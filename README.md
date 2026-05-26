@@ -22,15 +22,16 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 ## Requirements
 
 - **JetBrains IDE** 2024.3 – 2025.1.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
-- **`claude` CLI** installed and accessible on `PATH` or `~/.local/bin`
+- **`claude` CLI** installed and accessible on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
+  - If it's in a custom location, set the executable path (and, if needed, environment variables) in **Settings → Tools → Claude Code**
 - **Auth** reused from the binary (Claude subscription / OAuth or `ANTHROPIC_API_KEY`)
 
 ## Installation
 
 **From a pre-built zip:**
 
-1. Download `claude-code-for-jetbrains-1.2.0.zip` from [Releases](../../releases)
+1. Download `claude-code-for-jetbrains-1.3.0.zip` from [Releases](../../releases)
 2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the zip and restart
 
@@ -62,7 +63,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-for-jetbrains-1.2.0.zip`
+Output: `build/distributions/claude-code-for-jetbrains-1.3.0.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -77,6 +78,6 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v1.2.0** — Collapsible tool calls, nested subagent transcripts, anchored tool outputs. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v1.3.0** — Windows support (binary detection + npm shim handling), configurable executable paths and environment variables. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.

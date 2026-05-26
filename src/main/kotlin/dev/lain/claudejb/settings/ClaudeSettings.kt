@@ -7,6 +7,7 @@ import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
+import dev.lain.claudejb.process.EnvScriptLoader
 import dev.lain.claudejb.session.ClaudeSession
 
 /**
@@ -26,7 +27,27 @@ class ClaudeSettings : PersistentStateComponent<ClaudeSettings.State> {
         @JvmField var settingSources: String = "user,project,local"
         @JvmField var allowedTools: String = ""
         @JvmField var disallowedTools: String = ""
+        @JvmField var claudePath: String = ""
+        @JvmField var nodePath: String = ""
+        @JvmField var envVars: String = ""
+        @JvmField var sourceScript: String = ""
     }
+
+    val claudePath: String get() = state.claudePath
+    val nodePath: String get() = state.nodePath
+    val sourceScript: String get() = state.sourceScript
+
+    /** Parses the `KEY=VALUE` lines (one per line) into an env map; blank/`#`-comment lines ignored. */
+    fun parseEnv(): Map<String, String> =
+        state.envVars.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains("=") }
+            .associate { line -> line.substringBefore("=").trim() to line.substringAfter("=").trim() }
+            .filterKeys { it.isNotEmpty() }
+
+    /** Effective process env: the sourced script's environment first, then explicit overrides on top. */
+    fun resolveEnv(): Map<String, String> =
+        EnvScriptLoader.load(state.sourceScript) + parseEnv()
 
     private var state = State()
 

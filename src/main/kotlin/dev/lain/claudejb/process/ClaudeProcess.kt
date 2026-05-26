@@ -25,6 +25,8 @@ class ClaudeProcess(
     private val args: List<String>,
     private val onEvent: (ClaudeEvent) -> Unit,
     private val onTerminated: (exitCode: Int) -> Unit,
+    private val nodeOverride: String? = null,
+    private val extraEnv: Map<String, String> = emptyMap(),
 ) {
     private val log = thisLogger()
     private val writeLock = Any()
@@ -34,11 +36,20 @@ class ClaudeProcess(
     private var handler: KillableProcessHandler? = null
 
     fun start() {
-        val commandLine = GeneralCommandLine(binary.absolutePath)
+        // On Windows an npm `.cmd` shim must be driven as `node cli.js` (see ClaudeBinaryLocator.resolveNodeScript):
+        // launching the shim through cmd.exe breaks streaming stdio and arg quoting.
+        val nodeScript = ClaudeBinaryLocator.resolveNodeScript(binary)
+        val commandLine = (
+            if (nodeScript != null)
+                GeneralCommandLine(ClaudeBinaryLocator.locateNode(binary, nodeOverride))
+                    .withParameters(nodeScript.absolutePath).withParameters(args)
+            else
+                GeneralCommandLine(binary.absolutePath).withParameters(args)
+            )
             .withWorkDirectory(workDir)
-            .withParameters(args)
             .withCharset(StandardCharsets.UTF_8)
             .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+            .withEnvironment(extraEnv)
 
         val processHandler = KillableProcessHandler(commandLine)
         processHandler.setShouldDestroyProcessRecursively(true)

@@ -1,7 +1,9 @@
 package dev.lain.claudejb.session
 
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -13,6 +15,7 @@ import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.process.ClaudeBinaryLocator
+import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.process.ClaudeProcess
 import dev.lain.claudejb.protocol.AccountInfo
 import dev.lain.claudejb.protocol.AgentInfo
@@ -116,13 +119,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     /** Starts the binary if it is not already running. Returns false (and notifies) if `claude` is missing. */
     fun start(resume: Boolean = sessionId != null): Boolean {
         if (isRunning()) return true
-        val binary = ClaudeBinaryLocator.locate() ?: run {
-            notifyError(
-                "The 'claude' binary was not found on PATH or in a typical location. " +
-                    "Install Claude Code (https://claude.com/code) and ensure 'claude' is on your PATH."
-            )
+        val settings = ClaudeSettings.getInstance(project)
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run {
+            notifyMissingBinary()
             return false
         }
+        // Persist the auto-detected path so later launches are stable and the user can see/edit it
+        // (also refreshes a stale saved path that fell back to auto-detection).
+        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
@@ -133,6 +137,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             binary = binary,
             workDir = workDir,
             args = buildArgs(resume),
+            nodeOverride = settings.nodePath,
+            extraEnv = settings.resolveEnv(),
             onEvent = ::onEvent,
             onTerminated = ::onTerminated,
         )
@@ -592,6 +598,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP)
             .createNotification("Claude Code", content, NotificationType.ERROR)
+            .notify(project)
+    }
+
+    private fun notifyMissingBinary() {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP)
+            .createNotification(
+                "Claude Code",
+                "The 'claude' binary was not found on PATH or in a typical location. " +
+                    "Install Claude Code (https://claude.com/code), or set the executable path manually.",
+                NotificationType.ERROR,
+            )
+            .addAction(NotificationAction.createSimple("Configure paths…") {
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+            })
             .notify(project)
     }
 

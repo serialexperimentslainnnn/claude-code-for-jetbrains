@@ -4,6 +4,9 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBFont
 import com.intellij.ui.scale.JBUIScale
@@ -33,6 +36,18 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val modeCombo = JComboBox(ClaudeSession.PERMISSION_MODES.toTypedArray())
     private val thinkingSpinner = JSpinner(SpinnerNumberModel(0, 0, 200_000, 1_000))
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
+    private val claudePathField = JBTextField().apply {
+        emptyText.text = "Auto-detect (leave blank unless 'claude' is in a custom location)"
+    }
+    private val nodePathField = JBTextField().apply {
+        emptyText.text = "Auto-detect (set only if Node is in a custom dir not on PATH — Windows npm installs)"
+    }
+    private val envVarsArea = JBTextArea(4, 0).apply {
+        emptyText.text = "One KEY=VALUE per line (e.g. PATH=C:\\custom\\bin;%PATH%). Useful on Windows."
+    }
+    private val sourceScriptField = JBTextField().apply {
+        emptyText.text = "Optional: .sh to source (Linux/macOS) or PowerShell profile/.ps1 to dot-source (Windows)"
+    }
 
     private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
     private val allowedToolsGroup = CheckboxGroup(ClaudeSession.BUILTIN_TOOLS, columns = 4)
@@ -50,6 +65,12 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addLabeledComponent("Permission mode:", modeCombo)
             .addLabeledComponent("Thinking tokens (0 = off):", thinkingSpinner)
             .addComponent(partialCheck)
+            .addSeparator()
+            .addLabeledComponent("claude executable path:", claudePathField)
+            .addLabeledComponent("node executable path:", nodePathField)
+            .addLabeledComponent("Source script:", sourceScriptField)
+            .addComponent(sectionLabel("Environment variables (KEY=VALUE per line)"))
+            .addComponent(JBScrollPane(envVarsArea))
             .addSeparator()
             .addComponent(sectionLabel("Setting sources (none = don't pass --setting-sources)"))
             .addComponent(settingSourcesGroup.component)
@@ -73,7 +94,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             partialCheck.isSelected != s.includePartialMessages ||
             csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources) ||
             csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools) ||
-            csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools)
+            csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools) ||
+            claudePathField.text.trim() != s.claudePath ||
+            nodePathField.text.trim() != s.nodePath ||
+            sourceScriptField.text.trim() != s.sourceScript ||
+            envVarsArea.text != s.envVars
     }
 
     override fun apply() {
@@ -86,6 +111,10 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.settingSources = settingSourcesGroup.text()
         s.allowedTools = allowedToolsGroup.text()
         s.disallowedTools = disallowedToolsGroup.text()
+        s.claudePath = claudePathField.text.trim()
+        s.nodePath = nodePathField.text.trim()
+        s.sourceScript = sourceScriptField.text.trim()
+        s.envVars = envVarsArea.text
         settings.applyTo(session)
     }
 
@@ -99,6 +128,10 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         settingSourcesGroup.setFrom(s.settingSources)
         allowedToolsGroup.setFrom(s.allowedTools)
         disallowedToolsGroup.setFrom(s.disallowedTools)
+        claudePathField.text = s.claudePath
+        nodePathField.text = s.nodePath
+        sourceScriptField.text = s.sourceScript
+        envVarsArea.text = s.envVars
     }
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()

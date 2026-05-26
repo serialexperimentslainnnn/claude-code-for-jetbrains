@@ -1,3 +1,18 @@
+## v1.3.0 — 2026-05-26
+
+**Windows support**
+- The `claude` binary is now detected on Windows (`claude.exe` / `claude.cmd`) across npm, scoop, volta, chocolatey and `~\.local\bin`.
+- npm `.cmd` shims are driven as `node cli.js` directly, bypassing cmd.exe — which corrupted the streaming stdio pipe (stdin EOF triggered "Terminate batch job (Y/N)?") and mangled argument quoting. This fixes both the "not a valid Win32 application" (error 193) failure and the "found but no response" hang.
+
+**Configurable paths & environment**
+- Explicit overrides for the `claude` and `node` executable paths in Settings — the catch-all for custom install dirs, version managers, or a GUI IDE that doesn't inherit the user's PATH.
+- Configurable environment variables (`KEY=VALUE` per line) injected into the binary's process — useful on Windows for `PATH` additions.
+- **Source script**: point to a `.sh` (sourced in the login shell on Linux/macOS) or a PowerShell profile/`.ps1` (dot-sourced on Windows); its resulting environment is captured and applied to the `claude` process, so the IDE inherits the same `PATH`/setup as the user's own shell.
+- The "binary not found" notification now offers a **Configure paths…** action that jumps straight to the settings page.
+- The auto-detected `claude` path is persisted on first launch (and refreshed when stale), so startup is stable and the path is visible/editable.
+
+---
+
 ## v1.2.0 — 2026-05-26
 
 **Hierarchical, collapsible transcript**
