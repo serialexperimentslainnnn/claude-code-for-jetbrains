@@ -65,31 +65,45 @@ class PermissionBroker(
         }
         val mode = permissionMode()
         val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
+        // A reviewable write is only eligible for auto-approval when its target is confined to the project root.
+        // See [autoAllow] / [isWithinRoot] for the rationale (blast-radius containment of acceptEdits/bypass).
+        val autoApprovable = !reviewable ||
+            DiffPresenter.isWithinRoot(DiffPresenter.filePathOf(request.input), projectRoot)
         when {
-            mode == "bypassPermissions" -> {
+            mode == "bypassPermissions" && autoApprovable -> {
                 autoAllow(requestId, request, reviewable); return
             }
-            mode == "acceptEdits" && reviewable -> {
+            mode == "acceptEdits" && reviewable && autoApprovable -> {
                 autoAllow(requestId, request, reviewable); return
             }
         }
-        present(
-            PendingPermission(
-                requestId = requestId,
-                toolName = request.toolName,
-                input = request.input,
-                title = request.title ?: defaultTitle(request),
-                summary = summarize(request.toolName, request.input),
-                reviewable = reviewable,
-            )
-        )
+        // Not auto-approved (default/plan mode, or a write that escapes the project root): surface a manual card.
+        present(presentable(requestId, request, reviewable))
     }
+
+    private fun presentable(requestId: String, request: CanUseToolRequest, reviewable: Boolean) =
+        PendingPermission(
+            requestId = requestId,
+            toolName = request.toolName,
+            input = request.input,
+            title = request.title ?: defaultTitle(request),
+            summary = summarize(request.toolName, request.input),
+            reviewable = reviewable,
+        )
 
     /** Replies to an unsupported binary->host control request so the binary is not left waiting. */
     fun rejectUnsupported(requestId: String, subtype: String?) {
         respond(ControlProtocol.error(requestId, "Unsupported control request: ${subtype ?: "?"}"))
     }
 
+    /**
+     * Writes the `allow` control response for a request the mode permits silently. Reached only after [handle]
+     * has cleared it for auto-approval: in particular, reviewable writes (Edit/Write/MultiEdit) get here **only**
+     * when their `file_path` is confined to the project root ([DiffPresenter.isWithinRoot]). This caps the blast
+     * radius of acceptEdits/bypassPermissions to the project tree — a write outside it (e.g. ~/.ssh, /etc) is
+     * degraded to an explicit manual card rather than auto-applied. Non-reviewable tools (Bash, etc.) carry no
+     * file_path and keep the prior auto-allow behaviour under bypassPermissions.
+     */
     private fun autoAllow(requestId: String, request: CanUseToolRequest, reviewable: Boolean) {
         if (reviewable) {
             DiffPresenter.filePathOf(request.input)?.let(onApprovedWrite)

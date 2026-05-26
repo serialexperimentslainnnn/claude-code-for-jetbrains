@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "1.3.5"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -23,6 +23,14 @@ dependencies {
 
     // JSON (de)serialization for the stream-json / control protocol.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Unit tests (pure JVM: protocol parsing/building, no IntelliJ Platform fixtures needed).
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    // The IntelliJ Platform Gradle plugin wires a JUnit4-based runtime into the test task; its executor
+    // references JUnit4 API (org.junit.rules.TestRule) even when our tests are JUnit5, so it must be present.
+    testRuntimeOnly("junit:junit:4.13.2")
 }
 
 // The Kotlin stdlib and JetBrains annotations are provided by the IntelliJ Platform at runtime; keep
@@ -37,6 +45,9 @@ tasks {
     runIde {
         jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
     }
+    test {
+        useJUnitPlatform()
+    }
 }
 
 intellijPlatform {
@@ -50,14 +61,29 @@ intellijPlatform {
         changeNotes = provider { latestReleaseNotesHtml() }
     }
 
+    // Marketplace publishing + plugin signing. All credentials come from the environment (GitHub Actions
+    // secrets); never commit them. Locally these are simply absent and the publish/sign tasks aren't run.
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+    }
+    signing {
+        certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("PRIVATE_KEY")
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+
     pluginVerification {
         // 'JetBrains' in the plugin name is a Marketplace naming lint, not an API problem; muting it lets
         // the verifier proceed to the actual binary-compatibility / internal-API checks we care about.
         freeArgs = listOf("-mute", "TemplateWordInPluginName")
         ides {
-            // Verify against the locally installed IntelliJ IDEA (the user's real runtime, no extra download).
-            // For CI/Marketplace, replace with `recommended()`.
-            local(file("/home/dexperiments/.local/share/JetBrains/Toolbox/apps/intellij-idea"))
+            // On CI there's no local IDE install: verify against the recommended IDEs (downloaded on demand).
+            // Locally, verify against the developer's real runtime to avoid an extra download.
+            if (providers.environmentVariable("CI").isPresent) {
+                recommended()
+            } else {
+                local(file("/home/dexperiments/.local/share/JetBrains/Toolbox/apps/intellij-idea"))
+            }
         }
     }
 }

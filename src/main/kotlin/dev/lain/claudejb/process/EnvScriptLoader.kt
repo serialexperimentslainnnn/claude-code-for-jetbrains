@@ -37,7 +37,11 @@ object EnvScriptLoader {
             )
         } else {
             val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/bash"
-            GeneralCommandLine(shell, "-lc", ". \"${script.absolutePath}\" && env")
+            // Pass the script path as a positional argument ($1) instead of interpolating it into the
+            // `-lc` command string, so a path containing `"`, `$(...)` or backticks cannot break the
+            // quoting and inject shell code. With `sh -lc CMD ARG0 ARG1 ...`, ARG0 becomes `$0` and ARG1
+            // becomes `$1`; we use a dummy `$0` (the shell name) and reference the path as `$1`.
+            GeneralCommandLine(shell, "-lc", ". \"$1\" && env", shell, script.absolutePath)
         }
         cmd.charset = StandardCharsets.UTF_8
         cmd.withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
@@ -55,7 +59,7 @@ object EnvScriptLoader {
     }
 
     /** Keeps only well-formed `KEY=VALUE` lines (KEY has no whitespace); ignores multi-line value spillover. */
-    private fun parse(dump: String): Map<String, String> =
+    internal fun parse(dump: String): Map<String, String> =
         dump.lineSequence()
             .mapNotNull { line ->
                 val eq = line.indexOf('=')
