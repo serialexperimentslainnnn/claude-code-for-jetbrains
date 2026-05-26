@@ -32,7 +32,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val session: ClaudeSession get() = ChatSessionManager.getInstance(project).activeOrCreate()
 
     private val modelCombo = JComboBox<String>().apply { isEditable = true }
-    private val effortCombo = JComboBox(arrayOf("", *ClaudeSession.EFFORT_LEVELS.toTypedArray()))
+    private val effortCombo = JComboBox(ClaudeSession.EFFORT_LEVELS.toTypedArray())
     private val modeCombo = JComboBox(ClaudeSession.PERMISSION_MODES.toTypedArray())
     private val thinkingSpinner = JSpinner(SpinnerNumberModel(0, 0, 200_000, 1_000))
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
@@ -58,7 +58,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     override fun getDisplayName(): String = "Claude Code"
 
     override fun createComponent(): JComponent {
-        modelCombo.model = DefaultComboBoxModel(arrayOf("", *session.models.map { it.value }.toTypedArray()))
+        modelCombo.model = DefaultComboBoxModel(session.modelOptions().map { it.value }.toTypedArray())
         val built = FormBuilder.createFormBuilder()
             .addLabeledComponent("Model:", modelCombo)
             .addLabeledComponent("Effort:", effortCombo)

@@ -23,20 +23,9 @@ object OptionMenus {
     }
 
     fun modelGroup(session: ClaudeSession) = DefaultActionGroup("Model", true).apply {
-        // Exclude "default": opusplan is the recommended default, so there's no need for a generic fallback.
-        session.models.filter { it.value != "default" }.forEach { m ->
+        session.modelOptions().forEach { m ->
             add(Choice(m.displayName.ifBlank { m.value }) { session.model == m.value }
                 .onChosen { session.changeModel(m.value) })
-        }
-        // Add known Opus IDs only when the binary's initialize didn't return them.
-        listOf("claude-opus-4-5" to "Opus 4.5", "claude-opus-4-7" to "Opus 4.7").forEach { (id, label) ->
-            if (session.models.none { it.value == id }) {
-                add(Choice(label) { session.model == id }.onChosen { session.changeModel(id) })
-            }
-        }
-        // opusplan is a CLI alias (auto-scales the model to the task: Opus for hard work, Sonnet for the rest).
-        if (session.models.none { it.value == "opusplan" }) {
-            add(Choice("Opusplan (auto: Opus/Sonnet by task)") { session.model == "opusplan" }.onChosen { session.changeModel("opusplan") })
         }
     }
 

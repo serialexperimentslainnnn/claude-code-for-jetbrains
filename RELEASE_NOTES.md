@@ -1,3 +1,12 @@
+## v1.3.1 — 2026-05-26
+
+**Fixes & defaults**
+- Fixed the Settings model dropdown showing empty when opened before the initialize handshake — it now always lists available models plus known fallbacks.
+- Removed the blank entry from the Effort dropdown in Settings.
+- Default model is now **Opus 4.7**; default effort is now **medium**.
+
+---
+
 ## v1.3.0 — 2026-05-26
 
 **Windows support**

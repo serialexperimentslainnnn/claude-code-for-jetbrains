@@ -31,7 +31,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 **From a pre-built zip:**
 
-1. Download `claude-code-for-jetbrains-1.3.0.zip` from [Releases](../../releases)
+1. Download `claude-code-for-jetbrains-1.3.1.zip` from [Releases](../../releases)
 2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the zip and restart
 
@@ -63,7 +63,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-for-jetbrains-1.3.0.zip`
+Output: `build/distributions/claude-code-for-jetbrains-1.3.1.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -78,7 +78,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v1.3.0** — Windows support (binary detection + npm shim handling), configurable executable paths and environment variables. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v1.3.1** — Windows support (binary detection + npm shim handling), configurable executable paths and environment variables; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 

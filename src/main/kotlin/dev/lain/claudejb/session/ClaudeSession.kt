@@ -623,8 +623,26 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process = null
     }
 
+    /** Models for the GUI: those the binary reported (minus the generic "default") plus known aliases
+     *  not yet present — so the list is never empty even before the initialize handshake lands. */
+    fun modelOptions(): List<ModelInfo> {
+        val result = models.filter { it.value != "default" }.toMutableList()
+        FALLBACK_MODELS.forEach { fb -> if (result.none { it.value == fb.value }) result += fb }
+        return result
+    }
+
     companion object {
         const val NOTIFICATION_GROUP = "Claude Code"
+
+        /** Default model on a fresh install: Opus 4.7. */
+        const val DEFAULT_MODEL = "claude-opus-4-7"
+
+        /** Offered when the binary's initialize handshake hasn't (yet) returned them. */
+        val FALLBACK_MODELS = listOf(
+            ModelInfo("claude-opus-4-7", "Opus 4.7"),
+            ModelInfo("claude-opus-4-5", "Opus 4.5"),
+            ModelInfo("opusplan", "Opusplan (auto: Opus/Sonnet by task)"),
+        )
 
         /** Shift+Tab cycles through these, like the CLI. */
         val PERMISSION_MODES_CYCLE = listOf("default", "acceptEdits", "plan")

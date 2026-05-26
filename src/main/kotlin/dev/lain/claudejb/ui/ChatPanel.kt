@@ -323,7 +323,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
     private fun refreshState() {
         updateQuotaBar()
         rebuildQueueStrip()
-        modelChip.text = "Model: ${session.model?.let { shortModel(it) } ?: "opusplan"}  ▾"
+        modelChip.text = "Model: ${session.model?.let { shortModel(it) } ?: "Opus 4.7"}  ▾"
         modeChip.text = "Mode: ${session.permissionMode}  ▾"
         effortChip.text = "effort: ${session.effort ?: "default"}  ▾"
         thinkingChip.text = (session.thinkingTokens?.let { "thinking: ${it / 1000}k" } ?: "thinking: off") + "  ▾"

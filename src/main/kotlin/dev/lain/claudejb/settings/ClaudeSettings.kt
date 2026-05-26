@@ -19,8 +19,8 @@ import dev.lain.claudejb.session.ClaudeSession
 class ClaudeSettings : PersistentStateComponent<ClaudeSettings.State> {
 
     class State {
-        @JvmField var model: String = "opusplan"
-        @JvmField var effort: String = ""
+        @JvmField var model: String = ClaudeSession.DEFAULT_MODEL
+        @JvmField var effort: String = "medium"
         @JvmField var permissionMode: String = "default"
         @JvmField var thinkingTokens: Int = 0
         @JvmField var includePartialMessages: Boolean = true
