@@ -82,6 +82,12 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 
+## Disclaimer
+
+Unofficial, community-built, open-source plugin. **Not affiliated with, sponsored by, or endorsed by Anthropic or JetBrains.** It requires the user's own separately-installed `claude` CLI and their own Claude subscription or API key — no credentials are bundled or provided.
+
+"Claude" and "Claude Code" are trademarks of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related names are trademarks of JetBrains s.r.o. Used here for identification only.
+
 ## License
 
 Licensed under the **GNU General Public License v3.0**. See [`LICENSE`](LICENSE) for the full text.

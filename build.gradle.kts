@@ -46,6 +46,8 @@ intellijPlatform {
             sinceBuild = "243"
             untilBuild = "261.*"
         }
+        // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
+        changeNotes = provider { latestReleaseNotesHtml() }
     }
 
     pluginVerification {
@@ -65,4 +67,41 @@ kotlin {
     compilerOptions {
         freeCompilerArgs.add("-Xjvm-default=all")
     }
+}
+
+/** Extracts the top (latest) `## vX.Y.Z` section of RELEASE_NOTES.md and renders it as the HTML subset
+ *  the Marketplace accepts for change notes. Falls back to a generic line if the file is missing. */
+fun latestReleaseNotesHtml(): String {
+    val notes = file("RELEASE_NOTES.md")
+    if (!notes.exists()) return "See RELEASE_NOTES.md."
+    val lines = notes.readLines()
+    val start = lines.indexOfFirst { it.startsWith("## v") }
+    if (start < 0) return "See RELEASE_NOTES.md."
+    val end = lines.drop(start + 1).indexOfFirst { it.startsWith("## v") }.let {
+        if (it < 0) lines.size else start + 1 + it
+    }
+
+    fun inline(s: String): String = s
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace(Regex("\\*\\*(.+?)\\*\\*"), "<b>$1</b>")
+        .replace(Regex("`(.+?)`"), "<code>$1</code>")
+
+    val html = StringBuilder()
+    var inList = false
+    fun closeList() { if (inList) { html.append("</ul>"); inList = false } }
+
+    for (raw in lines.subList(start, end)) {
+        val line = raw.trim()
+        when {
+            line.startsWith("## v") -> html.append("<p><b>").append(inline(line.removePrefix("## ").trim())).append("</b></p>")
+            line == "---" || line.isEmpty() -> closeList()
+            line.startsWith("- ") -> {
+                if (!inList) { html.append("<ul>"); inList = true }
+                html.append("<li>").append(inline(line.removePrefix("- ").trim())).append("</li>")
+            }
+            else -> { closeList(); html.append("<p>").append(inline(line)).append("</p>") }
+        }
+    }
+    closeList()
+    return html.toString()
 }

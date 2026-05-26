@@ -72,7 +72,6 @@ First stable release.
 
 **Full slash-command palette**
 - All commands from the `claude` binary are surfaced natively (Ctrl+K / Cmd+K)
-- Built-in `/btw` command added by the plugin (client-side, not in the binary)
 
 **Model & runtime controls**
 - Model selector chip (all models available in your account)

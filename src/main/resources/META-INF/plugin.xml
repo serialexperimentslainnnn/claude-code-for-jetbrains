@@ -1,11 +1,16 @@
 <idea-plugin>
     <id>dev.lain.claude-code-for-jetbrains</id>
     <name>Claude Code Native</name>
-    <vendor email="dev@digitalexperiments.dev">lain</vendor>
+    <vendor email="dev@digitalexperiments.dev" url="https://digitalexperiments.dev">lain</vendor>
 
     <description><![CDATA[
         <p>Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
         binary over its stream-json protocol — no terminal required, no Node.js at runtime.</p>
+
+        <p><em>Unofficial, community-built, open-source plugin. Not affiliated with, sponsored by, or
+        endorsed by Anthropic or JetBrains. It requires the user's own separately-installed
+        <code>claude</code> CLI and their own Claude subscription or API key — no credentials are
+        bundled or provided.</em></p>
 
         <h2>Features</h2>
 
@@ -59,6 +64,11 @@
             <li><a href="https://claude.ai/code"><code>claude</code> binary</a> installed and on PATH or <code>~/.local/bin/</code></li>
             <li>Claude subscription (claude.ai) or <code>ANTHROPIC_API_KEY</code> environment variable</li>
         </ul>
+
+        <h2>License &amp; trademarks</h2>
+        <p>Released under the GNU General Public License v3.0. "Claude" and "Claude Code" are trademarks
+        of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related names are trademarks of JetBrains
+        s.r.o. Used here for identification only; this project is not affiliated with either company.</p>
     ]]></description>
 
     <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
