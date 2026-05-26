@@ -4,23 +4,23 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-## [0.1.5] — 2026-05-26
-
-### Added
-- Status bar (thinking word + live token count + "Esc to interrupt") moved above the quota bar for better visibility
-- Settings: setting-sources, allowed-tools and disallowed-tools fields now have enable/disable checkboxes
-
-### Changed
-- Send / Stop / Accept buttons now use the IDE's primary button color instead of a fixed coral, respecting the active theme
-- Tool window icon and plugin icon replaced with the official Claude logo (Simple Icons, `currentColor` for theme adaptation)
-- `CLAUDE.md` and code comments translated to English
+## [1.1.0] — 2026-05-26
 
 ### Fixed
-- (fill in)
+- Quota bar stays visible with reset countdown when utilization % is not reported (Max plans); % meter hides independently
+- `isWarning` / `isExhausted` no longer fire on `overageStatus = "rejected"` alone
+- Token counter now accumulates correctly across multi-message turns (tool calls, chained assistant messages)
+- Failed turns with no `result` text (`error_*` subtypes) surface the `errors` list or subtype name — no more silent failures
+- `dispose()` sends EOF before killing the process (clean exit, same order as `stop()`)
+- `LiveUsage` updates moved to EDT to eliminate read-modify-write race on token counters
+- `ready` and `process` marked `@Volatile` — visibility gap on session start/stop across threads
+- Startup queue flushed after `system/init` — messages sent before the handshake are no longer dropped
+- `JBUI.scale` → `JBUIScale.scale` for correct stroke scaling on IntelliJ Platform 2025+
 
-## [0.1.1] — initial release
+### Added
+- `errors: List<String>` field on `ResultMessage` to capture SDK `SDKResultError.errors` payloads
+
+## [1.0.0] — 2026-05-26
 
 ### Added
 - Native stream-json + control protocol transport (one long-lived process per tab)
@@ -31,11 +31,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Slash-command palette (all commands from `initialize` + client-side `/btw`)
 - Model / effort / permission-mode / thinking chips + gear menu
 - Multi-prompt queue (send follow-ups while agent works)
-- Quota bar + live token counter
+- Quota bar + live token counter + reset countdown
 - Auto-diff on acceptEdits / bypass permission mode
 - Ctrl+O toggle for reasoning blocks
-- UI rethemed to follow the active IDE theme (light/dark)
+- Status bar with thinking indicator, live token count and "Esc to interrupt"
+- Settings: model, permission mode, effort, thinking tokens, allowed/disallowed tools, setting sources, output style
+- UI rethemed to follow the active IDE theme (light/dark); Claude logo icon
 
-[Unreleased]: https://github.com/lain/claude-code-for-jetbrains/compare/v0.1.5...HEAD
-[0.1.5]: https://github.com/lain/claude-code-for-jetbrains/compare/v0.1.1...v0.1.5
-[0.1.1]: https://github.com/lain/claude-code-for-jetbrains/releases/tag/v0.1.1
+[1.1.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/lain/claude-code-for-jetbrains/releases/tag/v1.0.0

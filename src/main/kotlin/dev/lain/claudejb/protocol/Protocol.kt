@@ -53,6 +53,8 @@ data class ResultMessage(
     val subtype: String = "",
     @SerialName("is_error") val isError: Boolean = false,
     val result: String = "",
+    // error_* subtypes carry no `result`; their message(s) arrive here (sdk.d.ts SDKResultError.errors).
+    val errors: List<String> = emptyList(),
     @SerialName("session_id") val sessionId: String = "",
     @SerialName("total_cost_usd") val totalCostUsd: Double = 0.0,
     @SerialName("num_turns") val numTurns: Int = 0,
@@ -196,8 +198,8 @@ data class RateLimitInfo(
         (if (it <= 1.0) it * 100 else it).toInt().coerceIn(0, 100)
     }
 
-    val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected" || overageStatus == "rejected"
-    val isExhausted: Boolean get() = status == "rejected" || overageStatus == "rejected"
+    val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
+    val isExhausted: Boolean get() = status == "rejected"
 
     /** Short window label for the UI (e.g. "5h", "7d"). */
     fun windowLabel(): String = when (rateLimitType) {

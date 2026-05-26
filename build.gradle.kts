@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "1.0.0"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -31,6 +31,12 @@ dependencies {
 configurations.named("runtimeClasspath") {
     exclude(mapOf("group" to "org.jetbrains.kotlin", "module" to "kotlin-stdlib"))
     exclude(mapOf("group" to "org.jetbrains", "module" to "annotations"))
+}
+
+tasks {
+    runIde {
+        jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
+    }
 }
 
 intellijPlatform {

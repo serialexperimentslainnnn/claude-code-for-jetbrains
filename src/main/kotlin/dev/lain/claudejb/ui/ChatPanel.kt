@@ -6,6 +6,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.awt.RelativePoint
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
@@ -335,19 +336,33 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         }
     }
 
-    /** Reflects the session's subscription quota. Only visible when utilization data is available (~90%+). */
+    /**
+     * Reflects the session's subscription quota. The reset countdown + reset hour show whenever the binary
+     * reports a window (`resetsAt`); the "% usage" meter is shown only when utilization is actually reported
+     * (e.g. near the limit / overage). On a plan with plenty of headroom (Max x20) the % simply drops out while
+     * the reset info stays. The whole bar hides only when there is nothing meaningful to show.
+     */
     private fun updateQuotaBar() {
         val rl = session.rateLimit
         val pct = rl?.utilizationPercent() ?: if (rl?.isExhausted == true) 100 else null
-        if (pct == null) {
-            if (quotaPanel.isVisible) { quotaPanel.isVisible = false; quotaPanel.revalidate() }
+        val hasReset = rl?.resetsAt != null
+        if (rl == null || (pct == null && !hasReset && !rl.isWarning)) {
+            if (quotaPanel.isVisible) { quotaPanel.isVisible = false; quotaPanel.parent?.revalidate(); quotaPanel.parent?.repaint() }
             return
         }
         val wasHidden = !quotaPanel.isVisible
         quotaPanel.isVisible = true
-        if (wasHidden) quotaPanel.revalidate()
-        val overage = if (rl!!.isUsingOverage) " · overage" else ""
 
+        val overage = if (rl.isUsingOverage) " · overage" else ""
+        val usageColor = when (pct) {
+            null      -> ChatTheme.TEXT_DIM
+            in 0..20  -> Color(0x4CAF50)
+            in 21..50 -> Color(0xFFD54F)
+            in 51..80 -> Color(0xFF7043)
+            else      -> Color(0xEF5350)
+        }
+
+        // Line 1 — reset countdown (+ overage). Present whenever there is a window.
         val resetStr = rl.resetsAt?.let {
             val remaining = it - System.currentTimeMillis() / 1000
             if (remaining > 0) {
@@ -355,25 +370,25 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 val m = (remaining % 3600) / 60
                 "Resets in ${if (h > 0L) "${h}h " else ""}${m}m"
             } else "Resetting soon"
-        } ?: "Quota ${rl.windowLabel()}"
-
-        val resetHour = rl.resetsAt?.let {
-            java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-        } ?: "--:--"
-
-        val usageColor = when {
-            pct <= 20 -> Color(0x4CAF50)
-            pct <= 50 -> Color(0xFFD54F)
-            pct <= 80 -> Color(0xFF7043)
-            else      -> Color(0xEF5350)
         }
-
-        val pctStr = if (rl.isExhausted) "exhausted" else "$pct%"
-        quotaLabel.text = (if (rl.isWarning) "⚠ " else "") + resetStr + overage
+        quotaLabel.isVisible = resetStr != null || rl.isWarning
+        quotaLabel.text = (if (rl.isWarning) "⚠ " else "") + (resetStr ?: "") + overage
         quotaLabel.foreground = if (rl.isWarning) usageColor else ChatTheme.TEXT_DIM
-        usageLabel.text = "Session Usage: $pctStr  Reset Hour: $resetHour"
+
+        // Line 2 — only the parts we actually have: the % meter drops out when utilization isn't reported.
+        val parts = buildList {
+            if (pct != null) add("Session Usage: ${if (rl.isExhausted) "exhausted" else "$pct%"}")
+            rl.resetsAt?.let {
+                val hour = java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+                add("Reset Hour: $hour")
+            }
+        }
+        usageLabel.isVisible = parts.isNotEmpty()
+        usageLabel.text = parts.joinToString("  ")
         usageLabel.foreground = usageColor
+
+        if (wasHidden) { quotaPanel.parent?.revalidate(); quotaPanel.parent?.repaint() }
     }
 
     private fun shortModel(value: String): String =
@@ -631,7 +646,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 }
 
                 val iconAlpha = if (isEnabled) 210 else 80
-                g2.stroke = BasicStroke(JBUI.scale(1.5f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                g2.stroke = BasicStroke(JBUIScale.scale(1.5f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
 
                 if (isStopMode) {
                     g2.color = Color(150, 150, 150, iconAlpha)

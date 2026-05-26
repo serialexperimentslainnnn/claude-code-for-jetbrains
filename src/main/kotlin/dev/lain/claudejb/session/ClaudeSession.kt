@@ -70,7 +70,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var rateLimit: RateLimitInfo? = null; private set
     @Volatile var liveOutputTokens: Int = 0; private set
     @Volatile var sessionTokens: Int = 0; private set
-    private var ready = false
+    @Volatile private var ready = false
 
     // --- metadata from the initialize handshake (powers the GUI menus) ---
     var commands: List<SlashCommand> = emptyList(); private set
@@ -79,7 +79,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     var availableOutputStyles: List<String> = emptyList(); private set
     var account: AccountInfo = AccountInfo(); private set
 
-    private var process: ClaudeProcess? = null
+    @Volatile private var process: ClaudeProcess? = null
     private val queue = ArrayDeque<String>()
     private val pendingControl = ConcurrentHashMap<String, (ClaudeEvent.ControlResult) -> Unit>()
     private val pendingRefresh = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -236,6 +236,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             turnActive = true
             fireState()
         }
+        // Flush anything still queued from startup; the binary accumulates messages mid-turn.
+        pump()
     }
 
     fun removeQueued(index: Int) {
@@ -435,7 +437,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             is ClaudeEvent.ThinkingDelta -> edt { appendThinking(event.text) }
             is ClaudeEvent.AssistantText -> edt { finalizeAssistant(event.text) }
             is ClaudeEvent.AssistantThinking -> edt { finalizeThinking(event.text) }
-            is ClaudeEvent.MessageStart -> edt { liveAssistant = null; liveThinking = null }
+            is ClaudeEvent.MessageStart -> edt {
+                // A turn can emit several assistant messages (e.g. around tool calls). message_delta usage
+                // restarts near 0 per message, so fold the finished message's tokens into the session total
+                // before the next one overwrites the live counter — otherwise only the last message counts.
+                sessionTokens += liveOutputTokens
+                liveOutputTokens = 0
+                liveAssistant = null
+                liveThinking = null
+            }
 
             is ClaudeEvent.ToolUse -> edt {
                 liveAssistant = null
@@ -449,8 +459,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 turnActive = false
                 liveAssistant = null
                 liveThinking = null
-                if (event.result.isError && event.result.result.isNotBlank()) {
-                    transcript.add(Speaker.ERROR, event.result.result)
+                if (event.result.isError) {
+                    // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
+                    // Always surface something so a failed turn never ends silently.
+                    val message = event.result.result.ifBlank {
+                        event.result.errors.joinToString("\n").ifBlank { "Turn ended with error: ${event.result.subtype}" }
+                    }
+                    transcript.add(Speaker.ERROR, message)
                 }
                 refreshTouchedFiles()
                 fireState()
@@ -463,7 +478,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.StatusNotice -> systemNotice(event.text)
 
-            is ClaudeEvent.LiveUsage -> { liveOutputTokens = event.outputTokens }
+            // On the EDT like every sibling case, so the token counters are single-threaded (no read-modify-write
+            // race with the Result / MessageStart folds). invokeLater preserves arrival order, so the running total stays correct.
+            is ClaudeEvent.LiveUsage -> edt { liveOutputTokens = event.outputTokens }
             is ClaudeEvent.RateLimit -> { rateLimit = event.info; edt { fireState() } }
 
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
@@ -544,6 +561,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     override fun dispose() {
+        // EOF first (lets the binary exit cleanly) then destroy the tree — same order as stop().
+        process?.closeStdin()
         process?.destroy()
         process = null
     }
