@@ -1,6 +1,6 @@
 <idea-plugin>
     <id>dev.lain.claude-code-for-jetbrains</id>
-    <name>Claude Code For JetBrains</name>
+    <name>Claude Code Native</name>
     <vendor email="dev@digitalexperiments.dev">lain</vendor>
 
     <description><![CDATA[

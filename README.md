@@ -1,4 +1,4 @@
-# Claude Code for JetBrains
+# Claude Code Native
 
 A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with streaming chat, native diff review, and full protocol-level access to the `claude` binary.
 
