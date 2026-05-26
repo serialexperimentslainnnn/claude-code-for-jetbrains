@@ -81,3 +81,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 **v1.3.0** — Windows support (binary detection + npm shim handling), configurable executable paths and environment variables. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
+
+## License
+
+Licensed under the **GNU General Public License v3.0**. See [`LICENSE`](LICENSE) for the full text.
