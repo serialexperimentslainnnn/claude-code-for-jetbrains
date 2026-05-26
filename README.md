@@ -1,6 +1,6 @@
 # Claude Code for JetBrains
 
-A native IntelliJ Platform plugin that integrates [Claude Code](https://code.claude.com) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with streaming chat, native diff review, and full protocol-level access to the `claude` binary.
+A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with streaming chat, native diff review, and full protocol-level access to the `claude` binary.
 
 > **Goal:** surpass AI Assistant and the official plugin (currently just a terminal launcher). Built to present to Anthropic.
 
@@ -8,68 +8,73 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://code.cla
 
 - **Streaming chat** — token-by-token rendering in a native Swing transcript, multi-chat tabs
 - **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
-- **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw`
-- **Model / effort / permission-mode / thinking controls** — live chips and gear menu, no restart needed
-- **Multi-prompt queue** — send follow-ups while the agent is still working
-- **Quota bar + live tokens** — real-time subscription usage and per-message token counter
+- **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
+- **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
+- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
 - **`AskUserQuestion` support** — multi-select option cards rendered natively in the transcript
-- **Markdown rendering** — bold, code blocks, tables
+- **Quota bar** — subscription usage % shown when near the usage limit, with reset countdown
+- **Live token counter** — per-message output tokens shown in the status line while the agent thinks
+- **Markdown rendering** — bold, inline code, code blocks, tables
 - **IDE-themed UI** — surfaces, text, and borders follow the active IDE theme (light/dark)
 
 ## Requirements
 
-- **JetBrains IDE** 2024.3+ (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
-- **`claude` CLI** installed and accessible — the plugin requires the binary at startup
-  - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://code.claude.com)
-  - The plugin looks in `PATH` and `~/.local/bin`
-- **Auth** is reused from the binary (Claude subscription / OAuth or `ANTHROPIC_API_KEY`)
+- **JetBrains IDE** 2024.3 – 2025.1.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
+- **`claude` CLI** installed and accessible on `PATH` or `~/.local/bin`
+  - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
+- **Auth** reused from the binary (Claude subscription / OAuth or `ANTHROPIC_API_KEY`)
 
 ## Installation
 
-**From a pre-built zip (recommended):**
+**From a pre-built zip:**
 
-1. Download the latest zip from [Releases](../../releases)
+1. Download `claude-code-for-jetbrains-1.0.0.zip` from [Releases](../../releases)
 2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the zip and restart
 
-**From source:** see [Build](#build-from-source) below.
+**From source:** see [Build from source](#build-from-source) below.
 
 ## Usage
 
 Open the **Claude Code** tool window (right side panel, same area as AI Assistant). Each tab is an independent chat session backed by its own `claude` process.
 
-- **New Chat** — opens a fresh tab
-- **Send** — submits the composer (Enter key, or Shift+Enter for newlines)
-- **Ctrl+/** — slash-command palette
-- **Ctrl+O** — toggle extended thinking
-- **Gear icon** — model, effort, permission mode, thinking settings
-- **Stop** — interrupts the running agent
+| Shortcut | Action |
+|---|---|
+| Enter | Send message |
+| Shift+Enter | New line in composer |
+| Ctrl+K | Slash-command palette |
+| Ctrl+O | Toggle extended thinking |
+| Esc | Interrupt running agent |
 
-File edit proposals appear as a diff tab in the editor; an inline card lets you Accept or Reject without leaving the chat.
+- **Model / Mode / Effort chips** — click to change at any time
+- **Gear icon** — advanced settings (thinking tokens, allowed tools, etc.)
+- **New Chat button** — opens a fresh tab
+
+File edit proposals open as a diff tab in the editor; an inline Accept/Reject card in the chat lets you review without leaving the conversation.
 
 ## Build from source
 
-Requirements: JDK 21, Gradle (the wrapper is included).
+Requires JDK 21. The Gradle wrapper is included.
 
 ```bash
-./gradlew buildPlugin
+JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-The plugin zip is written to `build/distributions/`. Load it via **Settings → Plugins → ⚙ → Install Plugin from Disk…**.
+Output: `build/distributions/claude-code-for-jetbrains-1.0.0.zip`
 
 ```bash
-./gradlew runIde        # launch a sandbox IDE with the plugin loaded
-./gradlew verifyPlugin  # run the IntelliJ plugin verifier
+./gradlew runIde        # sandbox IDE with the plugin loaded
+./gradlew verifyPlugin  # IntelliJ plugin verifier
 ```
 
 ## How it works
 
-The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio protocol — no Node.js or TS SDK at runtime. One long-lived process per chat session handles streaming input/output. The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is included only as a protocol reference and is not bundled.
+The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio protocol — no Node.js or TS SDK at runtime. One long-lived process per chat session handles streaming input/output. The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is included as a **protocol reference only** and is not distributed.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and verified empirical facts about the binary's behavior.
 
 ## Status
 
-**v0.1.1 — MVP complete.** Core protocol transport, multi-chat, permissions + native diff, all UI controls, quota display, and markdown rendering are working. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v1.0.0** — First stable release. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
-**Pending:** fix permission-mode reset on `system/init`, persist chip state, IDE tools MCP server, persistent "always allow", inline edits.
+See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
