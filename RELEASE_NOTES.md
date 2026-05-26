@@ -1,3 +1,26 @@
+## v2.0.0 — 2026-05-26
+
+**Reliability & security hardening + first unit-test suite**
+
+This release is a stability milestone: a multi-profile review (security, clean-code, SRE) drove a round of fixes across the process lifecycle, permission handling and the protocol layer, backed by the project's first automated tests.
+
+**Reliability**
+- Fixed an EDT freeze on session start: resolving the process environment (which sources a login shell, up to a multi-second timeout) and spawning the binary now run off the UI thread; the resolved environment is cached per session. The IDE no longer hangs when opening the first chat or sending the first prompt.
+- In-flight control requests (`get_context_usage`, session cost, MCP status, the initialize handshake) are now resolved when the process stops or crashes, instead of leaving dialogs stuck on "Loading…".
+- Control requests get a 30s watchdog, so a hung binary no longer leaves a callback pending forever.
+- Process start failures are now surfaced (notification + log) instead of leaving a half-initialized "ready" session; writes to a dead stdin are logged instead of silently dropped.
+
+**Security**
+- Auto-approved file writes (in `acceptEdits` / `bypassPermissions`) are now confined to the project root: a write whose path resolves (symlinks included) outside the project falls back to a manual Accept/Reject card.
+- Trust-on-open gate: if a project's `claude-code.xml` carries a source script or a custom stdio MCP server (both execute code at launch), the plugin asks for confirmation once before running them.
+- The source-script argument is now passed without shell interpolation (no injection via a crafted path), and Settings now warns that environment variables are stored in plain text and that the source script is executed on start.
+
+**Quality**
+- First unit-test suite (80 tests): protocol parsing/building, diff reconstruction, transcript hierarchy, rate-limit math, environment parsing.
+- Internal cleanups: MCP config building extracted to a testable unit, thread-safe tab counter, named constants, and quieter-failure logging.
+
+---
+
 ## v1.3.5 — 2026-05-26
 
 **IDE tools over MCP (opt-in)**

@@ -77,8 +77,10 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addLabeledComponent("claude executable path:", claudePathField)
             .addLabeledComponent("node executable path:", nodePathField)
             .addLabeledComponent("Source script:", sourceScriptField)
+            .addComponent(sourceScriptWarningLabel())
             .addComponent(sectionLabel("Environment variables (KEY=VALUE per line)"))
             .addComponent(JBScrollPane(envVarsArea))
+            .addComponent(envVarsWarningLabel())
             .addSeparator()
             .addComponent(sectionLabel("Setting sources (none = don't pass --setting-sources)"))
             .addComponent(settingSourcesGroup.component)
@@ -178,6 +180,17 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
     private fun sectionLabel(text: String) = JBLabel(text).apply { font = JBFont.medium().asBold() }
+
+    private fun envVarsWarningLabel() = JBLabel(
+        "<html>⚠ <b>Security:</b> these variables are stored <b>in plain text</b> in <code>claude-code.xml</code> " +
+        "(may be committed to a repo or end up in backups). <b>Do not put secrets here</b> (API keys, tokens) — " +
+        "use the source script above or the <code>claude</code> binary's native authentication instead.</html>"
+    ).apply { font = JBFont.small() }
+
+    private fun sourceScriptWarningLabel() = JBLabel(
+        "<html>⚠ <b>Security:</b> this script is <b>executed</b> when the session starts. Only point it at a script " +
+        "you trust — do not run scripts that arrive with an untrusted project/repo.</html>"
+    ).apply { font = JBFont.small() }
 
     private fun jetbrainsMcpWarningLabel() = JBLabel(
         "<html>⚠ <b>Security:</b> requires JetBrains' MCP Server plugin enabled. sse / streamable-http expose a " +

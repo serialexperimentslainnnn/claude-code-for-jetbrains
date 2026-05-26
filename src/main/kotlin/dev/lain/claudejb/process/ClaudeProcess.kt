@@ -35,6 +35,14 @@ class ClaudeProcess(
     @Volatile
     private var handler: KillableProcessHandler? = null
 
+    /**
+     * Launches the `claude` process and begins streaming.
+     *
+     * May throw if the process cannot be created (e.g. `ExecutionException`/`ProcessNotCreatedException`
+     * from invalid args, an unresolved node interpreter, or insufficient permissions). The exception is
+     * propagated to the caller (who is expected to wrap this in `runCatching`, notify, and abort); on
+     * failure `handler` is left null so `isRunning()` reports false.
+     */
     fun start() {
         // On Windows an npm `.cmd` shim must be driven as `node cli.js` (see ClaudeBinaryLocator.resolveNodeScript):
         // launching the shim through cmd.exe breaks streaming stdio and arg quoting.
@@ -51,6 +59,8 @@ class ClaudeProcess(
             .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
             .withEnvironment(extraEnv)
 
+        // KillableProcessHandler's constructor starts the OS process; if it throws, `handler` stays null
+        // and we let the exception propagate to the caller.
         val processHandler = KillableProcessHandler(commandLine)
         processHandler.setShouldDestroyProcessRecursively(true)
         processHandler.addProcessListener(object : ProcessListener {
@@ -61,10 +71,15 @@ class ClaudeProcess(
                 }
             }
 
-            override fun processTerminated(event: ProcessEvent) = onTerminated(event.exitCode)
+            override fun processTerminated(event: ProcessEvent) {
+                log.info("claude terminated, exitCode=${event.exitCode}")
+                onTerminated(event.exitCode)
+            }
         })
         handler = processHandler
         processHandler.startNotify()
+        // Args may carry paths/data, so we log only their count — never the contents or env.
+        log.info("claude started: ${binary.name} (${args.size} args)")
     }
 
     private fun consumeStdout(text: String) {
@@ -87,14 +102,24 @@ class ClaudeProcess(
         }
     }
 
-    /** Writes a single NDJSON record to the binary's stdin. Safe to call from any thread. */
-    fun writeLine(line: String) {
-        val stream = handler?.processInput ?: return
+    /**
+     * Writes a single NDJSON record to the binary's stdin. Safe to call from any thread.
+     *
+     * @return true if the line was written, false if it was dropped because stdin is dead
+     *         (process not started or already terminated). The Boolean lets callers react;
+     *         it is safe to ignore for fire-and-forget writes.
+     */
+    fun writeLine(line: String): Boolean {
+        val stream = handler?.processInput ?: run {
+            log.warn("Dropping line to dead claude stdin: ${line.take(120)}")
+            return false
+        }
         synchronized(writeLock) {
             stream.write(line.toByteArray(StandardCharsets.UTF_8))
             stream.write('\n'.code)
             stream.flush()
         }
+        return true
     }
 
     fun isRunning(): Boolean = handler?.let { !it.isProcessTerminated } ?: false

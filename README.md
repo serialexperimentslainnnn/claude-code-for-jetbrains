@@ -74,7 +74,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-native-1.3.5.zip`
+Output: `build/distributions/claude-code-native-2.0.0.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -89,7 +89,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v1.3.5** — Opt-in IDE tools over MCP (JetBrains MCP server with auto-built sse/streamable-http/stdio config, plus custom servers). Builds on v1.3.x: Windows support (binary detection + npm shim handling), configurable executable paths and environment variables; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v2.0.0** — Reliability & security hardening backed by the first unit-test suite (80 tests): EDT-freeze fix on start, in-flight control requests resolved on stop/crash + 30s watchdog, auto-writes confined to the project root, trust-on-open gate for source script / custom stdio MCP, and safe source-script quoting. Builds on v1.3.x: opt-in IDE tools over MCP (JetBrains MCP server with auto-built sse/streamable-http/stdio config, plus custom servers), Windows support, configurable executable paths and environment; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 

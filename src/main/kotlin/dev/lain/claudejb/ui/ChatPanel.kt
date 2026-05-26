@@ -127,9 +127,9 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
     private val spinnerFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     private var spinnerTick = 0
     private var thinkingWord = thinkingWords.random()
-    private val spinnerTimer = javax.swing.Timer(120) {
+    private val spinnerTimer = javax.swing.Timer(SPINNER_INTERVAL_MS) {
         spinnerTick++
-        if (spinnerTick % 40 == 0) thinkingWord = thinkingWords.random() // change the word ~every 4.8s
+        if (spinnerTick % SPINNER_WORD_CHANGE_TICKS == 0) thinkingWord = thinkingWords.random() // change the word ~every 4.8s
         updateStatus()
     }
     /**
@@ -137,7 +137,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
      * session data. The binary may emit a rate_limit_event in response, which updates rateLimit and
      * triggers another updateQuotaBar via the session listener.
      */
-    private val quotaRefreshTimer = javax.swing.Timer(60_000) {
+    private val quotaRefreshTimer = javax.swing.Timer(QUOTA_REFRESH_MS) {
         updateQuotaBar()
         session.requestSessionCost { updateQuotaBar() }
     }
@@ -367,11 +367,11 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
 
         val overage = if (rl.isUsingOverage) " · overage" else ""
         val usageColor = when (pct) {
-            null      -> ChatTheme.TEXT_DIM
-            in 0..20  -> Color(0x4CAF50)
-            in 21..50 -> Color(0xFFD54F)
-            in 51..80 -> Color(0xFF7043)
-            else      -> Color(0xEF5350)
+            null                            -> ChatTheme.TEXT_DIM
+            in 0..QUOTA_LOW_MAX             -> Color(0x4CAF50)
+            in QUOTA_LOW_MAX + 1..QUOTA_MID_MAX  -> Color(0xFFD54F)
+            in QUOTA_MID_MAX + 1..QUOTA_HIGH_MAX -> Color(0xFF7043)
+            else                            -> Color(0xEF5350)
         }
 
         // Line 1 — reset countdown (+ overage/warning). Present whenever there is a window.
@@ -457,7 +457,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                     isOpaque = true
                     border = JBUI.Borders.empty(3, 6)
                 }
-                val naturalH = (area.preferredSize.height + JBUIScale.scale(6)).coerceAtMost(JBUIScale.scale(82))
+                val naturalH = (area.preferredSize.height + JBUIScale.scale(6)).coerceAtMost(JBUIScale.scale(PERMISSION_SUMMARY_MAX_HEIGHT))
                 add(JBScrollPane(area).apply {
                     border = JBUI.Borders.empty()
                     background = ChatTheme.CODE_BG
@@ -578,7 +578,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
             add(JBLabel("⏳").apply { foreground = ChatTheme.TEXT_DIM })
-            add(JBLabel(truncate(prompt, 70)).apply { foreground = ChatTheme.TEXT_DIM })
+            add(JBLabel(truncate(prompt, QUEUE_PROMPT_MAX_CHARS)).apply { foreground = ChatTheme.TEXT_DIM })
             add(linkButton("✕") { session.removeQueued(index) })
         }
 
@@ -714,5 +714,24 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             }
             super.paintComponent(g)
         }
+    }
+
+    companion object {
+        /** Spinner animation tick interval (ms). */
+        private const val SPINNER_INTERVAL_MS = 120
+        /** Spinner ticks between thinking-word changes (~4.8s at [SPINNER_INTERVAL_MS]). */
+        private const val SPINNER_WORD_CHANGE_TICKS = 40
+        /** Interval (ms) for the quota countdown refresh + session-cost poll. */
+        private const val QUOTA_REFRESH_MS = 60_000
+
+        // Quota usage % thresholds (inclusive upper bounds) that drive the meter color.
+        private const val QUOTA_LOW_MAX = 20   // 0..20  → green
+        private const val QUOTA_MID_MAX = 50   // 21..50 → amber
+        private const val QUOTA_HIGH_MAX = 80  // 51..80 → orange; above → red
+
+        /** Max height (unscaled) of a permission card's summary box before it scrolls. */
+        private const val PERMISSION_SUMMARY_MAX_HEIGHT = 82
+        /** Max characters of a queued prompt shown in the queue strip before truncation. */
+        private const val QUEUE_PROMPT_MAX_CHARS = 70
     }
 }
