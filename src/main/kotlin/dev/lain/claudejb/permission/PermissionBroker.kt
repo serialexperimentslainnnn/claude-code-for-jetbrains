@@ -42,6 +42,8 @@ class PermissionBroker(
     private val present: (PendingPermission) -> Unit,
     /** Auto-approved file edit (acceptEdits/bypassPermissions): pop its diff so the user still sees it. */
     private val onAutoReviewed: (toolName: String, input: JsonObject) -> Unit,
+    /** Project root for turning absolute paths into relative ones in permission cards. */
+    private val projectRoot: String? = null,
 ) {
 
     fun handle(requestId: String, request: CanUseToolRequest) {
@@ -98,16 +100,23 @@ class PermissionBroker(
         respond(ControlProtocol.permissionAllow(requestId, request.input))
     }
 
+    private fun relativize(path: String): String {
+        val root = projectRoot ?: return path.substringAfterLast('/')
+        val prefix = if (root.endsWith('/')) root else "$root/"
+        return if (path.startsWith(prefix)) path.removePrefix(prefix) else path.substringAfterLast('/')
+    }
+
     private fun defaultTitle(request: CanUseToolRequest): String =
         "Claude wants to use ${request.toolName}" +
-            (DiffPresenter.filePathOf(request.input)?.let { " on ${it.substringAfterLast('/')}" } ?: "")
+            (DiffPresenter.filePathOf(request.input)?.let { " on ${relativize(it)}" } ?: "")
 
     private fun summarize(toolName: String, input: JsonObject): String = when (toolName) {
         "Bash" -> input.str("command")?.let { "$ $it" } ?: ""
-        "Read", "Glob", "Grep" -> input.str("file_path") ?: input.str("path") ?: input.str("pattern") ?: ""
-        "Write", "Edit", "MultiEdit" -> DiffPresenter.filePathOf(input) ?: ""
+        "Read", "Glob", "Grep" -> (input.str("file_path") ?: input.str("path") ?: input.str("pattern") ?: "")
+            .let { if (it.startsWith('/')) relativize(it) else it }
+        "Write", "Edit", "MultiEdit" -> DiffPresenter.filePathOf(input)?.let { relativize(it) } ?: ""
         "WebFetch" -> input.str("url") ?: ""
         "WebSearch" -> input.str("query") ?: ""
-        else -> DiffPresenter.filePathOf(input) ?: ""
+        else -> DiffPresenter.filePathOf(input)?.let { relativize(it) } ?: ""
     }.take(2000)
 }

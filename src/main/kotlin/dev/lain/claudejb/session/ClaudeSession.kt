@@ -69,6 +69,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var turnActive: Boolean = false; private set
     @Volatile var rateLimit: RateLimitInfo? = null; private set
     @Volatile var liveOutputTokens: Int = 0; private set
+    @Volatile var sessionTokens: Int = 0; private set
     private var ready = false
 
     // --- metadata from the initialize handshake (powers the GUI menus) ---
@@ -97,6 +98,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             onApprovedWrite = { pendingRefresh.add(it) },
             present = ::presentPermission,
             onAutoReviewed = ::autoOpenDiff,
+            projectRoot = project.basePath,
         )
     }
 
@@ -258,7 +260,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             val next = queue.removeFirst()
             transcript.add(Speaker.USER, next)
             write(ControlProtocol.userMessage(next))
-            if (!turnActive) liveOutputTokens = 0
             turnActive = true
         }
         fireState()
@@ -443,6 +444,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.Result -> edt {
+                sessionTokens += liveOutputTokens
+                liveOutputTokens = 0
                 turnActive = false
                 liveAssistant = null
                 liveThinking = null
@@ -460,7 +463,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.StatusNotice -> systemNotice(event.text)
 
-            is ClaudeEvent.LiveUsage -> { liveOutputTokens = event.outputTokens; edt { fireState() } }
+            is ClaudeEvent.LiveUsage -> { liveOutputTokens = event.outputTokens }
             is ClaudeEvent.RateLimit -> { rateLimit = event.info; edt { fireState() } }
 
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
@@ -555,6 +558,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val PERMISSION_MODES = listOf("default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto")
 
         val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max")
+
+        /** Setting-source scopes (--setting-sources), for the Settings checkboxes. */
+        val SETTING_SOURCES = listOf("user", "project", "local")
+
+        /** Standard built-in tools, for the allow/deny checkboxes in Settings. */
+        val BUILTIN_TOOLS = listOf(
+            "Bash", "Read", "Edit", "Write", "Glob", "Grep",
+            "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit",
+        )
 
         /** Concise one-line representation of a tool call, mirroring the CLI's "Tool(arg)" bullets. */
         fun formatToolUse(name: String, input: JsonObject): String {

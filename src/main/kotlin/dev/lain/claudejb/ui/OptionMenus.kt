@@ -23,23 +23,21 @@ object OptionMenus {
     }
 
     fun modelGroup(session: ClaudeSession) = DefaultActionGroup("Model", true).apply {
-        // The binary's initialize already returns a `value:"default"` entry ("Default (recommended)"), so we
-        // must NOT add our own "Default" too — that produced the duplicate ("Default" + "Default (recommended)").
-        // We map that entry to "no --model flag" (model == null) and treat both states as the same selection.
-        if (session.models.none { it.value == "default" }) {
-            add(Choice("Default") { session.model == null }.onChosen { session.changeModel(null) })
+        // Exclude "default": opusplan is the recommended default, so there's no need for a generic fallback.
+        session.models.filter { it.value != "default" }.forEach { m ->
+            add(Choice(m.displayName.ifBlank { m.value }) { session.model == m.value }
+                .onChosen { session.changeModel(m.value) })
         }
-        session.models.forEach { m ->
-            val isDefault = m.value == "default"
-            add(
-                Choice(m.displayName.ifBlank { m.value }) {
-                    if (isDefault) session.model == null || session.model == "default" else session.model == m.value
-                }.onChosen { if (isDefault) session.changeModel(null) else session.changeModel(m.value) }
-            )
+        // Add known Opus IDs only when the binary's initialize didn't return them.
+        listOf("claude-opus-4-5" to "Opus 4.5", "claude-opus-4-7" to "Opus 4.7").forEach { (id, label) ->
+            if (session.models.none { it.value == id }) {
+                add(Choice(label) { session.model == id }.onChosen { session.changeModel(id) })
+            }
         }
-        // opusplan is a CLI alias (auto-scales the model to the task: Opus for hard work, Sonnet for the rest),
-        // not returned by initialize, so we add it by hand.
-        add(Choice("Opusplan (auto: Opus/Sonnet by task)") { session.model == "opusplan" }.onChosen { session.changeModel("opusplan") })
+        // opusplan is a CLI alias (auto-scales the model to the task: Opus for hard work, Sonnet for the rest).
+        if (session.models.none { it.value == "opusplan" }) {
+            add(Choice("Opusplan (auto: Opus/Sonnet by task)") { session.model == "opusplan" }.onChosen { session.changeModel("opusplan") })
+        }
     }
 
     fun effortGroup(session: ClaudeSession) = DefaultActionGroup("Effort (applies on restart)", true).apply {

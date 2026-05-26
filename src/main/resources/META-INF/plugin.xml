@@ -18,7 +18,7 @@
         <!-- Right-hand tool window, next to where the JetBrains AI Assistant lives. -->
         <toolWindow id="Claude Code"
                     anchor="right"
-                    icon="/icons/claude.svg"
+                    icon="/icons/toolwindow.svg"
                     canCloseContents="true"
                     factoryClass="dev.lain.claudejb.ui.ClaudeToolWindowFactory"/>
 
