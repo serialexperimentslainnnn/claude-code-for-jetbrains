@@ -1,0 +1,60 @@
+package dev.lain.claudejb.ui
+
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ToggleAction
+import dev.lain.claudejb.session.ClaudeSession
+
+/**
+ * Builds the gear menu that exposes Claude Code's runtime options graphically: model, effort,
+ * permission mode and thinking. Rendered as a nested action-group popup from the tool window title bar.
+ */
+object OptionMenus {
+
+    fun buildOptionsGroup(session: ClaudeSession): DefaultActionGroup {
+        val root = DefaultActionGroup("Claude Options", true)
+        root.add(modelGroup(session))
+        root.add(effortGroup(session))
+        root.add(permissionModeGroup(session))
+        root.add(thinkingGroup(session))
+        return root
+    }
+
+    fun modelGroup(session: ClaudeSession) = DefaultActionGroup("Model", true).apply {
+        add(Choice("Default") { session.model == null }.onChosen { session.changeModel(null) })
+        session.models.forEach { m ->
+            add(Choice(m.displayName.ifBlank { m.value }) { session.model == m.value }.onChosen { session.changeModel(m.value) })
+        }
+    }
+
+    fun effortGroup(session: ClaudeSession) = DefaultActionGroup("Effort (applies on restart)", true).apply {
+        add(Choice("Default") { session.effort == null }.onChosen { session.changeEffort(null) })
+        ClaudeSession.EFFORT_LEVELS.forEach { level ->
+            add(Choice(level) { session.effort == level }.onChosen { session.changeEffort(level) })
+        }
+    }
+
+    fun permissionModeGroup(session: ClaudeSession) = DefaultActionGroup("Permission mode", true).apply {
+        ClaudeSession.PERMISSION_MODES.forEach { mode ->
+            add(Choice(mode) { session.permissionMode == mode }.onChosen { session.changePermissionMode(mode) })
+        }
+    }
+
+    fun thinkingGroup(session: ClaudeSession) = DefaultActionGroup("Thinking", true).apply {
+        add(Choice("Off") { session.thinkingTokens == null }.onChosen { session.changeThinkingTokens(null) })
+        add(Choice("On (8k)") { session.thinkingTokens == 8_000 }.onChosen { session.changeThinkingTokens(8_000) })
+        add(Choice("On (24k)") { session.thinkingTokens == 24_000 }.onChosen { session.changeThinkingTokens(24_000) })
+    }
+
+    /** A radio-style toggle whose selected state and effect are supplied as lambdas. */
+    private class Choice(text: String, private val selected: () -> Boolean) : ToggleAction(text) {
+        private var chosen: () -> Unit = {}
+        fun onChosen(block: () -> Unit): Choice = apply { chosen = block }
+        override fun isSelected(e: AnActionEvent): Boolean = selected()
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            if (state) chosen()
+        }
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+    }
+}

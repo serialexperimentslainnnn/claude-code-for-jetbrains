@@ -1,0 +1,156 @@
+package dev.lain.claudejb.protocol
+
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/**
+ * A single parsed line of the binary's stdout, normalized into the handful of cases the plugin acts on.
+ * Anything unrecognized becomes [Other] so the reader loop never throws.
+ */
+sealed interface ClaudeEvent {
+    /** system/init — capture [SystemInit.sessionId] for --resume and the initial slash command names. */
+    data class Init(val info: SystemInit) : ClaudeEvent
+
+    /** A finalized text block from a full assistant message. */
+    data class AssistantText(val text: String, val parentToolUseId: String?) : ClaudeEvent
+
+    /** A finalized thinking block. */
+    data class AssistantThinking(val text: String) : ClaudeEvent
+
+    /** A tool_use block: the agent wants to run [name] with [input]. */
+    data class ToolUse(val id: String, val name: String, val input: JsonObject) : ClaudeEvent
+
+    /** Incremental text delta from --include-partial-messages (live streaming preview). */
+    data class TextDelta(val text: String) : ClaudeEvent
+
+    /** Incremental thinking delta. */
+    data class ThinkingDelta(val text: String) : ClaudeEvent
+
+    /** Boundary between assistant messages within a turn (a new message starts streaming). */
+    data object MessageStart : ClaudeEvent
+
+    /** End of a turn. */
+    data class Result(val result: ResultMessage) : ClaudeEvent
+
+    /** Output of a CLI-local slash command (e.g. /cost, /clear) that did not go to the model. */
+    data class LocalCommandOutput(val content: String) : ClaudeEvent
+
+    /** A `can_use_tool` permission request the host must answer. */
+    data class PermissionRequest(val requestId: String, val request: CanUseToolRequest) : ClaudeEvent
+
+    /** A binary->host control request we don't implement; must still be answered (error) so the binary doesn't hang. */
+    data class UnsupportedControlRequest(val requestId: String, val subtype: String?) : ClaudeEvent
+
+    /** Reply from the binary to a host-initiated control_request, correlated by [requestId]. */
+    data class ControlResult(
+        val requestId: String,
+        val success: Boolean,
+        val payload: JsonObject?,
+        val error: String?,
+    ) : ClaudeEvent
+
+    /** Any other (ignored) message; kept for logging/debugging. */
+    data class Other(val type: String, val subtype: String?, val raw: JsonObject) : ClaudeEvent
+}
+
+/** Stateless decoder from one NDJSON line to a list of [ClaudeEvent]s (an assistant message fans out per block). */
+object ProtocolParser {
+
+    fun parse(line: String): List<ClaudeEvent> {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val root = runCatching { ClaudeJson.parseToJsonElement(trimmed) }.getOrNull() as? JsonObject
+            ?: return listOf(ClaudeEvent.Other("?", null, JsonObject(emptyMap())))
+        val type = root.str("type") ?: return listOf(ClaudeEvent.Other("?", null, root))
+
+        return when (type) {
+            "system" -> parseSystem(root)
+            "assistant" -> parseAssistant(root)
+            "stream_event" -> parseStreamEvent(root)
+            "result" -> listOf(ClaudeEvent.Result(ClaudeJson.decodeFromJsonElement(ResultMessage.serializer(), root)))
+            "control_request" -> parseControlRequest(root)
+            "control_response" -> parseControlResponse(root)
+            "keep_alive" -> emptyList()
+            else -> listOf(ClaudeEvent.Other(type, root.str("subtype"), root))
+        }
+    }
+
+    private fun parseSystem(root: JsonObject): List<ClaudeEvent> = when (root.str("subtype")) {
+        "init" -> listOf(ClaudeEvent.Init(ClaudeJson.decodeFromJsonElement(SystemInit.serializer(), root)))
+        "local_command_output" -> listOf(ClaudeEvent.LocalCommandOutput(root.str("content").orEmpty()))
+        else -> listOf(ClaudeEvent.Other("system", root.str("subtype"), root))
+    }
+
+    private fun parseAssistant(root: JsonObject): List<ClaudeEvent> {
+        val parentToolUseId = root.str("parent_tool_use_id")
+        val inner = (root["message"] as? JsonObject)
+            ?.let { ClaudeJson.decodeFromJsonElement(AssistantInner.serializer(), it) }
+            ?: return listOf(ClaudeEvent.Other("assistant", null, root))
+        val out = ArrayList<ClaudeEvent>(inner.content.size)
+        for (block in inner.content) {
+            when (block.str("type")) {
+                "text" -> block.str("text")?.takeIf { it.isNotEmpty() }
+                    ?.let { out += ClaudeEvent.AssistantText(it, parentToolUseId) }
+                "thinking" -> block.str("thinking")?.takeIf { it.isNotEmpty() }
+                    ?.let { out += ClaudeEvent.AssistantThinking(it) }
+                "tool_use" -> out += ClaudeEvent.ToolUse(
+                    id = block.str("id").orEmpty(),
+                    name = block.str("name").orEmpty(),
+                    input = (block["input"] as? JsonObject) ?: JsonObject(emptyMap()),
+                )
+            }
+        }
+        return out
+    }
+
+    private fun parseStreamEvent(root: JsonObject): List<ClaudeEvent> {
+        val event = root["event"] as? JsonObject ?: return emptyList()
+        return when (event.str("type")) {
+            "message_start" -> listOf(ClaudeEvent.MessageStart)
+            "content_block_delta" -> {
+                val delta = event["delta"] as? JsonObject ?: return emptyList()
+                when (delta.str("type")) {
+                    "text_delta" -> delta.str("text")?.let { listOf(ClaudeEvent.TextDelta(it)) } ?: emptyList()
+                    "thinking_delta" -> delta.str("thinking")?.let { listOf(ClaudeEvent.ThinkingDelta(it)) } ?: emptyList()
+                    else -> emptyList()
+                }
+            }
+            else -> emptyList()
+        }
+    }
+
+    private fun parseControlRequest(root: JsonObject): List<ClaudeEvent> {
+        val requestId = root.str("request_id") ?: return emptyList()
+        val request = root["request"] as? JsonObject ?: return emptyList()
+        return when (request.str("subtype")) {
+            "can_use_tool" -> listOf(
+                ClaudeEvent.PermissionRequest(
+                    requestId,
+                    ClaudeJson.decodeFromJsonElement(CanUseToolRequest.serializer(), request),
+                )
+            )
+            // Other binary->host requests (mcp_message, hook_callback, elicitation, request_user_dialog…)
+            // are not handled in the MVP; the session replies with an error so the binary is not left waiting.
+            else -> listOf(ClaudeEvent.UnsupportedControlRequest(requestId, request.str("subtype")))
+        }
+    }
+
+    private fun parseControlResponse(root: JsonObject): List<ClaudeEvent> {
+        val response = root["response"] as? JsonObject ?: return emptyList()
+        val requestId = response.str("request_id") ?: return emptyList()
+        val success = response.str("subtype") == "success"
+        return listOf(
+            ClaudeEvent.ControlResult(
+                requestId = requestId,
+                success = success,
+                payload = response["response"] as? JsonObject,
+                error = response.str("error"),
+            )
+        )
+    }
+}
+
+/** Null-safe string accessor for a [JsonObject] field that is a JSON primitive. */
+internal fun JsonObject.str(key: String): String? =
+    (this[key] as? JsonPrimitive)?.contentOrNull

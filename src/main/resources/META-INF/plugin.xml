@@ -1,0 +1,33 @@
+<idea-plugin>
+    <id>dev.lain.claude-code-for-jetbrains</id>
+    <name>Claude Code For JetBrains</name>
+    <vendor email="dev@digitalexperiments.dev">lain</vendor>
+
+    <description><![CDATA[
+        Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
+        binary over its stream-json protocol and exposes the full Claude Code surface as a rich GUI:
+        streaming chat, multi-prompt queueing while the agent works, the complete slash-command
+        palette, model / effort / permission-mode / thinking menus, MCP, agents, context &amp; cost
+        views, and native diff review for file edits. No terminal required.
+    ]]></description>
+
+    <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Right-hand tool window, next to where the JetBrains AI Assistant lives. -->
+        <toolWindow id="Claude Code"
+                    anchor="right"
+                    icon="/icons/claude.svg"
+                    canCloseContents="true"
+                    factoryClass="dev.lain.claudejb.ui.ClaudeToolWindowFactory"/>
+
+        <notificationGroup id="Claude Code" displayType="BALLOON"/>
+
+        <projectConfigurable
+                instance="dev.lain.claudejb.ui.ClaudeSettingsConfigurable"
+                id="dev.lain.claudejb.settings"
+                displayName="Claude Code"
+                nonDefaultProject="false"/>
+    </extensions>
+</idea-plugin>
