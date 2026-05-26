@@ -4,11 +4,61 @@
     <vendor email="dev@digitalexperiments.dev">lain</vendor>
 
     <description><![CDATA[
-        Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
-        binary over its stream-json protocol and exposes the full Claude Code surface as a rich GUI:
-        streaming chat, multi-prompt queueing while the agent works, the complete slash-command
-        palette, model / effort / permission-mode / thinking menus, MCP, agents, context &amp; cost
-        views, and native diff review for file edits. No terminal required.
+        <p>Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
+        binary over its stream-json protocol — no terminal required, no Node.js at runtime.</p>
+
+        <h2>Features</h2>
+
+        <h3>Streaming chat</h3>
+        <ul>
+            <li>Real-time token streaming with animated thinking indicator and live token counter</li>
+            <li>Multi-tab support — independent sessions per project</li>
+            <li>Multi-prompt queue: type while the agent is working, messages sent in order when the turn ends</li>
+            <li><code>/btw</code> side-questions sent mid-turn without interrupting the active turn</li>
+            <li>Interrupt (Esc) to stop the current turn at any time</li>
+        </ul>
+
+        <h3>Full slash-command palette</h3>
+        <ul>
+            <li>All commands from the <code>claude</code> binary surfaced natively (Ctrl+K)</li>
+            <li>Built-in <code>/btw</code> command added by the plugin</li>
+        </ul>
+
+        <h3>Model &amp; runtime controls</h3>
+        <ul>
+            <li>Model selector chip (all models available in your account)</li>
+            <li>Permission mode chip (default / acceptEdits / bypassPermissions)</li>
+            <li>Effort chip (low / medium / high) for extended thinking</li>
+            <li>Thinking token budget (Ctrl+O to toggle)</li>
+        </ul>
+
+        <h3>Native diff review for file edits</h3>
+        <ul>
+            <li>When the agent requests to write or edit a file, a diff opens inline in the editor area</li>
+            <li>Non-modal Accept / Reject card in the chat — no popups or modal dialogs</li>
+            <li>On acceptance the binary writes the file; VFS is refreshed automatically</li>
+        </ul>
+
+        <h3>Permission &amp; question handling</h3>
+        <ul>
+            <li><code>can_use_tool</code> requests surface as native inline cards (Accept / Reject)</li>
+            <li><code>AskUserQuestion</code> rendered as a structured question card with option buttons</li>
+            <li>Auto-approve in <code>acceptEdits</code> / <code>bypassPermissions</code> modes</li>
+        </ul>
+
+        <h3>IDE integration</h3>
+        <ul>
+            <li>Tool window anchored to the right panel (same area as AI Assistant)</li>
+            <li>Light and dark theme support with custom icons</li>
+            <li>Works in any IntelliJ Platform IDE (IDEA, PyCharm, WebStorm, GoLand, etc.)</li>
+        </ul>
+
+        <h2>Requirements</h2>
+        <ul>
+            <li>JetBrains IDE 2024.3 – 2025.1.x (build 243–261)</li>
+            <li><a href="https://claude.ai/code"><code>claude</code> binary</a> installed and on PATH or <code>~/.local/bin/</code></li>
+            <li>Claude subscription (claude.ai) or <code>ANTHROPIC_API_KEY</code> environment variable</li>
+        </ul>
     ]]></description>
 
     <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
