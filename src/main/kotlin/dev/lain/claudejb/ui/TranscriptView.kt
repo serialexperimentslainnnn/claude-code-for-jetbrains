@@ -3,7 +3,9 @@ package dev.lain.claudejb.ui
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.panels.VerticalLayout
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.JBUI
+import dev.lain.claudejb.session.Speaker
 import dev.lain.claudejb.session.TranscriptEntry
 import dev.lain.claudejb.session.TranscriptModel
 import java.awt.BorderLayout
@@ -26,6 +28,10 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
 
     private val rows = LinkedHashMap<Long, MessageRow>()
 
+    // Tool rows by their tool_use id, so an output or nested entry can be routed *into* its tool item's
+    // children container rather than scattered as a flat sibling.
+    private val toolRowByToolUseId = HashMap<String, ToolRow>()
+
     /**
      * Streaming coalescing: re-rendering a row's Markdown means reparsing its whole HTML document, which is
      * O(n) per delta and O(n²) over a long streamed message — enough to choke the EDT. Instead of rendering
@@ -36,9 +42,9 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
     private val flushTimer = javax.swing.Timer(80) { flushDirty() }.apply { isRepeats = true }
 
     /** Tracks the viewport width so HTML rows wrap instead of forcing a horizontal scrollbar. */
-    private val content = object : JPanel(VerticalLayout(JBUI.scale(2))), Scrollable {
+    private val content = object : JPanel(VerticalLayout(JBUIScale.scale(2))), Scrollable {
         override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
-        override fun getScrollableUnitIncrement(r: Rectangle, orientation: Int, direction: Int) = JBUI.scale(24)
+        override fun getScrollableUnitIncrement(r: Rectangle, orientation: Int, direction: Int) = JBUIScale.scale(24)
         override fun getScrollableBlockIncrement(r: Rectangle, orientation: Int, direction: Int) = r.height
         override fun getScrollableTracksViewportWidth() = true
         override fun getScrollableTracksViewportHeight() = false
@@ -51,7 +57,7 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
     private val scroll = JBScrollPane(content).apply {
         border = JBUI.Borders.empty()
         horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        verticalScrollBar.unitIncrement = JBUI.scale(24)
+        verticalScrollBar.unitIncrement = JBUIScale.scale(24)
         viewport.background = ChatTheme.BG
     }
 
@@ -63,16 +69,35 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
         showEmptyState(true)
     }
 
-    override fun onAdded(entry: TranscriptEntry) {
+    override fun onAdded(entry: TranscriptEntry, index: Int) {
         val atBottom = isAtBottom()
         showEmptyState(false)
         val row = MessageRow.create(entry)
         rows[entry.id] = row
-        content.add(row)
+
+        if (entry.speaker == Speaker.TOOL && entry.toolUseId != null) {
+            (row as ToolRow).onToggle = {
+                content.revalidate()
+                content.repaint()
+                if (atBottom) scrollToBottom()
+            }
+            toolRowByToolUseId[entry.toolUseId] = row
+        }
+
+        // Route the row into its tool item's children container when it belongs to one (an output to its own
+        // call, nested activity to its Agent); each parent's direct children arrive in order, so append keeps
+        // them ordered without touching the flat list. Top-level entries append to the flat transcript.
+        val parentRow = directParentToolId(entry)?.let { toolRowByToolUseId[it] }
+        if (parentRow != null) parentRow.addChild(row) else content.add(row)
+
         content.revalidate()
         content.repaint()
         if (atBottom) scrollToBottom()
     }
+
+    /** The tool whose item this entry lives inside: its own call (for an output) or its Agent (nested activity). */
+    private fun directParentToolId(e: TranscriptEntry): String? =
+        if (e.speaker == Speaker.TOOL_OUTPUT) e.toolUseId else e.parentToolUseId
 
     override fun onUpdated(entry: TranscriptEntry) {
         if (entry.id !in rows) return
@@ -99,6 +124,7 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
         flushTimer.stop()
         dirty.clear()
         rows.clear()
+        toolRowByToolUseId.clear()
         content.removeAll()
         showEmptyState(true)
         content.revalidate()
@@ -126,7 +152,7 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
 
     private fun isAtBottom(): Boolean {
         val bar = scroll.verticalScrollBar
-        return bar.value + bar.visibleAmount >= bar.maximum - JBUI.scale(24)
+        return bar.value + bar.visibleAmount >= bar.maximum - JBUIScale.scale(24)
     }
 
     private fun scrollToBottom() {

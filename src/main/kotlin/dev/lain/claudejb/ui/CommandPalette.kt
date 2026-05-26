@@ -5,7 +5,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.awt.RelativePoint
-import com.intellij.util.ui.JBUI
+import com.intellij.ui.scale.JBUIScale
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.session.ClaudeSession
 import java.awt.Dimension
@@ -54,8 +54,8 @@ object CommandPalette {
         // Walk up the component tree to find the chat panel's actual width: the first ancestor
         // significantly wider than the input textarea is the card or outer panel.
         var c: java.awt.Component? = anchor.parent
-        while (c != null && c.width <= anchor.width + JBUI.scale(40)) c = c.parent
-        val popupWidth = c?.width ?: JBUI.scale(500)
+        while (c != null && c.width <= anchor.width + JBUIScale.scale(40)) c = c.parent
+        val popupWidth = c?.width ?: JBUIScale.scale(500)
 
         // Constrain width and measure height BEFORE showing, so we can place above the anchor.
         val content = popup.content

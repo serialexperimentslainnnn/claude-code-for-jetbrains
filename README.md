@@ -7,6 +7,8 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 ## Features
 
 - **Streaming chat** — token-by-token rendering in a native Swing transcript, multi-chat tabs
+- **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call
+- **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
 - **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
 - **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
 - **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
@@ -28,7 +30,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 **From a pre-built zip:**
 
-1. Download `claude-code-for-jetbrains-1.0.0.zip` from [Releases](../../releases)
+1. Download `claude-code-for-jetbrains-1.2.0.zip` from [Releases](../../releases)
 2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the zip and restart
 
@@ -60,7 +62,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-for-jetbrains-1.0.0.zip`
+Output: `build/distributions/claude-code-for-jetbrains-1.2.0.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -75,6 +77,6 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v1.0.0** — First stable release. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v1.2.0** — Collapsible tool calls, nested subagent transcripts, anchored tool outputs. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.

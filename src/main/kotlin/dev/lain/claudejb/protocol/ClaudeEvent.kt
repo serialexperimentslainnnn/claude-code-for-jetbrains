@@ -1,7 +1,9 @@
 package dev.lain.claudejb.protocol
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
@@ -19,8 +21,13 @@ sealed interface ClaudeEvent {
     /** A finalized thinking block. */
     data class AssistantThinking(val text: String) : ClaudeEvent
 
-    /** A tool_use block: the agent wants to run [name] with [input]. */
-    data class ToolUse(val id: String, val name: String, val input: JsonObject) : ClaudeEvent
+    /** A tool_use block: the agent wants to run [name] with [input]. [parentToolUseId] is set when the call
+     *  comes from inside a subagent (Task), so the UI can nest it under that Agent. */
+    data class ToolUse(val id: String, val name: String, val input: JsonObject, val parentToolUseId: String?) : ClaudeEvent
+
+    /** The result of a tool execution, emitted by the binary as a user/tool_result block. [parentToolUseId]
+     *  is set for subagent results so the output nests under its Agent. */
+    data class ToolResult(val toolUseId: String, val content: String, val isError: Boolean, val parentToolUseId: String?) : ClaudeEvent
 
     /** Incremental text delta from --include-partial-messages (live streaming preview). */
     data class TextDelta(val text: String) : ClaudeEvent
@@ -77,6 +84,7 @@ object ProtocolParser {
         return when (type) {
             "system" -> parseSystem(root)
             "assistant" -> parseAssistant(root)
+            "user" -> parseUser(root)
             "stream_event" -> parseStreamEvent(root)
             "result" -> listOf(ClaudeEvent.Result(ClaudeJson.decodeFromJsonElement(ResultMessage.serializer(), root)))
             "control_request" -> parseControlRequest(root)
@@ -143,6 +151,7 @@ object ProtocolParser {
                     id = block.str("id").orEmpty(),
                     name = block.str("name").orEmpty(),
                     input = (block["input"] as? JsonObject) ?: JsonObject(emptyMap()),
+                    parentToolUseId = parentToolUseId,
                 )
             }
         }
@@ -166,6 +175,23 @@ object ProtocolParser {
                 }
             }
             else -> emptyList()
+        }
+    }
+
+    private fun parseUser(root: JsonObject): List<ClaudeEvent> {
+        val message = root["message"] as? JsonObject ?: return emptyList()
+        val content = message["content"] as? JsonArray ?: return emptyList()
+        val parentToolUseId = root.str("parent_tool_use_id")
+        return content.filterIsInstance<JsonObject>().mapNotNull { block ->
+            if (block.str("type") != "tool_result") return@mapNotNull null
+            val toolUseId = block.str("tool_use_id") ?: return@mapNotNull null
+            val isError = (block["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false
+            val text = when (val c = block["content"]) {
+                is JsonPrimitive -> c.contentOrNull.orEmpty()
+                is JsonArray -> c.filterIsInstance<JsonObject>().mapNotNull { it.str("text") }.joinToString("\n")
+                else -> ""
+            }
+            ClaudeEvent.ToolResult(toolUseId, text, isError, parentToolUseId)
         }
     }
 

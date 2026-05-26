@@ -4,7 +4,10 @@ import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.HTMLEditorKitBuilder
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.JBUI
 import dev.lain.claudejb.session.Speaker
 import dev.lain.claudejb.session.TranscriptEntry
@@ -35,9 +38,13 @@ import javax.swing.text.html.StyleSheet
  * Streaming entries (assistant text, thinking) grow via [update]; the others are written once.
  */
 sealed class MessageRow(val entryId: Long) : JPanel(BorderLayout()) {
+    /** Row padding; subclasses tweak it (e.g. tool outputs sit tighter to their call). */
+    protected open val baseInsets: Insets get() = Insets(5, 12, 5, 12)
+
     init {
         isOpaque = false
-        border = JBUI.Borders.empty(5, 12)
+        val i = baseInsets
+        border = JBUI.Borders.empty(i.top, i.left, i.bottom, i.right)
     }
 
     abstract fun update(text: String, meta: String?)
@@ -51,6 +58,7 @@ sealed class MessageRow(val entryId: Long) : JPanel(BorderLayout()) {
             Speaker.ASSISTANT -> AssistantRow(entry.id)
             Speaker.THINKING -> ThinkingRow(entry.id)
             Speaker.TOOL -> ToolRow(entry.id)
+            Speaker.TOOL_OUTPUT -> ToolOutputRow(entry.id)
             Speaker.SYSTEM -> SystemRow(entry.id)
             Speaker.ERROR -> ErrorRow(entry.id)
         }.also { it.update(entry.text, entry.meta) }
@@ -151,7 +159,7 @@ private class ThinkingRow(id: Long) : MessageRow(id) {
     override fun update(text: String, meta: String?) = content.setMarkdown(text)
 }
 
-private class ToolRow(id: Long) : MessageRow(id) {
+class ToolRow(id: Long) : MessageRow(id) {
     // JTextArea (not a label): a long Bash command wraps onto multiple lines and stays fully readable
     // instead of being clipped to one line with an ellipsis.
     private val label = JTextArea().apply {
@@ -168,15 +176,73 @@ private class ToolRow(id: Long) : MessageRow(id) {
         border = JBUI.Borders.emptyRight(8)
         verticalAlignment = SwingConstants.TOP // stay aligned with the first line of a multi-line command
     }
+    // Disclosure triangle: collapses/expands this tool's child rows (output, and a subagent's nested activity).
+    // Hidden until the tool actually has children, so a childless call shows no useless toggle.
+    private val toggle = JBLabel().apply {
+        foreground = ChatTheme.TEXT_DIM
+        font = ChatTheme.small
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        border = JBUI.Borders.emptyRight(6)
+        verticalAlignment = SwingConstants.TOP
+        isVisible = false
+    }
     private val card = ChatTheme.RoundedPanel(10, ChatTheme.CARD_BG, ChatTheme.BORDER).apply {
         layout = BorderLayout()
         border = JBUI.Borders.empty(6, 10)
-        add(icon, BorderLayout.WEST)
-        add(label, BorderLayout.CENTER)
+        add(toggle, BorderLayout.WEST)
+        add(JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(icon, BorderLayout.WEST)
+            add(label, BorderLayout.CENTER)
+        }, BorderLayout.CENTER)
+    }
+
+    // Physical container for this tool's outputs and nested (subagent) activity. Children live *inside* the
+    // tool item, so collapsing simply hides this panel and arrival order is preserved by append — no flat-list
+    // index juggling that let late-arriving outputs scatter under unrelated rows.
+    private val childrenPanel = JPanel(VerticalLayout(JBUIScale.scale(2))).apply {
+        isOpaque = false
+        border = JBUI.Borders.emptyLeft(JBUIScale.scale(14))
+        isVisible = false // outputs start collapsed
+    }
+
+    // Outputs are collapsed by default; the user expands a tool to inspect its result.
+    private var expanded = false
+    private var hasChildren = false
+
+    /** Invoked after the user toggles, so the view can re-lay out and keep the scroll pinned. */
+    var onToggle: (() -> Unit)? = null
+
+    /** Append a child row (output or nested activity) inside this tool item and reveal the disclosure toggle. */
+    fun addChild(row: JComponent) {
+        childrenPanel.add(row)
+        if (!hasChildren) {
+            hasChildren = true
+            toggle.isVisible = true
+            syncToggle()
+        }
     }
 
     init {
-        add(card, BorderLayout.CENTER)
+        syncToggle()
+        toggle.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                if (!hasChildren) return
+                expanded = !expanded
+                childrenPanel.isVisible = expanded
+                syncToggle()
+                onToggle?.invoke()
+            }
+        })
+        add(JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(card, BorderLayout.NORTH)
+            add(childrenPanel, BorderLayout.CENTER)
+        }, BorderLayout.CENTER)
+    }
+
+    private fun syncToggle() {
+        toggle.text = if (expanded) "▾" else "▸"
     }
 
     override fun update(text: String, meta: String?) {
@@ -192,6 +258,49 @@ private class ToolRow(id: Long) : MessageRow(id) {
         "WebFetch", "WebSearch" -> AllIcons.General.Web
         "Task" -> AllIcons.Actions.RunAll
         else -> AllIcons.Nodes.Plugin
+    }
+}
+
+private class ToolOutputRow(id: Long) : MessageRow(id) {
+    private val area = JTextArea().apply {
+        isEditable = false
+        lineWrap = false
+        font = ChatTheme.mono
+        foreground = ChatTheme.TEXT_DIM
+        background = ChatTheme.CODE_BG
+        border = JBUI.Borders.empty(6, 8)
+        margin = Insets(0, 0, 0, 0)
+    }
+    private val scroll = JBScrollPane(area).apply {
+        border = JBUI.Borders.empty()
+        horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+        verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+        background = ChatTheme.CODE_BG
+        viewport.background = ChatTheme.CODE_BG
+    }
+    private val card = ChatTheme.RoundedPanel(10, ChatTheme.CODE_BG, ChatTheme.BORDER).apply {
+        layout = BorderLayout()
+        add(scroll, BorderLayout.CENTER)
+    }
+
+    // Reduced top padding so the output block reads as attached to the tool call card above.
+    override val baseInsets: Insets get() = Insets(2, 12, 5, 12)
+
+    init {
+        add(card, BorderLayout.CENTER)
+    }
+
+    override fun update(text: String, meta: String?) {
+        val lines = text.lines()
+        val truncated = if (lines.size > 200) {
+            lines.take(200).joinToString("\n") + "\n… (${lines.size - 200} more lines)"
+        } else text
+        area.text = truncated
+        area.caretPosition = 0
+        // Cap height so a huge file read doesn't flood the chat; let the scrollbar handle the rest.
+        val naturalH = area.preferredSize.height + JBUIScale.scale(12)
+        scroll.preferredSize = Dimension(0, minOf(naturalH, JBUIScale.scale(160)))
+        revalidate()
     }
 }
 
@@ -248,7 +357,7 @@ class HtmlContent(dim: Boolean = false) : JEditorPane() {
     }
 
     // Don't let the HTML view demand a wide preferred width; it must wrap to whatever the column gives it.
-    override fun getMinimumSize(): Dimension = Dimension(JBUI.scale(60), super.getMinimumSize().height)
+    override fun getMinimumSize(): Dimension = Dimension(JBUIScale.scale(60), super.getMinimumSize().height)
 
     private fun buildKit(): HTMLEditorKit {
         val ss = StyleSheet().apply {

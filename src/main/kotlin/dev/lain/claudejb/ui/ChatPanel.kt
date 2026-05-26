@@ -67,7 +67,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         isOpaque = true
     }
 
-    private val permissionTray = JPanel(VerticalLayout(JBUI.scale(6))).apply {
+    private val permissionTray = JPanel(VerticalLayout(JBUIScale.scale(6))).apply {
         isOpaque = false
         border = JBUI.Borders.emptyBottom(6)
         isVisible = false
@@ -81,12 +81,15 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     // Subscription quota shown above the prompt as two text lines.
-    private val quotaLabel = JBLabel().apply {
+    private val quotaLabel = JBLabel().apply {  // line 1: "Resets in Xh Ym" / warning
         font = ChatTheme.small
         foreground = ChatTheme.TEXT_DIM
-        border = JBUI.Borders.emptyBottom(1)
     }
-    private val usageLabel = JBLabel().apply {
+    private val resetHourLabel = JBLabel().apply {  // line 2: "Reset Hour: HH:mm"
+        font = ChatTheme.small
+        foreground = ChatTheme.TEXT_DIM
+    }
+    private val usageLabel = JBLabel().apply {  // line 3: "Session Usage: X%"
         font = ChatTheme.small
         foreground = ChatTheme.TEXT_DIM
     }
@@ -94,6 +97,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         isOpaque = false
         border = JBUI.Borders.emptyBottom(6)
         add(quotaLabel)
+        add(resetHourLabel)
         add(usageLabel)
         isVisible = false
     }
@@ -108,8 +112,11 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
 
     private val statusLabel = JBLabel().apply {
         foreground = ChatTheme.TEXT_DIM
-        font = JBFont.medium()
+        // Match the quota lines' typography so the spinner/token meter sits on the same baseline as the
+        // reset timers above it, instead of dropping lower with a larger font.
+        font = ChatTheme.small
         horizontalAlignment = SwingConstants.LEADING
+        verticalAlignment = SwingConstants.TOP
     }
 
     // CLI-style "thinking" spinner: a rotating gerund + braille frames, animated only while a turn is active.
@@ -151,7 +158,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
 
         session.transcript.addListener(transcript)
         session.addListener(this)
-        session.transcript.entries.forEach(transcript::onAdded)
+        session.transcript.entries.forEachIndexed { index, entry -> transcript.onAdded(entry, index) }
         refreshState()
         rebuildPermissionTray()
         quotaRefreshTimer.start()
@@ -161,7 +168,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
     /** Card composer: trays (permissions, queue) on top, two-tone input card (gray input / dark options). */
     private fun buildComposer(): JComponent {
         val inputScroll = JBScrollPane(input).apply {
-            preferredSize = Dimension(0, JBUI.scale(60))
+            preferredSize = Dimension(0, JBUIScale.scale(60))
             border = JBUI.Borders.empty()
             isOpaque = false
             viewport.isOpaque = false
@@ -196,7 +203,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 val g2 = g.create() as Graphics2D
                 try {
                     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                    val arc = JBUI.scale(14)
+                    val arc = JBUIScale.scale(14)
                     val w = width; val h = height
                     val splitY = optionsBar.y.takeIf { optionsBar.height > 0 }
                         ?: (h - optionsBar.preferredSize.height)
@@ -222,8 +229,8 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             isOpaque = true
             background = ChatTheme.BG
             border = JBUI.Borders.empty(2, 18, 10, 18)
-            add(statusLabel)
             add(quotaPanel)
+            add(statusLabel)
             add(permissionTray)
             add(queueStrip)
             add(card)
@@ -246,6 +253,11 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                     e.keyCode == KeyEvent.VK_ENTER && !e.isShiftDown -> {
                         e.consume()
                         sendInput()
+                    }
+                    // Shift+Enter has no default binding in JTextArea, so insert the newline ourselves.
+                    e.keyCode == KeyEvent.VK_ENTER && e.isShiftDown -> {
+                        e.consume()
+                        input.replaceSelection("\n")
                     }
                     e.keyCode == KeyEvent.VK_ESCAPE && session.turnActive -> {
                         e.consume()
@@ -362,7 +374,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             else      -> Color(0xEF5350)
         }
 
-        // Line 1 — reset countdown (+ overage). Present whenever there is a window.
+        // Line 1 — reset countdown (+ overage/warning). Present whenever there is a window.
         val resetStr = rl.resetsAt?.let {
             val remaining = it - System.currentTimeMillis() / 1000
             if (remaining > 0) {
@@ -375,17 +387,18 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         quotaLabel.text = (if (rl.isWarning) "⚠ " else "") + (resetStr ?: "") + overage
         quotaLabel.foreground = if (rl.isWarning) usageColor else ChatTheme.TEXT_DIM
 
-        // Line 2 — only the parts we actually have: the % meter drops out when utilization isn't reported.
-        val parts = buildList {
-            if (pct != null) add("Session Usage: ${if (rl.isExhausted) "exhausted" else "$pct%"}")
-            rl.resetsAt?.let {
-                val hour = java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
-                    .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
-                add("Reset Hour: $hour")
-            }
+        // Line 2 — reset hour. Present whenever resetsAt is known.
+        val resetHour = rl.resetsAt?.let {
+            java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
         }
-        usageLabel.isVisible = parts.isNotEmpty()
-        usageLabel.text = parts.joinToString("  ")
+        resetHourLabel.isVisible = resetHour != null
+        resetHourLabel.text = resetHour?.let { "Reset Hour: $it" } ?: ""
+        resetHourLabel.foreground = ChatTheme.TEXT_DIM
+
+        // Line 3 — session usage %. Only shown when the binary reports utilization (near limit / overage).
+        usageLabel.isVisible = pct != null
+        usageLabel.text = if (pct != null) "Session Usage: ${if (rl.isExhausted) "exhausted" else "$pct%"}" else ""
         usageLabel.foreground = usageColor
 
         if (wasHidden) { quotaPanel.parent?.revalidate(); quotaPanel.parent?.repaint() }
@@ -431,7 +444,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             foreground = ChatTheme.TEXT
             font = ChatTheme.small.asBold()
         }
-        val texts = JPanel(VerticalLayout(JBUI.scale(2))).apply {
+        val texts = JPanel(VerticalLayout(JBUIScale.scale(2))).apply {
             isOpaque = false
             add(titleLabel)
             if (request.summary.isNotBlank()) {
@@ -444,7 +457,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                     isOpaque = true
                     border = JBUI.Borders.empty(3, 6)
                 }
-                val naturalH = (area.preferredSize.height + JBUI.scale(6)).coerceAtMost(JBUI.scale(82))
+                val naturalH = (area.preferredSize.height + JBUIScale.scale(6)).coerceAtMost(JBUIScale.scale(82))
                 add(JBScrollPane(area).apply {
                     border = JBUI.Borders.empty()
                     background = ChatTheme.CODE_BG
@@ -469,7 +482,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         buttons.add(RoundedActionButton("Accept") { session.resolvePermission(request.requestId, allow = true) })
 
         return ChatTheme.RoundedPanel(12, ChatTheme.CARD_BG, ChatTheme.ACCENT).apply {
-            layout = BorderLayout(JBUI.scale(8), JBUI.scale(6))
+            layout = BorderLayout(JBUIScale.scale(8), JBUIScale.scale(6))
             border = JBUI.Borders.empty(10, 12)
             add(texts, BorderLayout.CENTER)
             add(buttons, BorderLayout.SOUTH)
@@ -491,7 +504,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             }
         }.apply { isEnabled = false }
 
-        val body = JPanel(VerticalLayout(JBUI.scale(4))).apply { isOpaque = false }
+        val body = JPanel(VerticalLayout(JBUIScale.scale(4))).apply { isOpaque = false }
         body.add(JBLabel(request.title).apply { foreground = ChatTheme.TEXT; font = ChatTheme.small.asBold() })
 
         for (q in questions) {
@@ -538,7 +551,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         buttons.add(submit)
 
         return ChatTheme.RoundedPanel(12, ChatTheme.CARD_BG, ChatTheme.ACCENT).apply {
-            layout = BorderLayout(JBUI.scale(8), JBUI.scale(6))
+            layout = BorderLayout(JBUIScale.scale(8), JBUIScale.scale(6))
             border = JBUI.Borders.empty(10, 12)
             add(body, BorderLayout.CENTER)
             add(buttons, BorderLayout.SOUTH)
@@ -625,7 +638,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             isBorderPainted = false
             isOpaque = false
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            val s = JBUI.scale(32)
+            val s = JBUIScale.scale(32)
             preferredSize = Dimension(s, s)
             minimumSize = Dimension(s, 0)
             maximumSize = Dimension(s, Int.MAX_VALUE)
@@ -642,7 +655,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 if (model.isRollover || model.isPressed) {
                     val alpha = if (model.isPressed) 50 else 25
                     g2.color = Color(255, 255, 255, alpha)
-                    g2.fillRoundRect(2, 2, w - 4, h - 4, JBUI.scale(6), JBUI.scale(6))
+                    g2.fillRoundRect(2, 2, w - 4, h - 4, JBUIScale.scale(6), JBUIScale.scale(6))
                 }
 
                 val iconAlpha = if (isEnabled) 210 else 80
@@ -650,12 +663,12 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
 
                 if (isStopMode) {
                     g2.color = Color(150, 150, 150, iconAlpha)
-                    val sq = JBUI.scale(11)
-                    g2.drawRoundRect((w - sq) / 2, (h - sq) / 2, sq, sq, JBUI.scale(3), JBUI.scale(3))
+                    val sq = JBUIScale.scale(11)
+                    g2.drawRoundRect((w - sq) / 2, (h - sq) / 2, sq, sq, JBUIScale.scale(3), JBUIScale.scale(3))
                 } else {
                     g2.color = Color(200, 200, 200, iconAlpha)
-                    val padX = JBUI.scale(9)
-                    val padY = JBUI.scale(9)
+                    val padX = JBUIScale.scale(9)
+                    val padY = JBUIScale.scale(9)
                     g2.drawPolygon(
                         intArrayOf(w - padX, padX, padX),
                         intArrayOf(h / 2,    padY, h - padY),
@@ -694,7 +707,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                     model.isPressed -> base.darker()
                     else -> base
                 }
-                val arc = JBUI.scale(14)
+                val arc = JBUIScale.scale(14)
                 g2.fillRoundRect(0, 0, width, height, arc, arc)
             } finally {
                 g2.dispose()

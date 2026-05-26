@@ -6,7 +6,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBFont
-import com.intellij.util.ui.JBUI
+import com.intellij.ui.scale.JBUIScale
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
@@ -116,7 +116,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         private val boxes = LinkedHashMap<String, JBCheckBox>().apply {
             options.forEach { put(it, JBCheckBox(it)) }
         }
-        val component: JComponent = JPanel(GridLayout(0, columns, JBUI.scale(8), JBUI.scale(2))).apply {
+        val component: JComponent = JPanel(GridLayout(0, columns, JBUIScale.scale(8), JBUIScale.scale(2))).apply {
             boxes.values.forEach { add(it) }
         }
 

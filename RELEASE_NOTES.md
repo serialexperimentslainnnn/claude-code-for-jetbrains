@@ -1,17 +1,12 @@
-# Claude Code Native — Release Notes
+## v1.2.0 — 2026-05-26
 
-## v1.1.0 — 2026-05-26
+**Hierarchical, collapsible transcript**
+- Every tool call is now a collapsible group: a disclosure triangle on the tool card shows or hides its output.
+- Subagent (`Task`/Agent) activity nests under its Agent — the subagent's own tool calls, outputs and text are anchored and indented beneath the Agent card. Collapsing is hierarchical: collapse the Agent to fold its whole subtree, or collapse a single sub-tool to fold just its output.
+- Tool outputs now anchor directly under their tool call instead of drifting to the end of the transcript. This fixes outputs of tools that require human interaction (permission cards, `AskUserQuestion`) and long-running/parallel calls, where the result previously landed at the tail.
 
-### Fixed
+---
 
-**Quota bar**
-- Reset countdown and overage indicator now stay visible even when the usage % isn't reported (e.g. Max plans with plenty of headroom). The % meter drops out gracefully when the binary doesn't send utilization data instead of hiding the whole bar.
-- `isWarning` / `isExhausted` flags no longer trigger on `overageStatus = "rejected"` alone, avoiding false quota-exhausted state.
-
-**Token counter**
-- Multi-message turns (tool calls, chained assistant messages) now accumulate correctly. Previously only the last message's token count was shown; each message's tokens are now folded into the session total before the next one starts.
-
-**Error handling**
 - Failed turns that carry no `result` text (SDK `error_*` subtypes) now always surface a message in the transcript — falling back to the `errors` list or the subtype name. Silent failures after a tool error are gone.
 
 **Session lifecycle**
@@ -22,6 +17,28 @@
 
 **Build**
 - `JBUI.scale` → `JBUIScale.scale` (correct API for stroke scaling in IntelliJ Platform 2025+).
+
+**Info bar**
+- Reordered: (1) Resets in countdown, (2) Reset Hour, (3) Session Usage %, (4) Brewing / live tokens / Esc to interrupt.
+
+---
+
+## v1.1.0 — 2026-05-26
+
+**Quota & rate-limit fixes**
+- Quota bar stays visible with reset countdown when utilization % is not reported (Max plans); % meter hides independently.
+- `isWarning` / `isExhausted` no longer fire on `overageStatus = "rejected"` alone.
+- Token counter now accumulates correctly across multi-message turns (tool calls, chained assistant messages).
+
+**Session reliability**
+- Failed turns with no `result` text (`error_*` subtypes) surface the `errors` list or subtype name — no more silent failures.
+- `dispose()` sends EOF before killing the process (clean exit, same order as `stop()`).
+- `LiveUsage` updates moved to EDT to eliminate read-modify-write race on token counters.
+- `ready` and `process` marked `@Volatile` — visibility gap on session start/stop across threads fixed.
+- Startup queue flushed after `system/init` — messages sent before the handshake are no longer dropped.
+
+**Protocol**
+- `errors: List<String>` field added to `ResultMessage` to capture SDK `SDKResultError.errors` payloads.
 
 ---
 

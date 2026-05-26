@@ -6,7 +6,7 @@ import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.NamedColorUtil
-import com.intellij.util.ui.JBUI
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.UIUtil
 import java.awt.Color
 import java.awt.Graphics
@@ -63,7 +63,7 @@ object ChatTheme {
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                val a = JBUI.scale(arc)
+                val a = JBUIScale.scale(arc)
                 if (fill != null) {
                     g2.color = fill
                     g2.fillRoundRect(0, 0, width, height, a, a)

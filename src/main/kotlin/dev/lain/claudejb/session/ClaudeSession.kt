@@ -180,6 +180,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         edt { clearPending(); fireState() }
     }
 
+    /**
+     * The mode the binary actually runs in. `acceptEdits`/`bypassPermissions` are enforced host-side by the
+     * [PermissionBroker]: we keep the binary in `default` so it still routes every edit through
+     * `--permission-prompt-tool stdio`. That round-trip is what lets us open the native diff in the IDE before
+     * the binary writes — newer binaries auto-approve edits internally in acceptEdits and never prompt, so the
+     * diff would otherwise never appear. `default`/`plan` pass through unchanged.
+     */
+    private fun binaryPermissionMode(): String =
+        if (permissionMode == "acceptEdits" || permissionMode == "bypassPermissions") "default" else permissionMode
+
     private fun buildArgs(resume: Boolean): List<String> {
         val args = mutableListOf(
             "--print",
@@ -187,7 +197,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             "--input-format", "stream-json",
             "--verbose",
             "--permission-prompt-tool", "stdio",
-            "--permission-mode", permissionMode,
+            "--permission-mode", binaryPermissionMode(),
         )
         if (includePartialMessages) args += "--include-partial-messages"
         if (settingSources.isNotBlank()) args += listOf("--setting-sources", settingSources)
@@ -346,7 +356,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         permissionMode = mode
         // Persist so new tabs / restarts launch in this mode instead of falling back to "default".
         ClaudeSettings.getInstance(project).getState().permissionMode = mode
-        if (isRunning()) write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), mode))
+        if (isRunning()) write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), binaryPermissionMode()))
         fireState()
     }
 
@@ -422,8 +432,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // reports the *launch-time* mode ("default"), which used to clobber a user choice (the
                 // recurring "reset to default" bug). Never adopt it; if the binary has drifted from our mode,
                 // push ours back so it converges instead.
-                if (event.info.permissionMode.isNotBlank() && event.info.permissionMode != permissionMode) {
-                    write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), permissionMode))
+                if (event.info.permissionMode.isNotBlank() && event.info.permissionMode != binaryPermissionMode()) {
+                    write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), binaryPermissionMode()))
                 }
                 ready = true
                 edt {
@@ -435,7 +445,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.TextDelta -> edt { appendAssistant(event.text) }
             is ClaudeEvent.ThinkingDelta -> edt { appendThinking(event.text) }
-            is ClaudeEvent.AssistantText -> edt { finalizeAssistant(event.text) }
+            is ClaudeEvent.AssistantText -> edt {
+                // Subagent text arrives finalized with a parent id: anchor it under its Agent without touching
+                // the top-level live stream. Top-level text keeps the existing streaming reconciliation.
+                if (event.parentToolUseId != null) {
+                    transcript.add(Speaker.ASSISTANT, event.text, parentToolUseId = event.parentToolUseId)
+                } else {
+                    finalizeAssistant(event.text)
+                }
+            }
             is ClaudeEvent.AssistantThinking -> edt { finalizeThinking(event.text) }
             is ClaudeEvent.MessageStart -> edt {
                 // A turn can emit several assistant messages (e.g. around tool calls). message_delta usage
@@ -448,9 +466,26 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.ToolUse -> edt {
-                liveAssistant = null
-                liveThinking = null
-                transcript.add(Speaker.TOOL, formatToolUse(event.name, event.input), meta = event.name)
+                // Only break the top-level live stream for top-level tool calls; a subagent's tool call must not
+                // cut a top-level paragraph that may continue after the Agent finishes.
+                if (event.parentToolUseId == null) {
+                    liveAssistant = null
+                    liveThinking = null
+                }
+                transcript.add(
+                    Speaker.TOOL,
+                    formatToolUse(event.name, event.input),
+                    meta = event.name,
+                    toolUseId = event.id,
+                    parentToolUseId = event.parentToolUseId,
+                )
+            }
+
+            is ClaudeEvent.ToolResult -> edt {
+                val text = event.content.trim()
+                if (text.isNotBlank()) {
+                    transcript.addToolOutput(event.toolUseId, text, parentToolUseId = event.parentToolUseId)
+                }
             }
 
             is ClaudeEvent.Result -> edt {
