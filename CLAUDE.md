@@ -1,57 +1,57 @@
-# Claude Code for JetBrains — plugin nativo
+# Claude Code for JetBrains — native plugin
 
-Plugin de IntelliJ Platform (Kotlin/Swing) que integra Claude Code en IDEs JetBrains, con GUI nativa rica (chat en streaming, review de diffs por permisos, plan-mode, sesiones, inteligencia del IDE al agente). Objetivo: superar al AI Assistant y al plugin oficial (hoy un lanzador de terminal). Para presentar a Anthropic.
+IntelliJ Platform plugin (Kotlin/Swing) that integrates Claude Code into JetBrains IDEs, with a rich native GUI (streaming chat, permission-gated diff review, plan-mode, sessions, IDE intelligence fed to the agent). Goal: surpass AI Assistant and the official plugin (currently just a terminal launcher). Built to present to Anthropic.
 
-## Decisión central
-**No usa Node ni la SDK de TS en runtime.** Habla Kotlin/JVM **directo con el binario `claude`** vía `stream-json` + control sobre stdio. La SDK de TS es solo un wrapper que spawnea el mismo binario; la replicamos en Kotlin. `node_modules/@anthropic-ai/claude-agent-sdk/` (`sdk.d.ts`, `sdk-tools.d.ts`, `sdk.mjs`) queda **solo como referencia** del protocolo, no se distribuye.
+## Core decision
+**No Node or TS SDK at runtime.** Speaks Kotlin/JVM **directly with the `claude` binary** via `stream-json` + control over stdio. The TS SDK is just a wrapper that spawns the same binary; we replicate it in Kotlin. `node_modules/@anthropic-ai/claude-agent-sdk/` (`sdk.d.ts`, `sdk-tools.d.ts`, `sdk.mjs`) is kept **as protocol reference only**, not distributed.
 
-Decisiones: (1) **Swing**, no JCEF; diffs con el `DiffManager` del IDE. (2) **Binario `claude` preinstalado y requerido** (detección PATH + `~/.local/bin`; si falta → notificación accionable y aborta). (3) **Auth reutilizada** del binario (suscripción/OAuth o `ANTHROPIC_API_KEY`).
+Decisions: (1) **Swing**, not JCEF; diffs via the IDE's `DiffManager`. (2) **Preinstalled `claude` binary required** (PATH + `~/.local/bin` detection; if missing → actionable notification and abort). (3) **Auth reused** from the binary (subscription/OAuth or `ANTHROPIC_API_KEY`).
 
-**Principio de comportamiento:** paridad de UX con el Claude Code original, consumiendo el **protocolo estructurado** de la SDK (`stream-json`/control) — "usar la SDK" = su contrato, no el paquete npm. **Nunca planchar el output del CLI**: no volcar el texto formateado del terminal; reconstruir cada estado/comando de forma **nativa** desde los campos estructurados del evento (p.ej. compactación desde `status`/`compact_metadata`, coste desde `get_session_cost`). `system/local_command_output` es el antipatrón a evitar.
+**Behavioral principle:** UX parity with the original Claude Code, consuming the SDK's **structured protocol** (`stream-json`/control) — "using the SDK" means its contract, not the npm package. **Never mirror raw CLI output**: do not dump terminal-formatted text; reconstruct every state/command **natively** from the event's structured fields (e.g. compaction from `status`/`compact_metadata`, cost from `get_session_cost`). `system/local_command_output` is the antipattern to avoid.
 
-## Protocolo (stream-json + control)
-Un proceso por sesión, vivo en streaming-input. Flags clave (`--print` es **obligatorio**):
+## Protocol (stream-json + control)
+One process per session, kept alive in streaming-input mode. Key flags (`--print` is **mandatory**):
 ```
 claude --print --output-format stream-json --input-format stream-json --verbose \
        --permission-prompt-tool stdio [--include-partial-messages] [--permission-mode <m>] \
        [--model <m>] [--resume <id>] [--allowedTools …] [--setting-sources user,project,local]
 ```
-- stdin: `{"type":"user","message":{"role":"user","content":"…"},"parent_tool_use_id":null}` (una línea = un JSON). `cwd`=raíz del proyecto, `env` heredado.
-- stdout: `system/init` (trae `session_id`, `slash_commands`), `assistant` (content blocks), `stream_event` (deltas), `result` (fin de turno), `keep_alive` (ignorar), frames de control.
-- **Control** (correlado por `request_id`): el binario emite `control_request{subtype:"can_use_tool",tool_name,input,title}` → el host responde `control_response{subtype:"success",response:{behavior:"allow",updatedInput}}` o `{behavior:"deny",message}`. Host→binario: `initialize`, `interrupt`, `set_model`, `set_permission_mode`, `get_context_usage`, `get_session_cost`, `mcp_status`.
+- stdin: `{"type":"user","message":{"role":"user","content":"…"},"parent_tool_use_id":null}` (one line = one JSON). `cwd`=project root, `env` inherited.
+- stdout: `system/init` (carries `session_id`, `slash_commands`), `assistant` (content blocks), `stream_event` (deltas), `result` (end of turn), `keep_alive` (ignore), control frames.
+- **Control** (correlated by `request_id`): the binary emits `control_request{subtype:"can_use_tool",tool_name,input,title}` → host responds `control_response{subtype:"success",response:{behavior:"allow",updatedInput}}` or `{behavior:"deny",message}`. Host→binary: `initialize`, `interrupt`, `set_model`, `set_permission_mode`, `get_context_usage`, `get_session_cost`, `mcp_status`.
 
-**Quién escribe el archivo:** con `allow`, **el binario escribe** (no el IDE). Por eso, antes de aprobar Edit/Write reconstruimos el contenido propuesto y abrimos un **diff en pestaña de editor** (`SimpleDiffRequest`→`ChainDiffVirtualFile`→`FileEditorManager.openFile`; NO `DiffEditorTabFilesManager.showDiffFile`, que abre ventana). Aprobación = **tarjeta inline no-modal** (Accept/Reject/View diff), nunca diálogos. Tras escribir, refrescar VFS (`VfsUtil.markDirtyAndRefresh`).
+**Who writes the file:** on `allow`, **the binary writes** (not the IDE). Therefore, before approving Edit/Write we reconstruct the proposed content and open a **diff in an editor tab** (`SimpleDiffRequest`→`ChainDiffVirtualFile`→`FileEditorManager.openFile`; NOT `DiffEditorTabFilesManager.showDiffFile`, which opens a window). Approval = **inline non-modal card** (Accept/Reject/View diff), never dialogs. After writing, refresh VFS (`VfsUtil.markDirtyAndRefresh`).
 
-## Arquitectura (`src/main/kotlin/dev/lain/claudejb/`)
-- `process/` — `ClaudeBinaryLocator` (localiza/valida) + `ClaudeProcess` (GeneralCommandLine + KillableColoredProcessHandler, stdio, kill graceful).
-- `protocol/` — modelos kotlinx.serialization + `ProtocolParser` (NDJSON→`ClaudeEvent`) + `ControlProtocol` (builders de salida). Decodificación lenient (ignoreUnknownKeys).
-- `session/` — `ClaudeSession` (instanciable, una por pestaña: proceso, `session_id`, cola, transcript observable, permisos, rate-limit, tokens en vivo) + `ChatSessionManager` (`@Service(PROJECT)`, dueño de las pestañas).
-- `permission/PermissionBroker` — recibe `can_use_tool`, **no bloquea**; auto-aprueba (bypass/acceptEdits) o entrega `PendingPermission` a la UI. Resolución real en `ClaudeSession.resolvePermission`/`resolveQuestion`.
-- `diff/DiffPresenter` — `openDiff`/`revealDiff`/`closeDiff` en el área de editores (sin modales).
-- `context/EditorContextProvider` — archivo/selección/diagnósticos para @-mentions.
-- `ui/` — `ClaudeToolWindowFactory` (pestañas + New Chat) + `ChatPanel` (transcript streaming + composer con chips modelo·modo·effort·thinking + barra de cuota + spinner/tokens) + `ChatMessageViews`/`TranscriptView`/`MarkdownRenderer`/`ChatTheme` + `CommandPalette` + `OptionMenus` + `InfoDialogs` + Settings.
-- (V2) `mcp/IdeToolsServer` — exponer tools del IDE vía `--mcp-config`.
+## Architecture (`src/main/kotlin/dev/lain/claudejb/`)
+- `process/` — `ClaudeBinaryLocator` (locate/validate) + `ClaudeProcess` (GeneralCommandLine + KillableColoredProcessHandler, stdio, graceful kill).
+- `protocol/` — kotlinx.serialization models + `ProtocolParser` (NDJSON→`ClaudeEvent`) + `ControlProtocol` (output builders). Lenient decoding (ignoreUnknownKeys).
+- `session/` — `ClaudeSession` (one per tab: process, `session_id`, queue, observable transcript, permissions, rate-limit, live tokens) + `ChatSessionManager` (`@Service(PROJECT)`, owns the tabs).
+- `permission/PermissionBroker` — receives `can_use_tool`, **does not block**; auto-approves (bypass/acceptEdits) or hands off a `PendingPermission` to the UI. Actual resolution in `ClaudeSession.resolvePermission`/`resolveQuestion`.
+- `diff/DiffPresenter` — `openDiff`/`revealDiff`/`closeDiff` in the editor area (no modals).
+- `context/EditorContextProvider` — file/selection/diagnostics for @-mentions.
+- `ui/` — `ClaudeToolWindowFactory` (tabs + New Chat) + `ChatPanel` (streaming transcript + composer with model·mode·effort·thinking chips + quota bar + spinner/tokens) + `ChatMessageViews`/`TranscriptView`/`MarkdownRenderer`/`ChatTheme` + `CommandPalette` + `OptionMenus` + `InfoDialogs` + Settings.
+- (V2) `mcp/IdeToolsServer` — expose IDE tools via `--mcp-config`.
 
-Threading: I/O y parseo en `Dispatchers.IO`; UI en EDT/`invokeLater`. plugin.xml: `toolWindow id="Claude Code"` anchor=right, `notificationGroup`, `projectService`, `projectConfigurable`.
+Threading: I/O and parsing on `Dispatchers.IO`; UI on EDT/`invokeLater`. plugin.xml: `toolWindow id="Claude Code"` anchor=right, `notificationGroup`, `projectService`, `projectConfigurable`.
 
-## Stack y build
-IntelliJ Platform Gradle Plugin **2.16.0** (requiere Gradle ≥9 → wrapper en **9.5.1**). Kotlin **2.1.20** + serialization, toolchain **JDK 21** (máximo: el IDE corre sobre JBR 21). Target `IC 2025.1`, since=243 until=261.*. Runtime: `kotlinx-serialization-json:1.7.3` (stdlib/annotations excluidos del bundle, los da la plataforma).
-Build: `JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin` → zip en `build/distributions/`. También `verifyPlugin`, `runIde`. Instalar: Settings → Plugins → ⚙ → Install Plugin from Disk.
+## Stack & build
+IntelliJ Platform Gradle Plugin **2.16.0** (requires Gradle ≥9 → wrapper at **9.5.1**). Kotlin **2.1.20** + serialization, toolchain **JDK 21** (ceiling: the IDE runs on JBR 21). Target `IC 2025.1`, since=243 until=261.*. Runtime: `kotlinx-serialization-json:1.7.3` (stdlib/annotations excluded from the bundle, provided by the platform).
+Build: `JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin` → zip in `build/distributions/`. Also `verifyPlugin`, `runIde`. Install: Settings → Plugins → ⚙ → Install Plugin from Disk.
 
-## Estado
-Paquete `dev.lain.claudejb`, plugin id `dev.lain.claude-code-for-jetbrains`, versión 0.1.1. MVP + GUI completos y compilando limpio (`verifyPlugin` Compatible con IU-261). Implementado: protocolo+transporte, multi-chat con cola, permisos+diff nativo, AskUserQuestion, tablas markdown, auto-diff en acceptEdits/bypass, comandos multilínea, Ctrl+O reasoning, barra de cuota + spinner/tokens, menús que cierran al elegir, `/btw`, UI retematizada al tema del IDE. `claude` 2.1.150 en `~/.local/bin/claude`.
+## Status
+Package `dev.lain.claudejb`, plugin id `dev.lain.claude-code-for-jetbrains`, version 0.1.1. MVP + GUI complete and building clean (`verifyPlugin` Compatible with IU-261). Implemented: protocol+transport, multi-chat with queue, permissions+native diff, AskUserQuestion, markdown tables, auto-diff on acceptEdits/bypass, multi-line commands, Ctrl+O reasoning, quota bar + spinner/tokens, menus that close on selection, `/btw`, UI rethemed to IDE theme. `claude` 2.1.150 at `~/.local/bin/claude`.
 
-Pendiente: fix del reset a `default` (la línea de `ClaudeSession` que adopta `permissionMode` del `init`), persistir el modo del chip, MCP de tools del IDE, "always allow" persistente, edits inline.
+Pending: fix the reset to `default` (the `ClaudeSession` line that adopts `permissionMode` from `init`), persist chip mode, IDE tools MCP, persistent "always allow", inline edits.
 
-## Hechos de protocolo verificados (empíricamente, 2.1.150)
-- `--print` obligatorio junto a stream-json in/out. `--permission-prompt-tool stdio` confirmado.
-- `initialize` (handshake) devuelve `commands`/`models`/`agents`/`available_output_styles`/`account`. **No** incluye `/btw` (es client-side del REPL, interceptado por regex) → el plugin lo añade a la paleta y lo envía con `sendSideQuestion`.
-- `system/init` llega **en cada turno** (tras cada user message), reportando el `permissionMode` actual. NO bloquear la sesión esperándolo (deadlock histórico): `start()` marca `ready=true` al arrancar.
-- **`AskUserQuestion` va por `can_use_tool`** (no `request_user_dialog`): `input:{questions:[{question,header,options:[{label,description,preview?}],multiSelect}]}`; el host responde `allow` con `updatedInput={...input,"answers":{pregunta:label}}` (coma si multiSelect). Sin `answers`, sale vacío y el modelo improvisa.
-- `rate_limit_event` trae `status`/`resetsAt`/`rateLimitType`/`isUsingOverage`; `utilization` (% cuota) **solo cerca del límite**. `get_session_cost` → `{text}` con coste en **$** (API), no % de cuota.
-- Tokens en vivo: `stream_event` `message_delta.usage.output_tokens` (acumulado del mensaje).
-- El binario **acumula** varios user messages recibidos de golpe/mid-turn y los procesa juntos (contexto compartido) → la cola se vacía entera, no uno por turno.
+## Empirically verified protocol facts (2.1.150)
+- `--print` required alongside stream-json in/out. `--permission-prompt-tool stdio` confirmed.
+- `initialize` (handshake) returns `commands`/`models`/`agents`/`available_output_styles`/`account`. Does **not** include `/btw` (client-side REPL, intercepted by regex) → the plugin adds it to the palette and sends it with `sendSideQuestion`.
+- `system/init` arrives **every turn** (after each user message), reporting the current `permissionMode`. Do NOT block the session waiting for it (historic deadlock): `start()` sets `ready=true` at startup.
+- **`AskUserQuestion` comes through `can_use_tool`** (not `request_user_dialog`): `input:{questions:[{question,header,options:[{label,description,preview?}],multiSelect}]}`; host responds `allow` with `updatedInput={...input,"answers":{question:label}}` (comma-separated if multiSelect). Without `answers` the response is empty and the model improvises.
+- `rate_limit_event` carries `status`/`resetsAt`/`rateLimitType`/`isUsingOverage`; `utilization` (quota %) **only near the limit**. `get_session_cost` → `{text}` with cost in **$** (API), not quota %.
+- Live tokens: `stream_event` `message_delta.usage.output_tokens` (accumulated for the message).
+- The binary **accumulates** multiple user messages received at once / mid-turn and processes them together (shared context) → the queue drains entirely, not one message per turn.
 
-## Referencias
-- Protocolo (verdad local): `node_modules/@anthropic-ai/claude-agent-sdk/{sdk.d.ts,sdk-tools.d.ts,sdk.mjs}`.
-- Docs: https://code.claude.com/docs/en/agent-sdk/overview · IntelliJ Platform SDK https://plugins.jetbrains.com/docs/intellij/ · plugin oficial https://code.claude.com/docs/en/jetbrains.
+## References
+- Protocol (local truth): `node_modules/@anthropic-ai/claude-agent-sdk/{sdk.d.ts,sdk-tools.d.ts,sdk.mjs}`.
+- Docs: https://code.claude.com/docs/en/agent-sdk/overview · IntelliJ Platform SDK https://plugins.jetbrains.com/docs/intellij/ · official plugin https://code.claude.com/docs/en/jetbrains.

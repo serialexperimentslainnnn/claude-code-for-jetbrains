@@ -97,10 +97,10 @@ object ControlProtocol {
         })
 
     /**
-     * PermissionResult allow. [updatedInput] es el input con el que el binario ejecutará la tool: el
-     * original reenviado si el usuario no cambió nada, o el editado en el diff. El esquema en runtime del
-     * binario lo EXIGE (el .d.ts publicado lo marca opcional, pero no lo es): omitirlo hace que el binario
-     * rechace la respuesta y la tool falle.
+     * PermissionResult allow. [updatedInput] is the input the binary will use to execute the tool: the
+     * original forwarded unchanged if the user did not edit anything, or the diff-edited version.
+     * The binary's runtime schema REQUIRES it (the published .d.ts marks it optional, but it is not):
+     * omitting it causes the binary to reject the response and the tool to fail.
      */
     fun permissionAllow(requestId: String, updatedInput: JsonObject): String =
         success(requestId, buildJsonObject {

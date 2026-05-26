@@ -29,8 +29,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val modeCombo = JComboBox(ClaudeSession.PERMISSION_MODES.toTypedArray())
     private val thinkingSpinner = JSpinner(SpinnerNumberModel(0, 0, 200_000, 1_000))
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
+    private val settingSourcesCheck = JBCheckBox("Custom setting sources:")
     private val settingSourcesField = JBTextField()
+    private val allowedToolsCheck = JBCheckBox("Restrict allowed tools:")
     private val allowedToolsField = JBTextField()
+    private val disallowedToolsCheck = JBCheckBox("Restrict disallowed tools:")
     private val disallowedToolsField = JBTextField()
 
     private var panel: JPanel? = null
@@ -39,14 +42,20 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
     override fun createComponent(): JComponent {
         modelCombo.model = DefaultComboBoxModel(arrayOf("", *session.models.map { it.value }.toTypedArray()))
+        settingSourcesCheck.addActionListener { settingSourcesField.isEnabled = settingSourcesCheck.isSelected }
+        allowedToolsCheck.addActionListener { allowedToolsField.isEnabled = allowedToolsCheck.isSelected }
+        disallowedToolsCheck.addActionListener { disallowedToolsField.isEnabled = disallowedToolsCheck.isSelected }
         val built = FormBuilder.createFormBuilder()
             .addLabeledComponent("Model:", modelCombo)
             .addLabeledComponent("Effort:", effortCombo)
             .addLabeledComponent("Permission mode:", modeCombo)
             .addLabeledComponent("Thinking tokens (0 = off):", thinkingSpinner)
-            .addLabeledComponent("Setting sources:", settingSourcesField)
-            .addLabeledComponent("Allowed tools:", allowedToolsField)
-            .addLabeledComponent("Disallowed tools:", disallowedToolsField)
+            .addComponent(settingSourcesCheck)
+            .addComponent(settingSourcesField)
+            .addComponent(allowedToolsCheck)
+            .addComponent(allowedToolsField)
+            .addComponent(disallowedToolsCheck)
+            .addComponent(disallowedToolsField)
             .addComponent(partialCheck)
             .addComponentFillVertically(JPanel(), 0)
             .panel
@@ -62,9 +71,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             modeText() != s.permissionMode ||
             thinkingValue() != s.thinkingTokens ||
             partialCheck.isSelected != s.includePartialMessages ||
-            settingSourcesField.text != s.settingSources ||
-            allowedToolsField.text != s.allowedTools ||
-            disallowedToolsField.text != s.disallowedTools
+            settingSourcesText() != s.settingSources ||
+            allowedToolsText() != s.allowedTools ||
+            disallowedToolsText() != s.disallowedTools
     }
 
     override fun apply() {
@@ -74,10 +83,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.permissionMode = modeText()
         s.thinkingTokens = thinkingValue()
         s.includePartialMessages = partialCheck.isSelected
-        s.settingSources = settingSourcesField.text
-        s.allowedTools = allowedToolsField.text
-        s.disallowedTools = disallowedToolsField.text
-        // Push the runtime-changeable ones to the live session immediately.
+        s.settingSources = settingSourcesText()
+        s.allowedTools = allowedToolsText()
+        s.disallowedTools = disallowedToolsText()
         settings.applyTo(session)
     }
 
@@ -88,13 +96,22 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         modeCombo.selectedItem = s.permissionMode
         thinkingSpinner.value = s.thinkingTokens
         partialCheck.isSelected = s.includePartialMessages
+        settingSourcesCheck.isSelected = s.settingSources.isNotBlank()
         settingSourcesField.text = s.settingSources
+        settingSourcesField.isEnabled = settingSourcesCheck.isSelected
+        allowedToolsCheck.isSelected = s.allowedTools.isNotBlank()
         allowedToolsField.text = s.allowedTools
+        allowedToolsField.isEnabled = allowedToolsCheck.isSelected
+        disallowedToolsCheck.isSelected = s.disallowedTools.isNotBlank()
         disallowedToolsField.text = s.disallowedTools
+        disallowedToolsField.isEnabled = disallowedToolsCheck.isSelected
     }
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
     private fun effortText() = (effortCombo.selectedItem as? String).orEmpty()
     private fun modeText() = (modeCombo.selectedItem as? String) ?: "default"
     private fun thinkingValue() = (thinkingSpinner.value as Number).toInt()
+    private fun settingSourcesText() = if (settingSourcesCheck.isSelected) settingSourcesField.text.trim() else ""
+    private fun allowedToolsText() = if (allowedToolsCheck.isSelected) allowedToolsField.text.trim() else ""
+    private fun disallowedToolsText() = if (disallowedToolsCheck.isSelected) disallowedToolsField.text.trim() else ""
 }

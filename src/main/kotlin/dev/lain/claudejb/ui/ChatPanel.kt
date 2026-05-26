@@ -20,6 +20,7 @@ import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -39,6 +40,7 @@ import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.UIManager
 
 /**
  * The GUI for one chat tab: a claude.ai-style dark transcript ([TranscriptView]) above a card composer.
@@ -131,6 +133,15 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         if (spinnerTick % 40 == 0) thinkingWord = thinkingWords.random() // change the word ~every 4.8s
         updateStatus()
     }
+    /**
+     * Every minute: refresh the "Resets in Xh Ym" countdown locally AND ask the binary for fresh
+     * session data. The binary may emit a rate_limit_event in response, which updates rateLimit and
+     * triggers another updateQuotaBar via the session listener.
+     */
+    private val quotaRefreshTimer = javax.swing.Timer(60_000) {
+        updateQuotaBar()
+        session.requestSessionCost { updateQuotaBar() }
+    }
 
     /** Request ids whose diff we've already triggered, so a tray rebuild doesn't reopen it every tick. */
     private val diffOpened = HashSet<String>()
@@ -151,6 +162,8 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         session.transcript.entries.forEach(transcript::onAdded)
         refreshState()
         rebuildPermissionTray()
+        quotaRefreshTimer.start()
+        session.requestSessionCost { updateQuotaBar() }
     }
 
     /** Card composer: trays (permissions, queue) on top, the dark input card, chips + Send beneath it. */
@@ -188,11 +201,11 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             isOpaque = true
             background = ChatTheme.BG
             border = JBUI.Borders.empty(6, 18, 10, 18)
+            add(statusBar)
             add(quotaPanel)
             add(permissionTray)
             add(queueStrip)
             add(card)
-            add(statusBar)
         }
     }
 
@@ -324,7 +337,15 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             else -> "—"
         }
         val overage = if (rl.isUsingOverage) " · overage" else ""
-        quotaLabel.text = (if (rl.isWarning) "⚠ " else "") + "Quota ${rl.windowLabel()}$overage"
+        val resetStr = rl.resetsAt?.let {
+            val remaining = it - System.currentTimeMillis() / 1000
+            if (remaining > 0) {
+                val h = remaining / 3600
+                val m = (remaining % 3600) / 60
+                "Resets in ${if (h > 0L) "${h}h " else ""}${m}m"
+            } else "Resetting soon"
+        } ?: "Quota ${rl.windowLabel()}"
+        quotaLabel.text = (if (rl.isWarning) "⚠ " else "") + resetStr + overage
         quotaLabel.foreground = if (rl.isWarning) color else ChatTheme.TEXT_DIM
         quotaPanel.toolTipText = rl.resetsAt?.let {
             "Resets ~" + java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
@@ -528,39 +549,43 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             null, group, DataContext.EMPTY_CONTEXT,
             JBPopupFactory.ActionSelectionAid.MNEMONICS, true,
         )
-        // Los chips están al fondo del tool window: anclar ENCIMA del chip, no debajo
-        // (showUnderneathOf lo empujaría fuera del borde / a la esquina inferior-izquierda).
+        // The chips sit at the bottom of the tool window: anchor ABOVE the chip, not below
+        // (showUnderneathOf would push it off the edge / into the bottom-left corner).
         popup.show(RelativePoint(this, java.awt.Point(0, -popup.content.preferredSize.height)))
     }
 
     override fun dispose() {
         spinnerTimer.stop()
+        quotaRefreshTimer.stop()
         session.transcript.removeListener(transcript)
         session.removeListener(this)
     }
 
-    /** A compact, coral-filled pill button (Send / Stop / Accept). */
+    /** A compact pill button (Send / Stop / Accept) painted with the IDE's primary button color. */
     private class RoundedActionButton(text: String, private val onClick: () -> Unit) : JButton(text) {
         init {
             isFocusable = false
             isContentAreaFilled = false
             isBorderPainted = false
             isOpaque = false
-            foreground = ChatTheme.ACCENT_TEXT
             font = ChatTheme.small.asBold()
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             margin = JBUI.insets(5, 14)
             addActionListener { onClick() }
         }
 
+        override fun getForeground(): Color =
+            UIManager.getColor("Button.default.foreground") ?: Color.WHITE
+
         override fun paintComponent(g: Graphics) {
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                val base: Color = UIManager.getColor("Button.default.startBackground") ?: Color(0x4B6EAF)
                 g2.color = when {
-                    !isEnabled -> ChatTheme.ACCENT.darker().darker()
-                    model.isPressed -> ChatTheme.ACCENT.darker()
-                    else -> ChatTheme.ACCENT
+                    !isEnabled -> base.darker()
+                    model.isPressed -> base.darker()
+                    else -> base
                 }
                 val arc = JBUI.scale(14)
                 g2.fillRoundRect(0, 0, width, height, arc, arc)
