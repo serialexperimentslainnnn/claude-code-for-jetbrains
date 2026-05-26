@@ -55,6 +55,17 @@ Open the **Claude Code** tool window (right side panel, same area as AI Assistan
 
 File edit proposals open as a diff tab in the editor; an inline Accept/Reject card in the chat lets you review without leaving the conversation.
 
+### IDE tools (MCP) — optional
+
+Let Claude query the IDE directly (diagnostics, open files, usages, …) via JetBrains' own MCP server. It is **off by default** and takes two steps:
+
+1. **Enable JetBrains' MCP Server plugin.** Install/enable the bundled **MCP Server** plugin (Settings ▸ Plugins) and confirm it is running.
+2. **Turn it on here.** Go to **Settings ▸ Claude Code ▸ IDE tools (MCP)**, tick *Enable JetBrains IDE tools (MCP)*, pick the **transport** (`sse` is the default; `streamable-http` is the alternative) and set the **port** if you changed it from `64342`. Apply, then start a **new chat** (the setting is applied when the `claude` process launches).
+
+For the `stdio` transport or a remote server, choose **custom** and paste the server JSON from JetBrains into the box. This also works unchanged on Windows (the pasted config carries the right paths and ports for your install).
+
+> ⚠ **Security:** `sse`/`streamable-http` use JetBrains' localhost endpoint, which any process on your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you trust. Every IDE tool call is still gated by the in-chat permission prompt.
+
 ## Build from source
 
 Requires JDK 21. The Gradle wrapper is included.
@@ -63,7 +74,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-for-jetbrains-1.3.1.zip`
+Output: `build/distributions/claude-code-native-1.3.5.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -78,7 +89,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v1.3.1** — Windows support (binary detection + npm shim handling), configurable executable paths and environment variables; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v1.3.5** — Opt-in IDE tools over MCP (JetBrains MCP server with auto-built sse/streamable-http/stdio config, plus custom servers). Builds on v1.3.x: Windows support (binary detection + npm shim handling), configurable executable paths and environment variables; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 

@@ -27,6 +27,10 @@ class ClaudeSettings : PersistentStateComponent<ClaudeSettings.State> {
         @JvmField var settingSources: String = "user,project,local"
         @JvmField var allowedTools: String = ""
         @JvmField var disallowedTools: String = ""
+        @JvmField var ideMcpEnabled: Boolean = false
+        @JvmField var ideMcpTransport: String = "sse"
+        @JvmField var ideMcpPort: Int = ClaudeSession.DEFAULT_IDE_MCP_PORT
+        @JvmField var customMcpServers: String = ""
         @JvmField var claudePath: String = ""
         @JvmField var nodePath: String = ""
         @JvmField var envVars: String = ""
@@ -65,6 +69,10 @@ class ClaudeSettings : PersistentStateComponent<ClaudeSettings.State> {
             disallowedTools = state.disallowedTools,
             settingSources = state.settingSources,
             includePartialMessages = state.includePartialMessages,
+            ideMcpEnabled = state.ideMcpEnabled,
+            ideMcpTransport = state.ideMcpTransport,
+            ideMcpPort = state.ideMcpPort,
+            customMcpServers = state.customMcpServers,
         )
     }
 

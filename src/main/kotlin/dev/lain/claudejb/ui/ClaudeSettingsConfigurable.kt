@@ -1,6 +1,7 @@
 package dev.lain.claudejb.ui
 
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
@@ -49,6 +50,13 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         emptyText.text = "Optional: .sh to source (Linux/macOS) or PowerShell profile/.ps1 to dot-source (Windows)"
     }
 
+    private val ideMcpCheck = JBCheckBox("Enable JetBrains MCP server — lets Claude query the IDE")
+    private val ideMcpTransportCombo = JComboBox(ClaudeSession.IDE_MCP_TRANSPORTS.toTypedArray())
+    private val ideMcpPortSpinner = JSpinner(SpinnerNumberModel(ClaudeSession.DEFAULT_IDE_MCP_PORT, 1, 65535, 1))
+    private val customMcpArea = JBTextArea(7, 0).apply {
+        emptyText.text = "JSON object of name → server config; add as many as you like (sse / streamable-http / stdio)"
+    }
+
     private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
     private val allowedToolsGroup = CheckboxGroup(ClaudeSession.BUILTIN_TOOLS, columns = 4)
     private val disallowedToolsGroup = CheckboxGroup(ClaudeSession.BUILTIN_TOOLS, columns = 4)
@@ -78,6 +86,16 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addComponent(allowedToolsGroup.component)
             .addComponent(sectionLabel("Disallowed tools (none = nothing blocked)"))
             .addComponent(disallowedToolsGroup.component)
+            .addSeparator()
+            .addComponent(sectionLabel("JetBrains MCP server (opt-in) — requires the MCP Server plugin enabled"))
+            .addComponent(ideMcpCheck)
+            .addLabeledComponent("Transport:", ideMcpTransportCombo)
+            .addLabeledComponent("Port:", ideMcpPortSpinner)
+            .addComponent(jetbrainsMcpWarningLabel())
+            .addSeparator()
+            .addComponent(sectionLabel("Custom MCP servers (advanced) — add any number"))
+            .addComponent(JBScrollPane(customMcpArea))
+            .addComponent(customMcpWarningLabel())
             .addComponentFillVertically(JPanel(), 0)
             .panel
         panel = built
@@ -98,10 +116,17 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             claudePathField.text.trim() != s.claudePath ||
             nodePathField.text.trim() != s.nodePath ||
             sourceScriptField.text.trim() != s.sourceScript ||
-            envVarsArea.text != s.envVars
+            envVarsArea.text != s.envVars ||
+            ideMcpCheck.isSelected != s.ideMcpEnabled ||
+            mcpTransportText() != s.ideMcpTransport ||
+            mcpPortValue() != s.ideMcpPort ||
+            customMcpArea.text.trim() != s.customMcpServers
     }
 
     override fun apply() {
+        if (!ClaudeSession.isValidMcpConfig(customMcpArea.text.trim())) {
+            throw ConfigurationException("Custom MCP servers must be a JSON object mapping each server name to its config.")
+        }
         val s = settings.state
         s.model = modelText()
         s.effort = effortText()
@@ -115,6 +140,10 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.nodePath = nodePathField.text.trim()
         s.sourceScript = sourceScriptField.text.trim()
         s.envVars = envVarsArea.text
+        s.ideMcpEnabled = ideMcpCheck.isSelected
+        s.ideMcpTransport = mcpTransportText()
+        s.ideMcpPort = mcpPortValue()
+        s.customMcpServers = customMcpArea.text.trim()
         settings.applyTo(session)
     }
 
@@ -132,17 +161,34 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         nodePathField.text = s.nodePath
         sourceScriptField.text = s.sourceScript
         envVarsArea.text = s.envVars
+        ideMcpCheck.isSelected = s.ideMcpEnabled
+        ideMcpTransportCombo.selectedItem = s.ideMcpTransport
+        ideMcpPortSpinner.value = s.ideMcpPort
+        customMcpArea.text = s.customMcpServers
     }
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
     private fun effortText() = (effortCombo.selectedItem as? String).orEmpty()
     private fun modeText() = (modeCombo.selectedItem as? String) ?: "default"
     private fun thinkingValue() = (thinkingSpinner.value as Number).toInt()
+    private fun mcpTransportText() = (ideMcpTransportCombo.selectedItem as? String) ?: "sse"
+    private fun mcpPortValue() = (ideMcpPortSpinner.value as Number).toInt()
 
     private fun csvSet(s: String): Set<String> =
         s.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
     private fun sectionLabel(text: String) = JBLabel(text).apply { font = JBFont.medium().asBold() }
+
+    private fun jetbrainsMcpWarningLabel() = JBLabel(
+        "<html>⚠ <b>Security:</b> requires JetBrains' MCP Server plugin enabled. sse / streamable-http expose a " +
+        "localhost port any local process can reach; stdio launches a helper from the IDE (no port). Enable only " +
+        "on a machine you trust. Tool calls are still gated by the permission prompt.</html>"
+    ).apply { font = JBFont.small() }
+
+    private fun customMcpWarningLabel() = JBLabel(
+        "<html>Format: <code>{ \"server-name\": { \"type\": \"…\", … }, … }</code>. " +
+        "⚠ third-party servers run with your privileges and can read what you share — add only ones you trust.</html>"
+    ).apply { font = JBFont.small() }
 
     /** A row/grid of checkboxes backed by a comma-separated value — the GUI form of a list option. */
     private class CheckboxGroup(options: List<String>, columns: Int) {

@@ -1,3 +1,15 @@
+## v1.3.5 — 2026-05-26
+
+**IDE tools over MCP (opt-in)**
+- New section in Settings ▸ Claude Code with two independent controls:
+  - **Enable JetBrains MCP server** — let Claude query the IDE (diagnostics, open files, usages, …) through JetBrains' own MCP Server plugin. Choose the transport (`sse`, `streamable-http`, `stdio`) and port. For `sse`/`streamable-http` the localhost endpoint is filled in for you; **`stdio` is assembled automatically from the running IDE** (its JBR `java` and bundled `mcpserver` libs), so there's nothing to paste and it works on Windows unchanged.
+  - **Custom MCP servers** — add as many of your own MCP servers as you like, as a JSON object (`name → server config`).
+- Off by default. Every IDE tool call is still gated by the in-chat permission prompt; enable only on a machine you trust.
+
+> Requires JetBrains' **MCP Server** plugin enabled (Settings ▸ Plugins) for the JetBrains option.
+
+---
+
 ## v1.3.1 — 2026-05-26
 
 **Fixes & defaults**

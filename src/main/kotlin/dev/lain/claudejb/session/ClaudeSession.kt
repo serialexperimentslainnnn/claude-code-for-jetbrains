@@ -29,9 +29,15 @@ import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
+import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.util.SystemInfo
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -67,6 +73,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var allowedTools: String = ""; private set
     @Volatile var disallowedTools: String = ""; private set
     @Volatile var settingSources: String = "user,project,local"; private set
+    /** Whether to wire JetBrains' own MCP server. Independent of [customMcpServers]. */
+    @Volatile var ideMcpEnabled: Boolean = false; private set
+    /** JetBrains transport: "sse" / "streamable-http" (localhost at [ideMcpPort]) or "stdio" (synthesized from IDE paths). */
+    @Volatile var ideMcpTransport: String = "sse"; private set
+    @Volatile var ideMcpPort: Int = DEFAULT_IDE_MCP_PORT; private set
+    /** User-defined extra MCP servers, as a JSON object with the same shape as `mcpServers` (name → server). */
+    @Volatile var customMcpServers: String = ""; private set
     @Volatile var includePartialMessages: Boolean = true; private set
     @Volatile var outputStyle: String = "default"; private set
     @Volatile var turnActive: Boolean = false; private set
@@ -211,9 +224,68 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         effort?.let { args += listOf("--effort", it) }
         allowedTools.trim().ifBlank { null }?.let { args += listOf("--allowedTools", it) }
         disallowedTools.trim().ifBlank { null }?.let { args += listOf("--disallowedTools", it) }
+        mcpConfigJson()?.let { args += listOf("--mcp-config", it) }
         if (resume) sessionId?.let { args += listOf("--resume", it) }
         return args
     }
+
+    /**
+     * Builds `{"mcpServers": …}` for `--mcp-config`, merging (when enabled) JetBrains' own server under the
+     * `jetbrains` key with the user's custom servers. Returns null (skipping the flag) when there's nothing to
+     * register, so a launch is never blocked by an absent/invalid config.
+     */
+    private fun mcpConfigJson(): String? {
+        val servers = buildJsonObject {
+            if (ideMcpEnabled) jetbrainsMcpServer()?.let { put("jetbrains", it) }
+            customMcpServersObject()?.forEach { (name, server) -> put(name, server) }
+        }
+        if (servers.isEmpty()) return null
+        return buildJsonObject { put("mcpServers", servers) }.toString()
+    }
+
+    /** The JetBrains server object for the selected transport. stdio is synthesized from the running IDE's paths. */
+    private fun jetbrainsMcpServer(): JsonObject? = when (ideMcpTransport) {
+        "stdio" -> stdioMcpServer()
+        "streamable-http" -> httpMcpServer("streamable-http", "http://127.0.0.1:$ideMcpPort/stream")
+        else -> httpMcpServer("sse", "http://127.0.0.1:$ideMcpPort/sse")
+    }
+
+    private fun httpMcpServer(type: String, url: String): JsonObject = buildJsonObject {
+        put("type", type)
+        put("url", url)
+        putJsonObject("headers") {}
+    }
+
+    /**
+     * Synthesizes the stdio server config from the running IDE: the JBR java, the bundled "mcpserver" plugin
+     * libs plus the platform lib dir (via the JVM classpath wildcard, so we don't hardcode jar names),
+     * and IJ_MCP_SERVER_PORT. Returns null if the plugin can't be located (→ stdio simply isn't registered).
+     */
+    private fun stdioMcpServer(): JsonObject? {
+        val javaBin = File(File(System.getProperty("java.home"), "bin"), if (SystemInfo.isWindows) "java.exe" else "java")
+        val pluginLib = PluginManagerCore.plugins
+            .firstOrNull { it.pluginPath?.fileName?.toString()?.contains("mcpserver", ignoreCase = true) == true }
+            ?.pluginPath?.resolve("lib")?.toFile()
+            ?: return null
+        if (!javaBin.exists() || !pluginLib.isDirectory) return null
+        val sep = File.pathSeparator
+        val classpath = "${pluginLib.absolutePath}${File.separator}*$sep${PathManager.getLibPath()}${File.separator}*"
+        return buildJsonObject {
+            put("type", "stdio")
+            put("command", javaBin.absolutePath)
+            putJsonArray("args") {
+                add("-classpath"); add(classpath); add("com.intellij.mcpserver.stdio.McpStdioRunnerKt")
+            }
+            putJsonObject("env") { put("IJ_MCP_SERVER_PORT", ideMcpPort.toString()) }
+        }
+    }
+
+    /** Parses [customMcpServers] as a `name → server` JSON object; null if blank or not a valid object. */
+    private fun customMcpServersObject(): JsonObject? =
+        ifBlankNull(customMcpServers)?.let { runCatching { ClaudeJson.parseToJsonElement(it) }.getOrNull() as? JsonObject }
+
+    private fun ifBlankNull(s: String): String? = s.trim().ifBlank { null }
+
 
     // -----------------------------------------------------------------------
     // Sending prompts / commands (multiprompt)
@@ -384,11 +456,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         disallowedTools: String,
         settingSources: String,
         includePartialMessages: Boolean,
+        ideMcpEnabled: Boolean = false,
+        ideMcpTransport: String = "sse",
+        ideMcpPort: Int = DEFAULT_IDE_MCP_PORT,
+        customMcpServers: String = "",
     ) {
         this.allowedTools = allowedTools
         this.disallowedTools = disallowedTools
         this.settingSources = settingSources
         this.includePartialMessages = includePartialMessages
+        this.ideMcpEnabled = ideMcpEnabled
+        this.ideMcpTransport = ideMcpTransport.ifBlank { "sse" }
+        this.ideMcpPort = ideMcpPort.takeIf { it in 1..65535 } ?: DEFAULT_IDE_MCP_PORT
+        this.customMcpServers = customMcpServers
         fireState()
     }
 
@@ -654,6 +734,24 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
         /** Setting-source scopes (--setting-sources), for the Settings checkboxes. */
         val SETTING_SOURCES = listOf("user", "project", "local")
+
+        /** Default port of JetBrains' MCP Server plugin (used to synthesize the sse/streamable-http endpoint). */
+        const val DEFAULT_IDE_MCP_PORT = 64342
+
+        /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
+        val IDE_MCP_TRANSPORTS = listOf("sse", "streamable-http", "stdio")
+
+        /** Example shown in the custom-servers text area (the `mcpServers` shape: name → server). */
+        val CUSTOM_MCP_SERVERS_HINT = """
+            {
+              "my-http-server": { "type": "streamable-http", "url": "https://example.com/mcp", "headers": {} },
+              "my-stdio-server": { "type": "stdio", "command": "/path/to/server", "args": [] }
+            }
+        """.trimIndent()
+
+        /** True iff the text is a JSON object (or blank) — used by the settings UI to reject a bad custom paste. */
+        fun isValidMcpConfig(text: String): Boolean =
+            text.isBlank() || (runCatching { ClaudeJson.parseToJsonElement(text) }.getOrNull() is JsonObject)
 
         /** Standard built-in tools, for the allow/deny checkboxes in Settings. */
         val BUILTIN_TOOLS = listOf(
