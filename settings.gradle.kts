@@ -1,4 +1,4 @@
-rootProject.name = "claude-code-for-jetbrains"
+rootProject.name = "claude-code-native"
 
 pluginManagement {
     repositories {
