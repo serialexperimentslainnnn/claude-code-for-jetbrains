@@ -175,3 +175,37 @@ data class ContextCategory(
     val name: String = "",
     val tokens: Long = 0,
 )
+
+// ---------------------------------------------------------------------------
+// rate_limit_event (binary -> host): subscription quota usage for claude.ai users.
+// `utilization` is only present when the binary has it (typically near the limit).
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class RateLimitInfo(
+    val status: String = "allowed",            // allowed | allowed_warning | rejected
+    val resetsAt: Long? = null,                // epoch seconds when this window resets
+    val rateLimitType: String? = null,         // five_hour | seven_day | seven_day_opus/sonnet | overage
+    val utilization: Double? = null,           // % of quota used (0..100, sometimes 0..1)
+    val overageStatus: String? = null,
+    val isUsingOverage: Boolean = false,
+    val surpassedThreshold: Double? = null,
+) {
+    /** Normalized 0..100 percent, or null if the binary didn't report utilization. */
+    fun utilizationPercent(): Int? = utilization?.let {
+        (if (it <= 1.0) it * 100 else it).toInt().coerceIn(0, 100)
+    }
+
+    val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected" || overageStatus == "rejected"
+    val isExhausted: Boolean get() = status == "rejected" || overageStatus == "rejected"
+
+    /** Short window label for the UI (e.g. "5h", "7d"). */
+    fun windowLabel(): String = when (rateLimitType) {
+        "five_hour" -> "5h"
+        "seven_day" -> "7d"
+        "seven_day_opus" -> "7d Opus"
+        "seven_day_sonnet" -> "7d Sonnet"
+        "overage" -> "overage"
+        else -> "quota"
+    }
+}

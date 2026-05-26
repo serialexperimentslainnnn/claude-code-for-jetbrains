@@ -22,8 +22,10 @@ import dev.lain.claudejb.protocol.ContextUsage
 import dev.lain.claudejb.protocol.ControlProtocol
 import dev.lain.claudejb.protocol.InitializeResponse
 import dev.lain.claudejb.protocol.ModelInfo
+import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.str
+import dev.lain.claudejb.settings.ClaudeSettings
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -65,6 +67,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var includePartialMessages: Boolean = true; private set
     @Volatile var outputStyle: String = "default"; private set
     @Volatile var turnActive: Boolean = false; private set
+    @Volatile var rateLimit: RateLimitInfo? = null; private set
+    @Volatile var liveOutputTokens: Int = 0; private set
     private var ready = false
 
     // --- metadata from the initialize handshake (powers the GUI menus) ---
@@ -242,12 +246,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
     }
 
+    /**
+     * Flushes the whole queue at once. The binary accepts user messages mid-turn and **accumulates** them into
+     * its context, processing them together (verified: 3 messages sent back-to-back are grouped, sharing
+     * context). So we send every queued prompt immediately — even while a turn is active — instead of releasing
+     * one per `result`. The queue only buffers prompts typed before the process is `ready` (during startup).
+     */
     private fun pump() {
-        if (!ready || turnActive || queue.isEmpty() || !isRunning()) return
-        val next = queue.removeFirst()
-        transcript.add(Speaker.USER, next)
-        write(ControlProtocol.userMessage(next))
-        turnActive = true
+        if (!ready || queue.isEmpty() || !isRunning()) return
+        while (queue.isNotEmpty()) {
+            val next = queue.removeFirst()
+            transcript.add(Speaker.USER, next)
+            write(ControlProtocol.userMessage(next))
+            if (!turnActive) liveOutputTokens = 0
+            turnActive = true
+        }
         fireState()
     }
 
@@ -328,6 +341,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     fun changePermissionMode(mode: String) {
         permissionMode = mode
+        // Persist so new tabs / restarts launch in this mode instead of falling back to "default".
+        ClaudeSettings.getInstance(project).getState().permissionMode = mode
         if (isRunning()) write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), mode))
         fireState()
     }
@@ -399,8 +414,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             is ClaudeEvent.Init -> {
                 sessionId = event.info.sessionId
                 if (model == null && event.info.model.isNotBlank()) model = event.info.model
-                if (event.info.permissionMode.isNotBlank()) permissionMode = event.info.permissionMode
                 if (event.info.outputStyle.isNotBlank()) outputStyle = event.info.outputStyle
+                // The plugin is the source of truth for permissionMode. system/init re-arrives every turn and
+                // reports the *launch-time* mode ("default"), which used to clobber a user choice (the
+                // recurring "reset to default" bug). Never adopt it; if the binary has drifted from our mode,
+                // push ours back so it converges instead.
+                if (event.info.permissionMode.isNotBlank() && event.info.permissionMode != permissionMode) {
+                    write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), permissionMode))
+                }
                 ready = true
                 edt {
                     systemNotice("Connected · ${event.info.model.ifBlank { "claude" }} · ${event.info.cwd}")
@@ -436,6 +457,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             is ClaudeEvent.LocalCommandOutput -> edt {
                 if (event.content.isNotBlank()) transcript.add(Speaker.SYSTEM, event.content)
             }
+
+            is ClaudeEvent.StatusNotice -> systemNotice(event.text)
+
+            is ClaudeEvent.LiveUsage -> { liveOutputTokens = event.outputTokens; edt { fireState() } }
+            is ClaudeEvent.RateLimit -> { rateLimit = event.info; edt { fireState() } }
 
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
             is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)

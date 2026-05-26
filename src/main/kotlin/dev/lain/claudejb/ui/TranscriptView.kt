@@ -26,6 +26,15 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
 
     private val rows = LinkedHashMap<Long, MessageRow>()
 
+    /**
+     * Streaming coalescing: re-rendering a row's Markdown means reparsing its whole HTML document, which is
+     * O(n) per delta and O(n²) over a long streamed message — enough to choke the EDT. Instead of rendering
+     * on every [onUpdated], we mark the entry dirty and flush at most ~12×/s. The timer always renders the
+     * entry's *current* text, so the final delta (and the finalize replaceText) is captured by the trailing tick.
+     */
+    private val dirty = LinkedHashMap<Long, TranscriptEntry>()
+    private val flushTimer = javax.swing.Timer(80) { flushDirty() }.apply { isRepeats = true }
+
     /** Tracks the viewport width so HTML rows wrap instead of forcing a horizontal scrollbar. */
     private val content = object : JPanel(VerticalLayout(JBUI.scale(2))), Scrollable {
         override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
@@ -66,14 +75,29 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
     }
 
     override fun onUpdated(entry: TranscriptEntry) {
-        val row = rows[entry.id] ?: return
+        if (entry.id !in rows) return
+        // Coalesce: defer the heavy Markdown re-render to the next timer tick instead of running it per delta.
+        dirty[entry.id] = entry
+        if (!flushTimer.isRunning) flushTimer.start()
+    }
+
+    /** Renders every row that changed since the last tick in a single revalidate/scroll pass. */
+    private fun flushDirty() {
+        if (dirty.isEmpty()) {
+            flushTimer.stop()
+            return
+        }
         val atBottom = isAtBottom()
-        row.update(entry.text, entry.meta)
+        val batch = dirty.values.toList()
+        dirty.clear()
+        for (entry in batch) rows[entry.id]?.update(entry.text, entry.meta)
         content.revalidate()
         if (atBottom) scrollToBottom()
     }
 
     override fun onCleared() {
+        flushTimer.stop()
+        dirty.clear()
         rows.clear()
         content.removeAll()
         showEmptyState(true)

@@ -36,6 +36,7 @@ object ChatTheme {
     val BORDER: Color get() = JBColor.border()
     val ERROR: Color get() = NamedColorUtil.getErrorForeground()
     val ERROR_BG: Color get() = JBColor(Color(0xFBE9E7), Color(0x3D2422))
+    val WARNING: Color get() = JBColor(Color(0xB8860B), Color(0xE0A030))     // amber — quota warning
 
     /** The Claude starburst, used as the assistant avatar. */
     val avatar: Icon = IconLoader.getIcon("/icons/claude.svg", ChatTheme::class.java)
