@@ -9,6 +9,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.diff.DiffPresenter
@@ -33,14 +34,14 @@ import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.util.SystemInfo
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
+import com.intellij.util.concurrency.AppExecutorUtil
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns the long-lived `claude` process for a project and is the single entry point the GUI talks to.
@@ -88,6 +89,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var sessionTokens: Int = 0; private set
     @Volatile private var ready = false
 
+    /** Env resolved by sourcing the user's shell script (blocking, ~seconds). Cached so a restart doesn't re-source it;
+     *  invalidated in [stop] so a settings change to the source script is picked up on the next start. */
+    @Volatile private var cachedEnv: Map<String, String>? = null
+
     // --- metadata from the initialize handshake (powers the GUI menus) ---
     var commands: List<SlashCommand> = emptyList(); private set
     var models: List<ModelInfo> = emptyList(); private set
@@ -96,6 +101,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     var account: AccountInfo = AccountInfo(); private set
 
     @Volatile private var process: ClaudeProcess? = null
+    /**
+     * Pending-prompt buffer. [ArrayDeque] is NOT thread-safe; **the queue is only ever touched on the EDT**
+     * (send / sendSideQuestion / removeQueued / pump wrap their queue access in [edt]). Do not access it from a
+     * background thread — confinement, not a concurrent structure, is the invariant here.
+     */
     private val queue = ArrayDeque<String>()
     private val pendingControl = ConcurrentHashMap<String, (ClaudeEvent.ControlResult) -> Unit>()
     private val pendingRefresh = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -129,7 +139,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // Lifecycle
     // -----------------------------------------------------------------------
 
-    /** Starts the binary if it is not already running. Returns false (and notifies) if `claude` is missing. */
+    /**
+     * Starts the binary if it is not already running. Returns false (and notifies) only on a *synchronously*
+     * detectable failure (`claude` missing). The actual launch is **asynchronous**: resolving the process env
+     * (which sources a login shell with a multi-second timeout) and spawning the process are blocking, so they run
+     * on a pooled thread to keep the EDT responsive — `start()` is called on the EDT from both `send()` and the tool
+     * window, and doing this work inline froze the IDE for up to the shell timeout.
+     *
+     * The contract is intentionally "start returns before the process is ready": `pump()` is gated on `ready`/
+     * `isRunning()`, so any prompt queued by `send()` before the async launch completes is flushed once `ready`
+     * flips true at the end of the pooled-thread → EDT hand-back. A `true` return means "launch dispatched", not
+     * "process up".
+     */
     fun start(resume: Boolean = sessionId != null): Boolean {
         if (isRunning()) return true
         val settings = ClaudeSettings.getInstance(project)
@@ -140,49 +161,86 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // Persist the auto-detected path so later launches are stable and the user can see/edit it
         // (also refreshes a stale saved path that fell back to auto-detection).
         if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
+
+        // Trust-on-open gate: a project-level claude-code.xml can ship a sourceScript or a stdio MCP server
+        // (arbitrary command), both of which we'd execute at launch. If that config is present and the project
+        // hasn't been trusted for it, ask once before running anything. Declining aborts the launch rather than
+        // silently executing code that arrived with an untrusted repo. Runs on the EDT (start()'s contract).
+        if (!ensureExecTrust(settings)) return false
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
         liveAssistant = null
         liveThinking = null
 
-        val proc = ClaudeProcess(
-            binary = binary,
-            workDir = workDir,
-            args = buildArgs(resume),
-            nodeOverride = settings.nodePath,
-            extraEnv = settings.resolveEnv(),
-            onEvent = ::onEvent,
-            onTerminated = ::onTerminated,
-        )
-        process = proc
-        proc.start()
+        // Off the EDT: env resolution sources a shell (seconds) and process spawn can block. Hand back to the EDT
+        // for the state mutations the GUI observes (ready/fireState/pump) and the queue invariant.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
+            val proc = ClaudeProcess(
+                binary = binary,
+                workDir = workDir,
+                args = buildArgs(resume),
+                nodeOverride = settings.nodePath,
+                extraEnv = env,
+                onEvent = ::onEvent,
+                onTerminated = ::onTerminated,
+            )
+            process = proc
+            // ClaudeProcess.start() may throw if the process fails to spawn — surface it instead of leaving a
+            // half-initialized session that never becomes ready.
+            val started = runCatching { proc.start() }
+            if (started.isFailure) {
+                process = null
+                log.warn("Failed to start the claude process", started.exceptionOrNull())
+                notifyError("Failed to start Claude Code: ${started.exceptionOrNull()?.message ?: "unknown error"}")
+                return@executeOnPooledThread
+            }
 
-        // Optional handshake → rich command/model/agent metadata for the GUI menus.
-        val initId = ControlProtocol.newRequestId()
-        pendingControl[initId] = handler@{ res ->
-            val payload = res.payload ?: return@handler
-            val info = runCatching { ClaudeJson.decodeFromJsonElement(InitializeResponse.serializer(), payload) }.getOrNull()
-                ?: return@handler
-            commands = info.commands
-            models = info.models
-            agents = info.agents
-            availableOutputStyles = info.availableOutputStyles
-            account = info.account
-            if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
-            edt { fireMetadata() }
+            // Optional handshake → rich command/model/agent metadata for the GUI menus.
+            val initId = ControlProtocol.newRequestId()
+            val initWatchdog = scheduleControlTimeout(initId)
+            pendingControl[initId] = handler@{ res ->
+                initWatchdog.cancel(false)
+                val payload = res.payload ?: return@handler
+                val info = runCatching { ClaudeJson.decodeFromJsonElement(InitializeResponse.serializer(), payload) }
+                    .onFailure { log.debug("Failed to decode initialize response", it) }
+                    .getOrNull()
+                    ?: return@handler
+                commands = info.commands
+                models = info.models
+                agents = info.agents
+                availableOutputStyles = info.availableOutputStyles
+                account = info.account
+                if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
+                edt { fireMetadata() }
+            }
+            write(ControlProtocol.initializeRequest(initId))
+
+            // NOTE (claude 2.1.150): the binary accepts prompts on stdin from the start and only emits the
+            // `system/init` line *after* the first user turn — not on launch. So we must NOT gate readiness on
+            // the Init event (that would deadlock: pump() waits for ready, ready waits for a prompt). We're
+            // ready as soon as the process is up; Init, when it later arrives, just back-fills sessionId/model.
+            edt {
+                ready = true
+                transcript.add(Speaker.SYSTEM, "Claude Code ready.")
+                fireState()
+                pump()
+            }
         }
-        write(ControlProtocol.initializeRequest(initId))
-
-        // NOTE (claude 2.1.150): the binary accepts prompts on stdin from the start and only emits the
-        // `system/init` line *after* the first user turn — not on launch. So we must NOT gate readiness on
-        // the Init event (that would deadlock: pump() waits for ready, ready waits for a prompt). We're
-        // ready as soon as the process is up; Init, when it later arrives, just back-fills sessionId/model.
-        ready = true
-        systemNotice("Claude Code ready.")
-        edt { fireState(); pump() }
         return true
     }
+
+    /**
+     * Per-request watchdog: if the binary leaves a control request hanging (semi-stuck), fail it after a timeout so
+     * "Loading…" dialogs don't wait forever. Cancelled by the response handler when the reply arrives in time.
+     */
+    private fun scheduleControlTimeout(id: String): ScheduledFuture<*> =
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            pendingControl.remove(id)?.invoke(
+                ClaudeEvent.ControlResult(requestId = id, success = false, payload = null, error = "control request timed out"),
+            )
+        }, CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
     /** Stops the current process and starts a fresh one, resuming the same session if possible. */
     fun restart(resume: Boolean = true) {
@@ -196,7 +254,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process = null
         turnActive = false
         ready = false
+        // Drop the cached env so a settings change to the source script is re-sourced on the next start.
+        cachedEnv = null
+        failPendingControl()
         edt { clearPending(); fireState() }
+    }
+
+    /**
+     * Resolves every in-flight control request with a failure so their callbacks (get_context_usage / cost /
+     * mcp_status / initialize) don't hang forever once the process is gone — the callbacks map a null payload to
+     * `onResult(null)` on the EDT, which closes the "Loading…" dialogs. Called on stop / termination / dispose.
+     */
+    private fun failPendingControl() {
+        pendingControl.values.toList().also { pendingControl.clear() }.forEach {
+            it(ClaudeEvent.ControlResult(requestId = "", success = false, payload = null, error = "process gone"))
+        }
     }
 
     /**
@@ -230,61 +302,32 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
-     * Builds `{"mcpServers": …}` for `--mcp-config`, merging (when enabled) JetBrains' own server under the
-     * `jetbrains` key with the user's custom servers. Returns null (skipping the flag) when there's nothing to
-     * register, so a launch is never blocked by an absent/invalid config.
+     * Builds `{"mcpServers": …}` for `--mcp-config` by delegating to the pure [McpConfigBuilder] (testable without
+     * the IDE). The only IDE-coupled bit — resolving the stdio command from the running IDE's paths — is computed
+     * here as [resolveStdioParams] and handed in; everything else is plain data. The wire format is unchanged.
      */
-    private fun mcpConfigJson(): String? {
-        val servers = buildJsonObject {
-            if (ideMcpEnabled) jetbrainsMcpServer()?.let { put("jetbrains", it) }
-            customMcpServersObject()?.forEach { (name, server) -> put(name, server) }
-        }
-        if (servers.isEmpty()) return null
-        return buildJsonObject { put("mcpServers", servers) }.toString()
-    }
-
-    /** The JetBrains server object for the selected transport. stdio is synthesized from the running IDE's paths. */
-    private fun jetbrainsMcpServer(): JsonObject? = when (ideMcpTransport) {
-        "stdio" -> stdioMcpServer()
-        "streamable-http" -> httpMcpServer("streamable-http", "http://127.0.0.1:$ideMcpPort/stream")
-        else -> httpMcpServer("sse", "http://127.0.0.1:$ideMcpPort/sse")
-    }
-
-    private fun httpMcpServer(type: String, url: String): JsonObject = buildJsonObject {
-        put("type", type)
-        put("url", url)
-        putJsonObject("headers") {}
-    }
+    private fun mcpConfigJson(): String? =
+        McpConfigBuilder.mcpConfigJson(
+            ideMcpEnabled = ideMcpEnabled,
+            transport = ideMcpTransport,
+            port = ideMcpPort,
+            customMcpServers = customMcpServers,
+            stdioParams = if (ideMcpEnabled && ideMcpTransport == "stdio") resolveStdioParams() else null,
+            onCustomParseError = { log.debug("Failed to parse custom MCP servers JSON", it) },
+        )
 
     /**
-     * Synthesizes the stdio server config from the running IDE: the JBR java, the bundled "mcpserver" plugin
-     * libs plus the platform lib dir (via the JVM classpath wildcard, so we don't hardcode jar names),
-     * and IJ_MCP_SERVER_PORT. Returns null if the plugin can't be located (→ stdio simply isn't registered).
+     * Resolves the IDE-dependent inputs for the stdio transport: the JBR java, the bundled "mcpserver" plugin's lib
+     * dir, the platform lib dir and the port. Returns null if the plugin can't be located (→ stdio isn't registered).
      */
-    private fun stdioMcpServer(): JsonObject? {
+    private fun resolveStdioParams(): McpConfigBuilder.StdioParams? {
         val javaBin = File(File(System.getProperty("java.home"), "bin"), if (SystemInfo.isWindows) "java.exe" else "java")
         val pluginLib = PluginManagerCore.plugins
             .firstOrNull { it.pluginPath?.fileName?.toString()?.contains("mcpserver", ignoreCase = true) == true }
             ?.pluginPath?.resolve("lib")?.toFile()
             ?: return null
-        if (!javaBin.exists() || !pluginLib.isDirectory) return null
-        val sep = File.pathSeparator
-        val classpath = "${pluginLib.absolutePath}${File.separator}*$sep${PathManager.getLibPath()}${File.separator}*"
-        return buildJsonObject {
-            put("type", "stdio")
-            put("command", javaBin.absolutePath)
-            putJsonArray("args") {
-                add("-classpath"); add(classpath); add("com.intellij.mcpserver.stdio.McpStdioRunnerKt")
-            }
-            putJsonObject("env") { put("IJ_MCP_SERVER_PORT", ideMcpPort.toString()) }
-        }
+        return McpConfigBuilder.StdioParams(javaBin, pluginLib, PathManager.getLibPath(), ideMcpPort)
     }
-
-    /** Parses [customMcpServers] as a `name → server` JSON object; null if blank or not a valid object. */
-    private fun customMcpServersObject(): JsonObject? =
-        ifBlankNull(customMcpServers)?.let { runCatching { ClaudeJson.parseToJsonElement(it) }.getOrNull() as? JsonObject }
-
-    private fun ifBlankNull(s: String): String? = s.trim().ifBlank { null }
 
 
     // -----------------------------------------------------------------------
@@ -302,9 +345,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (!isRunning()) {
             if (!start()) return
         }
-        queue.addLast(trimmed)
-        fireState()
-        pump()
+        // Queue access is EDT-confined (the deque isn't thread-safe).
+        edt {
+            queue.addLast(trimmed)
+            fireState()
+            pump()
+        }
     }
 
     /**
@@ -316,19 +362,31 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         if (!isRunning()) {
+            // Cold start: the launch is async (process not up yet), so a direct write would be dropped. Fall back to
+            // the queue, which pump() flushes once the process is ready — behaving like a normal send when idle.
             if (!start()) return
+            edt {
+                queue.addLast(trimmed)
+                fireState()
+                pump()
+            }
+            return
         }
-        transcript.add(Speaker.USER, "↪ $trimmed")
-        write(ControlProtocol.userMessage(trimmed))
-        if (!turnActive) {
-            turnActive = true
-            fireState()
+        // pump() touches the (EDT-confined) queue, so run the whole body on the EDT.
+        edt {
+            transcript.add(Speaker.USER, "↪ $trimmed")
+            write(ControlProtocol.userMessage(trimmed))
+            if (!turnActive) {
+                turnActive = true
+                fireState()
+            }
+            // Flush anything still queued from startup; the binary accumulates messages mid-turn.
+            pump()
         }
-        // Flush anything still queued from startup; the binary accumulates messages mid-turn.
-        pump()
     }
 
-    fun removeQueued(index: Int) {
+    fun removeQueued(index: Int) = edt {
+        // Queue access is EDT-confined (the deque isn't thread-safe).
         if (index in queue.indices) {
             val copy = queue.toMutableList()
             copy.removeAt(index)
@@ -500,7 +558,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             return
         }
         val id = ControlProtocol.newRequestId()
-        pendingControl[id] = { res -> val mapped = map(res.payload); edt { onResult(mapped) } }
+        // Watchdog: a semi-stuck binary could otherwise leave this callback pending forever (eternal "Loading…").
+        val watchdog = scheduleControlTimeout(id)
+        pendingControl[id] = { res -> watchdog.cancel(false); val mapped = map(res.payload); edt { onResult(mapped) } }
         write(buildLine(id))
     }
 
@@ -613,12 +673,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     private fun onTerminated(exitCode: Int) {
+        // The process is gone: release any in-flight control callbacks so their dialogs don't hang.
+        failPendingControl()
         edt {
             turnActive = false
             ready = false
             clearPending()
-            if (exitCode != 0) transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
-            else systemNotice("Session ended.")
+            if (exitCode != 0) {
+                transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
+                // The user may not have this tab focused; also raise a notification so the failure isn't missed.
+                notifyError("Claude Code exited unexpectedly (code $exitCode).")
+            } else {
+                systemNotice("Session ended.")
+            }
             fireState()
         }
     }
@@ -681,6 +748,32 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             .notify(project)
     }
 
+    /**
+     * EDT-only. Returns true if the session may launch: either there's no risky exec config (sourceScript / stdio
+     * MCP server) or the user has trusted this project for it. Prompts once when trust is required; accepting
+     * persists the trust, declining returns false so the caller aborts the launch.
+     */
+    private fun ensureExecTrust(settings: ClaudeSettings): Boolean {
+        if (!settings.requiresTrustPrompt()) return true
+        val choice = Messages.showYesNoDialog(
+            project,
+            "This project is configured to run an environment script and/or a custom MCP server when a Claude " +
+                "Code session starts. These execute code on your machine. Only allow this if you trust this " +
+                "project's settings (claude-code.xml). Run them?",
+            "Trust Claude Code Execution Config?",
+            "Trust and run",
+            "Cancel",
+            Messages.getWarningIcon(),
+        )
+        return if (choice == Messages.YES) {
+            settings.setExecutionTrusted(true)
+            true
+        } else {
+            notifyError("Launch cancelled. Review the source script / custom MCP servers in Settings, then try again.")
+            false
+        }
+    }
+
     private fun notifyMissingBinary() {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(NOTIFICATION_GROUP)
@@ -701,6 +794,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process?.closeStdin()
         process?.destroy()
         process = null
+        // Release any in-flight control callbacks so nothing is left waiting after the tab is gone.
+        failPendingControl()
     }
 
     /** Models for the GUI: those the binary reported (minus the generic "default") plus known aliases
@@ -713,6 +808,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     companion object {
         const val NOTIFICATION_GROUP = "Claude Code"
+
+        /** How long to wait for a reply to a host-initiated control request before failing it (watchdog). */
+        const val CONTROL_TIMEOUT_SECONDS = 30L
 
         /** Default model on a fresh install: Opus 4.7. */
         const val DEFAULT_MODEL = "claude-opus-4-7"

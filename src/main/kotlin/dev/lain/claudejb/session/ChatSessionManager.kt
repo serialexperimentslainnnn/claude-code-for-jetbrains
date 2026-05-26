@@ -5,6 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Project-level owner of the open chat tabs. Each tab is one [ClaudeSession] (one `claude` process);
@@ -23,7 +24,7 @@ class ChatSessionManager(private val project: Project) : Disposable {
 
     private val sessions = CopyOnWriteArrayList<ClaudeSession>()
     private val listeners = CopyOnWriteArrayList<Listener>()
-    private var counter = 0
+    private val counter = AtomicInteger(0)
 
     @Volatile
     var active: ClaudeSession? = null
@@ -36,8 +37,7 @@ class ChatSessionManager(private val project: Project) : Disposable {
 
     /** Creates a fresh chat (does not start the process — the caller wires UI then calls [ClaudeSession.start]). */
     fun create(): ClaudeSession {
-        counter += 1
-        val session = ClaudeSession(project, "Chat $counter")
+        val session = ClaudeSession(project, "Chat ${counter.incrementAndGet()}")
         sessions.add(session)
         active = session
         fireChanged()

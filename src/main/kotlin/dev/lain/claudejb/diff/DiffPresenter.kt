@@ -31,6 +31,29 @@ object DiffPresenter {
 
     fun filePathOf(input: JsonObject): String? = input.str("file_path")
 
+    /**
+     * True iff [path] resolves to a location at or under [projectRoot]. Used to confine auto-approved writes
+     * (acceptEdits/bypassPermissions) to the project tree, so a binary-supplied absolute path pointing outside
+     * (e.g. ~/.ssh/config, /etc/...) cannot be written silently. Both sides are canonicalized — which also
+     * resolves symlinks — to defeat `..` traversal and symlink-based escapes. Conservative on the unknown: a
+     * null [path] or [projectRoot], or any canonicalization failure (IOException), returns false (never
+     * auto-approve when we cannot prove containment).
+     */
+    fun isWithinRoot(path: String?, projectRoot: String?): Boolean {
+        if (path == null || projectRoot == null) return false
+        return try {
+            val canonicalFile = File(path).canonicalFile
+            val canonicalRoot = File(projectRoot).canonicalFile
+            val rootPath = canonicalRoot.path
+            val filePath = canonicalFile.path
+            filePath == rootPath || filePath.startsWith(rootPath + File.separator)
+        } catch (_: java.io.IOException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
     /** Reconstructs the proposed file content, or null if it cannot be derived from [input]. */
     fun proposedContent(toolName: String, input: JsonObject, currentText: String): String? = when (toolName) {
         "Write" -> input.str("content") ?: ""
