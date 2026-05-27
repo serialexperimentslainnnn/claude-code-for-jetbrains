@@ -1,3 +1,39 @@
+## v2.1.0 — 2026-05-27
+
+**Review edits anytime, readable questions, partial acceptance, sessions from the binary's own files, and more**
+
+A round of native-only UX features, backed by new tests (132 total).
+
+**Edit review**
+- **Persistent diff from the transcript** — every Edit/Write/MultiEdit keeps a "View diff" button on its tool card, so you can re-open the old↔new diff at any time, in any permission mode (even after an auto-approved edit). The pre-write file contents are snapshotted at approval time and keyed to the tool call.
+- **Hunk-by-hunk acceptance** — the permission card now lists the change's hunks with checkboxes; accept only the ones you want and the binary writes exactly that subset (the file path is never altered).
+
+**Readability**
+- **AskUserQuestion options** now wrap — long labels, descriptions and the (previously unused) per-option preview are shown in full instead of being clipped to one line.
+- **Better Markdown** — strikethrough, GFM task-list checkboxes, nested lists, and a fix for double-linkified URLs.
+
+**Editor integration**
+- **"Explain with Claude"** in the editor right-click menu sends the current selection (with its file path) to the active chat.
+- **Jump-to-code** — `path:line` references in Claude's replies become clickable links that open the file at that line (confined to the project tree).
+
+**Permissions**
+- **"Always allow" per tool** — approve a tool once and skip its prompt for the rest of the project; reviewable writes still stay confined to the project root. Settings lists the remembered tools with a Remove button, so you can revoke any rule.
+
+**Sessions**
+- **Reads the binary's own session files** — past conversations come straight from Claude Code's transcripts (`~/.claude/projects`), so the plugin never stores a copy of your chats. **Open Previous Session…** lists the project's sessions by their real title (the one `--resume` shows) and re-attaches with `--resume`.
+- **Restore on startup** — the tabs you had open are reopened automatically; if none were recorded, your most recent session is restored. Turn it off in Settings ▸ Claude Code ▸ "Restore open chats on startup".
+- A background session that needs attention (pending permission, finished turn, or error) raises a notification and a tab badge — suppressed only for the chat currently on screen; the notification's **Open** button dismisses it.
+
+**Security**
+- Jump-to-code links are confined to the project root (a crafted `path:line` can't open `~/.ssh`, `/etc`, or `..`-traversed files), and explicit Markdown links are restricted to an allow-list of schemes with their href escaped.
+- The plugin writes **no conversation content** to project files — only which tabs were open (in `workspace.xml`). Session-file reads stay inside `~/.claude/projects` behind a UUID-shaped id check, so a crafted session id can't traverse out.
+
+**Fixes**
+- Reasoning shows again on current models: extended thinking now uses the launch flags `--thinking adaptive --thinking-display summarized` (the old `set_max_thinking_tokens` control stopped surfacing it). Thinking is on/off — adaptive, the model decides depth.
+- No more "Write-unsafe context!" crash when refreshing edited files (the VFS refresh is now asynchronous).
+
+---
+
 ## v2.0.1 — 2026-05-27
 
 **Compatibility update**

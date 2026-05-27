@@ -90,4 +90,13 @@
                 displayName="Claude Code"
                 nonDefaultProject="false"/>
     </extensions>
+
+    <actions>
+        <action id="dev.lain.claudejb.ExplainSelection"
+                class="dev.lain.claudejb.actions.ExplainSelectionAction"
+                text="Explain with Claude"
+                description="Send the selected code to Claude and ask it to explain.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

@@ -24,4 +24,11 @@ object EditorContextProvider {
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
         return editor.selectionModel.selectedText?.takeIf { it.isNotBlank() }
     }
+
+    /** 1-based line where the current selection starts (or the caret line if nothing is selected), or null. */
+    fun currentSelectionStartLine(project: Project): Int? {
+        val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: return null
+        val offset = editor.selectionModel.selectionStart
+        return editor.document.getLineNumber(offset) + 1
+    }
 }

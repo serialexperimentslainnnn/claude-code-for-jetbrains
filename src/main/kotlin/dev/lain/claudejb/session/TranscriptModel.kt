@@ -73,7 +73,7 @@ class TranscriptModel {
      * Inherits the call's [parentToolUseId] so subagent outputs nest under their Agent. Falls back to appending
      * if the call isn't found.
      */
-    fun addToolOutput(toolUseId: String, text: String, parentToolUseId: String? = null): TranscriptEntry {
+    fun addToolOutput(toolUseId: String, text: String, parentToolUseId: String? = null, meta: String? = null): TranscriptEntry {
         val toolIdx = backing.indexOfLast { it.speaker == Speaker.TOOL && it.toolUseId == toolUseId }
         val parent = parentToolUseId ?: byToolUseId[toolUseId]?.parentToolUseId
         val insertAt = if (toolIdx < 0) backing.size else {
@@ -81,7 +81,7 @@ class TranscriptModel {
             while (i < backing.size && backing[i].speaker == Speaker.TOOL_OUTPUT && backing[i].toolUseId == toolUseId) i++
             i
         }
-        val entry = TranscriptEntry(nextId++, Speaker.TOOL_OUTPUT, text, null, toolUseId, parent)
+        val entry = TranscriptEntry(nextId++, Speaker.TOOL_OUTPUT, text, meta, toolUseId, parent)
         backing.add(insertAt, entry)
         listeners.forEach { it.onAdded(entry, insertAt) }
         return entry
