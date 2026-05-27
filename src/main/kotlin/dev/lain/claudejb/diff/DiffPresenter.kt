@@ -103,6 +103,49 @@ object DiffPresenter {
         return vFile
     }
 
+    /**
+     * Line-level hunks between [current] and [proposed], computed via the platform diff engine. The pure
+     * narrowing/reconstruction that consumes these lives in [HunkSelection]. EDT/Application-bound.
+     */
+    fun computeHunks(current: String, proposed: String): List<Hunk> {
+        val fragments = com.intellij.diff.comparison.ComparisonManager.getInstance()
+            .compareLines(
+                current, proposed,
+                com.intellij.diff.comparison.ComparisonPolicy.DEFAULT,
+                com.intellij.openapi.progress.DumbProgressIndicator.INSTANCE,
+            )
+        val currentLines = current.split("\n")
+        val proposedLines = proposed.split("\n")
+        return fragments.mapIndexed { i, f ->
+            val preview = (proposedLines.getOrNull(f.startLine2) ?: currentLines.getOrNull(f.startLine1) ?: "").trim()
+            Hunk(i, f.startLine1, f.endLine1, f.startLine2, f.endLine2, preview)
+        }
+    }
+
+    /**
+     * Renders a unified diff (`@@`/` `/`-`/`+` lines) between [current] and [proposed], emitting only the
+     * changed regions plus [context] lines around each — the same shape Claude Code prints in the terminal,
+     * reconstructed natively so the chat can colorize it. Returns `""` when there is no change. The platform
+     * diff engine ([computeHunks]) is EDT/Application-bound.
+     */
+    fun unifiedDiff(current: String, proposed: String, context: Int = 3): String {
+        val hunks = computeHunks(current, proposed)
+        if (hunks.isEmpty()) return ""
+        val cur = current.split("\n")
+        val pro = proposed.split("\n")
+        val sb = StringBuilder()
+        for (h in hunks) {
+            val ctxStart = (h.start1 - context).coerceAtLeast(0)
+            val ctxEnd = (h.end1 + context).coerceAtMost(cur.size)
+            sb.append("@@ -${h.start1 + 1},${h.end1 - h.start1} +${h.start2 + 1},${h.end2 - h.start2} @@\n")
+            for (i in ctxStart until h.start1) sb.append(' ').append(cur[i]).append('\n')
+            for (i in h.start1 until h.end1) sb.append('-').append(cur.getOrElse(i) { "" }).append('\n')
+            for (i in h.start2 until h.end2) sb.append('+').append(pro.getOrElse(i) { "" }).append('\n')
+            for (i in h.end1 until ctxEnd) sb.append(' ').append(cur[i]).append('\n')
+        }
+        return sb.toString().trimEnd('\n')
+    }
+
     /** Brings an already-opened diff tab to the front (reopening it if the user closed it). EDT only. */
     fun revealDiff(project: Project, file: VirtualFile) {
         FileEditorManager.getInstance(project).openFile(file, true)

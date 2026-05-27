@@ -10,10 +10,15 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call
 - **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
 - **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
+- **Persistent diff + hunk-by-hunk** — re-open any edit's diff from its transcript card ("View diff"), and accept only selected hunks on the permission card (the binary writes just that subset)
+- **"Explain with Claude"** — editor right-click action sends the selection to chat; `path:line` references in replies are clickable (jump to file/line)
+- **"Always allow" per tool** — skip a tool's prompt for the rest of the project (revocable in Settings); reviewable writes stay confined to the project root
+- **Session notifications + tab badge** — a background session needing attention (permission, finished turn, error) notifies you and badges its tab
+- **Session history** — reads the `claude` binary's own session files (the source of truth): "Open Previous Session…" lists the project's past chats by their real title, and on startup the tabs you had open (or your most recent session) are reopened and re-attached via `--resume`. The plugin stores no transcripts of its own — only which tabs were open (in `workspace.xml`).
 - **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
 - **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
 - **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
-- **`AskUserQuestion` support** — multi-select option cards rendered natively in the transcript
+- **`AskUserQuestion` support** — multi-select option cards rendered natively, with full-width wrapped labels/descriptions/preview
 - **Quota bar** — subscription usage % shown when near the usage limit, with reset countdown
 - **Live token counter** — per-message output tokens shown in the status line while the agent thinks
 - **Markdown rendering** — bold, inline code, code blocks, tables
@@ -31,7 +36,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 **From a pre-built zip:**
 
-1. Download `claude-code-for-jetbrains-1.3.1.zip` from [Releases](../../releases)
+1. Download `claude-code-native-2.1.0.zip` from [Releases](../../releases)
 2. In the IDE: **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the zip and restart
 
@@ -74,7 +79,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-native-2.0.0.zip`
+Output: `build/distributions/claude-code-native-2.1.0.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -89,7 +94,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v2.0.0** — Reliability & security hardening backed by the first unit-test suite (80 tests): EDT-freeze fix on start, in-flight control requests resolved on stop/crash + 30s watchdog, auto-writes confined to the project root, trust-on-open gate for source script / custom stdio MCP, and safe source-script quoting. Builds on v1.3.x: opt-in IDE tools over MCP (JetBrains MCP server with auto-built sse/streamable-http/stdio config, plus custom servers), Windows support, configurable executable paths and environment; default model Opus 4.7, default effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.1.
+**v2.1.0** (132 tests) — persistent diff from the transcript ("View diff" on every edit card, in any permission mode), hunk-by-hunk partial acceptance, wrapped AskUserQuestion options, improved Markdown (strikethrough, task lists, nested lists), "Explain with Claude" editor action + jump-to-code links (project-confined), "Always allow" per tool (revocable in Settings), and background-session notifications with tab badges (suppressed only for the chat on screen; "Open" dismisses the notification). **Session history reads the binary's own session files** as the source of truth — real titles (as `--resume`), "Open Previous Session…" lists the project's sessions, and on startup the open tabs (or the most recent session) are restored; the plugin persists no transcripts, only the open-tab ids in `workspace.xml`. Internally, permission-mode/effort/transport are now typed enums. Builds on v2.0.x: reliability & security hardening (EDT-freeze fix, in-flight control resolution + watchdog, project-root write confinement, trust-on-open gate) and opt-in IDE tools over MCP. Default model Opus 4.7, effort medium. Verified compatible with IntelliJ IDEA 2024.3 – 2026.2 (build 243–262).
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 

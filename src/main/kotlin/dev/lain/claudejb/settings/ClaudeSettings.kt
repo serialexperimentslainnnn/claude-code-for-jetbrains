@@ -44,7 +44,13 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         @JvmField var nodePath: String = ""
         @JvmField var envVars: String = ""
         @JvmField var sourceScript: String = ""
+        /** Comma-separated tool names the user chose to "Always allow" (auto-approve without a card). */
+        @JvmField var alwaysAllowTools: String = ""
+        /** Reopen the chats that were open last time when the tool window starts. */
+        @JvmField var restoreOpenChatsOnStartup: Boolean = true
     }
+
+    val restoreOpenChatsOnStartup: Boolean get() = state.restoreOpenChatsOnStartup
 
     val claudePath: String get() = state.claudePath
     val nodePath: String get() = state.nodePath
@@ -91,6 +97,44 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
             ideMcpPort = state.ideMcpPort,
             customMcpServers = state.customMcpServers,
         )
+    }
+
+    // --- "Always allow" per tool ----------------------------------------------------------------
+    // Remembers tool names the user opted to auto-approve. Keyed by tool name only; path containment
+    // for reviewable writes is enforced independently by the broker (isWithinRoot), so a remembered
+    // write outside the project root still falls through to a manual card. The [input] param is kept
+    // for future-proofing (e.g. per-command/per-path rules) even though it is currently unused.
+
+    private fun alwaysAllowSet(): Set<String> =
+        state.alwaysAllowTools.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    /** True when [toolName] was previously marked "Always allow". */
+    @Suppress("UNUSED_PARAMETER")
+    fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean =
+        toolName.isNotBlank() && toolName in alwaysAllowSet()
+
+    /** Adds [toolName] to the remembered "Always allow" set (idempotent) and persists. */
+    fun rememberToolAlwaysAllow(toolName: String) {
+        if (toolName.isBlank()) return
+        val current = alwaysAllowSet()
+        if (toolName in current) return
+        state.alwaysAllowTools = (current + toolName).joinToString(",")
+    }
+
+    /** The remembered "Always allow" tool names: trimmed, non-empty, de-duplicated, order-stable. */
+    fun alwaysAllowedTools(): List<String> =
+        state.alwaysAllowTools.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+    /** Replaces the remembered "Always allow" set with [tools] (trimmed, non-empty, de-duplicated) and persists. */
+    fun setAlwaysAllowedTools(tools: List<String>) {
+        state.alwaysAllowTools = tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(",")
+    }
+
+    /** Removes [toolName] from the remembered "Always allow" set and persists. */
+    fun forgetToolAlwaysAllow(toolName: String) {
+        val target = toolName.trim()
+        if (target.isEmpty()) return
+        state.alwaysAllowTools = alwaysAllowSet().filterNot { it == target }.joinToString(",")
     }
 
     // --- Trust gate (trust-on-open) -------------------------------------------------------------

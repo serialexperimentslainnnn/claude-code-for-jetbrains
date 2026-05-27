@@ -2,6 +2,7 @@ package dev.lain.claudejb.permission
 
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.protocol.AskQuestion
+import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.protocol.CanUseToolRequest
 import dev.lain.claudejb.protocol.ControlProtocol
 import dev.lain.claudejb.protocol.parseAskQuestions
@@ -22,6 +23,8 @@ data class PendingPermission(
     val reviewable: Boolean,
     /** Non-null for AskUserQuestion: render these instead of an Accept/Reject card. */
     val questions: List<AskQuestion>? = null,
+    /** Correlates with the assistant ToolUse.id; keys the persistent edit snapshot. */
+    val toolUseId: String? = null,
 ) {
     /** Short headline for transcript notices, e.g. "Edit on App.kt". */
     val headline: String
@@ -41,7 +44,9 @@ class PermissionBroker(
     private val onApprovedWrite: (String) -> Unit,
     private val present: (PendingPermission) -> Unit,
     /** Auto-approved file edit (acceptEdits/bypassPermissions): pop its diff so the user still sees it. */
-    private val onAutoReviewed: (toolName: String, input: JsonObject) -> Unit,
+    private val onAutoReviewed: (toolName: String, input: JsonObject, toolUseId: String) -> Unit,
+    /** Returns true when the user has marked [toolName] as "Always allow" (auto-approve, no card). */
+    private val isRemembered: (toolName: String, input: JsonObject) -> Boolean = { _, _ -> false },
     /** Project root for turning absolute paths into relative ones in permission cards. */
     private val projectRoot: String? = null,
 ) {
@@ -59,6 +64,7 @@ class PermissionBroker(
                     summary = "",
                     reviewable = false,
                     questions = parseAskQuestions(request.input),
+                    toolUseId = request.toolUseId.ifBlank { null },
                 )
             )
             return
@@ -69,13 +75,15 @@ class PermissionBroker(
         // See [autoAllow] / [isWithinRoot] for the rationale (blast-radius containment of acceptEdits/bypass).
         val autoApprovable = !reviewable ||
             DiffPresenter.isWithinRoot(DiffPresenter.filePathOf(request.input), projectRoot)
-        when {
-            mode == "bypassPermissions" && autoApprovable -> {
-                autoAllow(requestId, request, reviewable); return
-            }
-            mode == "acceptEdits" && reviewable && autoApprovable -> {
-                autoAllow(requestId, request, reviewable); return
-            }
+        when (PermissionMode.from(mode)) {
+            PermissionMode.BYPASS -> if (autoApprovable) { autoAllow(requestId, request, reviewable); return }
+            PermissionMode.ACCEPT_EDITS -> if (reviewable && autoApprovable) { autoAllow(requestId, request, reviewable); return }
+            else -> {}
+        }
+        // "Always allow" honoured here, gated by the same autoApprovable check: a remembered reviewable write
+        // outside the project root still falls through to a manual card (path containment is non-negotiable).
+        if (isRemembered(request.toolName, request.input) && autoApprovable) {
+            autoAllow(requestId, request, reviewable); return
         }
         // Not auto-approved (default/plan mode, or a write that escapes the project root): surface a manual card.
         present(presentable(requestId, request, reviewable))
@@ -89,6 +97,7 @@ class PermissionBroker(
             title = request.title ?: defaultTitle(request),
             summary = summarize(request.toolName, request.input),
             reviewable = reviewable,
+            toolUseId = request.toolUseId.ifBlank { null },
         )
 
     /** Replies to an unsupported binary->host control request so the binary is not left waiting. */
@@ -109,7 +118,7 @@ class PermissionBroker(
             DiffPresenter.filePathOf(request.input)?.let(onApprovedWrite)
             // Pop the diff *before* answering allow: the binary writes the file right after, so the snapshot of
             // the current contents must be captured now (the callback reads disk synchronously).
-            onAutoReviewed(request.toolName, request.input)
+            onAutoReviewed(request.toolName, request.input, request.toolUseId)
         }
         respond(ControlProtocol.permissionAllow(requestId, request.input))
     }

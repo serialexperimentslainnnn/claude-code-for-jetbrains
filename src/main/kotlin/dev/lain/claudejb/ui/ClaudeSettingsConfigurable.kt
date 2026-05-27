@@ -6,8 +6,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.CollectionListModel
+import com.intellij.ui.ToolbarDecorator
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBFont
 import com.intellij.ui.scale.JBUIScale
@@ -35,8 +38,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val modelCombo = JComboBox<String>().apply { isEditable = true }
     private val effortCombo = JComboBox(ClaudeSession.EFFORT_LEVELS.toTypedArray())
     private val modeCombo = JComboBox(ClaudeSession.PERMISSION_MODES.toTypedArray())
-    private val thinkingSpinner = JSpinner(SpinnerNumberModel(0, 0, 200_000, 1_000))
+    private val thinkingCheck = JBCheckBox("Extended thinking (adaptive — the model decides depth)")
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
+    private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
     private val claudePathField = JBTextField().apply {
         emptyText.text = "Auto-detect (leave blank unless 'claude' is in a custom location)"
     }
@@ -57,6 +61,12 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         emptyText.text = "JSON object of name → server config; add as many as you like (sse / streamable-http / stdio)"
     }
 
+    private val alwaysAllowModel = CollectionListModel<String>()
+    private val alwaysAllowList = JBList(alwaysAllowModel).apply {
+        emptyText.text = "No tools are auto-approved — every tool call shows a permission card."
+        visibleRowCount = 4
+    }
+
     private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
     private val allowedToolsGroup = CheckboxGroup(ClaudeSession.BUILTIN_TOOLS, columns = 4)
     private val disallowedToolsGroup = CheckboxGroup(ClaudeSession.BUILTIN_TOOLS, columns = 4)
@@ -71,8 +81,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addLabeledComponent("Model:", modelCombo)
             .addLabeledComponent("Effort:", effortCombo)
             .addLabeledComponent("Permission mode:", modeCombo)
-            .addLabeledComponent("Thinking tokens (0 = off):", thinkingSpinner)
+            .addComponent(thinkingCheck)
             .addComponent(partialCheck)
+            .addComponent(restoreChatsCheck)
             .addSeparator()
             .addLabeledComponent("claude executable path:", claudePathField)
             .addLabeledComponent("node executable path:", nodePathField)
@@ -88,6 +99,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addComponent(allowedToolsGroup.component)
             .addComponent(sectionLabel("Disallowed tools (none = nothing blocked)"))
             .addComponent(disallowedToolsGroup.component)
+            .addComponent(sectionLabel("Always-allowed tools"))
+            .addComponent(alwaysAllowedWarningLabel())
+            .addComponent(alwaysAllowedComponent())
             .addSeparator()
             .addComponent(sectionLabel("JetBrains MCP server (opt-in) — requires the MCP Server plugin enabled"))
             .addComponent(ideMcpCheck)
@@ -110,8 +124,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         return modelText() != s.model ||
             effortText() != s.effort ||
             modeText() != s.permissionMode ||
-            thinkingValue() != s.thinkingTokens ||
+            thinkingCheck.isSelected != (s.thinkingTokens > 0) ||
             partialCheck.isSelected != s.includePartialMessages ||
+            restoreChatsCheck.isSelected != s.restoreOpenChatsOnStartup ||
             csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources) ||
             csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools) ||
             csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools) ||
@@ -122,7 +137,8 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             ideMcpCheck.isSelected != s.ideMcpEnabled ||
             mcpTransportText() != s.ideMcpTransport ||
             mcpPortValue() != s.ideMcpPort ||
-            customMcpArea.text.trim() != s.customMcpServers
+            customMcpArea.text.trim() != s.customMcpServers ||
+            alwaysAllowModel.items != settings.alwaysAllowedTools()
     }
 
     override fun apply() {
@@ -133,8 +149,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.model = modelText()
         s.effort = effortText()
         s.permissionMode = modeText()
-        s.thinkingTokens = thinkingValue()
+        s.thinkingTokens = if (thinkingCheck.isSelected) ClaudeSession.THINKING_ON else 0
         s.includePartialMessages = partialCheck.isSelected
+        s.restoreOpenChatsOnStartup = restoreChatsCheck.isSelected
         s.settingSources = settingSourcesGroup.text()
         s.allowedTools = allowedToolsGroup.text()
         s.disallowedTools = disallowedToolsGroup.text()
@@ -146,6 +163,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.ideMcpTransport = mcpTransportText()
         s.ideMcpPort = mcpPortValue()
         s.customMcpServers = customMcpArea.text.trim()
+        settings.setAlwaysAllowedTools(alwaysAllowModel.items.toList())
         settings.applyTo(session)
     }
 
@@ -154,8 +172,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         modelCombo.selectedItem = s.model
         effortCombo.selectedItem = s.effort
         modeCombo.selectedItem = s.permissionMode
-        thinkingSpinner.value = s.thinkingTokens
+        thinkingCheck.isSelected = s.thinkingTokens > 0
         partialCheck.isSelected = s.includePartialMessages
+        restoreChatsCheck.isSelected = s.restoreOpenChatsOnStartup
         settingSourcesGroup.setFrom(s.settingSources)
         allowedToolsGroup.setFrom(s.allowedTools)
         disallowedToolsGroup.setFrom(s.disallowedTools)
@@ -167,12 +186,12 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         ideMcpTransportCombo.selectedItem = s.ideMcpTransport
         ideMcpPortSpinner.value = s.ideMcpPort
         customMcpArea.text = s.customMcpServers
+        alwaysAllowModel.replaceAll(settings.alwaysAllowedTools())
     }
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
     private fun effortText() = (effortCombo.selectedItem as? String).orEmpty()
     private fun modeText() = (modeCombo.selectedItem as? String) ?: "default"
-    private fun thinkingValue() = (thinkingSpinner.value as Number).toInt()
     private fun mcpTransportText() = (ideMcpTransportCombo.selectedItem as? String) ?: "sse"
     private fun mcpPortValue() = (ideMcpPortSpinner.value as Number).toInt()
 
@@ -202,6 +221,19 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         "<html>Format: <code>{ \"server-name\": { \"type\": \"…\", … }, … }</code>. " +
         "⚠ third-party servers run with your privileges and can read what you share — add only ones you trust.</html>"
     ).apply { font = JBFont.small() }
+
+    private fun alwaysAllowedWarningLabel() = JBLabel(
+        "<html>⚠ <b>Security:</b> listed tools are auto-approved for this project without a prompt " +
+        "(writes still stay within the project root). Select an entry and click <b>Remove</b> to revoke it.</html>"
+    ).apply { font = JBFont.small() }
+
+    /** Editable list of remembered "Always allow" tool names with a Remove action (revoke). */
+    private fun alwaysAllowedComponent(): JComponent =
+        ToolbarDecorator.createDecorator(alwaysAllowList)
+            .setRemoveAction { alwaysAllowList.selectedValuesList.forEach { alwaysAllowModel.remove(it) } }
+            .disableAddAction()
+            .disableUpDownActions()
+            .createPanel()
 
     /** A row/grid of checkboxes backed by a comma-separated value — the GUI form of a list option. */
     private class CheckboxGroup(options: List<String>, columns: Int) {

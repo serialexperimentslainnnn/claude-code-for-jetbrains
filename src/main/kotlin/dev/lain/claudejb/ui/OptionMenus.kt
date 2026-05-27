@@ -43,9 +43,9 @@ object OptionMenus {
     }
 
     fun thinkingGroup(session: ClaudeSession) = DefaultActionGroup("Thinking", true).apply {
+        // Adaptive thinking is on/off: the model decides depth, so there's no token budget to pick.
         add(Choice("Off") { session.thinkingTokens == null }.onChosen { session.changeThinkingTokens(null) })
-        add(Choice("On (8k)") { session.thinkingTokens == 8_000 }.onChosen { session.changeThinkingTokens(8_000) })
-        add(Choice("On (24k)") { session.thinkingTokens == 24_000 }.onChosen { session.changeThinkingTokens(24_000) })
+        add(Choice("On (adaptive)") { session.thinkingTokens != null }.onChosen { session.changeThinkingTokens(ClaudeSession.THINKING_ON) })
     }
 
     /**

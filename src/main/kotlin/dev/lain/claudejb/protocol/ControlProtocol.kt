@@ -63,13 +63,6 @@ object ControlProtocol {
     fun mcpStatusRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "mcp_status") })
 
-    /** Sets the extended-thinking token budget at runtime (null disables thinking). */
-    fun setMaxThinkingTokensRequest(requestId: String, maxThinkingTokens: Int?): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "set_max_thinking_tokens")
-            put("max_thinking_tokens", maxThinkingTokens)
-        })
-
     fun reloadPluginsRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "reload_plugins") })
 
