@@ -63,10 +63,28 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
 
     private val emptyState = buildEmptyState()
 
+    // Whether the view should track the bottom. Stays true while the user reads the latest content; goes false
+    // once they scroll up. Used to re-pin to the bottom when the viewport shrinks (e.g. a permission / question
+    // card appears in the composer below), which otherwise would hide the last message above the fold.
+    private var stickToBottom = true
+    private var lastVerticalMax = 0
+
     init {
         background = ChatTheme.BG
         add(scroll, BorderLayout.CENTER)
         showEmptyState(true)
+        // One listener distinguishes the two causes of a scrollbar change: a pure scroll (max unchanged) updates
+        // stickiness from the user's position; a content/viewport change (max changed — new message, or a tray
+        // growing below) keeps the prior stickiness and re-pins to the bottom when we were following it.
+        scroll.verticalScrollBar.addAdjustmentListener {
+            val bar = scroll.verticalScrollBar
+            if (bar.maximum == lastVerticalMax) {
+                stickToBottom = bar.value + bar.visibleAmount >= bar.maximum - JBUIScale.scale(24)
+            } else {
+                lastVerticalMax = bar.maximum
+                if (stickToBottom) SwingUtilities.invokeLater { bar.value = bar.maximum }
+            }
+        }
     }
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {

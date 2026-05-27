@@ -38,6 +38,13 @@ object ChatTheme {
     val ERROR_BG: Color get() = JBColor(Color(0xFBE9E7), Color(0x3D2422))
     val WARNING: Color get() = JBColor(Color(0xB8860B), Color(0xE0A030))     // amber — quota warning
 
+    // Inline unified-diff colors (added / removed), GitHub-style, themed for light & dark.
+    val DIFF_ADDED_FG: Color get() = JBColor(Color(0x22863A), Color(0x7EE787))
+    val DIFF_ADDED_BG: Color get() = JBColor(Color(0xE6FFEC), Color(0x12261C))
+    val DIFF_REMOVED_FG: Color get() = JBColor(Color(0xB31D28), Color(0xFFA198))
+    val DIFF_REMOVED_BG: Color get() = JBColor(Color(0xFFEEF0), Color(0x301A1D))
+    val DIFF_HUNK_FG: Color get() = NamedColorUtil.getInactiveTextColor()    // @@ … @@ hunk headers
+
     /** The Claude starburst, used as the assistant avatar. */
     val avatar: Icon = IconLoader.getIcon("/icons/claude.svg", ChatTheme::class.java)
 

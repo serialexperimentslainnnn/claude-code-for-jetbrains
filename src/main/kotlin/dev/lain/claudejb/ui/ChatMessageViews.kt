@@ -25,8 +25,11 @@ import javax.swing.JEditorPane
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JTextArea
+import javax.swing.JTextPane
 import javax.swing.SwingConstants
 import javax.swing.event.HyperlinkEvent
+import javax.swing.text.SimpleAttributeSet
+import javax.swing.text.StyleConstants
 import javax.swing.text.html.HTMLEditorKit
 import javax.swing.text.html.StyleSheet
 
@@ -225,20 +228,31 @@ class ToolRow(id: Long) : MessageRow(id) {
 
     init {
         syncToggle()
-        toggle.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                if (!hasChildren) return
-                expanded = !expanded
-                childrenPanel.isVisible = expanded
-                syncToggle()
-                onToggle?.invoke()
-            }
-        })
+        // The whole tool card is the click target (not just the disclosure triangle), so a tap anywhere on the
+        // box expands/collapses its output. The same listener is attached to the inner label and icon, which
+        // would otherwise swallow the click before it reached the card.
+        val toggleListener = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = toggleExpanded()
+        }
+        card.addMouseListener(toggleListener)
+        label.addMouseListener(toggleListener)
+        icon.addMouseListener(toggleListener)
+        toggle.addMouseListener(toggleListener)
+        card.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        label.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         add(JPanel(BorderLayout()).apply {
             isOpaque = false
             add(card, BorderLayout.NORTH)
             add(childrenPanel, BorderLayout.CENTER)
         }, BorderLayout.CENTER)
+    }
+
+    private fun toggleExpanded() {
+        if (!hasChildren) return
+        expanded = !expanded
+        childrenPanel.isVisible = expanded
+        syncToggle()
+        onToggle?.invoke()
     }
 
     private fun syncToggle() {
@@ -271,6 +285,16 @@ private class ToolOutputRow(id: Long) : MessageRow(id) {
         border = JBUI.Borders.empty(6, 8)
         margin = Insets(0, 0, 0, 0)
     }
+    // Styled pane used only for inline diffs (meta == "diff"): each line is colored by its +/-/@ prefix.
+    // getScrollableTracksViewportWidth=false keeps long lines unwrapped (horizontal scroll), matching [area].
+    private val diffPane = object : JTextPane() {
+        override fun getScrollableTracksViewportWidth() = false
+    }.apply {
+        isEditable = false
+        font = ChatTheme.mono
+        background = ChatTheme.CODE_BG
+        border = JBUI.Borders.empty(6, 8)
+    }
     private val scroll = JBScrollPane(area).apply {
         border = JBUI.Borders.empty()
         horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
@@ -291,15 +315,48 @@ private class ToolOutputRow(id: Long) : MessageRow(id) {
     }
 
     override fun update(text: String, meta: String?) {
+        if (meta == "diff") renderDiff(text) else renderPlain(text)
+    }
+
+    private fun renderPlain(text: String) {
         val lines = text.lines()
         val truncated = if (lines.size > 200) {
             lines.take(200).joinToString("\n") + "\n… (${lines.size - 200} more lines)"
         } else text
         area.text = truncated
         area.caretPosition = 0
+        scroll.setViewportView(area)
         // Cap height so a huge file read doesn't flood the chat; let the scrollbar handle the rest.
-        val naturalH = area.preferredSize.height + JBUIScale.scale(12)
-        scroll.preferredSize = Dimension(0, minOf(naturalH, JBUIScale.scale(160)))
+        capHeight(area.preferredSize.height, JBUIScale.scale(160))
+    }
+
+    private fun renderDiff(diff: String) {
+        val doc = diffPane.styledDocument
+        doc.remove(0, doc.length)
+        val lines = diff.lines()
+        val shown = if (lines.size > 200) lines.take(200) else lines
+        for (line in shown) {
+            doc.insertString(doc.length, line + "\n", attrFor(line.firstOrNull()))
+        }
+        if (lines.size > 200) {
+            doc.insertString(doc.length, "… (${lines.size - 200} more lines)\n", attrFor(null))
+        }
+        diffPane.caretPosition = 0
+        scroll.setViewportView(diffPane)
+        capHeight(diffPane.preferredSize.height, JBUIScale.scale(240))
+    }
+
+    private fun attrFor(prefix: Char?): SimpleAttributeSet = SimpleAttributeSet().apply {
+        when (prefix) {
+            '+' -> { StyleConstants.setForeground(this, ChatTheme.DIFF_ADDED_FG); StyleConstants.setBackground(this, ChatTheme.DIFF_ADDED_BG) }
+            '-' -> { StyleConstants.setForeground(this, ChatTheme.DIFF_REMOVED_FG); StyleConstants.setBackground(this, ChatTheme.DIFF_REMOVED_BG) }
+            '@' -> { StyleConstants.setForeground(this, ChatTheme.DIFF_HUNK_FG); StyleConstants.setBold(this, true) }
+            else -> StyleConstants.setForeground(this, ChatTheme.TEXT_DIM)
+        }
+    }
+
+    private fun capHeight(natural: Int, max: Int) {
+        scroll.preferredSize = Dimension(0, minOf(natural + JBUIScale.scale(12), max))
         revalidate()
     }
 }
@@ -346,7 +403,51 @@ class HtmlContent(dim: Boolean = false) : JEditorPane() {
         foreground = if (dim) ChatTheme.TEXT_DIM else ChatTheme.TEXT
         putClientProperty(HONOR_DISPLAY_PROPERTIES, true)
         addHyperlinkListener { e ->
-            if (e.eventType == HyperlinkEvent.EventType.ACTIVATED) e.url?.let { BrowserUtil.browse(it) }
+            if (e.eventType != HyperlinkEvent.EventType.ACTIVATED) return@addHyperlinkListener
+            // Swing exposes non-standard schemes only via getDescription() (e.url is null), so intercept
+            // jb://open links there and navigate to the referenced source location; everything else opens
+            // in the browser. Any malformed link is a no-op, never an exception.
+            val desc = e.description
+            if (desc != null && desc.startsWith("jb://open")) {
+                navigateToSource(desc)
+            } else {
+                e.url?.let { BrowserUtil.browse(it) }
+            }
+        }
+    }
+
+    /** Parse a `jb://open?file=<urlenc>&line=<n>` link and open that file at that line in the IDE. */
+    private fun navigateToSource(description: String) {
+        try {
+            val query = description.substringAfter('?', "")
+            val params = query.split('&').mapNotNull { p ->
+                val k = p.substringBefore('=', "")
+                val v = p.substringAfter('=', "")
+                if (k.isEmpty()) null else k to v
+            }.toMap()
+            val rawFile = params["file"] ?: return
+            val path = java.net.URLDecoder.decode(rawFile, Charsets.UTF_8)
+            val line = (params["line"] ?: "1").toIntOrNull() ?: 1
+
+            val project = com.intellij.ide.DataManager.getInstance().getDataContext(this)
+                .getData(com.intellij.openapi.actionSystem.CommonDataKeys.PROJECT)
+                ?: com.intellij.openapi.project.ProjectManager.getInstance().openProjects.firstOrNull()
+                ?: return
+
+            val lfs = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            val resolved = if (path.startsWith("/")) path else {
+                val base = project.basePath ?: return
+                "$base/$path"
+            }
+            // The link text is assistant-controlled: confine navigation to the project tree so a crafted
+            // jb://open link (absolute path, ~/.ssh, .. traversal) can't surface out-of-project files in the
+            // editor. isWithinRoot canonicalizes both sides (defeats .. and symlinks) and fails closed.
+            if (!dev.lain.claudejb.diff.DiffPresenter.isWithinRoot(resolved, project.basePath)) return
+            val vFile = lfs.findFileByPath(resolved) ?: return
+            com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vFile, (line - 1).coerceAtLeast(0), 0)
+                .navigate(true)
+        } catch (_: Exception) {
+            // Bad link → silently ignore.
         }
     }
 

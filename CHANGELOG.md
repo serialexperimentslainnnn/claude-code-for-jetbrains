@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-05-27
+
+### Added
+- **Persistent diff from the transcript** — Edit/Write/MultiEdit tool cards carry a "View diff" button that re-opens the old↔new diff at any time, in any permission mode. A new `EditSnapshotStore` captures the pre-write file contents at approval time, keyed by `tool_use_id`.
+- **Hunk-by-hunk acceptance** — the permission card lists the change's hunks (via the platform diff `ComparisonManager`) with checkboxes; accepting a subset sends a narrowed `updatedInput` so the binary writes only the selected hunks. `file_path` is never modified.
+- **AskUserQuestion options wrap** — labels, descriptions and the per-option `preview` (previously unused) render in full instead of clipping to one line.
+- **"Explain with Claude"** editor-popup action sends the current selection (with file path) to the active session.
+- **Jump-to-code** — `path:line` references in replies become `jb://open` links that navigate to the file/line in the IDE.
+- **"Always allow" per tool** — persisted in `ClaudeSettings`; remembered tools auto-approve while reviewable writes stay confined to the project root. Settings ▸ Claude Code now lists the remembered tools with a Remove action, so the rule can be revoked without editing XML.
+- **Session attention notifications + tab badge** — a background session with a pending permission, a finished turn, or an error raises a notification and badges its tab; suppressed when that tab is the one on screen.
+- **Session history (reads the binary's own files)** — past conversations are read back from the `claude` binary's session transcripts (`~/.claude/projects/.../<sessionId>.jsonl`), the single source of truth. "Open Previous Session…" lists the project's sessions by their real title (as `--resume` shows them) and re-attaches via `--resume`. The plugin persists **no transcripts** — only the open-tab session ids, in `workspace.xml` (not committed by convention).
+- **Restore on startup** — the tabs you had open are reopened automatically; if none were recorded, the most recent session is restored. Toggle: Settings ▸ Claude Code ▸ "Restore open chats on startup".
+- Markdown rendering: strikethrough (`~~`), GFM task-list checkboxes, nested lists.
+- Tests: `EditSnapshotStore`, `PermissionBroker` tool_use_id plumbing, `HunkSelection`, `MarkdownRenderer`, `SessionHistory` open-tab ids, `SessionStore` path-traversal guard + cwd encoding, `SessionTitleReader`/`SessionTranscriptReader` JSONL parsing, and the settings enums (132 total).
+
+### Changed
+- Permission mode, effort and MCP transport are now backed by typed enums (`PermissionMode`/`EffortLevel`/`McpTransport`) as the single source of truth for allowed values and branching; the persisted/wire strings are unchanged (no config migration).
+
+### Security
+- Jump-to-code navigation is confined to the project root (`DiffPresenter.isWithinRoot`): a crafted `jb://open` link cannot open absolute paths, `~/.ssh`, `/etc`, or `..`-traversed files.
+- Explicit Markdown links are restricted to an allow-list of schemes (`http`/`https`/`jb`) with the href quote-escaped; other schemes (`javascript:`, `file:`, `data:`, relative) render as plain text.
+- No conversation content is written to project files anymore: session history keeps only open-tab ids in `workspace.xml`. Session-file reads are confined to `~/.claude/projects` and gated by a UUID-shaped id check (`SessionStore`), so a crafted session id can't traverse out of the tree.
+
+### Fixed
+- Markdown: a bare URL inside an explicit link's href is no longer double-linkified (`<a href="<a href=…">`).
+- Notifications no longer pop for the chat already on screen (the over-strict tool-window `isActive` check is gone; visible+selected tab is enough to suppress), and the notification's **Open** action now dismisses it.
+- Fixed a "Write-unsafe context!" crash when refreshing files the agent edited: the VFS refresh is now asynchronous (`refreshIoFiles`), which is safe from the non-write-safe modality it runs under.
+- **Extended thinking shows again** on current models (Opus 4.7 / `claude` 2.1.152+): reasoning is now enabled via the launch flags `--thinking adaptive --thinking-display summarized` instead of the deprecated `set_max_thinking_tokens` control, which no longer surfaces "Thought process" blocks. Thinking is now on/off (adaptive — the model decides depth); toggling the chip restarts the session via `--resume`.
+
+## [2.0.1] — 2026-05-27
+
+### Changed
+- Extended the supported IDE range to the current EAP (`until-build` = `262.*`); verified Compatible against IU-262.
+- Replaced the internal `PluginManagerCore` lookup for the bundled MCP Server plugin with the public `PluginManager` by-id API, removing the last internal-API usage.
+
 ## [2.0.0] — 2026-05-26
 
 ### Security
@@ -103,6 +138,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Settings: model, permission mode, effort, thinking tokens, allowed/disallowed tools, setting sources, output style
 - UI rethemed to follow the active IDE theme (light/dark); Claude logo icon
 
+[2.1.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v2.0.1...v2.1.0
+[2.0.1]: https://github.com/lain/claude-code-for-jetbrains/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.5...v2.0.0
 [1.3.5]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.1...v1.3.5
 [1.3.1]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.0...v1.3.1

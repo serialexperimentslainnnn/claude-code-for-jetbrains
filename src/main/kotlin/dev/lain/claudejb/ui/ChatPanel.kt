@@ -18,9 +18,12 @@ import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import dev.lain.claudejb.context.EditorContextProvider
 import dev.lain.claudejb.diff.DiffPresenter
+import dev.lain.claudejb.diff.HunkSelection
 import dev.lain.claudejb.permission.PendingPermission
+import dev.lain.claudejb.protocol.AskOption
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
+import dev.lain.claudejb.settings.ClaudeSettings
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Cursor
@@ -35,6 +38,8 @@ import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.AbstractAction
 import javax.swing.KeyStroke
 import javax.swing.BoxLayout
@@ -326,7 +331,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         modelChip.text = "Model: ${session.model?.let { shortModel(it) } ?: "Opus 4.7"}  ▾"
         modeChip.text = "Mode: ${session.permissionMode}  ▾"
         effortChip.text = "effort: ${session.effort ?: "default"}  ▾"
-        thinkingChip.text = (session.thinkingTokens?.let { "thinking: ${it / 1000}k" } ?: "thinking: off") + "  ▾"
+        thinkingChip.text = "thinking: " + (if (session.thinkingTokens != null) "on" else "off") + "  ▾"
         sendButton.isStopMode = session.turnActive
         if (session.turnActive) {
             if (!spinnerTimer.isRunning) spinnerTimer.start()
@@ -469,6 +474,21 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             }
         }
 
+        // Per-hunk selection: for a reviewable write with >1 hunk, let the user pick which hunks to apply.
+        // Computed once at card-build time so toggling doesn't re-read the file / recompute the diff.
+        val hunkData: HunkSelectorData? = if (request.reviewable) {
+            val path = DiffPresenter.filePathOf(request.input)
+            val current = path?.let {
+                val f = java.io.File(it)
+                if (f.isFile) runCatching { f.readText() }.getOrDefault("") else ""
+            } ?: ""
+            val proposed = DiffPresenter.proposedContent(request.toolName, request.input, current)
+            val hunks = if (proposed != null) DiffPresenter.computeHunks(current, proposed) else emptyList()
+            if (hunks.size > 1 && proposed != null) HunkSelectorData(current, proposed, hunks) else null
+        } else null
+
+        val accepted: LinkedHashSet<Int>? = hunkData?.hunks?.mapTo(LinkedHashSet()) { it.index }
+
         val buttons = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply { isOpaque = false }
         if (request.reviewable) {
             buttons.add(linkButton("View diff") {
@@ -478,14 +498,106 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                     ?.let { diffFiles[request.requestId] = it }
             })
         }
+        buttons.add(linkButton("Always allow") {
+            ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(request.toolName)
+            session.resolvePermission(request.requestId, allow = true)
+        })
         buttons.add(linkButton("Reject") { session.resolvePermission(request.requestId, allow = false) })
-        buttons.add(RoundedActionButton("Accept") { session.resolvePermission(request.requestId, allow = true) })
+        buttons.add(RoundedActionButton("Accept") {
+            if (hunkData != null && accepted != null) {
+                val allIndices = hunkData.hunks.mapTo(HashSet()) { it.index }
+                when {
+                    accepted.isEmpty() ->
+                        // Nothing selected: applying an empty subset would be a confusing no-op write, so reject.
+                        session.resolvePermission(request.requestId, allow = false)
+                    accepted == allIndices ->
+                        session.resolvePermission(request.requestId, allow = true)
+                    else -> {
+                        val selectedText = HunkSelection.reconstruct(
+                            hunkData.current.split("\n"), hunkData.proposed.split("\n"), hunkData.hunks, accepted,
+                        )
+                        val override = HunkSelection.encodeInput(
+                            request.toolName, request.input, hunkData.current, selectedText,
+                        )
+                        session.resolvePermission(request.requestId, allow = true, overrideInput = override)
+                    }
+                }
+            } else {
+                session.resolvePermission(request.requestId, allow = true)
+            }
+        })
+
+        // Summary (+ optional hunk selector) live together in the CENTER region of the card's BorderLayout.
+        val center = if (hunkData != null && accepted != null) {
+            JPanel(VerticalLayout(JBUIScale.scale(6))).apply {
+                isOpaque = false
+                add(texts)
+                add(hunkSelector(hunkData.hunks, accepted))
+            }
+        } else texts
 
         return ChatTheme.RoundedPanel(12, ChatTheme.CARD_BG, ChatTheme.ACCENT).apply {
             layout = BorderLayout(JBUIScale.scale(8), JBUIScale.scale(6))
             border = JBUI.Borders.empty(10, 12)
-            add(texts, BorderLayout.CENTER)
+            add(center, BorderLayout.CENTER)
             add(buttons, BorderLayout.SOUTH)
+        }
+    }
+
+    /** Diff data captured once when a per-hunk permission card is built (no re-read on toggle). */
+    private data class HunkSelectorData(
+        val current: String,
+        val proposed: String,
+        val hunks: List<dev.lain.claudejb.diff.Hunk>,
+    )
+
+    /**
+     * A height-capped, scrollable list of the change's hunks as checkbox rows (all checked by default). Toggling a
+     * row mutates [accepted] in place and refreshes its glyph; the Accept button reads [accepted] when clicked.
+     * Reuses the [optionRow] multi-select glyph style (☑/☐).
+     */
+    private fun hunkSelector(hunks: List<dev.lain.claudejb.diff.Hunk>, accepted: LinkedHashSet<Int>): JComponent {
+        val list = JPanel(VerticalLayout(JBUIScale.scale(2))).apply { isOpaque = false }
+        for (hunk in hunks) {
+            val glyph = JBLabel().apply {
+                font = ChatTheme.small
+                verticalAlignment = SwingConstants.TOP
+                border = JBUI.Borders.emptyRight(8)
+            }
+            val text = "Lines ${hunk.start1 + 1}-${hunk.end1}: ${truncate(hunk.preview, HUNK_PREVIEW_MAX_CHARS)}"
+            val label = wrappingArea(text, ChatTheme.small, ChatTheme.TEXT)
+            val refresh = {
+                val on = hunk.index in accepted
+                glyph.text = if (on) "☑" else "☐"
+                label.foreground = if (on) ChatTheme.TEXT else ChatTheme.TEXT_DIM
+            }
+            val toggle = {
+                if (!accepted.add(hunk.index)) accepted.remove(hunk.index)
+                refresh()
+            }
+            val click = object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) = toggle()
+            }
+            val row = JPanel(BorderLayout()).apply {
+                isOpaque = false
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                border = JBUI.Borders.empty(2, 4)
+                add(glyph, BorderLayout.WEST)
+                add(label, BorderLayout.CENTER)
+                addMouseListener(click)
+            }
+            glyph.addMouseListener(click)
+            label.addMouseListener(click)
+            refresh()
+            list.add(row)
+        }
+        return JBScrollPane(list).apply {
+            border = JBUI.Borders.empty()
+            isOpaque = false
+            viewport.isOpaque = false
+            preferredSize = Dimension(0, JBUIScale.scale(PERMISSION_SUMMARY_MAX_HEIGHT))
+            verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
         }
     }
 
@@ -518,31 +630,16 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 })
             }
             for (opt in q.options) {
-                val button = JButton().apply {
-                    isFocusable = false
-                    isContentAreaFilled = false
-                    isBorderPainted = false
-                    isOpaque = false
-                    horizontalAlignment = SwingConstants.LEFT
-                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                    font = ChatTheme.small
-                    margin = JBUI.insets(2, 4)
-                }
-                val refresh = {
-                    val on = opt.label in sel
-                    button.foreground = if (on) ChatTheme.TEXT else ChatTheme.TEXT_DIM
-                    val desc = if (opt.description.isNotBlank()) "  —  ${opt.description}" else ""
-                    button.text = "${if (on) "◉" else "◯"} ${opt.label}$desc"
-                }
-                refreshers.add(refresh)
-                button.addActionListener {
+                val toggle = {
                     if (q.multiSelect) { if (!sel.add(opt.label)) sel.remove(opt.label) }
                     else { sel.clear(); sel.add(opt.label) }
                     refreshers.forEach { it() }
                     submit.isEnabled = selections.values.all { it.isNotEmpty() }
                 }
+                val (row, refresh) = optionRow(opt, q.multiSelect, isSelected = { opt.label in sel }, onToggle = toggle)
+                refreshers.add(refresh)
                 refresh()
-                body.add(button)
+                body.add(row)
             }
         }
 
@@ -557,6 +654,97 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             add(buttons, BorderLayout.SOUTH)
         }
     }
+
+    /**
+     * One AskUserQuestion option as a wrapping, fully clickable row: a selection glyph plus the label, description
+     * and (when present) preview, each in a word-wrapping area so long text stays readable inside the narrow tool
+     * window instead of being clipped to one line. Returns the row and a refresher that syncs glyph/colors.
+     */
+    private fun optionRow(
+        opt: AskOption,
+        multiSelect: Boolean,
+        isSelected: () -> Boolean,
+        onToggle: () -> Unit,
+    ): Pair<JComponent, () -> Unit> {
+        val glyph = JBLabel().apply {
+            font = ChatTheme.small
+            verticalAlignment = SwingConstants.TOP
+            border = JBUI.Borders.emptyRight(8)
+        }
+        val label = wrappingArea(opt.label, ChatTheme.small.asBold(), ChatTheme.TEXT)
+        val center = JPanel(VerticalLayout(JBUIScale.scale(2))).apply {
+            isOpaque = false
+            add(label)
+            if (opt.description.isNotBlank()) {
+                add(wrappingArea(opt.description, ChatTheme.small, ChatTheme.TEXT_DIM))
+            }
+            opt.preview?.takeIf { it.isNotBlank() }?.let { preview ->
+                val area = JBTextArea(preview).apply {
+                    isEditable = false
+                    lineWrap = false
+                    font = ChatTheme.mono
+                    foreground = ChatTheme.TEXT_DIM
+                    background = ChatTheme.CODE_BG
+                    isOpaque = true
+                    border = JBUI.Borders.empty(3, 6)
+                }
+                val naturalH = (area.preferredSize.height + JBUIScale.scale(6))
+                    .coerceAtMost(JBUIScale.scale(PERMISSION_SUMMARY_MAX_HEIGHT))
+                add(JBScrollPane(area).apply {
+                    border = JBUI.Borders.empty()
+                    background = ChatTheme.CODE_BG
+                    viewport.background = ChatTheme.CODE_BG
+                    preferredSize = Dimension(0, naturalH)
+                    verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+                    horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+                })
+            }
+        }
+        val row = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            border = JBUI.Borders.empty(3, 4)
+            add(glyph, BorderLayout.WEST)
+            add(center, BorderLayout.CENTER)
+        }
+        // The whole row toggles; attach to the row and to the text components (which would otherwise swallow the
+        // click). The description/preview keep text selection but the click still toggles via these listeners.
+        val click = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = onToggle()
+        }
+        row.addMouseListener(click)
+        glyph.addMouseListener(click)
+        label.addMouseListener(click)
+        val refresh = {
+            val on = isSelected()
+            glyph.text = if (multiSelect) (if (on) "☑" else "☐") else (if (on) "◉" else "◯")
+            label.foreground = if (on) ChatTheme.TEXT else ChatTheme.TEXT_DIM
+        }
+        return row to refresh
+    }
+
+    /**
+     * A non-editable, word-wrapping text area. JBTextArea (not a JLabel) so the text is taken literally — no HTML
+     * escaping of labels/descriptions. Before the first layout the area has width 0 and would report a one-line
+     * height (collapsing the text); falling back to the parent's width makes the wrapped height correct on the
+     * first pass too.
+     */
+    private fun wrappingArea(content: String, font: JBFont, color: Color): JBTextArea =
+        object : JBTextArea(content) {
+            override fun getPreferredSize(): Dimension {
+                if (width == 0) parent?.width?.takeIf { it > 0 }?.let { setSize(it, Short.MAX_VALUE.toInt()) }
+                return super.getPreferredSize()
+            }
+        }.apply {
+            isEditable = false
+            isOpaque = false
+            lineWrap = true
+            wrapStyleWord = true
+            this.font = font
+            foreground = color
+            border = JBUI.Borders.empty()
+            margin = JBUI.emptyInsets()
+        }
 
     private fun truncate(s: String, max: Int): String =
         s.replace('\n', ' ').let { if (it.length > max) it.take(max) + "…" else it }
@@ -733,5 +921,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         private const val PERMISSION_SUMMARY_MAX_HEIGHT = 82
         /** Max characters of a queued prompt shown in the queue strip before truncation. */
         private const val QUEUE_PROMPT_MAX_CHARS = 70
+        /** Max characters of a hunk preview shown in a per-hunk selector row before truncation. */
+        private const val HUNK_PREVIEW_MAX_CHARS = 80
     }
 }

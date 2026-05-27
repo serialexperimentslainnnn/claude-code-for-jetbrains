@@ -11,8 +11,9 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.diff.DiffPresenter
+import dev.lain.claudejb.diff.EditSnapshot
+import dev.lain.claudejb.diff.EditSnapshotStore
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.process.ClaudeBinaryLocator
@@ -66,8 +67,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     val transcript = TranscriptModel()
 
+    /** Pre-write file snapshots keyed by tool_use id, so any Edit/Write/MultiEdit can be re-diffed from the transcript. */
+    private val editSnapshots = EditSnapshotStore()
+
     // --- session/runtime state (read by the GUI) ---
-    @Volatile var sessionId: String? = null; private set
+    @Volatile var sessionId: String? = null; internal set
     @Volatile var model: String? = null; private set
     @Volatile var effort: String? = null; private set
     @Volatile var permissionMode: String = "default"; private set
@@ -126,6 +130,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             present = ::presentPermission,
             onAutoReviewed = ::autoOpenDiff,
             projectRoot = project.basePath,
+            isRemembered = { toolName, input -> ClaudeSettings.getInstance(project).isToolAlwaysAllowed(toolName, input) },
         )
     }
 
@@ -295,6 +300,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (settingSources.isNotBlank()) args += listOf("--setting-sources", settingSources)
         model?.let { args += listOf("--model", it) }
         effort?.let { args += listOf("--effort", it) }
+        // Extended thinking (adaptive): a launch flag on current models. `--thinking-display summarized` is what
+        // actually streams the reasoning blocks; without it no "Thought process" appears. Any non-null budget = on.
+        if (thinkingTokens != null) args += listOf("--thinking", "adaptive", "--thinking-display", "summarized")
         allowedTools.trim().ifBlank { null }?.let { args += listOf("--allowedTools", it) }
         disallowedTools.trim().ifBlank { null }?.let { args += listOf("--disallowedTools", it) }
         mcpConfigJson()?.let { args += listOf("--mcp-config", it) }
@@ -430,6 +438,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private fun presentPermission(request: PendingPermission) = edt {
         pending[request.requestId] = request
         firePermissions()
+        fireAttention(AttentionReason.PERMISSION)
     }
 
     /**
@@ -437,19 +446,75 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * but the user still wants to see the change. Capture the file's current contents *now* — before the binary
      * writes (which happens right after we answer allow) — and open the diff tab on the EDT with that snapshot.
      */
-    private fun autoOpenDiff(toolName: String, input: JsonObject) {
-        val path = DiffPresenter.filePathOf(input) ?: return
-        val file = File(path)
-        val snapshot = if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""
-        edt { DiffPresenter.openDiff(project, toolName, input, snapshot) }
+    private fun autoOpenDiff(toolName: String, input: JsonObject, toolUseId: String) {
+        // Capture the pre-write contents now (the binary writes right after we answer allow) and persist them
+        // keyed by tool_use id, so the change is re-diffable from the transcript long after this tab closes.
+        val snapshot = editSnapshots.capture(toolName, input, toolUseId) ?: return
+        edt { DiffPresenter.openDiff(project, toolName, input, snapshot.beforeText) }
+    }
+
+    /** The persisted pre-write snapshot for a reviewable tool call, or null if none was captured (e.g. rejected). */
+    fun editSnapshot(toolUseId: String): EditSnapshot? = editSnapshots.get(toolUseId)
+
+    // -----------------------------------------------------------------------
+    // Persistence — restore + open-tab tracking (SessionHistory)
+    // The binary's session file is the source of truth for transcripts; we never persist our own.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Re-attaches this (not-yet-started) session to a saved one: adopts [savedSessionId] so the next [start]
+     * resumes via `--resume`, and rebuilds the transcript from [dtos]. Rows with an unknown speaker are skipped
+     * rather than failing the whole restore. Must run before start(); transcript mutation happens on the EDT.
+     */
+    fun restore(savedSessionId: String, dtos: List<EntryDTO>) {
+        sessionId = savedSessionId
+        edt {
+            transcript.clear()
+            for (dto in dtos) {
+                val speaker = runCatching { Speaker.valueOf(dto.speaker) }.getOrNull() ?: continue
+                transcript.add(
+                    speaker,
+                    dto.text,
+                    meta = dto.meta,
+                    toolUseId = dto.toolUseId,
+                    parentToolUseId = dto.parentToolUseId,
+                )
+            }
+        }
+    }
+
+    /**
+     * Off-EDT: resolves the binary's real session title (the one `--resume` shows), relabels the tab if it
+     * changed, and records the currently-open tab set so it can be restored on the next startup. No transcript
+     * is persisted — the binary's session file is the source of truth and is re-read on restore.
+     */
+    private fun recordOpenAndTitle(id: String) {
+        AppExecutorUtil.getAppExecutorService().execute {
+            val resolved = SessionTitleReader.readTitle(id) ?: title
+            if (resolved != title) {
+                title = resolved
+                edt { fireTitleChanged() }
+            }
+            SessionHistory.getInstance(project)
+                .setOpenSessions(ChatSessionManager.getInstance(project).all().mapNotNull { it.sessionId })
+        }
     }
 
     /** Invoked by the chat UI when the user clicks Accept/Reject on a permission card. */
-    fun resolvePermission(requestId: String, allow: Boolean, denyMessage: String? = null) {
+    fun resolvePermission(requestId: String, allow: Boolean, denyMessage: String? = null, overrideInput: JsonObject? = null) {
         val request = pending.remove(requestId) ?: return
         if (allow) {
-            if (request.reviewable) DiffPresenter.filePathOf(request.input)?.let { pendingRefresh.add(it) }
-            write(ControlProtocol.permissionAllow(requestId, request.input))
+            if (request.reviewable) {
+                // Snapshot/refresh stay on the ORIGINAL input: they describe the real file (before-text + path),
+                // independent of any narrowed payload (e.g. hunk-by-hunk partial acceptance) we actually send.
+                DiffPresenter.filePathOf(request.input)?.let { pendingRefresh.add(it) }
+                // Snapshot before answering allow (the binary writes right after), so "View diff" works from the
+                // transcript once the transient approval diff has closed. Synchronous read — small project files.
+                request.toolUseId?.let { editSnapshots.capture(request.toolName, request.input, it) }
+            }
+            // The UI may override the tool input to narrow what the binary writes (partial acceptance).
+            val effectiveInput = overrideInput ?: request.input
+            write(ControlProtocol.permissionAllow(requestId, effectiveInput))
             systemNotice("Approved ${request.headline}")
         } else {
             write(ControlProtocol.permissionDeny(requestId, denyMessage ?: "User rejected the ${request.toolName} request."))
@@ -504,10 +569,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         fireState()
     }
 
+    /**
+     * Extended thinking is a launch flag now (`--thinking`), not a runtime control — the deprecated
+     * `set_max_thinking_tokens` no longer surfaces reasoning on current models. So toggling it restarts the
+     * session (resuming the same conversation via `--resume`) to re-launch with the new flag. Any non-null
+     * value means "on" (adaptive); the exact token count is no longer sent (adaptive lets the model decide).
+     */
     fun changeThinkingTokens(tokens: Int?) {
+        if (tokens == thinkingTokens) return
+        val wasRunning = isRunning()
         thinkingTokens = tokens
-        if (isRunning()) write(ControlProtocol.setMaxThinkingTokensRequest(ControlProtocol.newRequestId(), tokens))
         fireState()
+        if (wasRunning) {
+            systemNotice(if (tokens != null) "Extended thinking on — restarting session." else "Extended thinking off — restarting session.")
+            restart(resume = true)
+        }
     }
 
     /** Launch-time options (tool allow/deny lists, setting sources, partial streaming). Take effect on (re)start. */
@@ -630,9 +706,23 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.ToolResult -> edt {
-                val text = event.content.trim()
-                if (text.isNotBlank()) {
-                    transcript.addToolOutput(event.toolUseId, text, parentToolUseId = event.parentToolUseId)
+                // For a reviewable write we captured the pre-write contents at approval time: render the actual
+                // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
+                // the output box shows what changed. The diff text is self-contained, so it also survives a
+                // session restore (no snapshot needed at render time). Falls back to the binary text otherwise.
+                val snap = editSnapshots.get(event.toolUseId)
+                val diff = if (snap != null && snap.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
+                    DiffPresenter.proposedContent(snap.toolName, snap.input, snap.beforeText)
+                        ?.let { DiffPresenter.unifiedDiff(snap.beforeText, it) }
+                        ?.takeIf { it.isNotBlank() }
+                } else null
+                if (diff != null) {
+                    transcript.addToolOutput(event.toolUseId, diff, parentToolUseId = event.parentToolUseId, meta = "diff")
+                } else {
+                    val text = event.content.trim()
+                    if (text.isNotBlank()) {
+                        transcript.addToolOutput(event.toolUseId, text, parentToolUseId = event.parentToolUseId)
+                    }
                 }
             }
 
@@ -653,6 +743,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 refreshTouchedFiles()
                 fireState()
                 pump()
+                // The binary's session file is the source of truth for the transcript; we don't persist our own.
+                // Once per turn we just record the open-tab set (for restore on startup) and refresh the tab title
+                // from the binary's resolved title. Off-EDT: the sidecar JSONL read is blocking IO.
+                sessionId?.let { id -> recordOpenAndTitle(id) }
+                fireAttention(if (event.result.isError) AttentionReason.ERROR else AttentionReason.TURN_DONE)
             }
 
             is ClaudeEvent.LocalCommandOutput -> edt {
@@ -685,6 +780,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
                 // The user may not have this tab focused; also raise a notification so the failure isn't missed.
                 notifyError("Claude Code exited unexpectedly (code $exitCode).")
+                fireAttention(AttentionReason.ERROR)
             } else {
                 systemNotice("Session ended.")
             }
@@ -721,11 +817,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     private fun refreshTouchedFiles() {
         val paths = synchronized(pendingRefresh) { pendingRefresh.toList().also { pendingRefresh.clear() } }
-        for (path in paths) {
-            LocalFileSystem.getInstance().refreshAndFindFileByPath(path)?.let {
-                VfsUtil.markDirtyAndRefresh(true, false, false, it)
-            }
-        }
+        if (paths.isEmpty()) return
+        // Async refresh: a synchronous VFS refresh (refreshAndFindFileByPath) requires a write-safe context,
+        // which the ModalityState.any() invokeLater we run under is not. refreshIoFiles handles
+        // created/modified/deleted paths and, with async=true, is safe to call from here.
+        LocalFileSystem.getInstance().refreshIoFiles(paths.map { File(it) }, true, false, null)
     }
 
     // -----------------------------------------------------------------------
@@ -739,6 +835,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private fun fireState() = listeners.forEach { it.onStateChanged() }
     private fun fireMetadata() = listeners.forEach { it.onMetadataChanged() }
     private fun firePermissions() = listeners.forEach { it.onPermissionsChanged() }
+    private fun fireAttention(reason: AttentionReason) = listeners.forEach { it.onAttention(reason) }
+    private fun fireTitleChanged() = listeners.forEach { it.onTitleChanged() }
 
     private fun edt(block: () -> Unit) =
         ApplicationManager.getApplication().invokeLater(block, ModalityState.any())
@@ -817,6 +915,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         /** Default model on a fresh install: Opus 4.7. */
         const val DEFAULT_MODEL = "claude-opus-4-7"
 
+        /** Sentinel "extended thinking on" value: adaptive thinking is on/off, so any positive budget means on. */
+        const val THINKING_ON = 1
+
         /** Offered when the binary's initialize handshake hasn't (yet) returned them. */
         val FALLBACK_MODELS = listOf(
             ModelInfo("claude-opus-4-7", "Opus 4.7"),
@@ -824,13 +925,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             ModelInfo("opusplan", "Opusplan (auto: Opus/Sonnet by task)"),
         )
 
+        // Allowed values come from the typed enums in ClaudeEnums.kt (single source of truth); exposed as the
+        // wire strings so the UI/persistence/protocol callers stay string-based and unchanged.
         /** Shift+Tab cycles through these, like the CLI. */
-        val PERMISSION_MODES_CYCLE = listOf("default", "acceptEdits", "plan")
+        val PERMISSION_MODES_CYCLE = PermissionMode.CYCLE.map { it.wire }
 
         /** Full set of modes for the GUI menu. */
-        val PERMISSION_MODES = listOf("default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto")
+        val PERMISSION_MODES = PermissionMode.entries.map { it.wire }
 
-        val EFFORT_LEVELS = listOf("low", "medium", "high", "xhigh", "max")
+        val EFFORT_LEVELS = EffortLevel.entries.map { it.wire }
 
         /** Setting-source scopes (--setting-sources), for the Settings checkboxes. */
         val SETTING_SOURCES = listOf("user", "project", "local")
@@ -839,7 +942,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         const val DEFAULT_IDE_MCP_PORT = 64342
 
         /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
-        val IDE_MCP_TRANSPORTS = listOf("sse", "streamable-http", "stdio")
+        val IDE_MCP_TRANSPORTS = McpTransport.entries.map { it.wire }
 
         /** Example shown in the custom-servers text area (the `mcpServers` shape: name → server). */
         val CUSTOM_MCP_SERVERS_HINT = """

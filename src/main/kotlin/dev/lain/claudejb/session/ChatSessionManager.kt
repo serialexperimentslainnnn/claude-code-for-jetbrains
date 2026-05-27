@@ -56,6 +56,8 @@ class ChatSessionManager(private val project: Project) : Disposable {
         if (!sessions.remove(session)) return
         session.dispose()
         if (active == session) active = sessions.lastOrNull()
+        // Keep the persisted open-tab set in sync so a closed tab isn't restored on next startup.
+        SessionHistory.getInstance(project).setOpenSessions(sessions.mapNotNull { it.sessionId })
         fireChanged()
     }
 
