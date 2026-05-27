@@ -11,6 +11,7 @@ import dev.lain.claudejb.session.ClaudeSession
 import java.awt.Dimension
 import java.awt.Point
 import javax.swing.JComponent
+import javax.swing.JList
 
 /**
  * Graphical picker for **every** slash command Claude Code reports (from the initialize handshake),
@@ -41,10 +42,13 @@ object CommandPalette {
         val popup = JBPopupFactory.getInstance()
             .createPopupChooserBuilder(commands)
             .setTitle("Slash commands")
-            .setRenderer(SimpleListCellRenderer.create("") { cmd ->
-                val hint = if (cmd.argumentHint.isNotBlank()) "  ${cmd.argumentHint}" else ""
-                val desc = cmd.description.let { if (it.length > 72) it.take(72) + "…" else it }
-                "/${cmd.name}$hint  —  $desc"
+            .setRenderer(object : SimpleListCellRenderer<SlashCommand>() {
+                override fun customize(list: JList<out SlashCommand>, cmd: SlashCommand?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                    cmd ?: return
+                    val hint = if (cmd.argumentHint.isNotBlank()) "  ${cmd.argumentHint}" else ""
+                    val desc = cmd.description.let { if (it.length > 72) it.take(72) + "…" else it }
+                    text = "/${cmd.name}$hint  —  $desc"
+                }
             })
             .setNamerForFiltering { "${it.name} ${it.description} ${it.aliases.joinToString(" ")}" }
             .setItemChosenCallback { onPick(it) }
