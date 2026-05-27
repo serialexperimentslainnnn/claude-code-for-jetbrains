@@ -1,3 +1,6 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.models.ProductRelease
+
 plugins {
     kotlin("jvm") version "2.1.20"
     kotlin("plugin.serialization") version "2.1.20"
@@ -5,7 +8,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "2.0.0"
+version = "2.0.1"
 
 repositories {
     mavenCentral()
@@ -55,7 +58,7 @@ intellijPlatform {
         // id/name/vendor/description live in META-INF/plugin.xml; only compatibility range is set here.
         ideaVersion {
             sinceBuild = "243"
-            untilBuild = "261.*"
+            untilBuild = "262.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
         changeNotes = provider { latestReleaseNotesHtml() }
@@ -83,6 +86,13 @@ intellijPlatform {
                 recommended()
             } else {
                 local(file("/home/dexperiments/.local/share/JetBrains/Toolbox/apps/intellij-idea"))
+            }
+            // Validate against the current EAP (2026.2 / build 262) before promising it via untilBuild.
+            select {
+                types = listOf(IntelliJPlatformType.IntellijIdeaCommunity)
+                channels = listOf(ProductRelease.Channel.EAP, ProductRelease.Channel.RC)
+                sinceBuild = "262"
+                untilBuild = "262.*"
             }
         }
     }
