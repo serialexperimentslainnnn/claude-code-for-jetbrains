@@ -30,8 +30,9 @@ import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
-import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.util.SystemInfo
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -317,13 +318,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         )
 
     /**
-     * Resolves the IDE-dependent inputs for the stdio transport: the JBR java, the bundled "mcpserver" plugin's lib
+     * Resolves the IDE-dependent inputs for the stdio transport: the JBR java, the bundled MCP Server plugin's lib
      * dir, the platform lib dir and the port. Returns null if the plugin can't be located (→ stdio isn't registered).
+     * Looked up by its stable plugin id via the public [PluginManager] API (not the internal PluginManagerCore).
      */
     private fun resolveStdioParams(): McpConfigBuilder.StdioParams? {
         val javaBin = File(File(System.getProperty("java.home"), "bin"), if (SystemInfo.isWindows) "java.exe" else "java")
-        val pluginLib = PluginManagerCore.plugins
-            .firstOrNull { it.pluginPath?.fileName?.toString()?.contains("mcpserver", ignoreCase = true) == true }
+        val pluginLib = PluginManager.getInstance()
+            .findEnabledPlugin(PluginId.getId("com.intellij.mcpServer"))
             ?.pluginPath?.resolve("lib")?.toFile()
             ?: return null
         return McpConfigBuilder.StdioParams(javaBin, pluginLib, PathManager.getLibPath(), ideMcpPort)

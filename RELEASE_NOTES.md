@@ -1,3 +1,12 @@
+## v2.0.1 — 2026-05-27
+
+**Compatibility update**
+
+- Extended the supported IDE range to the current EAP: `until-build` is now `262.*`, so the plugin installs and runs on the 2026.2 EAP builds (verified Compatible against IU-262 with `verifyPlugin`).
+- Replaced the internal `PluginManagerCore` API used to locate the bundled MCP Server plugin with the public `PluginManager` lookup by plugin id (`com.intellij.mcpServer`), removing the only internal-API usage and dropping the fragile path-name heuristic.
+
+---
+
 ## v2.0.0 — 2026-05-26
 
 **Reliability & security hardening + first unit-test suite**
