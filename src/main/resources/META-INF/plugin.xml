@@ -60,7 +60,7 @@
 
         <h2>Requirements</h2>
         <ul>
-            <li>JetBrains IDE 2024.3 – 2025.1.x (build 243–261)</li>
+            <li>JetBrains IDE 2025.2 or newer (build 252+); the native chat UI requires JCEF, bundled with the IDE's JBR</li>
             <li><a href="https://claude.ai/code"><code>claude</code> binary</a> installed and on PATH or <code>~/.local/bin/</code></li>
             <li>Claude subscription (claude.ai) or <code>ANTHROPIC_API_KEY</code> environment variable</li>
         </ul>
@@ -100,18 +100,21 @@
         <action id="dev.lain.claudejb.ExplainSelection"
                 class="dev.lain.claudejb.actions.ExplainSelectionAction"
                 text="Explain with Claude"
+                icon="/icons/claude.svg"
                 description="Send the selected code to Claude and ask it to explain.">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
         <action id="dev.lain.claudejb.AddSelectionAsContext"
                 class="dev.lain.claudejb.actions.AddSelectionAsContextAction"
                 text="Add Selection to Claude Context"
+                icon="/icons/claude.svg"
                 description="Attach the selected code to the active Claude chat as context.">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
         <action id="dev.lain.claudejb.AddFileAsContext"
                 class="dev.lain.claudejb.actions.AddFileAsContextAction"
                 text="Add File to Claude Context"
+                icon="/icons/claude.svg"
                 description="Attach the current file to the active Claude chat as an @-mention.">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>

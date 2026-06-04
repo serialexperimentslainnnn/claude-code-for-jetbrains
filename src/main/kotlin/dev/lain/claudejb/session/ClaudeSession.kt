@@ -13,6 +13,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.diff.EditSnapshot
+import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.process.ClaudeBinaryLocator
@@ -28,7 +29,10 @@ import dev.lain.claudejb.protocol.ClaudeJson
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.protocol.ContextUsage
 import dev.lain.claudejb.protocol.ControlProtocol
+import dev.lain.claudejb.protocol.DialogResponder
+import dev.lain.claudejb.protocol.ElicitationRequest
 import dev.lain.claudejb.protocol.InitializeResponse
+import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
@@ -36,8 +40,12 @@ import dev.lain.claudejb.protocol.TaskProgressInfo
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import com.intellij.util.concurrency.AppExecutorUtil
 import java.io.File
@@ -74,6 +82,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val controlClient = SessionControlClient(write = ::write)
     private val cards = PermissionCardManager(::firePermissions)
     private val hookBroker = HookBroker()
+    private val hookNarrator = HookActivityNarrator(transcript)
 
     // --- session/runtime state (read by the GUI) ---
     @Volatile var sessionId: String? = null; internal set
@@ -110,6 +119,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var authStatus: AuthStatusInfo? = null; private set
     /** Live reasoning-token estimate from thinking_tokens (running total for the current thinking block). */
     @Volatile var liveThinkingTokens: Int = 0; private set
+    /** Predicted next user prompt (prompt_suggestion), or null when none / cleared. Drives the composer chip. */
+    @Volatile var promptSuggestion: String? = null; private set
     /** Observable map of subagent tasks keyed by task_id (task_started/progress/updated/notification). */
     val subagentTasks: Map<String, TaskProgressInfo> get() = taskTracker.tasks
 
@@ -236,6 +247,22 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var lastSessionCost: JsonObject? = null; private set
     /** Latest `get_context_usage` result (or null until the first poll returns). Read by ChatPanel on the EDT. */
     @Volatile var lastContextUsage: ContextUsage? = null; private set
+
+    /** Working directory the binary runs in (the project root) — shown synchronously in the session dashboard. */
+    val workingDir: String? get() = project.basePath
+
+    /** Cached CLI binary version for the session dashboard; populated lazily by the panel via [requestBinaryVersion]. */
+    @Volatile var binaryVersion: String? = null
+
+    /** Client-generated id of the current user turn (tagged on each prompt) — the rewind_files() anchor. */
+    @Volatile var currentUserMessageId: String? = null; private set
+    private val toolUseTurn = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** The user-turn id an edit ([toolUseId]) belongs to, or null when unknown (then rewind isn't possible). */
+    fun userMessageIdFor(toolUseId: String): String? = toolUseTurn[toolUseId]
+
+    /** Whether file-checkpointing is enabled (native rewind requires it). */
+    val checkpointingEnabled: Boolean get() = ClaudeSettings.getInstance(project).enableFileCheckpointing
 
     private val quotaPollTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollQuota() }.apply { isRepeats = true }
 
@@ -415,15 +442,22 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         generation++
         // Flush any buffered streaming deltas so partial text isn't lost when the process goes away.
         flushDeltas()
+        // Default-cancel any pending MCP elicitation cards while the process is still alive, so the binary isn't
+        // left waiting on an ElicitResult when the session is torn down.
+        cancelPendingElicitations()
         process?.closeStdin()
         process?.destroy()
         process = null
         turnActive = false
         ready = false
+        // Reset per-turn live state so a stale figure/chip doesn't linger into a resumed session (restart path).
+        liveThinkingTokens = 0
+        promptSuggestion = null
         // Drop the cached env so a settings change to the source script is re-sourced on the next start.
         cachedEnv = null
         controlClient.failAll("process gone")
         taskTracker.clear()
+        hookNarrator.clear()
         edt { cards.clear(); fireState() }
     }
 
@@ -557,10 +591,22 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         while (queue.isNotEmpty()) {
             val next = queue.removeFirst()
             transcript.add(Speaker.USER, next.displayText)
-            write(ControlProtocol.userMessageWithImages(next.text, next.images))
+            // Tag each prompt with a client-generated uuid and remember it as the current turn, so
+            // edits that follow can be mapped back to this point for a native rewind_files().
+            val msgUuid = java.util.UUID.randomUUID().toString()
+            currentUserMessageId = msgUuid
+            write(ControlProtocol.userMessageWithImages(next.text, next.images, uuid = msgUuid))
             turnActive = true
         }
+        promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
+    }
+
+    /** Clears the predicted next-prompt chip (on send / dismiss). Public so the composer can drive it. */
+    fun clearSuggestion() {
+        if (promptSuggestion == null) return
+        promptSuggestion = null
+        edt { fireState() }
     }
 
     fun interrupt() {
@@ -595,6 +641,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     fun restore(savedSessionId: String, dtos: List<EntryDTO>) {
         sessionId = savedSessionId
+        // A restored transcript is a different timeline — drop any rewind turn-anchors from before.
+        toolUseTurn.clear()
+        currentUserMessageId = null
         edt {
             transcript.clear()
             for (dto in dtos) {
@@ -669,6 +718,40 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
         write(ControlProtocol.permissionAllow(requestId, updated))
         systemNotice("Answered Claude's question")
+        firePermissions()
+    }
+
+    /**
+     * Surfaces an MCP `elicitation` (binary -> host) as a non-modal card. The user's Accept/Decline/Cancel (via
+     * [resolveElicitation]) is what writes the ElicitResult. EDT-confined, like every other card operation.
+     */
+    private fun presentElicitation(requestId: String, req: ElicitationRequest) = edt {
+        cards.present(
+            PendingPermission(
+                requestId = requestId,
+                toolName = "elicitation",
+                input = JsonObject(emptyMap()),
+                title = req.displayName?.ifBlank { null } ?: req.title?.ifBlank { null } ?: req.mcpServerName,
+                summary = "",
+                reviewable = false,
+                elicitation = ElicitationCard(
+                    serverName = req.mcpServerName,
+                    message = req.message,
+                    description = req.description?.ifBlank { null },
+                    mode = req.mode,
+                    url = req.url,
+                    fields = parseElicitationFields(req.requestedSchema),
+                ),
+            )
+        )
+        fireAttention(AttentionReason.PERMISSION)
+    }
+
+    /** Invoked by the chat UI when the user resolves an elicitation card. Writes the ElicitResult and clears it. */
+    fun resolveElicitation(requestId: String, action: String, content: JsonObject?) {
+        cards.remove(requestId) ?: return
+        write(ControlProtocol.elicitationResult(requestId, action, content))
+        systemNotice("Elicitation: $action")
         firePermissions()
     }
 
@@ -833,6 +916,38 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         controlClient.query(ControlProtocol::getBinaryVersionRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
     }
 
+    /** Refresh the VFS for files the binary changed during a rewind so the editor reflects them. */
+    fun refreshAfterRewind(paths: List<String>) {
+        paths.forEach { diffs.markForRefresh(it) }
+        diffs.refreshTouched()
+    }
+
+    /** Result of a `rewind_files` control request. */
+    data class RewindResult(val canRewind: Boolean, val error: String?, val filesChanged: List<String>)
+
+    /**
+     * Ask the binary to rewind tracked files to the state at [userMessageId] (a turn anchor). With [dryRun]
+     * true the binary only reports feasibility (`canRewind`) without touching files. Result on the EDT; null
+     * on timeout / not running.
+     */
+    fun requestRewindFiles(userMessageId: String, dryRun: Boolean, onResult: (RewindResult?) -> Unit) {
+        if (!isRunning()) { edt { onResult(null) }; return }
+        controlClient.query(
+            buildRequest = { id -> ControlProtocol.rewindFilesRequest(id, userMessageId, dryRun) },
+            onResult = { mapped: RewindResult? -> edt { onResult(mapped) } },
+            decode = { payload ->
+                payload?.let {
+                    RewindResult(
+                        canRewind = (it["canRewind"] ?: it["can_rewind"])?.let { e -> (e as? JsonPrimitive)?.booleanOrNull } ?: false,
+                        error = ((it["error"] ?: it["message"]) as? JsonPrimitive)?.contentOrNull,
+                        filesChanged = ((it["filesChanged"] ?: it["files_changed"]) as? JsonArray)
+                            ?.mapNotNull { e -> (e as? JsonPrimitive)?.contentOrNull } ?: emptyList(),
+                    )
+                }
+            },
+        )
+    }
+
     /** Reconnects a disconnected/failed MCP server; fire-and-forget (the UI re-queries mcp_status after). */
     fun reconnectMcp(name: String) {
         if (isRunning()) write(ControlProtocol.mcpReconnectRequest(ControlProtocol.newRequestId(), name))
@@ -956,6 +1071,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // restarts near 0 per message, so fold the finished message's tokens into the session total
                 // before the next one overwrites the live counter — otherwise only the last message counts.
                 tokens.foldIntoSession()
+                liveThinkingTokens = 0 // the live reasoning estimate is per thinking block; reset at each boundary
                 reconciler.onMessageBoundary()
             }
 
@@ -979,6 +1095,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // hang the snapshot on). Idempotent + cheap (a small file read); a no-op for non-reviewable tools.
                 if (event.name in DiffPresenter.REVIEWABLE_TOOLS) {
                     diffs.captureForReview(event.name, event.input, event.id)
+                    // Remember which user turn this edit belongs to, for a native rewind_files().
+                    currentUserMessageId?.let { toolUseTurn[event.id] = it }
                 }
             }
 
@@ -987,7 +1105,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // below preserves the change visually in the tool card, and "View diff" can re-open it from the
                 // snapshot at any time, so leaving the editor tab pinned just clutters the workspace. The manager
                 // closes the tab and hands back the persisted pre-write snapshot for the inline diff below.
-                transcript.setToolState(event.toolUseId, ToolState.FINISHED)
+                transcript.setToolState(event.toolUseId, if (event.isError) ToolState.ERROR else ToolState.FINISHED)
                 val snap = diffs.onToolResult(event.toolUseId)
                 // For a reviewable write we captured the pre-write contents at approval time: render the actual
                 // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
@@ -1003,7 +1121,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 } else {
                     val text = event.content.trim()
                     if (text.isNotBlank()) {
-                        transcript.addToolOutput(event.toolUseId, text, parentToolUseId = event.parentToolUseId)
+                        transcript.addToolOutput(
+                            event.toolUseId, text, parentToolUseId = event.parentToolUseId,
+                            meta = if (event.isError) "error" else null,
+                        )
                     }
                 }
             }
@@ -1012,6 +1133,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 tokens.foldIntoSession()
                 reconciler.onMessageBoundary()
                 turnActive = false
+                liveThinkingTokens = 0
                 if (event.result.isError) {
                     // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
                     // Always surface something so a failed turn never ends silently.
@@ -1055,6 +1177,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
             is ClaudeEvent.HookCallback -> handleHookCallback(event.requestId, event.request)
+            // request_user_dialog: we render no custom dialog kinds — cancel (the CLI applies the dialog's default)
+            // and leave a transparency note so the user sees the agent asked for one.
+            is ClaudeEvent.UserDialogRequest -> {
+                write(DialogResponder.response(event.requestId))
+                systemNotice(DialogResponder.notice(event.dialogKind))
+            }
+            // elicitation: an MCP server wants user input — surface a non-modal card; the user's choice replies.
+            is ClaudeEvent.Elicitation -> presentElicitation(event.requestId, event.request)
             is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
             is ClaudeEvent.ControlResult -> controlClient.onControlResult(event)
 
@@ -1099,8 +1229,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 edt { fireState() }
             }
 
-            // thinking_tokens → live reasoning estimate (display in E7); EDT for single-threaded counter writes.
-            is ClaudeEvent.ThinkingTokens -> edt { liveThinkingTokens = event.info.estimatedTokens }
+            // thinking_tokens → live reasoning estimate shown in the composer status line. EDT for single-threaded
+            // counter writes; fireState so the status row repaints (thinking_tokens fires far slower than text deltas).
+            is ClaudeEvent.ThinkingTokens -> edt { liveThinkingTokens = event.info.estimatedTokens; fireState() }
 
             is ClaudeEvent.ApiRetry -> {
                 val of = if (event.info.maxRetries > 0) "/${event.info.maxRetries}" else ""
@@ -1110,17 +1241,25 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // commands_changed → REPLACE the cached command list (supportedCommands() never reflects mid-session changes).
             is ClaudeEvent.CommandsChanged -> edt { commands = event.info.commands; fireMetadata() }
 
-            // E3/E10: rich UI for the events below arrives later; for now keep them out of Other (logged + discreet notice).
+            // memory_recall → a collapsible "Recalled N memories" row listing what context influenced the turn.
             is ClaudeEvent.MemoryRecall -> {
-                log.debug("memory_recall mode=${event.info.mode} count=${event.info.memories.size}")
-                if (event.info.memories.isNotEmpty()) systemNotice("Recalled ${event.info.memories.size} memory item(s)")
+                if (event.info.memories.isNotEmpty()) edt {
+                    transcript.add(
+                        Speaker.MEMORY,
+                        MemoryRecallFormatter.body(event.info),
+                        meta = MemoryRecallFormatter.summary(event.info),
+                    )
+                }
             }
+            // prompt_suggestion → the predicted next prompt, surfaced as a clickable composer chip (see SuggestionStripPanel).
             is ClaudeEvent.PromptSuggestion -> {
-                // E7/E9: surface as a clickable composer suggestion. For now just log; not transcript noise.
-                log.debug("prompt_suggestion: ${event.info.suggestion}")
+                promptSuggestion = event.info.suggestion.takeIf { it.isNotBlank() }
+                edt { fireState() }
             }
             is ClaudeEvent.FilesPersisted -> {
-                log.debug("files_persisted ok=${event.info.files.size} failed=${event.info.failed.size}")
+                if (event.info.files.isNotEmpty()) {
+                    systemNotice("Uploaded ${event.info.files.size} file(s): " + event.info.files.joinToString(", ") { it.filename })
+                }
                 if (event.info.failed.isNotEmpty()) systemNotice("Failed to persist ${event.info.failed.size} file(s)")
             }
             is ClaudeEvent.PluginInstall -> {
@@ -1130,19 +1269,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     "failed" -> systemNotice("Plugin install failed${event.info.error?.let { ": $it" } ?: ""}")
                 }
             }
-            // E3: HookBroker will own these (native hook execution/feedback). For now: log only, no transcript noise.
-            is ClaudeEvent.HookStarted -> log.debug("hook_started ${event.info.hookEvent}/${event.info.hookName}")
-            is ClaudeEvent.HookProgress -> log.debug("hook_progress ${event.info.hookName}")
-            is ClaudeEvent.HookResponse -> {
-                log.debug("hook_response ${event.info.hookName} outcome=${event.info.outcome}")
-                if (event.info.outcome == "error") systemNotice("Hook ${event.info.hookName} failed")
-            }
-            // tool_progress / tool_use_summary: E10 will render heartbeats/summaries on tool cards. Log for now.
+            // hook_started/progress/response → one evolving "⚙ Hook …" transcript row per hook (HookActivityNarrator).
+            is ClaudeEvent.HookStarted -> edt { hookNarrator.onStarted(event.info) }
+            is ClaudeEvent.HookProgress -> edt { hookNarrator.onProgress(event.info) }
+            is ClaudeEvent.HookResponse -> edt { hookNarrator.onResponse(event.info) }
+            // tool_progress → RUNNING (animated box) + elapsed time (the protocol carries no completion %).
             is ClaudeEvent.ToolProgress -> edt {
-                // Heartbeat: the tool is actively executing → RUNNING (animated box) + elapsed time (no % exists).
                 transcript.setToolState(event.info.toolUseId, ToolState.RUNNING, event.info.elapsedTimeSeconds)
             }
-            is ClaudeEvent.ToolUseSummary -> log.debug("tool_use_summary: ${event.info.summary}")
+            // tool_use_summary → a quiet dim note summarizing the preceding tool calls.
+            is ClaudeEvent.ToolUseSummary -> edt {
+                if (event.info.summary.isNotBlank()) transcript.add(Speaker.SYSTEM, "↳ ${event.info.summary}")
+            }
             // mirror_error → the binary lost transcript data; warn the user (their session file may be incomplete).
             is ClaudeEvent.MirrorError -> {
                 log.warn("mirror_error: ${event.info.error}")
@@ -1165,8 +1303,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         edt {
             turnActive = false
             ready = false
+            liveThinkingTokens = 0
+            promptSuggestion = null
             cards.clear()
             taskTracker.clear()
+            hookNarrator.clear()
             if (exitCode != 0) {
                 transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
                 // The user may not have this tab focused; also raise a notification so the failure isn't missed.
@@ -1184,6 +1325,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // -----------------------------------------------------------------------
 
     private fun write(line: String) = process?.writeLine(line)
+
+    /** Answers any pending elicitation cards with {action:"cancel"} (called during teardown, process still alive). */
+    private fun cancelPendingElicitations() {
+        runCatching {
+            cards.all().filter { it.elicitation != null }.forEach {
+                write(ControlProtocol.elicitationResult(it.requestId, "cancel"))
+            }
+        }
+    }
 
     /**
      * Answers a `hook_callback` control_request: [HookBroker] (pure) parses the frame, decides, and builds the exact
@@ -1274,40 +1424,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             notifyInfo("Sign-in is only for the Anthropic provider. You're on ${settings.provider.label} — set its API key in Settings instead.")
             return
         }
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
-        // pty4j replaces the env wholesale, so seed it with the IDE's environment, layer the user's
-        // script/overrides, and force a TERM so the binary's TUI renders.
-        val env = HashMap(System.getenv()).apply {
-            putAll(settings.resolveEnv())
-            putIfAbsent("TERM", "xterm-256color")
-        }
-        val flow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
-        loginFlow = flow
-        val started = flow.start(object : ClaudeLoginFlow.Listener {
-            override fun onAuthUrl(url: String) = edt {
-                loginAuthUrl = url
-                BrowserUtil.browse(url)
-                notifyInfo("Opened your browser to sign in. Approve access, then paste the code when prompted.")
-            }
-
-            override fun onCodeRequested() = edt { promptForLoginCode(flow) }
-
-            override fun onResult(success: Boolean, message: String) = edt {
-                loginFlow = null
-                loginAuthUrl = null
-                if (success) {
-                    loginPrompted = false
-                    notifyInfo(message)
-                    restart()
-                } else {
-                    notifyError(message)
-                }
-            }
-        })
-        if (!started) {
-            loginFlow = null
-            openLoginTerminal() // last-resort fallback when a PTY can't be allocated
-        }
+        // Run `claude auth login` in the IDE terminal (instead of a modal code popup): the binary opens
+        // the browser and captures the auth AUTOMATICALLY via its localhost callback when the browser can
+        // reach it (no code to paste); if not, it prompts for the code in the terminal itself. Nicer and
+        // more capable than scraping a PTY + asking for the code in a dialog.
+        openLoginTerminal()
     }
 
     /** EDT-only. Asks for the authorization code and feeds it to the running [ClaudeLoginFlow] (or cancels it). */
@@ -1339,7 +1460,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
         val command = TerminalLauncher.loginCommand(binary.absolutePath)
         edt {
-            if (!TerminalLauncher.openAndRun(project, command, "claude login")) {
+            if (TerminalLauncher.openAndRun(project, command, "claude login")) {
+                // We can't observe the terminal's completion, so offer a one-click restart to pick up the
+                // new auth once the user finishes signing in there.
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup(NOTIFICATION_GROUP)
+                    .createNotification(
+                        "Claude Code",
+                        "Finish signing in in the terminal — the browser opens automatically. When it confirms you're logged in, restart the chat to use it.",
+                        NotificationType.INFORMATION,
+                    )
+                    .addAction(NotificationAction.createSimple("Restart chat") { restart() })
+                    .notify(project)
+            } else {
                 notifyError("Couldn't open the IDE terminal. Run this in a terminal, then restart the chat:\n$command")
             }
         }

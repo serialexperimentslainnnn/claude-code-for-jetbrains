@@ -63,6 +63,20 @@ sealed interface ClaudeEvent {
     /** A `hook_callback` control request: the binary fired a hook and blocks on the host's `HookJSONOutput` reply. */
     data class HookCallback(val requestId: String, val request: JsonObject) : ClaudeEvent
 
+    /** `request_user_dialog` control request: the binary asks the host to render a tool-driven blocking dialog of
+     *  an open-union [dialogKind] with an opaque per-kind [payload]. The host renders no custom kinds, so it is
+     *  answered {behavior:"cancelled"} (the CLI then applies the dialog's own default). */
+    data class UserDialogRequest(
+        val requestId: String,
+        val dialogKind: String?,
+        val payload: JsonObject,
+        val toolUseId: String?,
+    ) : ClaudeEvent
+
+    /** `elicitation` control request: an MCP server asks the user for input (a URL to complete, or a form). The
+     *  host surfaces it as a non-modal card and answers with an ElicitResult (accept/decline/cancel). */
+    data class Elicitation(val requestId: String, val request: ElicitationRequest) : ClaudeEvent
+
     /** A binary->host control request we don't implement; must still be answered (error) so the binary doesn't hang. */
     data class UnsupportedControlRequest(val requestId: String, val subtype: String?) : ClaudeEvent
 
@@ -333,8 +347,21 @@ object ProtocolParser {
             )
             // hook_callback: the binary fired a hook and blocks on a HookJSONOutput reply (HookBroker owns the decision).
             "hook_callback" -> listOf(ClaudeEvent.HookCallback(requestId, request))
-            // Other binary->host requests (mcp_message, elicitation, request_user_dialog…) are not handled; the
-            // session replies with an error so the binary is not left waiting.
+            // request_user_dialog: a tool-driven blocking dialog of an open-union kind — answered {behavior:"cancelled"}.
+            "request_user_dialog" -> listOf(
+                ClaudeEvent.UserDialogRequest(
+                    requestId,
+                    request.str("dialog_kind"),
+                    (request["payload"] as? JsonObject) ?: JsonObject(emptyMap()),
+                    request.str("tool_use_id"),
+                )
+            )
+            // elicitation: an MCP server requests user input — surfaced as a card. A hostile frame still answers.
+            "elicitation" -> runCatching {
+                listOf(ClaudeEvent.Elicitation(requestId, ClaudeJson.decodeFromJsonElement(ElicitationRequest.serializer(), request)))
+            }.getOrDefault(listOf(ClaudeEvent.UnsupportedControlRequest(requestId, "elicitation")))
+            // Any other binary->host request (mcp_message, …) is unhandled; the session replies with an error so
+            // the binary is not left waiting.
             else -> listOf(ClaudeEvent.UnsupportedControlRequest(requestId, request.str("subtype")))
         }
     }

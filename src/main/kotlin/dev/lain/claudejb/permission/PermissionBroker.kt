@@ -5,6 +5,7 @@ import dev.lain.claudejb.protocol.AskQuestion
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.protocol.CanUseToolRequest
 import dev.lain.claudejb.protocol.ControlProtocol
+import dev.lain.claudejb.protocol.ElicitField
 import dev.lain.claudejb.protocol.parseAskQuestions
 import dev.lain.claudejb.protocol.str
 import kotlinx.serialization.json.JsonObject
@@ -38,11 +39,27 @@ data class PendingPermission(
     val decisionReason: String? = null,
     /** can_use_tool `blocked_path`: the path that triggered the request (e.g. a Bash access outside the root). */
     val blockedPath: String? = null,
+    /** Non-null for an MCP elicitation: render an elicitation card instead of an Accept/Reject card. */
+    val elicitation: ElicitationCard? = null,
 ) {
     /** Short headline for transcript notices, e.g. "Edit on App.kt". */
     val headline: String
         get() = DiffPresenter.filePathOf(input)?.substringAfterLast('/')?.let { "$toolName on $it" } ?: toolName
 }
+
+/**
+ * The data for an MCP elicitation card (carried on a [PendingPermission]). [fields] is the flat set of
+ * primitive inputs extracted from the requested_schema; it is empty for URL mode or a non-renderable schema,
+ * in which case the card is a plain Accept/Decline.
+ */
+data class ElicitationCard(
+    val serverName: String,
+    val message: String,
+    val description: String?,
+    val mode: String?,            // "url" | "form" | null
+    val url: String?,
+    val fields: List<ElicitField>,
+)
 
 /**
  * Decides `can_use_tool` requests. Auto-approves according to the permission mode; otherwise it hands the

@@ -4,7 +4,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.session.ChatSessionManager
-import dev.lain.claudejb.ui.ChatPanel
+import dev.lain.claudejb.ui.JcefChatPanel
 
 /**
  * Shared routing for the "add … as @-context" editor actions: pins an [Attachment] onto the **active chat tab's**
@@ -18,7 +18,7 @@ object AttachmentActions {
 
     fun pin(project: Project, attachment: Attachment) {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Claude Code")
-        val panel = toolWindow?.contentManager?.selectedContent?.component as? ChatPanel
+        val panel = toolWindow?.contentManager?.selectedContent?.component as? JcefChatPanel
         if (panel != null) {
             panel.addAttachment(attachment)
             toolWindow.activate(null)
