@@ -54,6 +54,10 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         @JvmField var alwaysAllowTools: String = ""
         /** Reopen the chats that were open last time when the tool window starts. */
         @JvmField var restoreOpenChatsOnStartup: Boolean = true
+        /** Enable the binary's file checkpointing so the native rewind (rollback to a turn) works. Default on. */
+        @JvmField var enableFileCheckpointing: Boolean = true
+        /** Remembered fallback choice when native rewind is unavailable: "" = ask, "ide" = revert via IDE, "never" = do nothing. */
+        @JvmField var rewindFallback: String = ""
 
         // --- Advanced launch options (neutral defaults = flag omitted) ------------------------------
         /** `--max-turns N`: cap conversation turns. 0 = no cap (flag omitted). */
@@ -71,6 +75,10 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
     }
 
     val restoreOpenChatsOnStartup: Boolean get() = state.restoreOpenChatsOnStartup
+    val enableFileCheckpointing: Boolean get() = state.enableFileCheckpointing
+    var rewindFallback: String
+        get() = state.rewindFallback
+        set(value) { state.rewindFallback = value }
 
     /**
      * Resolved `claude` binary path. In production this is exactly the persisted [State.claudePath]
@@ -150,7 +158,11 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
      * and obtain user consent before running. The current start flow is intentionally left unchanged here.
      */
     fun resolveEnv(): Map<String, String> =
-        EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv() + providerEnv()
+        EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv() + providerEnv() + checkpointEnv()
+
+    /** Enables the binary's SDK file-checkpointing so native rewind works (env var the SDK uses). */
+    private fun checkpointEnv(): Map<String, String> =
+        if (state.enableFileCheckpointing) mapOf("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING" to "true") else emptyMap()
 
     /**
      * UI-test-only env seeding. When the IDE-under-test is launched with `-Dclaudejb.fakeFixture=<abs path>`

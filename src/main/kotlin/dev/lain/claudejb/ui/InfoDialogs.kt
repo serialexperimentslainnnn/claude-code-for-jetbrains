@@ -147,7 +147,10 @@ object InfoDialogs {
      * and an optional `status`/`state` plus an optional `enabled` boolean. Entries without a name are dropped.
      */
     fun parseMcpServers(payload: JsonObject?): List<McpServerRow> {
-        val arr = (payload?.get("mcp_servers") ?: payload?.get("servers")) as? JsonArray ?: return emptyList()
+        // The mcp_status control response uses camelCase `mcpServers`; system/init uses snake `mcp_servers`.
+        // Accept both (plus `servers`) — only matching `mcp_servers` was why connected servers showed as none.
+        val arr = (payload?.get("mcpServers") ?: payload?.get("mcp_servers") ?: payload?.get("servers")) as? JsonArray
+            ?: return emptyList()
         return arr.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
             val name = o.str("name")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null

@@ -1,13 +1,13 @@
 # Claude Code Native
 
-A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with streaming chat, native diff review, and full protocol-level access to the `claude` binary.
+A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, and full protocol-level access to the `claude` binary.
 
 > **Goal:** surpass AI Assistant and the official plugin (currently just a terminal launcher). Built to present to Anthropic.
 
 ## Features
 
 ### Chat & transcript
-- **Streaming chat** — token-by-token rendering in a native Swing transcript, multi-chat tabs
+- **Streaming chat** — token-by-token rendering in an embedded web (JCEF) transcript, multi-chat tabs. The transcript, composer, and permission/dashboard cards are an inlined web app (no CDN, strict CSP); diffs stay native via the IDE's `DiffManager`.
 - **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call. Tool cards show live state by colour: sky-blue while in flight (pulsing while working), green when finished, with elapsed time.
 - **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
 - **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
@@ -41,10 +41,11 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Predicted next prompt** — the binary's `prompt_suggestion` appears as a dismissible chip above the composer; click to drop it into the input (you review and send it yourself)
 
 ### Usage & diagnostics
-- **Graphical session consumption** — context window meter, authoritative cumulative token breakdown (input / cache write / cache read / output, from the binary's `get_session_cost`), and a unified quota bar with utilization %, reset countdown, and absolute reset hour
-- **Live token counter** — per-message output tokens shown in the status line while the agent thinks, plus a live reasoning-token estimate (`thinking_tokens`) mid-turn
+- **Session dashboard** — a toggle in the chat view flips the transcript to an overlay dashboard with a context breakdown (segmented by category), usage & cost (in / out / cache, USD when the binary reports it), account (email / org / plan / provider), the active model, the in-flight subagents (with Stop), and MCP server health (status dot + reconnect / enable-disable per server)
+- **Usage & cost** — the dashboard shows the authoritative cumulative token breakdown (input / cache write / cache read / output, from the binary's `get_session_cost`) and session cost; a compact context/output readout sits under the composer. _(The standalone quota/reset bar from the Swing UI is not yet re-ported.)_
+- **Live token counter** — a live reasoning-token estimate (`thinking_tokens`) and output count surface in the composer readout mid-turn
 - **Memory recall** — a collapsible "Recalled N memories" row shows which memories (scope · path · snippet) influenced the turn
-- **Subagent live strip** — one card per in-flight Task subagent with running tokens / tool-uses / elapsed time and a Stop button
+- **Subagents** — in-flight `Task` subagents appear in the dashboard with running tokens / tool-uses and a Stop button
 - **Account & diagnostics** — Account info, Binary Version, Effective Settings, and an interactive MCP-runtime dialog in the gear menu
 
 ### Login & setup
@@ -59,7 +60,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 ## Requirements
 
-- **JetBrains IDE** 2025.1 – 2026.2.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
+- **JetBrains IDE** 2025.2 or newer (build 252+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with **JCEF enabled** (bundled with the IDE's JBR by default; the chat UI is an embedded web view)
 - **`claude` CLI** installed and accessible on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
   - If it's in a custom location, set the executable path (and, if needed, environment variables) in **Settings → Tools → Claude Code**
@@ -114,7 +115,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-native-3.2.1.zip`
+Output: `build/distributions/claude-code-native-4.0.0.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded
@@ -129,7 +130,7 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and ve
 
 ## Status
 
-**v3.3.0** — **the full binary→host protocol surface, mapped into the UI**: native MCP **elicitation** cards (URL gated to http/https, or a form built from the request's schema) and correct `request_user_dialog` handling (both previously errored), a clickable **predicted-next-prompt** chip, a **live reasoning-token** estimate, evolving **hook-execution** rows, a **memory-recall** row, and tool-use-summary / file-upload notices. Adds an on-demand **protocol drift detector** (`./gradlew checkDrift`) that updates the SDK + binary to latest and reports any unmodeled protocol kind. Protocol surface verified against SDK 0.3.162 / `claude` 2.1.162. **v3.2.1** — provider selector (Anthropic / DeepSeek) with per-provider isolated keys, and a reasoning-toggle persistence fix. **v2.2.2** (test pyramid + gated UI suite) — completes the automated **test pyramid** (unit → headless `BasePlatformTestCase` → integration against a `fake-claude` stand-in → RemoteRobot UI) and the **maintenance workflow**: CI, tag-driven release/publish, nightly UI tests, SDK/binary drift detection, plus `SECURITY.md`/`CONTRIBUTING.md`/docs. No runtime change vs. 2.2.0. **v2.2.0** — Marketplace-publishable again: migrated the bundled MCP plugin lookup off the internal `findEnabledPlugin` API. **Model picker reflects the binary's actual options** by their human label (`Default (recommended)`/`Sonnet`/`Haiku`) and refreshes live when `initialize` lands; default model now `default` (binary chooses recommended tier). **Path:line links work inside backticks** (`` `src/Foo.kt:42` `` becomes a clickable monospaced link, still project-confined). Protocol surface bumped to SDK 0.3.161 / `claude` 2.1.161 (`ModelInfo` carries effort/thinking/fast/auto capabilities, `AccountInfo` carries provider; new `system/*` events tolerated). Built on **v2.1.0**: persistent diff from the transcript ("View diff" on every edit card, in any permission mode), hunk-by-hunk partial acceptance, wrapped AskUserQuestion options, improved Markdown (strikethrough, task lists, nested lists), "Explain with Claude" editor action + jump-to-code links (project-confined), "Always allow" per tool (revocable in Settings), and background-session notifications with tab badges (suppressed only for the chat on screen; "Open" dismisses the notification). **Session history reads the binary's own session files** as the source of truth — real titles (as `--resume`), "Open Previous Session…" lists the project's sessions, and on startup the open tabs (or the most recent session) are restored; the plugin persists no transcripts, only the open-tab ids in `workspace.xml`. Internally, permission-mode/effort/transport are now typed enums. Builds on v2.0.x: reliability & security hardening (EDT-freeze fix, in-flight control resolution + watchdog, project-root write confinement, trust-on-open gate) and opt-in IDE tools over MCP. Verified compatible with IntelliJ IDEA 2024.3 – 2026.2 (build 243–262).
+**v4.0.0** — **the chat UI was rebuilt on JCEF (embedded Chromium)**: a modern streaming transcript, a web composer (attachments, image drag-drop & paste), native permission / question / elicitation cards, and a session dashboard (context breakdown, cost, account, MCP health, subagents) — all an inlined web app under a strict CSP (no CDN), with diffs still native via the IDE's `DiffManager`. The old Swing chat UI and its tests were removed. **Requires JetBrains 2025.2+ (build 252+) with JCEF.** **v3.3.0** — **the full binary→host protocol surface, mapped into the UI**: native MCP **elicitation** cards (URL gated to http/https, or a form built from the request's schema) and correct `request_user_dialog` handling (both previously errored), a clickable **predicted-next-prompt** chip, a **live reasoning-token** estimate, evolving **hook-execution** rows, a **memory-recall** row, and tool-use-summary / file-upload notices. Adds an on-demand **protocol drift detector** (`./gradlew checkDrift`) that updates the SDK + binary to latest and reports any unmodeled protocol kind. Protocol surface verified against SDK 0.3.162 / `claude` 2.1.162. **v3.2.1** — provider selector (Anthropic / DeepSeek) with per-provider isolated keys, and a reasoning-toggle persistence fix. **v2.2.2** (test pyramid + gated UI suite) — completes the automated **test pyramid** (unit → headless `BasePlatformTestCase` → integration against a `fake-claude` stand-in → RemoteRobot UI) and the **maintenance workflow**: CI, tag-driven release/publish, nightly UI tests, SDK/binary drift detection, plus `SECURITY.md`/`CONTRIBUTING.md`/docs. No runtime change vs. 2.2.0. **v2.2.0** — Marketplace-publishable again: migrated the bundled MCP plugin lookup off the internal `findEnabledPlugin` API. **Model picker reflects the binary's actual options** by their human label (`Default (recommended)`/`Sonnet`/`Haiku`) and refreshes live when `initialize` lands; default model now `default` (binary chooses recommended tier). **Path:line links work inside backticks** (`` `src/Foo.kt:42` `` becomes a clickable monospaced link, still project-confined). Protocol surface bumped to SDK 0.3.161 / `claude` 2.1.161 (`ModelInfo` carries effort/thinking/fast/auto capabilities, `AccountInfo` carries provider; new `system/*` events tolerated). Built on **v2.1.0**: persistent diff from the transcript ("View diff" on every edit card, in any permission mode), hunk-by-hunk partial acceptance, wrapped AskUserQuestion options, improved Markdown (strikethrough, task lists, nested lists), "Explain with Claude" editor action + jump-to-code links (project-confined), "Always allow" per tool (revocable in Settings), and background-session notifications with tab badges (suppressed only for the chat on screen; "Open" dismisses the notification). **Session history reads the binary's own session files** as the source of truth — real titles (as `--resume`), "Open Previous Session…" lists the project's sessions, and on startup the open tabs (or the most recent session) are restored; the plugin persists no transcripts, only the open-tab ids in `workspace.xml`. Internally, permission-mode/effort/transport are now typed enums. Builds on v2.0.x: reliability & security hardening (EDT-freeze fix, in-flight control resolution + watchdog, project-root write confinement, trust-on-open gate) and opt-in IDE tools over MCP. As of 4.0.0, supported on JetBrains IDEs build 252 (2025.2) through the latest EAP/RC.
 
 See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
 

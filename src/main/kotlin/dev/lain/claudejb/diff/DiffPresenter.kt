@@ -99,7 +99,9 @@ object DiffPresenter {
         // Use FileEditorManager.openFile (not DiffEditorTabFilesManager.showDiffFile): showDiffFile honours the
         // global "show diff in window vs. editor" setting and would pop a separate window. openFile always lands
         // the diff in the editor area — the no-popup behaviour we want, like the JetBrains AI Assistant.
-        FileEditorManager.getInstance(project).openFile(vFile, true)
+        // focusEditor=false: open the diff WITHOUT stealing keyboard focus, so a diff popping up
+        // (incl. auto-open during a turn) never yanks the caret out of the chat composer mid-typing.
+        FileEditorManager.getInstance(project).openFile(vFile, false)
         OpenedDiffsService.getInstance(project).register(vFile)
         return vFile
     }
