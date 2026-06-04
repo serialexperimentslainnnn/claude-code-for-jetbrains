@@ -59,6 +59,11 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private val attachments = LinkedHashMap<String, Attachment>()
     private var nextAttachmentId = 0L
 
+    // Per-request hunk context for partial diff acceptance, computed on the EDT in pushPermissions. Declared
+    // before init {} because the constructor's pushPermissions() call (re)prunes this map — Kotlin initializes
+    // properties in declaration order, so a later declaration would still be null when init runs (NPE).
+    private val hunkCache = HashMap<String, HunkCtx>()
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -149,16 +154,17 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         )
     }
 
-    // Per-request hunk context for partial diff acceptance, computed on the EDT in pushPermissions.
     private data class HunkCtx(
         val toolName: String, val input: kotlinx.serialization.json.JsonObject,
         val currentLines: List<String>, val proposedLines: List<String>,
         val hunks: List<dev.lain.claudejb.diff.Hunk>,
     )
-    private val hunkCache = HashMap<String, HunkCtx>()
 
     private fun pushPermissions() {
         val perms = session.pendingPermissions()
+        // Drop cached hunk contexts for permissions that are no longer pending (resolved elsewhere,
+        // cleared on stop/interrupt, or never routed through us) so the cache can't leak across a session.
+        hunkCache.keys.retainAll(perms.mapTo(HashSet()) { it.requestId })
         val hunksByRequest = computeHunks(perms)
         host.exec(
             "window.cc.permissions && window.cc.permissions(" +
@@ -174,7 +180,12 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             val cached = hunkCache[p.requestId]
             if (cached != null) { out[p.requestId] = cached.hunks; continue }
             val path = DiffPresenter.filePathOf(p.input) ?: continue
-            val current = runCatching { java.io.File(path).takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
+            // Cap the synchronous (EDT) disk read + diff: hunk-by-hunk review is meaningless for huge files,
+            // and reading one on the EDT would freeze the UI. Oversized files just skip the hunk UI — a
+            // normal full accept still works (the binary does its own read/write).
+            val file = java.io.File(path)
+            if (file.isFile && file.length() > MAX_HUNK_FILE_BYTES) continue
+            val current = runCatching { file.takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
             val proposed = DiffPresenter.proposedContent(p.toolName, p.input, current) ?: continue
             val hunks = DiffPresenter.computeHunks(current, proposed)
             if (hunks.size > 1) {
@@ -224,15 +235,17 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                 if (isSelected) settings.rewindFallback = if (exitCode == com.intellij.openapi.ui.Messages.YES) "ide" else "never"
             }
         }
-        val choice = com.intellij.openapi.ui.Messages.showYesNoDialog(
-            project,
-            "Claude Code's native rewind isn't available for this edit ($reason).\nRestore this file via the IDE instead?",
-            "Rewind Unavailable",
-            "Restore via IDE", "Cancel",
-            com.intellij.openapi.ui.Messages.getQuestionIcon(),
-            doNotAsk,
-        )
-        if (choice == com.intellij.openapi.ui.Messages.YES) session.revertEdit(snap)
+        val restore = com.intellij.openapi.ui.MessageDialogBuilder
+            .yesNo(
+                "Rewind Unavailable",
+                "Claude Code's native rewind isn't available for this edit ($reason).\nRestore this file via the IDE instead?",
+            )
+            .yesText("Restore via IDE")
+            .noText("Cancel")
+            .icon(com.intellij.openapi.ui.Messages.getQuestionIcon())
+            .doNotAsk(doNotAsk)
+            .ask(project)
+        if (restore) session.revertEdit(snap)
     }
 
     /** A small balloon for clipboard feedback (e.g. when "Paste image" finds nothing to paste). */
@@ -299,11 +312,21 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                 val accepted = m.acceptedHunks
                 if (m.allow && ctx != null && accepted != null && accepted.size < ctx.hunks.size) {
                     // Partial accept: write only the chosen hunks (the binary still does the write).
-                    val selected = dev.lain.claudejb.diff.HunkSelection.reconstruct(
-                        ctx.currentLines, ctx.proposedLines, ctx.hunks, accepted.toSet())
-                    val currentText = ctx.currentLines.joinToString("\n")
-                    val override = dev.lain.claudejb.diff.HunkSelection.encodeInput(ctx.toolName, ctx.input, currentText, selected)
-                    session.resolvePermission(m.id, true, overrideInput = override)
+                    // Re-read disk first — if the file changed since the card was shown, the cached line
+                    // snapshot (and its hunks) no longer apply, so fall back to a normal full accept rather
+                    // than write content reconstructed from a stale snapshot (which would silently no-op or
+                    // clobber the external change).
+                    val cachedText = ctx.currentLines.joinToString("\n")
+                    val diskText = DiffPresenter.filePathOf(ctx.input)
+                        ?.let { runCatching { java.io.File(it).takeIf { f -> f.isFile }?.readText() }.getOrNull() }
+                    if (diskText != null && diskText == cachedText) {
+                        val selected = dev.lain.claudejb.diff.HunkSelection.reconstruct(
+                            ctx.currentLines, ctx.proposedLines, ctx.hunks, accepted.toSet())
+                        val override = dev.lain.claudejb.diff.HunkSelection.encodeInput(ctx.toolName, ctx.input, cachedText, selected)
+                        session.resolvePermission(m.id, true, overrideInput = override)
+                    } else {
+                        session.resolvePermission(m.id, true) // diverged on disk → full accept, binary reconciles
+                    }
                 } else {
                     session.resolvePermission(m.id, m.allow)
                 }
@@ -488,12 +511,16 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         livePanels.remove(this)
         session.transcript.removeListener(this)
         session.removeListener(this)
+        hunkCache.clear()
         timer.stop()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }
 
     private companion object {
         private val BTW = Regex("^/btw\\b.*")
+
+        // Files larger than this skip the EDT-side hunk read/diff for hunk-by-hunk review (full accept still works).
+        private const val MAX_HUNK_FILE_BYTES = 1_000_000L
 
         // Vibe Mode is global (ChatTheme.vibeMode), so a toggle on one tab must re-theme them all.
         private val livePanels = java.util.concurrent.CopyOnWriteArrayList<JcefChatPanel>()

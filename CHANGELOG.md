@@ -20,6 +20,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - The old Swing chat UI (`ChatPanel`/`TranscriptView`/`MarkdownRenderer` + tray/strip panels) and its tests were removed.
 - ⚙ menu reuses the formatted JCEF dashboard instead of plain-text dialogs.
+- Migrated the rewind-fallback confirmation off the deprecated `Messages.showYesNoDialog(…DoNotAskOption)` overload to `MessageDialogBuilder.yesNo` (keeps the zero-deprecation build clean).
+
+### Fixed (post-rewrite expert-consensus review)
+- **Startup crash / "all sessions disappeared" regression** (introduced by the `hunkCache` leak fix below, before release). The new unconditional `hunkCache.keys.retainAll(…)` prune in `pushPermissions()` dereferenced `hunkCache`, but that field was declared *after* the `init {}` block that calls `pushPermissions()` — and Kotlin initializes properties in declaration order, so the field was still `null` during construction → `NullPointerException` in `JcefChatPanel.<init>`. Every chat tab (including each restored session on startup) failed to construct, leaving the tool window empty (sessions on disk were untouched — the binary's JSONL files are the source of truth). The field declaration moved above `init {}`. The earlier code only touched `hunkCache` inside the `computeHunks` loop, which is empty at startup, so the null-deref stayed latent until the unconditional prune was added.
+- **Hunk-by-hunk partial accept no longer writes from a stale snapshot.** On accept the file is re-read from disk; if it diverged since the card was shown, the plugin falls back to a normal full accept instead of reconstructing from the cached line snapshot (which could silently no-op or clobber an external change).
+- **`hunkCache` can no longer leak.** Cached hunk contexts are pruned to the still-pending permissions on every push and cleared on panel dispose, so permissions cleared on stop/interrupt (without an explicit resolve) don't accumulate.
+- **Large files skip the EDT-side hunk read/diff** (>1 MB) — hunk-by-hunk review is meaningless there and the synchronous read would freeze the UI; full accept still works.
+- **Restored the `sms:` URI scheme** in the DOMPurify allowlist (it was dropped when the explicit `ALLOWED_URI_REGEXP` replaced DOMPurify's default; `data:image/` inline images and the internal `jb:` scheme remain allowed, `data:text/html` stays blocked).
 
 ### Notably not added
 - Mermaid / KaTeX — avoided as external bloat that would force relaxing the strict CSP. The plugin stays lean (~1.6 MB).

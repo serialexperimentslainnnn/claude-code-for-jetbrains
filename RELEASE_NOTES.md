@@ -30,6 +30,14 @@ The entire chat surface is now an embedded Chromium web view (JCEF) instead of S
 - **Inline images** (`data:` URIs, kept in-bounds) and a **responsive** layout for narrow tool windows.
 - **Deliberately NOT added:** Mermaid / KaTeX — too much external bloat and they'd force relaxing the strict hash-pinned CSP. Kept the plugin lean (~1.6 MB) and the CSP intact.
 
+**Expert-consensus review hardening (4.0.0).** A multi-reviewer pass over the parity changes confirmed and closed a handful of real defects — still frontend + thin UI wiring, the protocol backend untouched:
+
+- **Partial accept never writes from a stale snapshot.** Accepting a subset of hunks now re-reads the file from disk first; if it changed since the card appeared, the plugin does a normal full accept instead of reconstructing from the cached snapshot (which could silently no-op or overwrite an external edit).
+- **No more `hunkCache` growth.** Cached hunk contexts are pruned to the still-pending permissions on each push and cleared on dispose, so permissions cleared on stop/interrupt can't leak.
+- **Big files stay responsive.** Files over 1 MB skip the EDT-side hunk read/diff (full accept still works) so a large file can't freeze the UI when its permission card renders.
+- **`sms:` links work again** — restored in the DOMPurify allowlist alongside `data:image/` inline images and the internal `jb:` scheme (`data:text/html` stays blocked).
+- **Zero-deprecation build** — the rewind-fallback dialog moved off the deprecated `Messages.showYesNoDialog(…DoNotAskOption)` overload to `MessageDialogBuilder.yesNo`. Tests green and `verifyPlugin` Compatible across IC-252 → IU-262 EAP.
+
 **Still deferred (small, low-value now):** selecting text from an *open diff* to attach, and an "expand/collapse all" button.
 
 ---
