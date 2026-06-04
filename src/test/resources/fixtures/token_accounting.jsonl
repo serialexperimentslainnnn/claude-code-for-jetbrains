@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"66666666-6666-6666-6666-666666666666","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":50,"output_tokens":1}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Counting tokens."}}}
+{"type":"stream_event","event":{"type":"message_delta","usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":50,"output_tokens":30}}}
+{"type":"assistant","message":{"id":"msg_tk","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Counting tokens."}]}}
+{"type":"result","subtype":"success","result":"Counting tokens.","session_id":"66666666-6666-6666-6666-666666666666","num_turns":1}

@@ -1,0 +1,9 @@
+<!--
+  Optional-dependency descriptor, loaded by the IntelliJ Platform ONLY when the bundled Terminal plugin
+  (org.jetbrains.plugins.terminal) is present. Its sole purpose is to satisfy the `config-file` requirement of
+  the optional <depends> in plugin.xml; that <depends> is what grants our plugin runtime classloader access to
+  TerminalToolWindowManager (the Gradle bundledPlugin dependency only covers compilation). No extra extensions
+  are needed — TerminalLauncher calls the API directly — so this descriptor is intentionally empty.
+-->
+<idea-plugin>
+</idea-plugin>

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"55555555-5555-5555-5555-555555555555","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","utilization":92.5,"resetsAt":1893456000}}
+{"type":"assistant","message":{"id":"msg_r1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Heads up, you are near your quota."}]}}
+{"type":"result","subtype":"success","result":"Heads up, you are near your quota.","session_id":"55555555-5555-5555-5555-555555555555","num_turns":1}

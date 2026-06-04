@@ -1,0 +1,27 @@
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- rainbow trail -->
+  <rect x="1" y="9.2"   width="8" height="1.45" fill="#FF5B5B"/>
+  <rect x="1" y="10.65" width="8" height="1.45" fill="#FFA63D"/>
+  <rect x="1" y="12.1"  width="8" height="1.45" fill="#FFF03D"/>
+  <rect x="1" y="13.55" width="8" height="1.45" fill="#4DE06A"/>
+  <rect x="1" y="15.0"  width="8" height="1.45" fill="#4DA6FF"/>
+  <rect x="1" y="16.45" width="8" height="1.45" fill="#B84DFF"/>
+  <!-- pop-tart body -->
+  <rect x="8.3" y="9" width="8" height="8" rx="1.8" fill="#FF9CCB" stroke="#E86FB0" stroke-width="0.8"/>
+  <circle cx="10.6" cy="11.4" r="0.6" fill="#19E0E0"/>
+  <circle cx="13.2" cy="13"   r="0.6" fill="#19E0E0"/>
+  <circle cx="11.4" cy="14.4" r="0.6" fill="#19E0E0"/>
+  <!-- cat ears -->
+  <path d="M14.6 8.7 15.7 6.8 16.6 8.7Z" fill="#9AA0A6"/>
+  <path d="M18.6 8.7 19.5 6.8 20.6 8.7Z" fill="#9AA0A6"/>
+  <!-- cat head -->
+  <rect x="14.3" y="8.5" width="6.6" height="7" rx="2.2" fill="#B9BCC2" stroke="#8A8E96" stroke-width="0.8"/>
+  <circle cx="16.4" cy="11.4" r="0.7" fill="#1A1A1A"/>
+  <circle cx="19"   cy="11.4" r="0.7" fill="#1A1A1A"/>
+  <circle cx="15.7" cy="13" r="0.8" fill="#FF8FB6"/>
+  <circle cx="19.7" cy="13" r="0.8" fill="#FF8FB6"/>
+  <path d="M17 12.9v0.7M16.2 13.6h1.6" stroke="#5A5E66" stroke-width="0.6" stroke-linecap="round"/>
+  <!-- legs -->
+  <rect x="9.7"  y="16.6" width="1.6" height="2" rx="0.7" fill="#B9BCC2"/>
+  <rect x="13.4" y="16.6" width="1.6" height="2" rx="0.7" fill="#B9BCC2"/>
+</svg>

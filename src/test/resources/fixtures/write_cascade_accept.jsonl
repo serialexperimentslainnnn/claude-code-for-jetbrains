@@ -1,0 +1,16 @@
+{"type":"system","subtype":"init","session_id":"88888888-8888-8888-8888-888888888888","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"assistant","message":{"id":"msg_c1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_c1","name":"Write","input":{"file_path":"a.txt","content":"alpha"}}]}}
+{"type":"control_request","request_id":"fake_c1","request":{"subtype":"can_use_tool","tool_name":"Write","tool_use_id":"toolu_c1","input":{"file_path":"a.txt","content":"alpha"}}}
+{"_sleep_ms":150}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c1","content":"wrote a.txt","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_c2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_c2","name":"Write","input":{"file_path":"b.txt","content":"beta"}}]}}
+{"type":"control_request","request_id":"fake_c2","request":{"subtype":"can_use_tool","tool_name":"Write","tool_use_id":"toolu_c2","input":{"file_path":"b.txt","content":"beta"}}}
+{"_sleep_ms":150}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c2","content":"wrote b.txt","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_c3","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_c3","name":"Write","input":{"file_path":"c.txt","content":"gamma"}}]}}
+{"type":"control_request","request_id":"fake_c3","request":{"subtype":"can_use_tool","tool_name":"Write","tool_use_id":"toolu_c3","input":{"file_path":"c.txt","content":"gamma"}}}
+{"_sleep_ms":150}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c3","content":"wrote c.txt","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_c4","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"All three files written."}]}}
+{"type":"result","subtype":"success","result":"All three files written.","session_id":"88888888-8888-8888-8888-888888888888","num_turns":1}
