@@ -13,6 +13,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.diff.EditSnapshot
+import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.process.ClaudeBinaryLocator
@@ -28,7 +29,10 @@ import dev.lain.claudejb.protocol.ClaudeJson
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.protocol.ContextUsage
 import dev.lain.claudejb.protocol.ControlProtocol
+import dev.lain.claudejb.protocol.DialogResponder
+import dev.lain.claudejb.protocol.ElicitationRequest
 import dev.lain.claudejb.protocol.InitializeResponse
+import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
@@ -74,6 +78,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val controlClient = SessionControlClient(write = ::write)
     private val cards = PermissionCardManager(::firePermissions)
     private val hookBroker = HookBroker()
+    private val hookNarrator = HookActivityNarrator(transcript)
 
     // --- session/runtime state (read by the GUI) ---
     @Volatile var sessionId: String? = null; internal set
@@ -110,6 +115,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var authStatus: AuthStatusInfo? = null; private set
     /** Live reasoning-token estimate from thinking_tokens (running total for the current thinking block). */
     @Volatile var liveThinkingTokens: Int = 0; private set
+    /** Predicted next user prompt (prompt_suggestion), or null when none / cleared. Drives the composer chip. */
+    @Volatile var promptSuggestion: String? = null; private set
     /** Observable map of subagent tasks keyed by task_id (task_started/progress/updated/notification). */
     val subagentTasks: Map<String, TaskProgressInfo> get() = taskTracker.tasks
 
@@ -415,15 +422,22 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         generation++
         // Flush any buffered streaming deltas so partial text isn't lost when the process goes away.
         flushDeltas()
+        // Default-cancel any pending MCP elicitation cards while the process is still alive, so the binary isn't
+        // left waiting on an ElicitResult when the session is torn down.
+        cancelPendingElicitations()
         process?.closeStdin()
         process?.destroy()
         process = null
         turnActive = false
         ready = false
+        // Reset per-turn live state so a stale figure/chip doesn't linger into a resumed session (restart path).
+        liveThinkingTokens = 0
+        promptSuggestion = null
         // Drop the cached env so a settings change to the source script is re-sourced on the next start.
         cachedEnv = null
         controlClient.failAll("process gone")
         taskTracker.clear()
+        hookNarrator.clear()
         edt { cards.clear(); fireState() }
     }
 
@@ -560,7 +574,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             write(ControlProtocol.userMessageWithImages(next.text, next.images))
             turnActive = true
         }
+        promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
+    }
+
+    /** Clears the predicted next-prompt chip (on send / dismiss). Public so the composer can drive it. */
+    fun clearSuggestion() {
+        if (promptSuggestion == null) return
+        promptSuggestion = null
+        edt { fireState() }
     }
 
     fun interrupt() {
@@ -669,6 +691,40 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
         write(ControlProtocol.permissionAllow(requestId, updated))
         systemNotice("Answered Claude's question")
+        firePermissions()
+    }
+
+    /**
+     * Surfaces an MCP `elicitation` (binary -> host) as a non-modal card. The user's Accept/Decline/Cancel (via
+     * [resolveElicitation]) is what writes the ElicitResult. EDT-confined, like every other card operation.
+     */
+    private fun presentElicitation(requestId: String, req: ElicitationRequest) = edt {
+        cards.present(
+            PendingPermission(
+                requestId = requestId,
+                toolName = "elicitation",
+                input = JsonObject(emptyMap()),
+                title = req.displayName?.ifBlank { null } ?: req.title?.ifBlank { null } ?: req.mcpServerName,
+                summary = "",
+                reviewable = false,
+                elicitation = ElicitationCard(
+                    serverName = req.mcpServerName,
+                    message = req.message,
+                    description = req.description?.ifBlank { null },
+                    mode = req.mode,
+                    url = req.url,
+                    fields = parseElicitationFields(req.requestedSchema),
+                ),
+            )
+        )
+        fireAttention(AttentionReason.PERMISSION)
+    }
+
+    /** Invoked by the chat UI when the user resolves an elicitation card. Writes the ElicitResult and clears it. */
+    fun resolveElicitation(requestId: String, action: String, content: JsonObject?) {
+        cards.remove(requestId) ?: return
+        write(ControlProtocol.elicitationResult(requestId, action, content))
+        systemNotice("Elicitation: $action")
         firePermissions()
     }
 
@@ -956,6 +1012,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // restarts near 0 per message, so fold the finished message's tokens into the session total
                 // before the next one overwrites the live counter — otherwise only the last message counts.
                 tokens.foldIntoSession()
+                liveThinkingTokens = 0 // the live reasoning estimate is per thinking block; reset at each boundary
                 reconciler.onMessageBoundary()
             }
 
@@ -1012,6 +1069,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 tokens.foldIntoSession()
                 reconciler.onMessageBoundary()
                 turnActive = false
+                liveThinkingTokens = 0
                 if (event.result.isError) {
                     // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
                     // Always surface something so a failed turn never ends silently.
@@ -1055,6 +1113,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
             is ClaudeEvent.HookCallback -> handleHookCallback(event.requestId, event.request)
+            // request_user_dialog: we render no custom dialog kinds — cancel (the CLI applies the dialog's default)
+            // and leave a transparency note so the user sees the agent asked for one.
+            is ClaudeEvent.UserDialogRequest -> {
+                write(DialogResponder.response(event.requestId))
+                systemNotice(DialogResponder.notice(event.dialogKind))
+            }
+            // elicitation: an MCP server wants user input — surface a non-modal card; the user's choice replies.
+            is ClaudeEvent.Elicitation -> presentElicitation(event.requestId, event.request)
             is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
             is ClaudeEvent.ControlResult -> controlClient.onControlResult(event)
 
@@ -1099,8 +1165,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 edt { fireState() }
             }
 
-            // thinking_tokens → live reasoning estimate (display in E7); EDT for single-threaded counter writes.
-            is ClaudeEvent.ThinkingTokens -> edt { liveThinkingTokens = event.info.estimatedTokens }
+            // thinking_tokens → live reasoning estimate shown in the composer status line. EDT for single-threaded
+            // counter writes; fireState so the status row repaints (thinking_tokens fires far slower than text deltas).
+            is ClaudeEvent.ThinkingTokens -> edt { liveThinkingTokens = event.info.estimatedTokens; fireState() }
 
             is ClaudeEvent.ApiRetry -> {
                 val of = if (event.info.maxRetries > 0) "/${event.info.maxRetries}" else ""
@@ -1110,17 +1177,25 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // commands_changed → REPLACE the cached command list (supportedCommands() never reflects mid-session changes).
             is ClaudeEvent.CommandsChanged -> edt { commands = event.info.commands; fireMetadata() }
 
-            // E3/E10: rich UI for the events below arrives later; for now keep them out of Other (logged + discreet notice).
+            // memory_recall → a collapsible "Recalled N memories" row listing what context influenced the turn.
             is ClaudeEvent.MemoryRecall -> {
-                log.debug("memory_recall mode=${event.info.mode} count=${event.info.memories.size}")
-                if (event.info.memories.isNotEmpty()) systemNotice("Recalled ${event.info.memories.size} memory item(s)")
+                if (event.info.memories.isNotEmpty()) edt {
+                    transcript.add(
+                        Speaker.MEMORY,
+                        MemoryRecallFormatter.body(event.info),
+                        meta = MemoryRecallFormatter.summary(event.info),
+                    )
+                }
             }
+            // prompt_suggestion → the predicted next prompt, surfaced as a clickable composer chip (see SuggestionStripPanel).
             is ClaudeEvent.PromptSuggestion -> {
-                // E7/E9: surface as a clickable composer suggestion. For now just log; not transcript noise.
-                log.debug("prompt_suggestion: ${event.info.suggestion}")
+                promptSuggestion = event.info.suggestion.takeIf { it.isNotBlank() }
+                edt { fireState() }
             }
             is ClaudeEvent.FilesPersisted -> {
-                log.debug("files_persisted ok=${event.info.files.size} failed=${event.info.failed.size}")
+                if (event.info.files.isNotEmpty()) {
+                    systemNotice("Uploaded ${event.info.files.size} file(s): " + event.info.files.joinToString(", ") { it.filename })
+                }
                 if (event.info.failed.isNotEmpty()) systemNotice("Failed to persist ${event.info.failed.size} file(s)")
             }
             is ClaudeEvent.PluginInstall -> {
@@ -1130,19 +1205,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     "failed" -> systemNotice("Plugin install failed${event.info.error?.let { ": $it" } ?: ""}")
                 }
             }
-            // E3: HookBroker will own these (native hook execution/feedback). For now: log only, no transcript noise.
-            is ClaudeEvent.HookStarted -> log.debug("hook_started ${event.info.hookEvent}/${event.info.hookName}")
-            is ClaudeEvent.HookProgress -> log.debug("hook_progress ${event.info.hookName}")
-            is ClaudeEvent.HookResponse -> {
-                log.debug("hook_response ${event.info.hookName} outcome=${event.info.outcome}")
-                if (event.info.outcome == "error") systemNotice("Hook ${event.info.hookName} failed")
-            }
-            // tool_progress / tool_use_summary: E10 will render heartbeats/summaries on tool cards. Log for now.
+            // hook_started/progress/response → one evolving "⚙ Hook …" transcript row per hook (HookActivityNarrator).
+            is ClaudeEvent.HookStarted -> edt { hookNarrator.onStarted(event.info) }
+            is ClaudeEvent.HookProgress -> edt { hookNarrator.onProgress(event.info) }
+            is ClaudeEvent.HookResponse -> edt { hookNarrator.onResponse(event.info) }
+            // tool_progress → RUNNING (animated box) + elapsed time (the protocol carries no completion %).
             is ClaudeEvent.ToolProgress -> edt {
-                // Heartbeat: the tool is actively executing → RUNNING (animated box) + elapsed time (no % exists).
                 transcript.setToolState(event.info.toolUseId, ToolState.RUNNING, event.info.elapsedTimeSeconds)
             }
-            is ClaudeEvent.ToolUseSummary -> log.debug("tool_use_summary: ${event.info.summary}")
+            // tool_use_summary → a quiet dim note summarizing the preceding tool calls.
+            is ClaudeEvent.ToolUseSummary -> edt {
+                if (event.info.summary.isNotBlank()) transcript.add(Speaker.SYSTEM, "↳ ${event.info.summary}")
+            }
             // mirror_error → the binary lost transcript data; warn the user (their session file may be incomplete).
             is ClaudeEvent.MirrorError -> {
                 log.warn("mirror_error: ${event.info.error}")
@@ -1165,8 +1239,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         edt {
             turnActive = false
             ready = false
+            liveThinkingTokens = 0
+            promptSuggestion = null
             cards.clear()
             taskTracker.clear()
+            hookNarrator.clear()
             if (exitCode != 0) {
                 transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
                 // The user may not have this tab focused; also raise a notification so the failure isn't missed.
@@ -1184,6 +1261,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // -----------------------------------------------------------------------
 
     private fun write(line: String) = process?.writeLine(line)
+
+    /** Answers any pending elicitation cards with {action:"cancel"} (called during teardown, process still alive). */
+    private fun cancelPendingElicitations() {
+        runCatching {
+            cards.all().filter { it.elicitation != null }.forEach {
+                write(ControlProtocol.elicitationResult(it.requestId, "cancel"))
+            }
+        }
+    }
 
     /**
      * Answers a `hook_callback` control_request: [HookBroker] (pure) parses the frame, decides, and builds the exact

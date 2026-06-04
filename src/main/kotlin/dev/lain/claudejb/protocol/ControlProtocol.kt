@@ -250,4 +250,25 @@ object ControlProtocol {
             put("message", message)
             put("interrupt", interrupt)
         })
+
+    /**
+     * request_user_dialog reply. The host implements no custom dialog kinds, so it cancels — the CLI then
+     * applies the dialog's own default. (UserDialogResult = {behavior:"cancelled"}.)
+     */
+    fun userDialogCancelled(requestId: String): String =
+        success(requestId, buildJsonObject { put("behavior", "cancelled") })
+
+    /** request_user_dialog completed with a host-produced [result] (UserDialogResult = {behavior:"completed",result}). */
+    fun userDialogCompleted(requestId: String, result: JsonObject): String =
+        success(requestId, buildJsonObject {
+            put("behavior", "completed")
+            put("result", result)
+        })
+
+    /** elicitation reply (ElicitResult). [action] ∈ accept|decline|cancel; [content] is only meaningful for accept. */
+    fun elicitationResult(requestId: String, action: String, content: JsonObject? = null): String =
+        success(requestId, buildJsonObject {
+            put("action", action)
+            if (content != null) put("content", content)
+        })
 }

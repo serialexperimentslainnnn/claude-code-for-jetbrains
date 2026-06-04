@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "3.2.1"
+version = "3.3.0"
 
 repositories {
     mavenCentral()
@@ -97,11 +97,45 @@ tasks {
         jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
     }
     test {
-        useJUnitPlatform()
+        // Exclude the live drift check: it downloads the latest SDK from npm and spawns the real binary,
+        // so it must not run in the default suite. It lives in the `checkDrift` task below. (excludeTags only
+        // affects JUnit5/jupiter discovery — the JUnit3 vintage headless tests carry no tags and still run.)
+        useJUnitPlatform { excludeTags("driftLive") }
         // Runs the whole non-UI pyramid: unit (jupiter) + headless/integration (BasePlatformTestCase via the
         // vintage engine). The IntelliJ Platform Gradle plugin only instruments ITS `test` task with the
         // platform runtime, so headless tests must run here rather than in a hand-rolled Test task.
         systemProperty("claudejb.fakeClaude", rootProject.file("bin/fake-claude").absolutePath)
+    }
+
+    // On-demand protocol drift watcher (NOT wired into `check`). Downloads the latest published SDK and
+    // probes the locally-installed (auto-updated) `claude` binary, then prints an agent-consumable report
+    // and fails on real surface drift. Runs only the `driftLive`-tagged DriftLiveCheck against the test
+    // classpath (the pure extraction/diff logic is covered offline by DriftDetectorTest in the normal suite).
+    //   ./gradlew checkDrift                          # uses ~/.local/bin/claude
+    //   ./gradlew checkDrift -PclaudeBinary=/path     # or CLAUDE_BINARY env var
+    val checkDrift by registering(Test::class) {
+        description = "Download latest SDK + probe the installed binary; report protocol drift (on-demand)."
+        group = "verification"
+        // Only the jupiter engine: the vintage engine would try to DISCOVER (instantiate) the JUnit3
+        // headless BasePlatformTestCase classes, which aren't on this task's classpath (only the plugin's
+        // own `test` task gets the platform runtime) — that fails before tag filtering even applies.
+        useJUnitPlatform { includeTags("driftLive"); includeEngines("junit-jupiter") }
+        // Belt-and-suspenders: restrict discovery to the drift package.
+        filter { includeTestsMatching("dev.lain.claudejb.drift.*") }
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = sourceSets.test.get().runtimeClasspath
+        // Always re-run (it polls the network + binary); never serve a cached result.
+        outputs.upToDateWhen { false }
+        val binaryPath = (providers.gradleProperty("claudeBinary").orNull
+            ?: providers.environmentVariable("CLAUDE_BINARY").orNull
+            ?: "${System.getProperty("user.home")}/.local/bin/claude")
+        systemProperty("claudejb.drift.projectDir", rootProject.projectDir.absolutePath)
+        systemProperty("claudejb.drift.sdkDir",
+            rootProject.file("node_modules/@anthropic-ai/claude-agent-sdk").absolutePath)
+        systemProperty("claudejb.drift.binary", binaryPath)
+        systemProperty("claudejb.drift.baseline", rootProject.file("scripts/drift-baseline.properties").absolutePath)
+        // Surface the report (println from the test) on the console.
+        testLogging { showStandardStreams = true }
     }
 
     // Convenience alias: run only the heavy IntelliJ-fixture packages (headless + fake-claude integration).

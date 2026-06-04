@@ -3,7 +3,7 @@ package dev.lain.claudejb.session
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Who produced a transcript entry; drives styling in the chat panel. */
-enum class Speaker { USER, ASSISTANT, THINKING, TOOL, TOOL_OUTPUT, SYSTEM, ERROR }
+enum class Speaker { USER, ASSISTANT, THINKING, TOOL, TOOL_OUTPUT, SYSTEM, ERROR, MEMORY }
 
 /**
  * Lifecycle of a tool call, reflected on its box: [LOADING] just dispatched (light blue), [RUNNING] actively

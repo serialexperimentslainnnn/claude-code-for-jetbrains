@@ -55,7 +55,9 @@ class SubPanelsHeadlessTest : BasePlatformTestCase() {
         onViewDiff: (String) -> Unit = {},
         onAlwaysAllow: (String) -> Unit = {},
         onAnswer: (String, Map<String, String>) -> Unit = { _, _ -> },
-    ) = PermissionTrayPanel(onAccept, onReject, onViewDiff, onAlwaysAllow, onAnswer)
+        onElicit: (String, String, JsonObject?) -> Unit = { _, _, _ -> },
+        onOpenLink: (String) -> Unit = {},
+    ) = PermissionTrayPanel(onAccept, onReject, onViewDiff, onAlwaysAllow, onAnswer, onElicit, onOpenLink)
 
     private fun permission(id: String, tool: String = "Bash"): PendingPermission =
         PendingPermission(
