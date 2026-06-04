@@ -1,8 +1,10 @@
 package dev.lain.claudejb.ui
 
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.JBFont
@@ -12,6 +14,9 @@ import dev.lain.claudejb.diff.Hunk
 import dev.lain.claudejb.diff.HunkSelection
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.protocol.AskOption
+import dev.lain.claudejb.protocol.ElicitField
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Cursor
@@ -53,6 +58,10 @@ class PermissionTrayPanel(
     private val onAlwaysAllow: (toolName: String) -> Unit,
     /** Answer an AskUserQuestion: question → comma-joined chosen labels. */
     private val onAnswer: (requestId: String, answers: Map<String, String>) -> Unit,
+    /** Resolve an MCP elicitation: action ∈ accept|decline|cancel; content is non-null only for an accepted form. */
+    private val onElicit: (requestId: String, action: String, content: JsonObject?) -> Unit,
+    /** Open an elicitation's URL (URL-mode, e.g. an OAuth link) in the browser. */
+    private val onOpenLink: (url: String) -> Unit,
 ) : JPanel(VerticalLayout(JBUIScale.scale(6))) {
 
     init {
@@ -69,6 +78,7 @@ class PermissionTrayPanel(
             add(
                 when {
                     request.isPlan -> planCard(request)
+                    request.elicitation != null -> elicitationCard(request)
                     request.questions != null -> questionCard(request)
                     else -> permissionCard(request)
                 }
@@ -411,6 +421,82 @@ class PermissionTrayPanel(
         }
         return row to refresh
     }
+
+    // -----------------------------------------------------------------------
+    // Elicitation card (MCP user input)
+    // -----------------------------------------------------------------------
+
+    /**
+     * MCP elicitation card: an MCP server asks the user for input. URL mode shows an "Open link" action (e.g. an
+     * OAuth flow) plus Accept/Cancel; form mode renders a labeled input per primitive schema field and an Accept
+     * that returns the collected `content`, plus Decline; a URL-less / fieldless request degrades to a plain
+     * Accept/Decline. Every action routes through [onElicit] (and [onOpenLink]) keyed by requestId — the host owns
+     * resolution, exactly like the question/plan cards.
+     */
+    private fun elicitationCard(request: PendingPermission): JComponent {
+        val e = request.elicitation ?: return permissionCard(request)
+        val body = JPanel(VerticalLayout(JBUIScale.scale(4))).apply { isOpaque = false }
+        val title = request.title.ifBlank { e.serverName.ifBlank { "Input requested" } }
+        body.add(JBLabel(title).apply { foreground = ChatTheme.TEXT; font = ChatTheme.small.asBold() })
+        if (e.message.isNotBlank()) body.add(wrappingArea(e.message, ChatTheme.small, ChatTheme.TEXT))
+        e.description?.takeIf { it.isNotBlank() }?.let { body.add(wrappingArea(it, ChatTheme.small, ChatTheme.TEXT_DIM)) }
+
+        val buttons = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply { isOpaque = false }
+        when {
+            // Only offer the link button for an http/https URL — an MCP server is untrusted, so a file:/jar:/etc.
+            // URL must never reach the browser launcher (mirrors the link-scheme allow-list elsewhere in the UI).
+            e.mode == "url" && isBrowsableUrl(e.url) -> {
+                val url = e.url!!
+                body.add(linkButton("Open link") { onOpenLink(url) })
+                buttons.add(linkButton("Cancel") { onElicit(request.requestId, "cancel", null) })
+                buttons.add(RoundedActionButton("Accept") { onElicit(request.requestId, "accept", null) })
+            }
+            e.fields.isNotEmpty() -> {
+                val inputs = LinkedHashMap<ElicitField, JComponent>()
+                for (field in e.fields) {
+                    val label = (field.title?.takeIf { it.isNotBlank() } ?: field.name) + if (field.required) " *" else ""
+                    body.add(JBLabel(label).apply {
+                        foreground = ChatTheme.TEXT_DIM
+                        font = ChatTheme.small
+                        border = JBUI.Borders.emptyTop(4)
+                    })
+                    val input: JComponent = if (field.type == "boolean") JBCheckBox() else JBTextField()
+                    inputs[field] = input
+                    body.add(input)
+                }
+                buttons.add(linkButton("Decline") { onElicit(request.requestId, "decline", null) })
+                buttons.add(RoundedActionButton("Accept") { onElicit(request.requestId, "accept", buildElicitContent(inputs)) })
+            }
+            else -> {
+                buttons.add(linkButton("Decline") { onElicit(request.requestId, "decline", null) })
+                buttons.add(RoundedActionButton("Accept") { onElicit(request.requestId, "accept", null) })
+            }
+        }
+
+        return ChatTheme.RoundedPanel(12, ChatTheme.CARD_BG, ChatTheme.ACCENT).apply {
+            layout = BorderLayout(JBUIScale.scale(8), JBUIScale.scale(6))
+            border = JBUI.Borders.empty(10, 12)
+            add(body, BorderLayout.CENTER)
+            add(buttons, BorderLayout.SOUTH)
+        }
+    }
+
+    /** True only for an http/https URL — an untrusted MCP server must not get a file:/jar:/javascript: link opened. */
+    private fun isBrowsableUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        return runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull() in setOf("http", "https")
+    }
+
+    /** Reads the form inputs into an ElicitResult `content` object; blank number/integer fields are omitted. */
+    private fun buildElicitContent(inputs: Map<ElicitField, JComponent>): JsonObject =
+        buildJsonObject {
+            for ((field, comp) in inputs) when (field.type) {
+                "boolean" -> put(field.name, (comp as JBCheckBox).isSelected)
+                "number" -> (comp as JBTextField).text.trim().toDoubleOrNull()?.let { put(field.name, it) }
+                "integer" -> (comp as JBTextField).text.trim().toLongOrNull()?.let { put(field.name, it) }
+                else -> put(field.name, (comp as JBTextField).text)
+            }
+        }
 
     // -----------------------------------------------------------------------
     // small shared controls

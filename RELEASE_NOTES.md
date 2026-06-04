@@ -1,3 +1,19 @@
+## v3.3.0 — 2026-06-04
+
+**The whole binary→host protocol surface, mapped into the UI — plus native MCP elicitation.**
+
+This release closes the loop on the native protocol: **every event the `claude` binary sends the host is now parsed *and* used** — answered when it's a request, surfaced in the chat when it carries information. The two control requests that used to fail with an error are handled correctly, and a batch of events that were parsed-but-invisible are now on screen. Under the hood it's all delegated to small single-responsibility collaborators (the chat session stays a thin orchestrator), and a new `./gradlew checkDrift` keeps the native models in step as the binary and SDK keep moving.
+
+- **MCP elicitation, natively.** When an MCP server needs your input, you now get an **inline card** (never a blocking dialog): a URL flow shows an **Open link** + Accept/Cancel; a form renders a labeled field per schema property and sends back what you type on Accept. URL links are restricted to `http`/`https` — an untrusted server can't get a `file:`/`javascript:` link opened.
+- **Predicted next prompt.** A `💡` chip above the composer offers the binary's predicted follow-up; click to drop it into the input (you still review and send it yourself).
+- **See the model think.** The status line shows a live reasoning-token estimate mid-turn.
+- **Hooks, visible.** Each hook the binary runs appears as a single transcript row that updates from "running…" to ✓/✗ — no more silent hooks.
+- **Memory recall, surfaced.** A collapsible "Recalled N memories" row shows exactly what context influenced a turn.
+- **Smaller touches.** Tool-use summaries render as quiet notes, and file uploads now confirm success, not just failures. `request_user_dialog` requests are answered correctly instead of erroring.
+- **Drift detection.** A new `./gradlew checkDrift` keeps the native protocol models in sync as the `claude` binary and its SDK evolve.
+
+---
+
 ## v3.2.1 — 2026-06-04
 
 **Pick your model provider — Anthropic or DeepSeek — without ever leaking your Anthropic credentials.**

@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui
 
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -95,9 +96,22 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
                 ?.let { session.resolvePermission(it.requestId, allow = true) }
         },
         onAnswer = { id, answers -> session.resolveQuestion(id, answers) },
+        onElicit = { id, action, content -> session.resolveElicitation(id, action, content) },
+        // Defence in depth: only ever launch an http/https URL (the tray already filters, but an MCP server is
+        // untrusted, so the actual BrowserUtil call is gated here too — never open file:/jar:/javascript: links).
+        onOpenLink = { url ->
+            val scheme = runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull()
+            if (scheme == "http" || scheme == "https") BrowserUtil.browse(url)
+        },
     )
 
     private val queueStrip = QueueStripPanel { session.removeQueued(it) }
+
+    // Predicted next-prompt chip (prompt_suggestion): clicking fills the input (never auto-sends); ✕ dismisses.
+    private val suggestionStrip = SuggestionStripPanel(
+        onFill = { fillSuggestion(it) },
+        onDismiss = { session.clearSuggestion() },
+    )
 
     // Pending attachments pinned to the next turn (files / selections / pasted-or-dropped images).
     // Clicking a chip body opens that attachment in the editor (project-confined).
@@ -335,6 +349,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
             add(permissionTray)
             add(subagentTasks)
             add(queueStrip)
+            add(suggestionStrip)
             add(attachmentStrip)
             add(card)
         }
@@ -539,6 +554,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         if (text.isBlank() && attachments.isEmpty()) return
         input.text = ""
         attachmentStrip.clear()
+        session.clearSuggestion() // the user is sending now; drop any stale predicted prompt
         // /login can't run in the TTY-less stream-json session (the binary answers "not available on this
         // environment"). Intercept it client-side and run `claude auth login` natively under a PTY.
         if (attachments.isEmpty() && text.trim().equals("/login", ignoreCase = true)) {
@@ -668,6 +684,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         usage.refresh()
         subagentTasks.update(session.subagentTasks.values.toList())
         queueStrip.update(session.queuedPrompts())
+        suggestionStrip.update(session.promptSuggestion)
         // The category is conveyed by each chip's glyph, so the label carries only the live value (full name in the
         // tooltip). Pre-init (or a fixture that doesn't report one) leaves model null; default resolves to Opus 4.8.
         val providerSel = session.provider
@@ -703,10 +720,19 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
      */
     private fun updateStatus() {
         if (session.turnActive) {
-            statusLabel.text = "$thinkingWord…   (Esc to interrupt)"
+            val reasoning = dev.lain.claudejb.session.StatusLineFormatter.thinkingSuffix(session.liveThinkingTokens)
+            val mid = if (reasoning.isNotEmpty()) " · $reasoning" else ""
+            statusLabel.text = "$thinkingWord…$mid   (Esc to interrupt)"
         } else {
             statusLabel.text = ""
         }
+    }
+
+    /** Fills the composer with a predicted prompt (the user reviews/edits — never auto-sent), then focuses it. */
+    private fun fillSuggestion(text: String) {
+        input.text = text
+        input.caretPosition = input.document.length
+        focusInput()
     }
 
     private fun shortModel(value: String): String {

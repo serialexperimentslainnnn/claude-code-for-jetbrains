@@ -71,6 +71,7 @@ sealed class MessageRow(val entryId: Long) : JPanel(BorderLayout()) {
             Speaker.TOOL_OUTPUT -> ToolOutputRow(entry.id)
             Speaker.SYSTEM -> SystemRow(entry.id)
             Speaker.ERROR -> ErrorRow(entry.id)
+            Speaker.MEMORY -> MemoryRow(entry.id)
         }.also { it.update(entry.text, entry.meta) }
     }
 }
@@ -167,6 +168,55 @@ private class ThinkingRow(id: Long) : MessageRow(id) {
     }
 
     override fun update(text: String, meta: String?) = content.setMarkdown(text)
+}
+
+/**
+ * A memory_recall row: a quiet, collapsible "Recalled N memories" disclosure (collapsed by default) whose body
+ * is the markdown list of recalled memories. Its own toggle — unlike [ThinkingRow] it is NOT driven by Ctrl+O,
+ * so hiding reasoning leaves the recall list where the user put it. [meta] carries the header summary.
+ */
+private class MemoryRow(id: Long) : MessageRow(id) {
+    private val content = HtmlContent(dim = true)
+    private val toggle = JBLabel().apply {
+        foreground = ChatTheme.TEXT_DIM
+        font = ChatTheme.small
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+    }
+    private val body = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        border = JBUI.Borders.empty(4, 8, 0, 0)
+        add(content, BorderLayout.CENTER)
+        isVisible = false
+    }
+    private var expanded = false
+    private var header = "Recalled memories"
+
+    init {
+        syncToggle()
+        toggle.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                expanded = !expanded
+                body.isVisible = expanded
+                syncToggle()
+                revalidate()
+            }
+        })
+        add(JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(toggle, BorderLayout.NORTH)
+            add(body, BorderLayout.CENTER)
+        }, BorderLayout.CENTER)
+    }
+
+    private fun syncToggle() {
+        toggle.text = (if (expanded) "▾ " else "▸ ") + "🧠 $header"
+    }
+
+    override fun update(text: String, meta: String?) {
+        header = meta?.takeIf { it.isNotBlank() } ?: "Recalled memories"
+        syncToggle()
+        content.setMarkdown(text)
+    }
 }
 
 class ToolRow(id: Long) : MessageRow(id) {
