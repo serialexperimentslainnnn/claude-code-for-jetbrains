@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.project.Project
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.settings.Provider
 
 /**
  * Builds the gear menu that exposes Claude Code's runtime options graphically: model, effort,
@@ -16,11 +17,22 @@ object OptionMenus {
 
     fun buildOptionsGroup(session: ClaudeSession): DefaultActionGroup {
         val root = DefaultActionGroup("Claude Options", true)
+        root.add(providerGroup(session))
         root.add(modelGroup(session))
         root.add(effortGroup(session))
         root.add(permissionModeGroup(session))
         root.add(thinkingGroup(session))
         return root
+    }
+
+    /**
+     * API provider picker. Selecting a third-party provider with no stored key prompts to configure it (in
+     * Settings) and does NOT switch/restart — the key gating lives in [ClaudeSession.changeProvider].
+     */
+    fun providerGroup(session: ClaudeSession) = DefaultActionGroup("Provider (applies on restart)", true).apply {
+        Provider.entries.forEach { p ->
+            add(ProviderChoice(p.label, ChatTheme.providerIcon(p), { session.provider == p }) { session.changeProvider(p) })
+        }
     }
 
     fun modelGroup(session: ClaudeSession) = DefaultActionGroup("Model", true).apply {
@@ -79,6 +91,25 @@ object OptionMenus {
         override fun actionPerformed(e: AnActionEvent) = chosen()
         override fun update(e: AnActionEvent) {
             e.presentation.icon = if (selected()) AllIcons.Actions.Checked else null
+        }
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+    }
+
+    /**
+     * A provider menu item that always shows the provider's **brand logo** as its icon (so each option reads
+     * as its provider), and marks the active one with a trailing check in the label (since the icon slot is
+     * taken by the logo, not the usual checkmark).
+     */
+    private class ProviderChoice(
+        private val label: String,
+        private val brand: javax.swing.Icon,
+        private val selected: () -> Boolean,
+        private val chosen: () -> Unit,
+    ) : AnAction(label, null, brand) {
+        override fun actionPerformed(e: AnActionEvent) = chosen()
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = brand
+            e.presentation.text = if (selected()) "$label  ✓" else label
         }
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
     }

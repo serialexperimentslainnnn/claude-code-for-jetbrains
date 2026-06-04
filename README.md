@@ -6,27 +6,57 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 ## Features
 
+### Chat & transcript
 - **Streaming chat** — token-by-token rendering in a native Swing transcript, multi-chat tabs
-- **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call
+- **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call. Tool cards show live state by colour: sky-blue while in flight (pulsing while working), green when finished, with elapsed time.
 - **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
+- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
+- **Output follow toggle** — pin to the streaming bottom, or scroll up to read history mid-stream without losing your place
+- **Markdown rendering** — bold, inline code, syntax-highlighted code blocks, tables, strikethrough, GFM task lists, nested lists
+
+### Permissions & diff review
 - **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
 - **Persistent diff + hunk-by-hunk** — re-open any edit's diff from its transcript card ("View diff"), and accept only selected hunks on the permission card (the binary writes just that subset)
-- **"Explain with Claude"** — editor right-click action sends the selection to chat; `path:line` references in replies are clickable (jump to file/line)
 - **"Always allow" per tool** — skip a tool's prompt for the rest of the project (revocable in Settings); reviewable writes stay confined to the project root
-- **Session notifications + tab badge** — a background session needing attention (permission, finished turn, error) notifies you and badges its tab
+- **Diff History tab + rollback** — lists every Edit/Write in the session with a `+a/-b` summary, **View diff** and per-edit **Revert**, plus a **Roll back all changes** action. Reverting a file-creating Write deletes the file; reverting an edit restores the prior contents.
+
+### Editor integration
+- **"Explain with Claude"** — editor right-click action sends the selection to chat; `path:line` references in replies are clickable (jump to file/line)
+- **Rich IDE attachments** — attach the current file / selection / clipboard image, drag & drop or paste (Ctrl/Cmd+V) images straight into the composer, pick files and directories from a native chooser, or select from your open and recently-opened files. Chips show the real file-type icon and are clickable to open.
+- **`jb://open` links** — file paths in replies (with or without line numbers) become clickable links, project-confined
+
+### Sessions
 - **Session history** — reads the `claude` binary's own session files (the source of truth): "Open Previous Session…" lists the project's past chats by their real title, and on startup the tabs you had open (or your most recent session) are reopened and re-attached via `--resume`. The plugin stores no transcripts of its own — only which tabs were open (in `workspace.xml`).
+- **Session management** — rename, fork, and delete past sessions (binary session files remain the source of truth)
+- **Session notifications + tab badge** — a background session needing attention (permission, finished turn, error) notifies you and badges its tab
+
+### Model & runtime controls
 - **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
 - **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
-- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
-- **`AskUserQuestion` support** — multi-select option cards rendered natively, with full-width wrapped labels/descriptions/preview
-- **Quota bar** — subscription usage % shown when near the usage limit, with reset countdown
+- **Provider selector (Anthropic / DeepSeek)** — switch between the official Anthropic endpoint (your subscription/login) and DeepSeek's Anthropic-compatible API (`/anthropic`). Each provider's API key is isolated in the IDE password safe and credentials are never reused across providers. Verified tool-call compatible with DeepSeek V4 Pro.
+- **Advanced launch options** — max turns, max budget (USD), fallback model, extra `--add-dir` roots, beta flags, strict MCP config
+- **Plan mode** — ExitPlanMode plan cards with decision reasons and blocked-path context
+- **Native hooks** — `hook_callback` answered host-side (the real tool gate is still `can_use_tool`)
+
+### Usage & diagnostics
+- **Graphical session consumption** — context window meter, authoritative cumulative token breakdown (input / cache write / cache read / output, from the binary's `get_session_cost`), and a unified quota bar with utilization %, reset countdown, and absolute reset hour
 - **Live token counter** — per-message output tokens shown in the status line while the agent thinks
-- **Markdown rendering** — bold, inline code, code blocks, tables
+- **Subagent live strip** — one card per in-flight Task subagent with running tokens / tool-uses / elapsed time and a Stop button
+- **Account & diagnostics** — Account info, Binary Version, Effective Settings, and an interactive MCP-runtime dialog in the gear menu
+
+### Login & setup
+- **Native `/login`** — PTY-based OAuth flow (pty4j): the plugin opens your browser, collects the code in the IDE, and signs you in — no terminal tab needed. Works on the reworked terminal (2025.2+) and classic terminal alike.
+- **`AskUserQuestion` support** — multi-select option cards rendered natively, with full-width wrapped labels/descriptions/preview
+
+### Look & feel
 - **IDE-themed UI** — surfaces, text, and borders follow the active IDE theme (light/dark)
+- **Native visual identity** — custom icons on every tool call (bash, read, edit, search, web, task…), the attach button, and chips, with the Claude coral as the accent
+- **Two-row composer** — model · mode · effort · thinking pills (each with its own icon and hover glow) on top; toggles + attach + neon Play/Stop on the bottom. Coral focus ring while you type, editor-font prompt.
+- **🌈 Vibe Coder Mode** — opt-in toggle that animates the coral accent through the rainbow and swaps the avatar for a Nyan Cat. Purely for fun; off by default.
 
 ## Requirements
 
-- **JetBrains IDE** 2024.3 – 2025.1.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
+- **JetBrains IDE** 2025.1 – 2026.2.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
 - **`claude` CLI** installed and accessible on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
   - If it's in a custom location, set the executable path (and, if needed, environment variables) in **Settings → Tools → Claude Code**
@@ -81,7 +111,7 @@ Requires JDK 21. The Gradle wrapper is included.
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
 ```
 
-Output: `build/distributions/claude-code-native-2.2.0.zip`
+Output: `build/distributions/claude-code-native-3.2.1.zip`
 
 ```bash
 ./gradlew runIde        # sandbox IDE with the plugin loaded

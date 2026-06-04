@@ -1,3 +1,17 @@
+## v3.2.1 — 2026-06-04
+
+**Pick your model provider — Anthropic or DeepSeek — without ever leaking your Anthropic credentials.**
+
+- **Provider selector.** A new `Provider:` option (in Settings and as a composer chip, with each provider's brand logo) lets you point the `claude` binary at **Anthropic** (your normal subscription/login) or **DeepSeek** (its Anthropic-compatible endpoint). Switching restarts the session.
+- **DeepSeek needs its own key — and that's enforced.** A non-Anthropic provider requires its **own issued key**, kept **isolated per provider in the IDE password safe** (never in a project file). Pick DeepSeek with no key and the plugin asks you to configure it first instead of switching.
+- **Your Anthropic credentials are never used for another provider.** The endpoint and key are set together as a pair, the binary won't even load your Anthropic OAuth when a provider key is present, and the form refuses an Anthropic key (`sk-ant-…`) in the DeepSeek slot. `/login` only applies to Anthropic.
+
+This release also fixes a pesky reasoning-regression: new "Thought process" blocks now respect the Ctrl+O toggle instead of always showing expanded — toggle reasoning off once and it stays off for every subsequent turn.
+
+It's also a hands-on way to see what these "Anthropic-compatible" Chinese endpoints actually do with Claude Code's tool calls.
+
+---
+
 ## v3.2.0 — 2026-06-04
 
 **Composer polish, smarter links, real rollback — and a Vibe Coder Mode nobody asked for.**
