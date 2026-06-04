@@ -5,6 +5,7 @@ import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBTextArea
@@ -20,6 +21,7 @@ import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.Provider
 import java.awt.GridLayout
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
@@ -46,6 +48,20 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val thinkingCheck = JBCheckBox("Extended thinking (adaptive — the model decides depth)")
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
     private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
+
+    private val providerCombo = JComboBox(Provider.entries.toTypedArray()).apply {
+        renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+            ): java.awt.Component = super.getListCellRendererComponent(
+                list, (value as? Provider)?.label ?: value, index, isSelected, cellHasFocus,
+            )
+        }
+        addActionListener { onProviderSelectionChanged() }
+    }
+    private val apiKeyField = JBPasswordField().apply {
+        emptyText.text = "Required for non-Anthropic providers — paste the provider's own issued key"
+    }
     private val claudePathField = JBTextField().apply {
         emptyText.text = "Auto-detect (leave blank unless 'claude' is in a custom location)"
     }
@@ -133,6 +149,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addComponent(partialCheck)
             .addComponent(restoreChatsCheck)
             .addSeparator()
+            .addComponent(sectionLabel("API provider"))
+            .addLabeledComponent("Provider:", providerCombo)
+            .addLabeledComponent("API key:", apiKeyField)
+            .addComponent(providerWarningLabel())
+            .addSeparator()
             .addLabeledComponent("claude executable path:", claudePathField)
             .addLabeledComponent("node executable path:", nodePathField)
             .addLabeledComponent("Source script:", sourceScriptField)
@@ -204,6 +225,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources) ||
             csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools) ||
             csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools) ||
+            selectedProvider().id != s.provider ||
+            (selectedProvider().requiresApiKey &&
+                String(apiKeyField.password).trim() != settings.getProviderApiKey(selectedProvider())) ||
             claudePathField.text.trim() != s.claudePath ||
             nodePathField.text.trim() != s.nodePath ||
             sourceScriptField.text.trim() != s.sourceScript ||
@@ -225,7 +249,26 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         if (!ClaudeSession.isValidMcpConfig(customMcpArea.text.trim())) {
             throw ConfigurationException("Custom MCP servers must be a JSON object mapping each server name to its config.")
         }
+        val provider = selectedProvider()
+        val apiKey = String(apiKeyField.password).trim()
+        // A third-party provider MUST carry its own key — without it we'd emit nothing and the binary would
+        // fall back to your Anthropic login (which doesn't work there). And the key must NOT be an Anthropic
+        // key: your Anthropic credentials are never used for another provider.
+        if (provider.requiresApiKey && apiKey.isEmpty()) {
+            throw ConfigurationException(
+                "${provider.label} requires its own API key. Enter the key, or switch the provider back to Anthropic."
+            )
+        }
+        if (provider.requiresApiKey && Provider.looksLikeAnthropicKey(apiKey)) {
+            throw ConfigurationException(
+                "That looks like an Anthropic key (sk-ant-…). ${provider.label} needs a ${provider.label}-issued key — " +
+                    "your Anthropic credentials are never used for another provider."
+            )
+        }
         val s = settings.state
+        s.provider = provider.id
+        // Save only the selected provider's own key (Anthropic has none; leave other providers' keys intact).
+        if (provider.requiresApiKey) settings.setProviderApiKey(provider, apiKey)
         s.model = modelText()
         s.effort = effortText()
         s.permissionMode = modeText()
@@ -255,6 +298,8 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
     override fun reset() {
         val s = settings.state
+        providerCombo.selectedItem = settings.provider
+        onProviderSelectionChanged()
         modelCombo.selectedItem = s.model
         effortCombo.selectedItem = s.effort
         modeCombo.selectedItem = s.permissionMode
@@ -315,6 +360,20 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         modelListenerSession = null
     }
 
+    private fun selectedProvider(): Provider = providerCombo.selectedItem as? Provider ?: Provider.DEFAULT
+
+    /**
+     * Reflect the selected provider in the API-key field: enabled only for a third-party provider, and loaded
+     * with THAT provider's own isolated stored key (so switching the combo shows each provider's key, and
+     * Anthropic — which needs none — shows an empty, disabled field). Discards unsaved edits to the previously
+     * shown key, which is the intended trade-off for per-provider isolation in a simple form.
+     */
+    private fun onProviderSelectionChanged() {
+        val p = selectedProvider()
+        apiKeyField.isEnabled = p.requiresApiKey
+        apiKeyField.text = if (p.requiresApiKey) settings.getProviderApiKey(p) else ""
+    }
+
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
     private fun effortText() = (effortCombo.selectedItem as? String).orEmpty()
     private fun modeText() = (modeCombo.selectedItem as? String) ?: "default"
@@ -336,6 +395,14 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private fun noteLabel(bodyHtml: String) = JBLabel(
         "<html><body style='width:${FORM_WIDTH}px'>$bodyHtml</body></html>"
     ).apply { font = JBFont.small() }
+
+    private fun providerWarningLabel() = noteLabel(
+        "<b>Anthropic</b> uses the <code>claude</code> binary's own login (subscription/OAuth). A non-Anthropic " +
+        "provider (e.g. <b>DeepSeek</b>) routes to its Anthropic-compatible endpoint and <b>requires its own " +
+        "issued key</b> — your Anthropic credentials are <b>never</b> reused for another provider. The key is " +
+        "stored in the IDE <b>password safe</b> (not in <code>claude-code.xml</code>). Changing the provider " +
+        "restarts the session."
+    )
 
     private fun envVarsWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> these variables are stored <b>in plain text</b> in <code>claude-code.xml</code> " +
