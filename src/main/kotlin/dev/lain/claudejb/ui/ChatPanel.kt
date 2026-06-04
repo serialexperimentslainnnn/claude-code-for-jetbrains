@@ -113,6 +113,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
     // option chips under the prompt — reflect the live session and open their popups on click. Each is a flat
     // capsule (PillChip) carrying a category glyph, so the label can shrink to just the live value (set in
     // refreshState) and the pill lights up with a coral glow on hover.
+    private val providerChip = PillChip { it.popup(OptionMenus.providerGroup(session)) }.apply { icon = ChatTheme.providerIcon(session.provider) }
     private val modelChip = PillChip { it.popup(OptionMenus.modelGroup(session)) }.apply { icon = ChatTheme.iconChipModel }
     private val modeChip = PillChip { it.popup(OptionMenus.permissionModeGroup(session)) }.apply { icon = ChatTheme.iconChipMode }
     private val effortChip = PillChip { it.popup(OptionMenus.effortGroup(session)) }.apply { icon = ChatTheme.iconChipEffort }
@@ -248,7 +249,7 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         // toggles centred, with the Play/Stop button pinned to the right.
         val row1 = JPanel(FlowLayout(FlowLayout.CENTER, JBUIScale.scale(4), 0)).apply {
             isOpaque = false
-            add(modelChip); add(modeChip); add(effortChip); add(thinkingChip)
+            add(providerChip); add(modelChip); add(modeChip); add(effortChip); add(thinkingChip)
         }
         val row2 = JPanel(BorderLayout()).apply {
             isOpaque = false
@@ -669,6 +670,10 @@ class ChatPanel(private val project: Project, val session: ClaudeSession) :
         queueStrip.update(session.queuedPrompts())
         // The category is conveyed by each chip's glyph, so the label carries only the live value (full name in the
         // tooltip). Pre-init (or a fixture that doesn't report one) leaves model null; default resolves to Opus 4.8.
+        val providerSel = session.provider
+        providerChip.text = "${providerSel.label}  ▾"
+        providerChip.toolTipText = "API provider — ${providerSel.label}"
+        providerChip.icon = ChatTheme.providerIcon(providerSel)
         val modelName = session.model?.let { shortModel(it) } ?: "Default · Opus 4.8"
         modelChip.text = "$modelName  ▾"; modelChip.toolTipText = "Model — $modelName"
         val modeName = dev.lain.claudejb.session.PermissionMode.labelFor(session.permissionMode)

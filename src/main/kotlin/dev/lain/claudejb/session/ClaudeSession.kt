@@ -35,6 +35,7 @@ import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.TaskProgressInfo
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.Provider
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -695,6 +696,51 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         fireState()
     }
 
+    /** The active API provider (persisted in settings). Anthropic = native auth; others = own key. */
+    val provider: Provider get() = ClaudeSettings.getInstance(project).provider
+
+    /**
+     * Switch the API provider. The provider's `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` are launch env, so the
+     * change requires a restart (we invalidate the cached env and resume via `--resume`).
+     *
+     * SECURITY: a third-party provider needs its OWN isolated key. If none is stored we do NOT switch and do
+     * NOT restart — we prompt the user to configure it (Settings → password safe). Restarting into a keyless
+     * third-party provider would silently fall back to Anthropic's native auth, which is confusing and not what
+     * the user asked for; and we never reuse Anthropic credentials for another provider.
+     */
+    fun changeProvider(target: Provider) {
+        val settings = ClaudeSettings.getInstance(project)
+        if (target == settings.provider) return
+        if (target.requiresApiKey && settings.getProviderApiKey(target).isBlank()) {
+            notifyConfigureProviderKey(target)
+            return
+        }
+        val wasRunning = isRunning()
+        settings.getState().provider = target.id
+        cachedEnv = null // provider env changed → re-resolve on next start
+        fireState()
+        if (wasRunning) {
+            systemNotice("Provider → ${target.label} — restarting session.")
+            restart(resume = true)
+        }
+    }
+
+    /** Warn that a third-party provider needs its own key and offer to open Settings. No provider switch. */
+    private fun notifyConfigureProviderKey(target: Provider) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(NOTIFICATION_GROUP)
+            .createNotification(
+                "Claude Code",
+                "${target.label} needs its own API key. Configure it in Settings — the provider isn't switched " +
+                    "until a key is set, and your Anthropic credentials are never used for another provider.",
+                NotificationType.WARNING,
+            )
+            .addAction(NotificationAction.createSimple("Configure…") {
+                ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+            })
+            .notify(project)
+    }
+
     /**
      * Extended thinking is a launch flag now (`--thinking`), not a runtime control — the deprecated
      * `set_max_thinking_tokens` no longer surfaces reasoning on current models. So toggling it restarts the
@@ -1189,8 +1235,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             .notify(project)
     }
 
-    /** Offer the login terminal once per auth-failure streak (see [loginPrompted]). EDT-confined. */
+    /** Offer the sign-in once per auth-failure streak (see [loginPrompted]). EDT-confined. */
     private fun maybePromptLogin() {
+        // Only the Anthropic provider uses OAuth login. On a third-party provider an auth failure means a
+        // wrong/missing API key, not a missing login — don't offer the Anthropic sign-in there.
+        if (ClaudeSettings.getInstance(project).provider != Provider.ANTHROPIC) return
         if (loginPrompted) return
         loginPrompted = true
         notifyLoginNeeded()
@@ -1219,6 +1268,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     fun startLogin() {
         val settings = ClaudeSettings.getInstance(project)
+        // /login is the Anthropic OAuth flow — only meaningful for the official Anthropic provider. For a
+        // third-party provider, auth is its own API key (configured in Settings), not an OAuth login.
+        if (settings.provider != Provider.ANTHROPIC) {
+            notifyInfo("Sign-in is only for the Anthropic provider. You're on ${settings.provider.label} — set its API key in Settings instead.")
+            return
+        }
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
         // pty4j replaces the env wholesale, so seed it with the IDE's environment, layer the user's
         // script/overrides, and force a TERM so the binary's TUI renders.

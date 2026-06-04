@@ -6,6 +6,10 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.intellij.credentialStore.CredentialAttributes
+import com.intellij.credentialStore.Credentials
+import com.intellij.credentialStore.generateServiceName
+import com.intellij.ide.passwordSafe.PasswordSafe
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.util.xmlb.XmlSerializerUtil
 import dev.lain.claudejb.process.EnvScriptLoader
@@ -42,6 +46,8 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         @JvmField var customMcpServers: String = ""
         @JvmField var claudePath: String = ""
         @JvmField var nodePath: String = ""
+        /** API provider id (see [Provider]): "anthropic" (default, native auth) or a compatible endpoint. */
+        @JvmField var provider: String = Provider.DEFAULT.id
         @JvmField var envVars: String = ""
         @JvmField var sourceScript: String = ""
         /** Comma-separated tool names the user chose to "Always allow" (auto-approve without a card). */
@@ -78,6 +84,37 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
     val nodePath: String get() = state.nodePath
     val sourceScript: String get() = state.sourceScript
 
+    /** Selected API provider (default Anthropic). Decides the `ANTHROPIC_BASE_URL` override at launch. */
+    val provider: Provider get() = Provider.fromId(state.provider)
+
+    // --- Provider API keys (third-party providers only) ----------------------------------------------
+    // SECURITY: stored in the IDE **password safe** (keychain/credential store), NOT in claude-code.xml —
+    // a project-level file that can be committed. This deliberately avoids the plaintext-secret-at-rest
+    // smell. Each provider has its OWN isolated credential (keyed by provider id), so switching providers
+    // never mixes keys and a stored DeepSeek key survives a round-trip through Anthropic. runCatching keeps
+    // pure unit tests (no platform) from throwing; they exercise Provider.launchEnv directly instead.
+    private fun providerKeyCredentials(provider: Provider) =
+        CredentialAttributes(generateServiceName("ClaudeCodeNative", "providerApiKey:${provider.id}"))
+
+    /** The stored API key for [provider] (isolated per provider), or "" when unset/unavailable. */
+    fun getProviderApiKey(provider: Provider): String =
+        runCatching { PasswordSafe.instance.get(providerKeyCredentials(provider))?.getPasswordAsString().orEmpty() }
+            .getOrDefault("")
+
+    /** Persist (or clear, on blank) [provider]'s isolated API key in the IDE password safe. */
+    fun setProviderApiKey(provider: Provider, key: String) {
+        val trimmed = key.trim()
+        runCatching {
+            PasswordSafe.instance.set(
+                providerKeyCredentials(provider),
+                if (trimmed.isEmpty()) null else Credentials(provider.id, trimmed),
+            )
+        }
+    }
+
+    /** Env that routes the binary to the selected provider — empty for Anthropic (native auth). */
+    private fun providerEnv(): Map<String, String> = Provider.launchEnv(provider, getProviderApiKey(provider))
+
     // --- Advanced launch accessors (for ClaudeSession.launchOptions mapping) ---------------------
     /** `--max-turns` value, or null when no cap is set (0). */
     val maxTurns: Int? get() = state.maxTurns.takeIf { it > 0 }
@@ -113,7 +150,7 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
      * and obtain user consent before running. The current start flow is intentionally left unchanged here.
      */
     fun resolveEnv(): Map<String, String> =
-        EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv()
+        EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv() + providerEnv()
 
     /**
      * UI-test-only env seeding. When the IDE-under-test is launched with `-Dclaudejb.fakeFixture=<abs path>`
