@@ -116,6 +116,12 @@ class TranscriptView : JPanel(BorderLayout()), TranscriptModel.Listener {
         val row = MessageRow.create(entry)
         rows[entry.id] = row
 
+        // New thinking rows inherit the current Ctrl+O toggle state — otherwise every new reasoning block
+        // would pop expanded even when the user hid them, forcing them to toggle again each turn.
+        if (entry.speaker == Speaker.THINKING && !reasoningVisible) {
+            row.setReasoningVisible(false)
+        }
+
         if (entry.speaker == Speaker.TOOL && entry.toolUseId != null) {
             (row as ToolRow).onToggle = {
                 content.revalidate()

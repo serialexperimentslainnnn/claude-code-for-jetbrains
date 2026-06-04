@@ -185,6 +185,18 @@ object ChatTheme {
 
     // Per-chip glyphs for the segmented options bar (model · permission mode · effort · thinking) — they let
     // each pill read at a glance from its icon, so the label can shrink to just the live value.
+    // Provider brand marks — loaded WITHOUT vibeIcon so the brand colours survive theme + Vibe Mode (a
+    // recoloured Anthropic/DeepSeek logo would stop reading as the brand). Fixed-hex SVGs, so IconLoader
+    // doesn't theme-patch them either.
+    val iconProviderAnthropic: Icon = IconLoader.getIcon("/icons/provider-anthropic.svg", ChatTheme::class.java)
+    val iconProviderDeepseek: Icon = IconLoader.getIcon("/icons/provider-deepseek.svg", ChatTheme::class.java)
+
+    /** The brand mark for [provider], shown on the composer's provider chip and the provider menu. */
+    fun providerIcon(provider: dev.lain.claudejb.settings.Provider): Icon = when (provider) {
+        dev.lain.claudejb.settings.Provider.ANTHROPIC -> iconProviderAnthropic
+        dev.lain.claudejb.settings.Provider.DEEPSEEK -> iconProviderDeepseek
+    }
+
     val iconChipModel: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-model.svg", ChatTheme::class.java))
     val iconChipMode: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-mode.svg", ChatTheme::class.java))
     val iconChipEffort: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-effort.svg", ChatTheme::class.java))

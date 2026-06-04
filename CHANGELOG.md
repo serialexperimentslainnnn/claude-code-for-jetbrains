@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] — 2026-06-04
+
+### Added
+- **API provider selector (Anthropic / DeepSeek)** — a new `Provider:` setting (Settings ▸ Claude Code) and a composer chip pick the endpoint the `claude` binary talks to. **Anthropic** uses the binary's own native login (subscription/OAuth). **DeepSeek** routes to its Anthropic-compatible endpoint (`https://api.deepseek.com/anthropic`) and **requires its own issued key**. Each provider keeps an **isolated** API key in the IDE **password safe** (not in `claude-code.xml`), shown with its **brand logo** on the chip and in the menu. (`settings/Provider.kt`, `settings/ClaudeSettings.kt`, `ui/ClaudeSettingsConfigurable.kt`, `ui/OptionMenus.kt`, `ui/ChatPanel.kt`, `ui/ChatTheme.kt`, `resources/icons/provider-*.svg`.)
+
+### Fixed
+- **Reasoning toggle now persists across turns** — new "Thought process" blocks correctly inherit the Ctrl+O toggle state instead of always appearing expanded. Previously toggling reasoning off hid existing blocks but every new turn's reasoning popped open again. (`ui/TranscriptView.kt`)
+
+### Security
+- **Credentials are pinned to their provider — no Anthropic credential ever leaks to a third party.** Switching provider sets `ANTHROPIC_BASE_URL` **and** `ANTHROPIC_API_KEY` as an **atomic pair**, and ONLY when a key is present (never a lone base URL, which would make the SDK ship your Anthropic OAuth bearer to the other endpoint). Because `ANTHROPIC_API_KEY` is set, the binary's SDK does not even load the stored OAuth `credentials.json`, so the subscription can't be sent elsewhere. We never emit `ANTHROPIC_AUTH_TOKEN`. The settings form rejects an Anthropic-shaped key (`sk-ant-…`) for a third-party provider; selecting a third-party provider with no stored key **does not switch or restart** — it prompts to configure the key first. **`/login` is restricted to the Anthropic provider** (a third-party auth failure is a wrong key, not a missing OAuth login). The pure `Provider.launchEnv` rules are unit-tested. (`settings/Provider.kt`, `session/ClaudeSession.kt`.)
+
 ## [3.2.0] — 2026-06-04
 
 ### Added
