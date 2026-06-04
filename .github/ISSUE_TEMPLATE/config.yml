@@ -1,0 +1,19 @@
+# Disable the "Open a blank issue" link so contributors are nudged into the
+# bug-report / feature-request templates.
+blank_issues_enabled: false
+
+contact_links:
+  # TODO: replace with the actual JetBrains Marketplace URL once the listing
+  # short-link is confirmed.
+  - name: JetBrains Marketplace review
+    url: https://plugins.jetbrains.com/plugin/dev.lain.claude-code-for-jetbrains
+    about: Leave a rating or short review on the Marketplace listing.
+
+  # TODO: replace with the GitHub Discussions URL once enabled for the repo.
+  - name: GitHub Discussions
+    url: https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/discussions
+    about: Ask a question, share a workflow, or discuss ideas before filing an issue.
+
+  - name: Security vulnerability
+    url: https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/security/policy
+    about: Do NOT open a public issue. See SECURITY.md and email dev@digitalexperiments.dev.

@@ -1,0 +1,111 @@
+# Claude Code Native
+
+A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with streaming chat, native diff review, and full protocol-level access to the `claude` binary.
+
+> **Goal:** surpass AI Assistant and the official plugin (currently just a terminal launcher). Built to present to Anthropic.
+
+## Features
+
+- **Streaming chat** — token-by-token rendering in a native Swing transcript, multi-chat tabs
+- **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call
+- **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
+- **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
+- **Persistent diff + hunk-by-hunk** — re-open any edit's diff from its transcript card ("View diff"), and accept only selected hunks on the permission card (the binary writes just that subset)
+- **"Explain with Claude"** — editor right-click action sends the selection to chat; `path:line` references in replies are clickable (jump to file/line)
+- **"Always allow" per tool** — skip a tool's prompt for the rest of the project (revocable in Settings); reviewable writes stay confined to the project root
+- **Session notifications + tab badge** — a background session needing attention (permission, finished turn, error) notifies you and badges its tab
+- **Session history** — reads the `claude` binary's own session files (the source of truth): "Open Previous Session…" lists the project's past chats by their real title, and on startup the tabs you had open (or your most recent session) are reopened and re-attached via `--resume`. The plugin stores no transcripts of its own — only which tabs were open (in `workspace.xml`).
+- **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
+- **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
+- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
+- **`AskUserQuestion` support** — multi-select option cards rendered natively, with full-width wrapped labels/descriptions/preview
+- **Quota bar** — subscription usage % shown when near the usage limit, with reset countdown
+- **Live token counter** — per-message output tokens shown in the status line while the agent thinks
+- **Markdown rendering** — bold, inline code, code blocks, tables
+- **IDE-themed UI** — surfaces, text, and borders follow the active IDE theme (light/dark)
+
+## Requirements
+
+- **JetBrains IDE** 2024.3 – 2025.1.x (IntelliJ IDEA, PyCharm, GoLand, WebStorm, …)
+- **`claude` CLI** installed and accessible on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
+  - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
+  - If it's in a custom location, set the executable path (and, if needed, environment variables) in **Settings → Tools → Claude Code**
+- **Auth** reused from the binary (Claude subscription / OAuth or `ANTHROPIC_API_KEY`)
+
+## Installation
+
+**From the JetBrains Marketplace** (recommended):
+
+1. In the IDE: **Settings → Plugins → Marketplace**
+2. Search for **"Claude Code Native"**
+3. Install and restart
+
+The Marketplace listing tracks the latest release. This GitHub repository is the **source of truth for the code** — releases are published to the Marketplace, not as binary attachments here.
+
+**From source:** see [Build from source](#build-from-source) below.
+
+## Usage
+
+Open the **Claude Code** tool window (right side panel, same area as AI Assistant). Each tab is an independent chat session backed by its own `claude` process.
+
+| Shortcut | Action |
+|---|---|
+| Enter | Send message |
+| Shift+Enter | New line in composer |
+| Ctrl+K | Slash-command palette |
+| Ctrl+O | Toggle extended thinking |
+| Esc | Interrupt running agent |
+
+- **Model / Mode / Effort chips** — click to change at any time
+- **Gear icon** — advanced settings (thinking tokens, allowed tools, etc.)
+- **New Chat button** — opens a fresh tab
+
+File edit proposals open as a diff tab in the editor; an inline Accept/Reject card in the chat lets you review without leaving the conversation.
+
+### IDE tools (MCP) — optional
+
+Let Claude query the IDE directly (diagnostics, open files, usages, …) via JetBrains' own MCP server. It is **off by default** and takes two steps:
+
+1. **Enable JetBrains' MCP Server plugin.** Install/enable the bundled **MCP Server** plugin (Settings ▸ Plugins) and confirm it is running.
+2. **Turn it on here.** Go to **Settings ▸ Claude Code ▸ IDE tools (MCP)**, tick *Enable JetBrains IDE tools (MCP)*, pick the **transport** (`sse` is the default; `streamable-http` is the alternative) and set the **port** if you changed it from `64342`. Apply, then start a **new chat** (the setting is applied when the `claude` process launches).
+
+For the `stdio` transport or a remote server, choose **custom** and paste the server JSON from JetBrains into the box. This also works unchanged on Windows (the pasted config carries the right paths and ports for your install).
+
+> ⚠ **Security:** `sse`/`streamable-http` use JetBrains' localhost endpoint, which any process on your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you trust. Every IDE tool call is still gated by the in-chat permission prompt.
+
+## Build from source
+
+Requires JDK 21. The Gradle wrapper is included.
+
+```bash
+JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
+```
+
+Output: `build/distributions/claude-code-native-2.2.0.zip`
+
+```bash
+./gradlew runIde        # sandbox IDE with the plugin loaded
+./gradlew verifyPlugin  # IntelliJ plugin verifier
+```
+
+## How it works
+
+The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio protocol — no Node.js or TS SDK at runtime. One long-lived process per chat session handles streaming input/output. The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is included as a **protocol reference only** and is not distributed.
+
+See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and verified empirical facts about the binary's behavior.
+
+## Status
+
+**v2.2.2** (241 tests + gated UI suite) — completes the automated **test pyramid** (unit → headless `BasePlatformTestCase` → integration against a `fake-claude` stand-in → RemoteRobot UI) and the **maintenance workflow**: CI, tag-driven release/publish, nightly UI tests, SDK/binary drift detection, plus `SECURITY.md`/`CONTRIBUTING.md`/docs. No runtime change vs. 2.2.0. **v2.2.0** — Marketplace-publishable again: migrated the bundled MCP plugin lookup off the internal `findEnabledPlugin` API. **Model picker reflects the binary's actual options** by their human label (`Default (recommended)`/`Sonnet`/`Haiku`) and refreshes live when `initialize` lands; default model now `default` (binary chooses recommended tier). **Path:line links work inside backticks** (`` `src/Foo.kt:42` `` becomes a clickable monospaced link, still project-confined). Protocol surface bumped to SDK 0.3.161 / `claude` 2.1.161 (`ModelInfo` carries effort/thinking/fast/auto capabilities, `AccountInfo` carries provider; new `system/*` events tolerated). Built on **v2.1.0**: persistent diff from the transcript ("View diff" on every edit card, in any permission mode), hunk-by-hunk partial acceptance, wrapped AskUserQuestion options, improved Markdown (strikethrough, task lists, nested lists), "Explain with Claude" editor action + jump-to-code links (project-confined), "Always allow" per tool (revocable in Settings), and background-session notifications with tab badges (suppressed only for the chat on screen; "Open" dismisses the notification). **Session history reads the binary's own session files** as the source of truth — real titles (as `--resume`), "Open Previous Session…" lists the project's sessions, and on startup the open tabs (or the most recent session) are restored; the plugin persists no transcripts, only the open-tab ids in `workspace.xml`. Internally, permission-mode/effort/transport are now typed enums. Builds on v2.0.x: reliability & security hardening (EDT-freeze fix, in-flight control resolution + watchdog, project-root write confinement, trust-on-open gate) and opt-in IDE tools over MCP. Verified compatible with IntelliJ IDEA 2024.3 – 2026.2 (build 243–262).
+
+See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
+
+## Disclaimer
+
+Unofficial, community-built, open-source plugin. **Not affiliated with, sponsored by, or endorsed by Anthropic or JetBrains.** It requires the user's own separately-installed `claude` CLI and their own Claude subscription or API key — no credentials are bundled or provided.
+
+"Claude" and "Claude Code" are trademarks of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related names are trademarks of JetBrains s.r.o. Used here for identification only.
+
+## License
+
+Licensed under the **GNU General Public License v3.0**. See [`LICENSE`](LICENSE) for the full text.

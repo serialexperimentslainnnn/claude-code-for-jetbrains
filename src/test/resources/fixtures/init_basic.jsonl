@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"11111111-1111-1111-1111-111111111111","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default","output_style":"default"}
+{"type":"result","subtype":"success","result":"ok","session_id":"11111111-1111-1111-1111-111111111111","num_turns":1}
