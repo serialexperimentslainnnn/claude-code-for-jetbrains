@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"33333333-3333-3333-3333-333333333333","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Let me "}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reason about "}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"this carefully."}}}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"Let me reason about this carefully."},{"type":"text","text":"The answer is 42."}]}}
+{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":8}}}
+{"type":"result","subtype":"success","result":"The answer is 42.","session_id":"33333333-3333-3333-3333-333333333333","num_turns":1}

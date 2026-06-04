@@ -1,0 +1,96 @@
+# GitLab CI — the project's REAL pipeline (PROVISIONAL).
+#
+# GitHub Actions is capped (billing) for this repo, so the `.github/workflows/*` files are kept only as
+# portable reference and do NOT run (their automatic triggers are disabled). The pipeline that actually
+# executes lives here, on the self-hosted GitLab runner.
+#
+# PROVISIONAL: this is the bridge until the dedicated self-hosted GitLab is stood up. Target end state:
+# GitHub becomes a *release-only* mirror (tagged release code pushed there), while ALL CI/CD — build,
+# verify, publish, and the SDK/binary drift watchers — runs on the local GitLab. Don't re-enable the GitHub
+# workflow triggers (they'd just fail on billing).
+#
+# Mirrors the local verification gate: unit + headless + integration tests, the IntelliJ plugin verifier,
+# and the distributable build. JDK 21 (the IDE ceiling is JBR 21). The Gradle wrapper is committed.
+
+default:
+  image: eclipse-temurin:21-jdk
+  tags:
+    - linux            # adjust to the self-hosted runner's tag if different
+  cache:
+    key: "gradle-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .gradle/caches/
+      - .gradle/wrapper/
+
+variables:
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+  # Non-interactive, reproducible, no daemon (fresh JVM per job on CI).
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.console=plain"
+
+stages:
+  - test
+  - verify
+  - build
+  - release
+
+# Unit + headless (BasePlatformTestCase) + integration (fake-claude) — the whole non-UI pyramid.
+# Requires python3 on the runner for bin/fake-claude (integration layer).
+test:
+  stage: test
+  before_script:
+    - command -v python3 >/dev/null || (apt-get update -qq && apt-get install -y -qq python3)
+  script:
+    - ./gradlew --no-daemon --stacktrace test
+  artifacts:
+    when: always
+    paths:
+      - build/reports/tests/
+      - build/test-results/
+    reports:
+      junit: build/test-results/test/TEST-*.xml
+    expire_in: 14 days
+
+# IntelliJ Plugin Verifier — must stay Compatible with IU-261 and IU-262 (EAP/RC), no internal/deprecated APIs.
+verify:
+  stage: verify
+  needs: ["test"]
+  script:
+    - ./gradlew --no-daemon --stacktrace verifyPlugin
+  artifacts:
+    when: always
+    paths:
+      - build/reports/pluginVerifier/
+    expire_in: 30 days
+
+# Distributable plugin zip (signed/published only from a tag via the release procedure, not here).
+build:
+  stage: build
+  needs: ["verify"]
+  script:
+    - ./gradlew --no-daemon --stacktrace buildPlugin
+  artifacts:
+    paths:
+      - build/distributions/*.zip
+    expire_in: 30 days
+
+# Sign + publish to the JetBrains Marketplace. Runs ONLY on a version tag (vX.Y.Z) and is MANUAL — a human
+# clicks "play" in the GitLab pipeline after the test/verify/build stages are green. The four credentials are
+# masked/protected CI/CD variables (Settings → CI/CD → Variables); never commit them. build.gradle.kts reads
+# them via providers.environmentVariable(...): PUBLISH_TOKEN, CERTIFICATE_CHAIN, PRIVATE_KEY, PRIVATE_KEY_PASSWORD.
+publish:
+  stage: release
+  needs: ["build"]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+    - when: never
+  script:
+    - ./gradlew --no-daemon --stacktrace signPlugin publishPlugin
+  artifacts:
+    paths:
+      - build/distributions/*.zip
+    expire_in: 90 days
+
+# NOTE on the UI layer (RemoteRobot, src/uiTest): it needs a running IDE + display, so it is NOT part of
+# the gating pipeline. Run it on a runner with Xvfb via:  xvfb-run -a ./gradlew uiTest -PuiTest.enabled=true
+# Add a manual `when: manual` job here once a display-capable runner tag is available.

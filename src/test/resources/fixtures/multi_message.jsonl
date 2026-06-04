@@ -1,0 +1,11 @@
+{"type":"system","subtype":"init","session_id":"77777777-7777-7777-7777-777777777777","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":80,"output_tokens":1}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"First part."}}}
+{"type":"stream_event","event":{"type":"message_delta","usage":{"input_tokens":80,"output_tokens":20}}}
+{"type":"assistant","message":{"id":"msg_m1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"First part."}]}}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Second part."}}}
+{"type":"stream_event","event":{"type":"message_delta","usage":{"input_tokens":10,"output_tokens":40}}}
+{"type":"assistant","message":{"id":"msg_m2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Second part."}]}}
+{"type":"result","subtype":"success","result":"Second part.","session_id":"77777777-7777-7777-7777-777777777777","num_turns":1}

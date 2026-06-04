@@ -1,0 +1,119 @@
+<idea-plugin>
+    <id>dev.lain.claude-code-for-jetbrains</id>
+    <name>Claude Code Native</name>
+    <vendor email="lain.agent604@passmail.com" url="https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains">lain</vendor>
+
+    <description><![CDATA[
+        <p>Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
+        binary over its stream-json protocol — no terminal required, no Node.js at runtime.</p>
+
+        <p><em>Unofficial, community-built, open-source plugin. Not affiliated with, sponsored by, or
+        endorsed by Anthropic or JetBrains. It requires the user's own separately-installed
+        <code>claude</code> CLI and their own Claude subscription or API key — no credentials are
+        bundled or provided.</em></p>
+
+        <h2>Features</h2>
+
+        <h3>Streaming chat</h3>
+        <ul>
+            <li>Real-time token streaming with animated thinking indicator and live token counter</li>
+            <li>Multi-tab support — independent sessions per project</li>
+            <li>Multi-prompt queue: type while the agent is working, messages sent in order when the turn ends</li>
+            <li><code>/btw</code> side-questions sent mid-turn without interrupting the active turn</li>
+            <li>Interrupt (Esc) to stop the current turn at any time</li>
+        </ul>
+
+        <h3>Full slash-command palette</h3>
+        <ul>
+            <li>All commands from the <code>claude</code> binary surfaced natively (Ctrl+K)</li>
+            <li>Built-in <code>/btw</code> command added by the plugin</li>
+        </ul>
+
+        <h3>Model &amp; runtime controls</h3>
+        <ul>
+            <li>Model selector chip (all models available in your account)</li>
+            <li>Permission mode chip (default / acceptEdits / bypassPermissions)</li>
+            <li>Effort chip (low / medium / high) for extended thinking</li>
+            <li>Thinking token budget (Ctrl+O to toggle)</li>
+        </ul>
+
+        <h3>Native diff review for file edits</h3>
+        <ul>
+            <li>When the agent requests to write or edit a file, a diff opens inline in the editor area</li>
+            <li>Non-modal Accept / Reject card in the chat — no popups or modal dialogs</li>
+            <li>On acceptance the binary writes the file; VFS is refreshed automatically</li>
+        </ul>
+
+        <h3>Permission &amp; question handling</h3>
+        <ul>
+            <li><code>can_use_tool</code> requests surface as native inline cards (Accept / Reject)</li>
+            <li><code>AskUserQuestion</code> rendered as a structured question card with option buttons</li>
+            <li>Auto-approve in <code>acceptEdits</code> / <code>bypassPermissions</code> modes</li>
+        </ul>
+
+        <h3>IDE integration</h3>
+        <ul>
+            <li>Tool window anchored to the right panel (same area as AI Assistant)</li>
+            <li>Light and dark theme support with custom icons</li>
+            <li>Works in any IntelliJ Platform IDE (IDEA, PyCharm, WebStorm, GoLand, etc.)</li>
+        </ul>
+
+        <h2>Requirements</h2>
+        <ul>
+            <li>JetBrains IDE 2024.3 – 2025.1.x (build 243–261)</li>
+            <li><a href="https://claude.ai/code"><code>claude</code> binary</a> installed and on PATH or <code>~/.local/bin/</code></li>
+            <li>Claude subscription (claude.ai) or <code>ANTHROPIC_API_KEY</code> environment variable</li>
+        </ul>
+
+        <h2>License &amp; trademarks</h2>
+        <p>Released under the GNU General Public License v3.0. "Claude" and "Claude Code" are trademarks
+        of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related names are trademarks of JetBrains
+        s.r.o. Used here for identification only; this project is not affiliated with either company.</p>
+    ]]></description>
+
+    <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
+    <depends>com.intellij.modules.platform</depends>
+    <!-- Bundled IDE Terminal: grants runtime classloader access to TerminalToolWindowManager so we can open an
+         interactive `claude login` session (the OAuth flow needs a TTY the stream-json process doesn't have).
+         Optional + config-file so the plugin still loads on a (hypothetical) IDE without Terminal; TerminalLauncher
+         additionally guards with PluginManager.isPluginInstalled. -->
+    <depends optional="true" config-file="claude-terminal.xml">org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Right-hand tool window, next to where the JetBrains AI Assistant lives. -->
+        <toolWindow id="Claude Code"
+                    anchor="right"
+                    icon="/icons/toolwindow.svg"
+                    canCloseContents="true"
+                    factoryClass="dev.lain.claudejb.ui.ClaudeToolWindowFactory"/>
+
+        <notificationGroup id="Claude Code" displayType="BALLOON"/>
+
+        <projectConfigurable
+                instance="dev.lain.claudejb.ui.ClaudeSettingsConfigurable"
+                id="dev.lain.claudejb.settings"
+                displayName="Claude Code"
+                nonDefaultProject="false"/>
+    </extensions>
+
+    <actions>
+        <action id="dev.lain.claudejb.ExplainSelection"
+                class="dev.lain.claudejb.actions.ExplainSelectionAction"
+                text="Explain with Claude"
+                description="Send the selected code to Claude and ask it to explain.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="dev.lain.claudejb.AddSelectionAsContext"
+                class="dev.lain.claudejb.actions.AddSelectionAsContextAction"
+                text="Add Selection to Claude Context"
+                description="Attach the selected code to the active Claude chat as context.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action id="dev.lain.claudejb.AddFileAsContext"
+                class="dev.lain.claudejb.actions.AddFileAsContextAction"
+                text="Add File to Claude Context"
+                description="Attach the current file to the active Claude chat as an @-mention.">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

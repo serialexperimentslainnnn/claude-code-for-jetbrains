@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""
+fake-claude — deterministic stand-in for the `claude` binary used by the test pyramid.
+
+The plugin spawns the real `claude` binary in stream-json mode (`--print --output-format stream-json
+--input-format stream-json --verbose --permission-prompt-tool stdio …`). For tests we replace that
+binary with this script: it replays a JSONL fixture line-by-line to stdout while honouring a tiny
+protocol-aware DSL so scenarios like `can_use_tool` (which require waiting on the host's
+`control_response`) work end-to-end without a real model in the loop.
+
+Selection: the fixture path comes from the env var `FAKE_FIXTURE`. If unset, the script emits a
+minimal `system/init` and a tiny `result` so a smoke launch doesn't hang. CLI args are accepted and
+ignored (we match the real binary's surface so the plugin's `buildArgs` keeps working unchanged).
+
+DSL on top of plain JSONL lines:
+  - A line with key `_wait_stdin` is consumed: the script reads one line from stdin (typically the
+    host's `control_response`) before continuing. Useful right after emitting a `control_request`.
+  - A line with key `_sleep_ms` sleeps that many milliseconds (good for racing tests).
+  - Anything else: emitted verbatim to stdout as a single line, followed by `\n` and flushed.
+
+Exit codes:
+  0  fixture consumed, EOF on stdin (or end of script).
+  1  fixture file unreadable (only when FAKE_FIXTURE was set).
+  2  stdin closed unexpectedly while waiting for a control_response.
+
+This script never makes network calls and prints nothing to stderr by default. Set FAKE_DEBUG=1 to
+trace what it's doing (useful when a fixture stalls).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import uuid
+
+
+def _log(msg: str) -> None:
+    if os.environ.get("FAKE_DEBUG"):
+        sys.stderr.write(f"[fake-claude] {msg}\n")
+        sys.stderr.flush()
+
+
+def _emit(obj) -> None:
+    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def _emit_line(line: str) -> None:
+    sys.stdout.write(line.rstrip("\n") + "\n")
+    sys.stdout.flush()
+
+
+def _default_session_id() -> str:
+    return os.environ.get("FAKE_SESSION_ID") or str(uuid.uuid4())
+
+
+def _run_default_smoke() -> int:
+    """No fixture → emit just enough that the plugin's init handshake finishes cleanly."""
+    session_id = _default_session_id()
+    # The initialize control request will arrive on stdin from the plugin; reply success then quit.
+    _emit({
+        "type": "system",
+        "subtype": "init",
+        "session_id": session_id,
+        "model": "default",
+        "cwd": os.getcwd(),
+        "permissionMode": "default",
+        "outputStyle": "default",
+    })
+    # Wait for the initialize control request and reply success, then end the turn.
+    try:
+        for raw in sys.stdin:
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            if msg.get("type") == "control_request" and msg.get("request", {}).get("subtype") == "initialize":
+                _emit({
+                    "type": "control_response",
+                    "response": {
+                        "subtype": "success",
+                        "request_id": msg.get("request_id"),
+                        "response": {"commands": [], "models": [], "agents": [], "account": {}},
+                    },
+                })
+                break
+            if msg.get("type") == "user":
+                # A user message before init: bounce out a tiny result.
+                _emit({"type": "result", "subtype": "success", "result": "ok", "session_id": session_id})
+                break
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _run_fixture(path: str) -> int:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [ln for ln in f.read().splitlines() if ln.strip()]
+    except OSError as e:
+        sys.stderr.write(f"fake-claude: cannot read FAKE_FIXTURE {path!r}: {e}\n")
+        return 1
+
+    _log(f"loaded {len(lines)} line(s) from {path}")
+    for raw in lines:
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            # Not JSON — emit verbatim and continue.
+            _emit_line(raw)
+            continue
+
+        if isinstance(obj, dict) and "_sleep_ms" in obj:
+            time.sleep(int(obj["_sleep_ms"]) / 1000.0)
+            continue
+
+        if isinstance(obj, dict) and obj.get("_wait_stdin"):
+            try:
+                resp = sys.stdin.readline()
+            except KeyboardInterrupt:
+                return 0
+            if not resp:
+                _log("stdin closed while waiting for control_response")
+                return 2
+            _log(f"consumed stdin: {resp.rstrip()}")
+            continue
+
+        _emit(obj)
+
+    # Drain any pending stdin so the plugin's writer doesn't block on a broken pipe.
+    try:
+        sys.stdin.read()
+    except Exception:
+        pass
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    # The real binary accepts many flags; we ignore them all (the protocol is what matters).
+    fixture = os.environ.get("FAKE_FIXTURE", "").strip()
+    if not fixture:
+        return _run_default_smoke()
+    return _run_fixture(fixture)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

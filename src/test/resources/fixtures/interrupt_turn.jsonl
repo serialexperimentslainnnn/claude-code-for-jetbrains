@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","session_id":"99999999-9999-9999-9999-999999999999","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Working on it"}}}
+{"_sleep_ms":1500}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" ... still going"}}}
+{"type":"assistant","message":{"id":"msg_int","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Working on it ... still going"}]}}
+{"type":"result","subtype":"success","result":"Interrupted turn completed.","session_id":"99999999-9999-9999-9999-999999999999","num_turns":1}

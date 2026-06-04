@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","session_id":"44444444-4444-4444-4444-444444444444","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":600}
+{"type":"assistant","message":{"id":"msg_t1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"notes.txt","content":"hello from claude"}}]}}
+{"type":"control_request","request_id":"fake_perm_1","request":{"subtype":"can_use_tool","tool_name":"Write","tool_use_id":"toolu_write_1","input":{"file_path":"notes.txt","content":"hello from claude"}}}
+{"_sleep_ms":4000}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_write_1","content":"File written successfully.","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_t2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Done, wrote the file."}]}}
+{"type":"result","subtype":"success","result":"Done, wrote the file.","session_id":"44444444-4444-4444-4444-444444444444","num_turns":1}

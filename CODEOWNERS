@@ -1,0 +1,16 @@
+# CODEOWNERS — Claude Code Native
+#
+# GitHub uses this file to auto-request reviews on pull requests.
+# Maintainer: @serialexperimentslainnnn (the local author "Lain" / lain.agent604@passmail.com).
+
+# Default owner for everything in the repo.
+*                       @serialexperimentslainnnn
+
+# Security-sensitive policies — keep ownership explicit even though the glob
+# above already matches.
+/SECURITY.md            @serialexperimentslainnnn
+/.github/               @serialexperimentslainnnn
+/build.gradle.kts       @serialexperimentslainnnn
+/src/main/kotlin/dev/lain/claudejb/process/      @serialexperimentslainnnn
+/src/main/kotlin/dev/lain/claudejb/permission/   @serialexperimentslainnnn
+/src/main/kotlin/dev/lain/claudejb/protocol/     @serialexperimentslainnnn
