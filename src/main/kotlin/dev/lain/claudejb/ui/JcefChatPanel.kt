@@ -149,11 +149,40 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         )
     }
 
+    // Per-request hunk context for partial diff acceptance, computed on the EDT in pushPermissions.
+    private data class HunkCtx(
+        val toolName: String, val input: kotlinx.serialization.json.JsonObject,
+        val currentLines: List<String>, val proposedLines: List<String>,
+        val hunks: List<dev.lain.claudejb.diff.Hunk>,
+    )
+    private val hunkCache = HashMap<String, HunkCtx>()
+
     private fun pushPermissions() {
+        val perms = session.pendingPermissions()
+        val hunksByRequest = computeHunks(perms)
         host.exec(
             "window.cc.permissions && window.cc.permissions(" +
-                JcefBridge.permissionsJson(session.pendingPermissions()) + ")"
+                JcefBridge.permissionsJson(perms, hunksByRequest) + ")"
         )
+    }
+
+    /** For each reviewable Edit/Write/MultiEdit permission, compute its hunks (current vs proposed) and cache them. */
+    private fun computeHunks(perms: List<dev.lain.claudejb.permission.PendingPermission>): Map<String, List<dev.lain.claudejb.diff.Hunk>> {
+        val out = HashMap<String, List<dev.lain.claudejb.diff.Hunk>>()
+        for (p in perms) {
+            if (!p.reviewable || p.toolName !in DiffPresenter.REVIEWABLE_TOOLS) continue
+            val cached = hunkCache[p.requestId]
+            if (cached != null) { out[p.requestId] = cached.hunks; continue }
+            val path = DiffPresenter.filePathOf(p.input) ?: continue
+            val current = runCatching { java.io.File(path).takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
+            val proposed = DiffPresenter.proposedContent(p.toolName, p.input, current) ?: continue
+            val hunks = DiffPresenter.computeHunks(current, proposed)
+            if (hunks.size > 1) {
+                hunkCache[p.requestId] = HunkCtx(p.toolName, p.input, current.split("\n"), proposed.split("\n"), hunks)
+                out[p.requestId] = hunks
+            }
+        }
+        return out
     }
 
     /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
@@ -265,7 +294,20 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             is JcefBridge.Msg.ChangeVibe -> { ChatTheme.setVibeMode(m.on); broadcastTheme() }
             is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
             is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
-            is JcefBridge.Msg.ResolvePermission -> session.resolvePermission(m.id, m.allow)
+            is JcefBridge.Msg.ResolvePermission -> {
+                val ctx = hunkCache.remove(m.id)
+                val accepted = m.acceptedHunks
+                if (m.allow && ctx != null && accepted != null && accepted.size < ctx.hunks.size) {
+                    // Partial accept: write only the chosen hunks (the binary still does the write).
+                    val selected = dev.lain.claudejb.diff.HunkSelection.reconstruct(
+                        ctx.currentLines, ctx.proposedLines, ctx.hunks, accepted.toSet())
+                    val currentText = ctx.currentLines.joinToString("\n")
+                    val override = dev.lain.claudejb.diff.HunkSelection.encodeInput(ctx.toolName, ctx.input, currentText, selected)
+                    session.resolvePermission(m.id, true, overrideInput = override)
+                } else {
+                    session.resolvePermission(m.id, m.allow)
+                }
+            }
             is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
             is JcefBridge.Msg.AlwaysAllow -> {
                 ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
@@ -297,6 +339,9 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             JcefBridge.Msg.AttachSelection ->
                 EditorContextProvider.selectionAsAttachment(project)?.let { addAttachment(it) }
             JcefBridge.Msg.AttachCurrentFile -> mentionCurrentFile()
+            JcefBridge.Msg.RequestAttachData -> pushAttachData()
+            is JcefBridge.Msg.AttachPath ->
+                addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
             JcefBridge.Msg.PasteClipboard -> {
                 // Ctrl+V: read the system clipboard host-side (reliable on Wayland). Image → attach;
                 // else plain text → insert it into the composer at the caret.
@@ -357,10 +402,29 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /**
      * Only **https** links open externally — plain http (a common malware-hosting scheme) is refused, and
-     * file:/jar:/javascript: never reach here. Links from the untrusted view are strictly gated.
+     * file:/jar:/javascript: never reach here. Internal `jb://open?file=&line=` links jump to code in the
+     * editor, gated to the project root. Links from the untrusted view are strictly gated.
      */
     private fun openUrl(url: String) {
-        if (url.trim().lowercase().startsWith("https://")) BrowserUtil.browse(url)
+        val u = url.trim()
+        when {
+            u.lowercase().startsWith("https://") -> BrowserUtil.browse(u)
+            u.startsWith("jb://open") -> openJbLink(u)
+        }
+    }
+
+    /** Opens the file from a `jb://open?file=<encoded-abs>&line=N` link in the editor, gated to the root. */
+    private fun openJbLink(url: String) {
+        val query = url.substringAfter('?', "")
+        val params = query.split('&').mapNotNull {
+            val k = it.substringBefore('=', ""); val v = it.substringAfter('=', "")
+            if (k.isEmpty()) null else k to runCatching { java.net.URLDecoder.decode(v, Charsets.UTF_8) }.getOrDefault(v)
+        }.toMap()
+        val path = params["file"] ?: return
+        if (!DiffPresenter.isWithinRoot(path, project.basePath)) return // never escape the project root
+        val line = (params["line"]?.toIntOrNull() ?: 1).coerceAtLeast(1) - 1
+        val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(path) ?: return
+        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line, 0).navigate(true)
     }
 
     // ── Tool-window actions ──────────────────────────────────────────────────────────────────────────────
@@ -384,6 +448,23 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     private fun pushAttachments() {
         host.exec("window.cc.attachments && window.cc.attachments(" + attachmentsJson() + ")")
+    }
+
+    /** Data for the rich 📎 attach menu: recent files (newest-first) + what context is available right now. */
+    private fun pushAttachData() {
+        val recent = FilePickerHelper.recentFiles(project, 14).map { path ->
+            buildJsonObject {
+                put("path", path)
+                put("name", FilePickerHelper.displayName(project, path))
+                put("ext", path.substringAfterLast('.', "").lowercase())
+            }
+        }
+        val payload = buildJsonObject {
+            put("recent", JsonArray(recent))
+            put("hasSelection", EditorContextProvider.currentSelection(project) != null)
+            put("hasFile", EditorContextProvider.currentFilePath(project) != null)
+        }
+        host.exec("window.cc.attachData && window.cc.attachData($payload)")
     }
 
     private fun attachmentsJson(): String = JsonArray(

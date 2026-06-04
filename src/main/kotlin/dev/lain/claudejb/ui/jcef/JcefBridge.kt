@@ -59,7 +59,7 @@ object JcefBridge {
         JsonArray(items.map { (e, order) -> entryJson(e, order) }).toString()
 
     /** One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). */
-    fun permissionJson(p: PendingPermission): JsonObject = buildJsonObject {
+    fun permissionJson(p: PendingPermission, hunks: List<dev.lain.claudejb.diff.Hunk> = emptyList()): JsonObject = buildJsonObject {
         put("id", p.requestId)
         put("tool", p.toolName)
         put("title", p.title)
@@ -71,6 +71,10 @@ object JcefBridge {
         p.description?.let { put("description", it) }
         p.decisionReason?.let { put("decisionReason", it) }
         p.blockedPath?.let { put("blockedPath", it) }
+        // Hunks for partial ("hunk-by-hunk") acceptance — only worth showing when there's more than one.
+        if (hunks.size > 1) put("hunks", buildJsonArray {
+            hunks.forEach { hk -> add(buildJsonObject { put("index", hk.index); put("preview", hk.preview) }) }
+        })
         p.questions?.let { qs ->
             put("questions", buildJsonArray {
                 qs.forEach { q ->
@@ -112,8 +116,8 @@ object JcefBridge {
         }
     }
 
-    fun permissionsJson(list: List<PendingPermission>): String =
-        JsonArray(list.map { permissionJson(it) }).toString()
+    fun permissionsJson(list: List<PendingPermission>, hunksByRequest: Map<String, List<dev.lain.claudejb.diff.Hunk>> = emptyMap()): String =
+        JsonArray(list.map { permissionJson(it, hunksByRequest[it.requestId] ?: emptyList()) }).toString()
 
     // ── JS → Kotlin : parsing ──────────────────────────────────────────────────────────────────────────
 
@@ -131,7 +135,7 @@ object JcefBridge {
         data class ChangeVibe(val on: Boolean) : Msg
         data class ChangeProvider(val id: String) : Msg
         data class RemoveQueued(val index: Int) : Msg
-        data class ResolvePermission(val id: String, val allow: Boolean) : Msg
+        data class ResolvePermission(val id: String, val allow: Boolean, val acceptedHunks: List<Int>? = null) : Msg
         data class ResolveQuestion(val id: String, val answers: Map<String, String>) : Msg
         data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : Msg
         data class AlwaysAllow(val tool: String) : Msg
@@ -145,6 +149,8 @@ object JcefBridge {
         data class RemoveAttachment(val id: String) : Msg
         object PickFiles : Msg
         object PickDirectory : Msg
+        object RequestAttachData : Msg
+        data class AttachPath(val path: String) : Msg
         object AttachSelection : Msg
         object AttachCurrentFile : Msg
         data class PasteClipboardImage(val notify: Boolean) : Msg
@@ -177,7 +183,11 @@ object JcefBridge {
             "changeVibe" -> Msg.ChangeVibe(bool("on"))
             "changeProvider" -> Msg.ChangeProvider(str("id").orEmpty())
             "removeQueued" -> Msg.RemoveQueued(obj["index"]?.jsonPrimitive?.intOrNull ?: -1)
-            "resolvePermission" -> Msg.ResolvePermission(str("id").orEmpty(), bool("allow"))
+            "resolvePermission" -> Msg.ResolvePermission(
+                str("id").orEmpty(),
+                bool("allow"),
+                (obj["hunks"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.intOrNull },
+            )
             "resolveQuestion" -> {
                 val answers = (obj["answers"] as? JsonObject).orEmptyAnswers()
                 Msg.ResolveQuestion(str("id").orEmpty(), answers)
@@ -193,6 +203,8 @@ object JcefBridge {
             "removeAttachment" -> Msg.RemoveAttachment(str("id").orEmpty())
             "pickFiles" -> Msg.PickFiles
             "pickDirectory" -> Msg.PickDirectory
+            "requestAttachData" -> Msg.RequestAttachData
+            "attachPath" -> Msg.AttachPath(str("path").orEmpty())
             "attachSelection" -> Msg.AttachSelection
             "attachCurrentFile" -> Msg.AttachCurrentFile
             "pasteClipboardImage" -> Msg.PasteClipboardImage(bool("notify"))

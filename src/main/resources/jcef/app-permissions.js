@@ -322,11 +322,39 @@
     if (card.blockedPath) bodyChildren.push(h('div', { class: 'perm-blocked', text: 'Blocked path: ' + String(card.blockedPath) }));
     if (card.decisionReason) bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
 
+    // Hunk-by-hunk: a checkbox per changed region (all ticked). Accept writes only the ticked hunks.
+    var hunkChecks = [];
+    if (Array.isArray(card.hunks) && card.hunks.length > 1) {
+      var hunkRows = card.hunks.map(function (hk) {
+        var cb = h('input', { attrs: { type: 'checkbox', checked: 'checked' } });
+        cb.checked = true;
+        cb.__hunkIndex = (typeof hk.index === 'number') ? hk.index : 0;
+        hunkChecks.push(cb);
+        return h('label', { class: 'perm-hunk' }, cb,
+          h('span', { class: 'perm-hunk-preview', text: (hk.preview != null ? String(hk.preview) : '') || '(change)' }));
+      });
+      bodyChildren.push(h('div', { class: 'perm-hunks' },
+        h('div', { class: 'perm-hunks-head', text: 'Apply selected changes:' }), hunkRows));
+    }
+
+    function acceptedHunks() {
+      if (!hunkChecks.length) return undefined;
+      var sel = [];
+      for (var i = 0; i < hunkChecks.length; i++) if (hunkChecks[i].checked) sel.push(hunkChecks[i].__hunkIndex);
+      // all ticked → undefined (normal full accept); otherwise the chosen subset
+      return sel.length === hunkChecks.length ? undefined : sel;
+    }
+
     var actions = [
       h('button', {
         class: 'btn primary',
         text: 'Accept',
-        on: { click: function () { send({ type: 'resolvePermission', id: id, allow: true }); } }
+        on: { click: function () {
+          var msg = { type: 'resolvePermission', id: id, allow: true };
+          var hk = acceptedHunks();
+          if (hk !== undefined) msg.hunks = hk;
+          send(msg);
+        } }
       }),
       h('button', {
         class: 'btn danger',
