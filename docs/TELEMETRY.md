@@ -5,27 +5,7 @@ analytics, no error reporting, no usage pings, no remote logging. The
 plugin opens no network connections of its own.
 
 ## What stays on your machine
-
-- **Conversation transcripts.** The plugin does **not** persist any
-  conversation content. The `claude` binary writes its own session files
-  under `~/.claude/projects/<cwd-encoded>/<sessionId>.jsonl`; the plugin
-  reads them via `SessionTranscriptReader` when you reopen a session, but
-  it never copies, ships, or syncs them. To purge transcripts, delete
-  files under `~/.claude/`.
-- **Workspace state.** The list of open chat-tab `sessionId`s for the
-  "restore on startup" feature is stored in the IDE's per-project
-  `workspace.xml`. This file is normally git-ignored.
-- **Settings.** Model / mode / effort / thinking / allowed-tools / env
-  vars / custom MCP servers live in the IDE's per-project
-  `claude-code.xml`. No secrets are written there by the plugin; if you
-  put a secret into the environment-variables setting it stays in that
-  file in plaintext — Settings displays a warning when you do.
-- **IDE logs.** The plugin uses `Logger.getInstance(...)` like any other
-  IntelliJ Platform component. Entries land in `idea.log` (see
-  [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md#logs)) and stay on disk
-  according to your IDE's log rotation. They are never read or transmitted
-  by the plugin.
-
+1
 ## What goes off-machine, and why
 
 - **Your prompts and the model's responses** travel between the `claude`

@@ -279,10 +279,12 @@ class ProtocolParserTest {
 
     @Test
     fun `unknown control_request subtype must still be answered`() {
-        val line = """{"type":"control_request","request_id":"r2","request":{"subtype":"request_user_dialog"}}"""
+        // A genuinely host->binary-only subtype the plugin never receives — must degrade to an answerable
+        // UnsupportedControlRequest (request_user_dialog / elicitation are now handled with their own branches).
+        val line = """{"type":"control_request","request_id":"r2","request":{"subtype":"mcp_message"}}"""
         val event = parseOne<ClaudeEvent.UnsupportedControlRequest>(line)
         assertEquals("r2", event.requestId)
-        assertEquals("request_user_dialog", event.subtype)
+        assertEquals("mcp_message", event.subtype)
     }
 
     @Test
