@@ -147,7 +147,7 @@
             ADD_ATTR: ["target"], FORBID_ATTR: ["style"],
             // Default safe schemes + our internal jb: jump-to-code links + data:image/ (inline images;
             // data:text/html stays blocked). Anything else (file:/javascript:/data:text…) is stripped.
-            ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+            ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
           })
         : raw;
     } catch (e2) {
