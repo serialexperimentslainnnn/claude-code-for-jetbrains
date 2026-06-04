@@ -10,7 +10,7 @@ enum class Speaker { USER, ASSISTANT, THINKING, TOOL, TOOL_OUTPUT, SYSTEM, ERROR
  * executing — a tool_progress heartbeat arrived (amber), [FINISHED] its result landed (green). Restored history
  * rows default to [FINISHED]. The protocol carries no completion %, so RUNNING surfaces elapsed time instead.
  */
-enum class ToolState { LOADING, RUNNING, FINISHED }
+enum class ToolState { LOADING, RUNNING, FINISHED, ERROR }
 
 /** One renderable line of the conversation. [text] is mutable so streaming deltas can grow an entry in place. */
 class TranscriptEntry(

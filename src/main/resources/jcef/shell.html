@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <!-- The host injects the real, hash-pinned Content-Security-Policy here (and as an HTTP response header).
+       Scripts are allowed only by exact sha256 hash — no 'unsafe-inline', so injected markup can never execute. -->
+  <!--CSP-->
+  <title>Claude Code</title>
+  <!--CSS-->
+</head>
+<body>
+  <div id="app">
+    <div id="conversation">
+      <div id="empty" class="empty-state">
+        <div class="empty-mark">✶</div>
+        <div class="empty-title">Claude Code</div>
+        <div class="empty-sub">Ask Claude, or type / for commands.</div>
+      </div>
+    </div>
+    <div id="dock">
+      <div id="permissions"></div>
+      <div id="composer"></div>
+    </div>
+    <div id="palette" hidden></div>
+  </div>
+  <!--LIBS-->
+  <!--APP-->
+</body>
+</html>

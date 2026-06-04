@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "3.3.0"
+version = "4.0.0"
 
 repositories {
     mavenCentral()
@@ -47,9 +47,10 @@ configurations {
 
 dependencies {
     intellijPlatform {
-        // Target IntelliJ IDEA Community 2025.1. The plugin still loads in newer IDEs
-        // (e.g. 2026.1) because untilBuild is widened below.
-        create("IC", "2025.1")
+        // Compile against IntelliJ IDEA Community 2025.2 — the declared since-build floor (252), so we build
+        // against the oldest IDE we support (never below it) and the plugin still loads in newer IDEs because
+        // untilBuild is widened below.
+        create("IC", "2025.2")
         // Bundled IDE Terminal: used to open an interactive `claude login` session (the OAuth flow needs a
         // TTY, which the stream-json process doesn't have). Compile-only coupling; TerminalLauncher guards
         // its use behind PluginManager.isPluginInstalled so a disabled Terminal plugin degrades gracefully.
@@ -237,11 +238,10 @@ intellijPlatform {
     pluginConfiguration {
         // id/name/vendor/description live in META-INF/plugin.xml; only compatibility range is set here.
         ideaVersion {
-            // 251 (2025.1), not 243: the composer attach menu uses FileChooserDescriptorFactory.multiFiles()/
-            // singleDir(), the fluent descriptor factories introduced in 2025.1. They don't exist on 2024.3
-            // (243), so that range would NoSuchMethodError — we drop it rather than fall back to the obsolete
-            // createXxx aliases. There is no 244–250 release branch; 243 → 251 is the 2024.3 → 2025.1 boundary.
-            sinceBuild = "251"
+            // Floor 252 (2025.2): the JCEF UI rebuild is verified from 2025.2 onward, and we compile against
+            // that same build (create("IC","2025.2") above) so no API below the floor can leak in. The ceiling
+            // tracks the latest verified EAP/RC branch (see pluginVerification.select below).
+            sinceBuild = "252"
             untilBuild = "262.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.

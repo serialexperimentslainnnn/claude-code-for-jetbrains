@@ -18,7 +18,7 @@ object ControlProtocol {
     fun newRequestId(): String = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
 
     /** stdin user message — sends a prompt (or a slash command, which is just user content starting with '/'). */
-    fun userMessage(content: String, parentToolUseId: String? = null): String =
+    fun userMessage(content: String, parentToolUseId: String? = null, uuid: String? = null): String =
         buildJsonObject {
             put("type", "user")
             putJsonObject("message") {
@@ -27,6 +27,8 @@ object ControlProtocol {
             }
             // put(key, String?) writes JsonNull when null, matching the protocol's explicit "parent_tool_use_id": null.
             put("parent_tool_use_id", parentToolUseId)
+            // Client-supplied message id so we can later `rewind_files` to this turn's checkpoint.
+            if (uuid != null) put("uuid", uuid)
         }.toString()
 
     /**
@@ -39,8 +41,9 @@ object ControlProtocol {
         content: String,
         images: List<Pair<String, String>>, // (mediaType, base64)
         parentToolUseId: String? = null,
+        uuid: String? = null,
     ): String {
-        if (images.isEmpty()) return userMessage(content, parentToolUseId)
+        if (images.isEmpty()) return userMessage(content, parentToolUseId, uuid)
         return buildJsonObject {
             put("type", "user")
             putJsonObject("message") {
@@ -61,6 +64,7 @@ object ControlProtocol {
                 }
             }
             put("parent_tool_use_id", parentToolUseId)
+            if (uuid != null) put("uuid", uuid)
         }.toString()
     }
 

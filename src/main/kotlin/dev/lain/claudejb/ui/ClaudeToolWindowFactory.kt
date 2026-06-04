@@ -38,7 +38,7 @@ import javax.swing.JList
 
 /**
  * Registers the right-anchored "Claude Code" tool window. Each conversation is a closeable tab (a
- * [ChatPanel] over its own [ClaudeSession]); "New chat" opens another, mirroring the web UI. The title
+ * [JcefChatPanel] over its own [ClaudeSession]); "New chat" opens another, mirroring the web UI. The title
  * bar and gear menu act on whichever tab is selected.
  */
 class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
@@ -56,7 +56,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
         cm.addContentManagerListener(object : ContentManagerListener {
             override fun contentRemoved(event: ContentManagerEvent) {
-                (event.content.component as? ChatPanel)?.let {
+                (event.content.component as? JcefChatPanel)?.let {
                     manager.remove(it.session)
                     contents.remove(it.session)
                     lastNotified.remove(it.session)
@@ -67,7 +67,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 if (event.operation == ContentManagerEvent.ContentOperation.add) {
                     // The user is now looking at this tab — clear its attention badge.
                     event.content.setIcon(null)
-                    (event.content.component as? ChatPanel)?.let { manager.setActive(it.session) }
+                    (event.content.component as? JcefChatPanel)?.let { manager.setActive(it.session) }
                 }
             }
         })
@@ -88,7 +88,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     /** Adds a tab for [session], wires it, and starts its process. */
     private fun openChat(project: Project, cm: ContentManager, session: ClaudeSession) {
-        val panel = ChatPanel(project, session)
+        val panel = JcefChatPanel(project, session)
         val content = ContentFactory.getInstance().createContent(panel, session.title, false)
         content.isCloseable = true
         content.setDisposer(panel)
@@ -140,7 +140,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             .notify(project)
     }
 
-    private fun activePanel(cm: ContentManager): ChatPanel? = cm.selectedContent?.component as? ChatPanel
+    private fun activePanel(cm: ContentManager): JcefChatPanel? = cm.selectedContent?.component as? JcefChatPanel
 
     /**
      * Opens (or focuses) the Diff History tab for the active session. If a [DiffHistoryPanel] for that same session
@@ -169,10 +169,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     private fun buildGearGroup(project: Project, cm: ContentManager) =
         DefaultActionGroup().apply {
-            add(simple("Context Usage") { activePanel(cm)?.let { InfoDialogs.showContextUsage(project, it.session) } })
-            add(simple("Session Cost") { activePanel(cm)?.let { InfoDialogs.showSessionCost(project, it.session) } })
-            add(simple("Account…") { activePanel(cm)?.let { InfoDialogs.showAccount(project, it.session) } })
-            add(simple("MCP Servers") { activePanel(cm)?.let { InfoDialogs.showMcpStatus(project, it.session) } })
+            // Context · Cost · Account · MCP all live in the formatted JCEF dashboard now — open that
+            // instead of the old plain-text dialogs.
+            add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(cm)?.openDashboard() })
             add(simple("Agents") { activePanel(cm)?.let { InfoDialogs.showAgents(project, it.session) } })
             add(simple("Binary Version…") { activePanel(cm)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
             add(simple("Effective Settings…") { activePanel(cm)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
@@ -397,7 +396,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     private class InterruptAction(private val cm: ContentManager) :
         AnAction("Interrupt", "Stop the current turn", AllIcons.Actions.Suspend) {
-        private fun session(): ClaudeSession? = (cm.selectedContent?.component as? ChatPanel)?.session
+        private fun session(): ClaudeSession? = (cm.selectedContent?.component as? JcefChatPanel)?.session
         override fun actionPerformed(e: AnActionEvent) {
             session()?.interrupt()
         }
@@ -410,7 +409,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private class CommandsAction(private val cm: ContentManager) :
         AnAction("Commands", "Browse all slash commands", AllIcons.Actions.Find) {
         override fun actionPerformed(e: AnActionEvent) {
-            (cm.selectedContent?.component as? ChatPanel)?.showCommandPalette()
+            (cm.selectedContent?.component as? JcefChatPanel)?.showCommandPalette()
         }
     }
 
@@ -432,8 +431,31 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
     }
 
-    private companion object {
+    companion object {
         /** Min gap between attention notifications for the same session, to avoid spam. */
         const val NOTIFY_THROTTLE_MS = 3000L
+
+        /**
+         * Opens (or focuses) the Diff History / rollback tab for [session] in the Claude Code tool window.
+         * Callable from anywhere (e.g. the JCEF composer's history button), not just the toolbar action.
+         */
+        fun openDiffHistoryFor(project: Project, session: ClaudeSession) {
+            val tw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("Claude Code") ?: return
+            val cm = tw.contentManager
+            val existing = cm.contents.firstOrNull {
+                (it.component as? DiffHistoryPanel)?.boundSession === session
+            }
+            if (existing != null) {
+                (existing.component as DiffHistoryPanel).refresh()
+                cm.setSelectedContent(existing)
+            } else {
+                val panel = DiffHistoryPanel(project, session)
+                val content = ContentFactory.getInstance().createContent(panel, "Diff History", false)
+                content.isCloseable = true
+                cm.addContent(content)
+                cm.setSelectedContent(content)
+            }
+            tw.activate(null)
+        }
     }
 }
