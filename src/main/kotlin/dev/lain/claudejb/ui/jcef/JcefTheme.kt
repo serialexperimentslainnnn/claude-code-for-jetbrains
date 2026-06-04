@@ -55,6 +55,17 @@ object JcefTheme {
             put("fontFamily", "\"${labelFont.family}\", system-ui, sans-serif")
             put("monoFamily", "\"$monoFamily\", \"JetBrains Mono\", monospace")
             put("fontSize", "${JBUI.scale(13)}px")
+            // Syntax-token colours straight from the IDE's editor scheme → the chat's code blocks
+            // (highlight.js classes) match the IDE exactly, in any theme. Fall back to text/dim.
+            val syn = { key: com.intellij.openapi.editor.colors.TextAttributesKey, fallback: Color ->
+                hex(scheme.getAttributes(key)?.foregroundColor ?: fallback)
+            }
+            put("synKeyword", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.KEYWORD, accent))
+            put("synString", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.STRING, text))
+            put("synComment", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.LINE_COMMENT, dim))
+            put("synNumber", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.NUMBER, text))
+            put("synFunction", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.FUNCTION_DECLARATION, text))
+            put("synType", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.CLASS_NAME, text))
             // 🌈 Vibe Mode flag — the web layer toggles the rainbow loop on this (not a CSS var).
             put("vibe", ChatTheme.vibeMode)
         }

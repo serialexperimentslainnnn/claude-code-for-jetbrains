@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] — 2026-06-04
+
+**Chat UI rebuilt on JCEF (embedded Chromium), then hardened and extended — all frontend; the Kotlin backend was untouched.** See `RELEASE_NOTES.md` for the full story.
+
+### Added
+- Embedded-web chat (JCEF): streaming transcript, web composer, native permission/question/elicitation cards, session dashboard, strict hash-pinned CSP.
+- **Hunk-by-hunk partial diff acceptance** — checkbox per changed region on reviewable Edit/Write/MultiEdit cards.
+- **`jb://` jump-to-code links** — `@file` mentions open the file at the line, gated to the project root.
+- **Rich attach menu** — search + Files/Directory/Image + current selection/file + filterable Recent files.
+- **Syntax highlighting in the IDE's colours** (highlight.js classes mapped to the editor scheme).
+- **Native rewind** as the default rollback (`rewind_files` by turn) with a confirmed IDE-side per-file fallback.
+- Clipboard paste on Wayland (text via AWT, image via `wl-paste`/`xclip`), tool-card colour states, colourised inline diffs, Ctrl+O reasoning toggle, auto-follow, 🌈 Vibe Mode, inline images, responsive layout.
+
+### Changed
+- The old Swing chat UI (`ChatPanel`/`TranscriptView`/`MarkdownRenderer` + tray/strip panels) and its tests were removed.
+- ⚙ menu reuses the formatted JCEF dashboard instead of plain-text dialogs.
+
+### Notably not added
+- Mermaid / KaTeX — avoided as external bloat that would force relaxing the strict CSP. The plugin stays lean (~1.6 MB).
+
 ## [3.3.0] — 2026-06-04
 
 **Completes the binary→host protocol surface.** Every message and control request the `claude` binary sends the host is now both *parsed* and *used*: the two control requests that were previously rejected with an error are answered correctly, and every event that was parsed-but-only-logged is now surfaced in the GUI. After this release nothing the binary emits to the host is silently dropped or wrongly errored — it is acted on (when it is a request) or shown (when it carries information). A new on-demand **drift detector** keeps these native models in lock-step as the binary and its SDK evolve, with `KNOWN_SUBTYPES` now tracking the **full triaged 0.3.162 subtype surface** (receive + send + knowingly-triaged).

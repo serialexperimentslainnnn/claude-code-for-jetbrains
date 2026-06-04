@@ -148,7 +148,9 @@
   }
 
   function buildThinking() {
-    return buildFold('Thought process', true, reasoningExpanded, true);
+    var rec = buildFold('Thought process', true, reasoningExpanded, true);
+    rec.el.classList.add('reasoning'); // so Ctrl+O toggles thought-process folds only, not memory folds
+    return rec;
   }
 
   function buildMemory(meta) {
@@ -679,7 +681,7 @@
     reasoningExpanded = !reasoningExpanded;       // persists to folds that stream in later
     var c = conversationEl();
     if (!c) { return; }
-    var folds = c.querySelectorAll('details.fold.dim');
+    var folds = c.querySelectorAll('details.fold.reasoning');
     for (var j = 0; j < folds.length; j++) { folds[j].open = reasoningExpanded; }
   }
 

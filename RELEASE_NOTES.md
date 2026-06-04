@@ -21,7 +21,16 @@ The entire chat surface is now an embedded Chromium web view (JCEF) instead of S
 - **Restored/added:** Ctrl+O reasoning toggle (folds collapsed by default, with a hint), auto-follow scroll, the 🌈 Vibe Mode gag (Nyan Cat + rainbow), diffs open without stealing keyboard focus, request cards cap at half height with the body scrollable and actions always visible, `/login` runs in the IDE terminal (browser auto-capture) and shows in the palette, "Explain with Claude" carries the Claude icon, and a **Cancel** button on question cards.
 - **Fixes:** the build didn't compile (`object a ChatTheme` + a nested-comment KDoc); session cost counters and the JetBrains MCP server now read the binary's `mcpServers` (camelCase) reply; ⚙ menu reuses the formatted dashboard instead of plain-text dialogs.
 
-**Not yet re-ported from the Swing UI (tracked as follow-ups):** hunk-by-hunk partial diff acceptance (full accept/reject + native "View diff" do work), `jb://` jump-to-code links, attach-from-an-open-diff (current selection / current diff), and colorized code syntax highlighting (code blocks render, without theme colors yet).
+**Feature parity + web-only differentiators (4.0.0).** A second pass closed the remaining Swing gap and added what only the web view enables — still all frontend (backend wiring only reuses what already existed):
+
+- **Hunk-by-hunk partial diff acceptance.** Reviewable Edit/Write/MultiEdit permission cards show a checkbox per changed region; accepting a subset narrows the input (`HunkSelection.encodeInput`) so the binary writes only the chosen hunks.
+- **`jb://` jump-to-code links.** `@file` mentions render as clickable links that open the file at the line in the editor — DOMPurify-allowed and gated to the project root (`DiffPresenter.isWithinRoot`).
+- **Rich attach menu (📎).** A search box + Files / Directory / Image + current selection/file + a filterable **Recent files** list (icon + name), AI-Assistant-style — recents from `FilePickerHelper.recentFiles`.
+- **Syntax highlighting in the IDE's colours.** highlight.js token classes map to the live editor scheme (`DefaultLanguageHighlighterColors`), so code blocks match the IDE in any theme.
+- **Inline images** (`data:` URIs, kept in-bounds) and a **responsive** layout for narrow tool windows.
+- **Deliberately NOT added:** Mermaid / KaTeX — too much external bloat and they'd force relaxing the strict hash-pinned CSP. Kept the plugin lean (~1.6 MB) and the CSP intact.
+
+**Still deferred (small, low-value now):** selecting text from an *open diff* to attach, and an "expand/collapse all" button.
 
 ---
 

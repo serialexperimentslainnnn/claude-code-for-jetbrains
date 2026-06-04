@@ -442,32 +442,92 @@
   // straight to a file picker: files, a directory, the current editor selection,
   // the current file, and a Wayland-safe "paste image from clipboard" (read by
   // the host via AWT, since JCEF's web clipboard is unreliable under Wayland).
-  var ATTACH_ITEMS = [
-    { label: 'Add files…',         msg: { type: 'pickFiles' } },
-    { label: 'Add directory…',     msg: { type: 'pickDirectory' } },
-    { label: 'Current selection',  msg: { type: 'attachSelection' } },
-    { label: 'Current file',       msg: { type: 'attachCurrentFile' } },
-    { label: 'Paste image',        msg: { type: 'pasteClipboardImage', notify: true } }
-  ];
+  // Rich attach menu (AI-Assistant-style): a search box, the attach actions, and a filterable
+  // "Recent files" list. Recent files + available-context flags come from the host via cc.attachData.
+  var lastAttachData = { recent: [], hasSelection: false, hasFile: false };
+
+  function fileIconGlyph(ext) {
+    var e = (ext || '').toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].indexOf(e) !== -1) return attIconGlyph('image');
+    return attIconGlyph('file');
+  }
+
+  function attachMenuItem(label, onClick) {
+    return h('div', {
+      class: 'menu-item', attrs: { role: 'option' },
+      on: { click: function (e) { e.preventDefault(); e.stopPropagation(); onClick(); } }
+    }, h('span', { class: 'menu-item-label', text: label }));
+  }
+
+  function renderAttachMenu(menu, anchorEl) {
+    menu.innerHTML = '';
+    var search = h('input', { class: 'attach-search', attrs: { type: 'text', placeholder: 'Search recent files…' } });
+    var list = h('div', { class: 'attach-list' });
+
+    function paint(q) {
+      list.innerHTML = '';
+      var actions = [
+        { label: 'Files…',     fn: function () { send({ type: 'pickFiles' }); } },
+        { label: 'Directory…', fn: function () { send({ type: 'pickDirectory' }); } },
+        { label: 'Image…',     fn: function () { send({ type: 'pasteClipboardImage', notify: true }); } }
+      ];
+      if (lastAttachData.hasSelection) actions.push({ label: 'Current selection', fn: function () { send({ type: 'attachSelection' }); } });
+      if (lastAttachData.hasFile) actions.push({ label: 'Current file', fn: function () { send({ type: 'attachCurrentFile' }); } });
+      actions.forEach(function (a) { list.appendChild(attachMenuItem(a.label, function () { closeMenu(); a.fn(); })); });
+
+      var recent = Array.isArray(lastAttachData.recent) ? lastAttachData.recent : [];
+      var ql = (q || '').toLowerCase();
+      var matched = recent.filter(function (r) {
+        return !ql || (String(r.name || '')).toLowerCase().indexOf(ql) !== -1 || (String(r.path || '')).toLowerCase().indexOf(ql) !== -1;
+      });
+      if (matched.length) {
+        list.appendChild(h('div', { class: 'attach-section', text: 'Recent files' }));
+        matched.forEach(function (r) {
+          var row = h('div', {
+            class: 'menu-item attach-recent', attrs: { role: 'option', title: String(r.path || '') },
+            on: { click: function (e) { e.preventDefault(); e.stopPropagation(); closeMenu(); send({ type: 'attachPath', path: r.path }); } }
+          },
+            h('span', { class: 'attach-icon', html: fileIconGlyph(r.ext) }),
+            h('span', { class: 'attach-name', text: String(r.name || r.path || '') }));
+          list.appendChild(row);
+        });
+      }
+    }
+
+    menu.appendChild(search);
+    menu.appendChild(list);
+    search.addEventListener('input', function () { paint(search.value); if (openMenu && openMenu.anchor) positionMenu(menu, openMenu.anchor); });
+    search.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeMenu(); } });
+    paint('');
+    setTimeout(function () { try { search.focus(); } catch (e) { /* ignore */ } }, 0);
+  }
 
   function toggleAttachMenu(anchorEl) {
     if (openMenu && openMenu.pill === '__attach') { closeMenu(); return; }
     closeMenu();
-    var menu = h('div', { class: 'menu', attrs: { role: 'listbox' } });
-    for (var i = 0; i < ATTACH_ITEMS.length; i++) {
-      (function (it) {
-        var item = h('div', {
-          class: 'menu-item', attrs: { role: 'option' },
-          on: { click: function (e) { e.preventDefault(); e.stopPropagation(); closeMenu(); send(it.msg); } }
-        }, h('span', { class: 'menu-item-label', text: it.label }));
-        menu.appendChild(item);
-      })(ATTACH_ITEMS[i]);
-    }
+    var menu = h('div', { class: 'menu attach-menu' });
     document.body.appendChild(menu);
+    openMenu = { el: menu, pill: '__attach', anchor: anchorEl };
+    renderAttachMenu(menu, anchorEl);
     positionMenu(menu, anchorEl);
     anchorEl.classList.add('pill-open');
-    openMenu = { el: menu, pill: '__attach', anchor: anchorEl };
+    send({ type: 'requestAttachData' }); // refresh recents + context; cc.attachData re-renders
   }
+
+  // Host pushes recent files + available context; re-render the menu if it's open.
+  cc.attachData = function (payload) {
+    if (payload && typeof payload === 'object') {
+      lastAttachData = {
+        recent: Array.isArray(payload.recent) ? payload.recent : [],
+        hasSelection: !!payload.hasSelection,
+        hasFile: !!payload.hasFile
+      };
+    }
+    if (openMenu && openMenu.pill === '__attach' && openMenu.el) {
+      renderAttachMenu(openMenu.el, openMenu.anchor);
+      positionMenu(openMenu.el, openMenu.anchor);
+    }
+  };
 
   // ---- ghost suggestion -----------------------------------------------------
   function renderGhost() {

@@ -324,6 +324,16 @@ details.fold .fold-body p:first-child { margin-top: 0; }
 .diff-line.dl-hunk { color: var(--accent); opacity: .9; }
 .diff-line.dl-ctx { color: var(--dim); }
 
+/* highlight.js token colours, driven by the IDE editor scheme (JcefTheme synXxx vars). */
+.hljs-keyword, .hljs-meta .hljs-keyword, .hljs-selector-tag { color: var(--syn-keyword); }
+.hljs-string, .hljs-regexp, .hljs-meta-string { color: var(--syn-string); }
+.hljs-comment, .hljs-quote { color: var(--syn-comment); font-style: italic; }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--syn-number); }
+.hljs-title, .hljs-title.function_, .hljs-section, .hljs-name { color: var(--syn-function); }
+.hljs-type, .hljs-built_in, .hljs-class .hljs-title, .hljs-title.class_, .hljs-attribute { color: var(--syn-type); }
+.hljs-attr, .hljs-variable, .hljs-template-variable, .hljs-property { color: var(--text); }
+.hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: 600; }
+
 /* nested subagent activity inside an Agent/Task card */
 .tool-children { display: none; padding: 2px 0 2px 12px; margin: 0 0 0 10px; border-left: 2px solid var(--border); }
 .tool.open > .tool-children { display: block; }
@@ -446,6 +456,22 @@ mark.cc-hit.active { background: var(--accent); color: var(--bg); }
 .menu-item.selected::after { content: "✓"; margin-left: auto; color: var(--accent); font-size: 11px; }
 .menu-item .menu-desc { color: var(--dim); font-size: 11px; margin-left: auto; }
 
+/* rich attach menu (search + recent files), AI-Assistant style */
+.attach-menu { min-width: 290px; max-width: 380px; padding: 6px; }
+.attach-search {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text); font-family: var(--font); font-size: 12.5px; padding: 6px 9px;
+  border-radius: var(--radius-sm); margin-bottom: 6px; outline: none;
+}
+.attach-search:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.attach-search::placeholder { color: var(--dim); }
+.attach-list { max-height: 46vh; overflow-y: auto; }
+.attach-section { font-size: 10.5px; color: var(--dim); padding: 7px 10px 3px; letter-spacing: .05em; text-transform: uppercase; }
+.attach-recent { gap: 8px; }
+.attach-icon { flex: 0 0 auto; display: inline-flex; color: var(--dim); }
+.attach-icon svg { width: 14px; height: 14px; display: block; }
+.attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; min-width: 0; }
+
 /* ── queue strip ──────────────────────────────────────────────────────────── */
 .queue { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .queue-chip {
@@ -554,6 +580,12 @@ mark.cc-hit.active { background: var(--accent); color: var(--bg); }
   border-radius: var(--radius-sm); padding: 10px 12px;
 }
 .perm-body .dim, .perm-body .reason { color: var(--dim); font-size: 12px; }
+/* hunk-by-hunk partial acceptance */
+.perm-hunks { margin: 6px 0 4px; display: flex; flex-direction: column; gap: 5px; }
+.perm-hunks-head { font-size: 11.5px; color: var(--dim); }
+.perm-hunk { display: flex; align-items: center; gap: 8px; cursor: pointer; min-width: 0; }
+.perm-hunk input { flex: 0 0 auto; accent-color: var(--accent); margin: 0; }
+.perm-hunk-preview { font-family: var(--mono); font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .perm-body code { font-family: var(--mono); }
 
 .perm-actions, .q-actions {
@@ -849,6 +881,17 @@ mark.cc-hit.active { background: var(--accent); color: var(--bg); }
 /* ════════════════════════════════════════════════════════════════════════════
    REDUCED MOTION
    ════════════════════════════════════════════════════════════════════════════ */
+/* inline images from model markdown (only data: URIs pass the CSP img-src) — keep them in-bounds */
+.body img { max-width: 100%; height: auto; border-radius: var(--radius-sm); margin: 6px 0; }
+
+/* responsive: tight panels (the tool window can be narrow) look professional, not cramped */
+@media (max-width: 600px) {
+  #conversation { padding: 16px 12px 24px; }
+  #dock { padding: 8px 12px 12px; }
+  .composer-bar { flex-wrap: wrap; }
+  .dashboard .dash-inner, .dash-grid { grid-template-columns: 1fr !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .001ms !important;

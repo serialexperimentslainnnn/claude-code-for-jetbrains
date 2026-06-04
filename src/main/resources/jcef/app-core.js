@@ -143,7 +143,12 @@
     var clean;
     try {
       clean = (typeof window.DOMPurify !== "undefined" && window.DOMPurify)
-        ? window.DOMPurify.sanitize(raw, { ADD_ATTR: ["target"], FORBID_ATTR: ["style"] })
+        ? window.DOMPurify.sanitize(raw, {
+            ADD_ATTR: ["target"], FORBID_ATTR: ["style"],
+            // Default safe schemes + our internal jb: jump-to-code links + data:image/ (inline images;
+            // data:text/html stays blocked). Anything else (file:/javascript:/data:text…) is stripped.
+            ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+          })
         : raw;
     } catch (e2) {
       clean = raw;
@@ -380,6 +385,7 @@
   if (typeof cc.focusInput !== "function") cc.focusInput = function () {};
   if (typeof cc.insertText !== "function") cc.insertText = function () {};
   if (typeof cc.openDashboard !== "function") cc.openDashboard = function () {};
+  if (typeof cc.attachData !== "function") cc.attachData = function () {};
   if (typeof cc.attachments !== "function") cc.attachments = function () {};
   if (typeof cc.session !== "function") cc.session = function () {};
   if (typeof cc.mcp !== "function") cc.mcp = function () {};
