@@ -18,7 +18,7 @@ object ControlProtocol {
     fun newRequestId(): String = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
 
     /** stdin user message — sends a prompt (or a slash command, which is just user content starting with '/'). */
-    fun userMessage(content: String, parentToolUseId: String? = null): String =
+    fun userMessage(content: String, parentToolUseId: String? = null, uuid: String? = null): String =
         buildJsonObject {
             put("type", "user")
             putJsonObject("message") {
@@ -27,6 +27,8 @@ object ControlProtocol {
             }
             // put(key, String?) writes JsonNull when null, matching the protocol's explicit "parent_tool_use_id": null.
             put("parent_tool_use_id", parentToolUseId)
+            // Client-supplied message id so we can later `rewind_files` to this turn's checkpoint.
+            if (uuid != null) put("uuid", uuid)
         }.toString()
 
     /**
@@ -39,8 +41,9 @@ object ControlProtocol {
         content: String,
         images: List<Pair<String, String>>, // (mediaType, base64)
         parentToolUseId: String? = null,
+        uuid: String? = null,
     ): String {
-        if (images.isEmpty()) return userMessage(content, parentToolUseId)
+        if (images.isEmpty()) return userMessage(content, parentToolUseId, uuid)
         return buildJsonObject {
             put("type", "user")
             putJsonObject("message") {
@@ -61,6 +64,7 @@ object ControlProtocol {
                 }
             }
             put("parent_tool_use_id", parentToolUseId)
+            if (uuid != null) put("uuid", uuid)
         }.toString()
     }
 
@@ -249,5 +253,26 @@ object ControlProtocol {
             put("behavior", "deny")
             put("message", message)
             put("interrupt", interrupt)
+        })
+
+    /**
+     * request_user_dialog reply. The host implements no custom dialog kinds, so it cancels — the CLI then
+     * applies the dialog's own default. (UserDialogResult = {behavior:"cancelled"}.)
+     */
+    fun userDialogCancelled(requestId: String): String =
+        success(requestId, buildJsonObject { put("behavior", "cancelled") })
+
+    /** request_user_dialog completed with a host-produced [result] (UserDialogResult = {behavior:"completed",result}). */
+    fun userDialogCompleted(requestId: String, result: JsonObject): String =
+        success(requestId, buildJsonObject {
+            put("behavior", "completed")
+            put("result", result)
+        })
+
+    /** elicitation reply (ElicitResult). [action] ∈ accept|decline|cancel; [content] is only meaningful for accept. */
+    fun elicitationResult(requestId: String, action: String, content: JsonObject? = null): String =
+        success(requestId, buildJsonObject {
+            put("action", action)
+            if (content != null) put("content", content)
         })
 }

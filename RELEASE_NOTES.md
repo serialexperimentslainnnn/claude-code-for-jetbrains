@@ -1,3 +1,63 @@
+## v4.0.0 — 2026-06-04
+
+**Chat UI rebuilt on JCEF (embedded Chromium).**
+
+The entire chat surface is now an embedded Chromium web view (JCEF) instead of Swing — an inlined web app (no CDN, no external resources), themeable to your IDE. Diffs stay native via the IDE's `DiffManager`; everything else got a new web front end. The old Swing chat UI (and its tests) was removed.
+
+- **Modern streaming transcript.** Token-by-token rendering of sanitized model markdown (tables, lists), collapsible tool cards that show live elapsed time, fenced code blocks with a language label and a Copy button, and a Ctrl/Cmd+F find bar. Links never navigate the view; external `https` links open in your system browser.
+- **Web composer.** Input with model · mode · effort · thinking · provider controls, a queued-prompt strip, a predicted-next-prompt ghost suggestion, a `/` command palette, and attachment chips — including image **drag-and-drop** and **paste** straight into the composer, plus a file picker.
+- **Native permission / question / elicitation cards.** Permission prompts, `AskUserQuestion`, and MCP **elicitation** (URL flow gated to http/https, or a form built from the request schema) render as inline cards — no modal dialogs.
+- **Session dashboard.** A toggle flips the transcript to a dashboard: context breakdown by category, usage & cost (in / out / cache, USD when the binary reports it), account (email / org / plan / provider), the active model, in-flight subagents (with Stop), and MCP server health (status + reconnect / enable-disable per server).
+- **Hardened web view.** Served from an in-process, network-less origin with a full set of real security headers and a strict, **hash-pinned** CSP (every script and the stylesheet allowed only by `sha256`, no `unsafe-inline`/`unsafe-eval`, `connect-src 'none'`), so untrusted rendered content can never fetch, exfiltrate, or execute injected script.
+- **Requires JetBrains 2025.2+ (build 252+)** with JCEF (bundled with the IDE's JBR).
+
+**Post-rewrite UI/UX hardening (4.0.0).** A full QA pass over the new JCEF surface closed a stack of bugs and re-ported the Swing features that mattered — all in the frontend, **the Kotlin backend was not touched**:
+
+- **Subagents nest properly.** A Task/Agent card now contains its subagents' tool activity; each nested card collapses/expands on its own (was a descendant-selector bug forcing them all open).
+- **Native rewind as the default rollback.** "Restore" on an edit asks Claude Code to `rewind_files` to that turn (client-tagged message uuid + `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING`); falls back to the IDE-side per-file revert behind a confirmation (with a remembered "don't ask again"). Per-edit "View diff" + the Diff History rollback tab return.
+- **Clipboard paste on Wayland.** Ctrl+V and "Paste image" are read host-side (text via AWT, image via `wl-paste`/`xclip` resolved across common paths), so image paste works where JCEF's web clipboard comes up empty; text pastes without duplicating.
+- **Tool-card states** fade sky-blue↔amber while active, green on success, **red on error** (`is_error`). Inline edit diffs render colourised (added/removed/hunk).
+- **Composer** is a flat single-row control bar (📎 · provider · model · mode · effort · thinking | 🌈 · history · follow · send) with the previous icon set; a session-usage line (running/idle + context + tokens) sits above it.
+- **Restored/added:** Ctrl+O reasoning toggle (folds collapsed by default, with a hint), auto-follow scroll, the 🌈 Vibe Mode gag (Nyan Cat + rainbow), diffs open without stealing keyboard focus, request cards cap at half height with the body scrollable and actions always visible, `/login` runs in the IDE terminal (browser auto-capture) and shows in the palette, "Explain with Claude" carries the Claude icon, and a **Cancel** button on question cards.
+- **Fixes:** the build didn't compile (`object a ChatTheme` + a nested-comment KDoc); session cost counters and the JetBrains MCP server now read the binary's `mcpServers` (camelCase) reply; ⚙ menu reuses the formatted dashboard instead of plain-text dialogs.
+
+**Feature parity + web-only differentiators (4.0.0).** A second pass closed the remaining Swing gap and added what only the web view enables — still all frontend (backend wiring only reuses what already existed):
+
+- **Hunk-by-hunk partial diff acceptance.** Reviewable Edit/Write/MultiEdit permission cards show a checkbox per changed region; accepting a subset narrows the input (`HunkSelection.encodeInput`) so the binary writes only the chosen hunks.
+- **`jb://` jump-to-code links.** `@file` mentions render as clickable links that open the file at the line in the editor — DOMPurify-allowed and gated to the project root (`DiffPresenter.isWithinRoot`).
+- **Rich attach menu (📎).** A search box + Files / Directory / Image + current selection/file + a filterable **Recent files** list (icon + name), AI-Assistant-style — recents from `FilePickerHelper.recentFiles`.
+- **Syntax highlighting in the IDE's colours.** highlight.js token classes map to the live editor scheme (`DefaultLanguageHighlighterColors`), so code blocks match the IDE in any theme.
+- **Inline images** (`data:` URIs, kept in-bounds) and a **responsive** layout for narrow tool windows.
+- **Deliberately NOT added:** Mermaid / KaTeX — too much external bloat and they'd force relaxing the strict hash-pinned CSP. Kept the plugin lean (~1.6 MB) and the CSP intact.
+
+**Expert-consensus review hardening (4.0.0).** A multi-reviewer pass over the parity changes confirmed and closed a handful of real defects — still frontend + thin UI wiring, the protocol backend untouched:
+
+- **Partial accept never writes from a stale snapshot.** Accepting a subset of hunks now re-reads the file from disk first; if it changed since the card appeared, the plugin does a normal full accept instead of reconstructing from the cached snapshot (which could silently no-op or overwrite an external edit).
+- **No more `hunkCache` growth.** Cached hunk contexts are pruned to the still-pending permissions on each push and cleared on dispose, so permissions cleared on stop/interrupt can't leak.
+- **Big files stay responsive.** Files over 1 MB skip the EDT-side hunk read/diff (full accept still works) so a large file can't freeze the UI when its permission card renders.
+- **`sms:` links work again** — restored in the DOMPurify allowlist alongside `data:image/` inline images and the internal `jb:` scheme (`data:text/html` stays blocked).
+- **Zero-deprecation build** — the rewind-fallback dialog moved off the deprecated `Messages.showYesNoDialog(…DoNotAskOption)` overload to `MessageDialogBuilder.yesNo`. Tests green and `verifyPlugin` Compatible across IC-252 → IU-262 EAP.
+
+**Still deferred (small, low-value now):** selecting text from an *open diff* to attach, and an "expand/collapse all" button.
+
+---
+
+## v3.3.0 — 2026-06-04
+
+**The whole binary→host protocol surface, mapped into the UI — plus native MCP elicitation.**
+
+This release closes the loop on the native protocol: **every event the `claude` binary sends the host is now parsed *and* used** — answered when it's a request, surfaced in the chat when it carries information. The two control requests that used to fail with an error are handled correctly, and a batch of events that were parsed-but-invisible are now on screen. Under the hood it's all delegated to small single-responsibility collaborators (the chat session stays a thin orchestrator), and a new `./gradlew checkDrift` keeps the native models in step as the binary and SDK keep moving.
+
+- **MCP elicitation, natively.** When an MCP server needs your input, you now get an **inline card** (never a blocking dialog): a URL flow shows an **Open link** + Accept/Cancel; a form renders a labeled field per schema property and sends back what you type on Accept. URL links are restricted to `http`/`https` — an untrusted server can't get a `file:`/`javascript:` link opened.
+- **Predicted next prompt.** A `💡` chip above tdhe composer offers the binary's predicted follow-up; click to drop it into the input (you still review and send it yourself).
+- **See the model think.** The status line shows a live reasoning-token estimate mid-turn.
+- **Hooks, visible.** Each hook the binary runs appears as a single transcript row that updates from "running…" to ✓/✗ — no more silent hooks.
+- **Memory recall, surfaced.** A collapsible "Recalled N memories" row shows exactly what context influenced a turn.
+- **Smaller touches.** Tool-use summaries render as quiet notes, and file uploads now confirm success, not just failures. `request_user_dialog` requests are answered correctly instead of erroring.
+- **Drift detection.** A new `./gradlew checkDrift` keeps the native protocol models in sync as the `claude` binary and its SDK evolve.
+
+---
+
 ## v3.2.1 — 2026-06-04
 
 **Pick your model provider — Anthropic or DeepSeek — without ever leaking your Anthropic credentials.**

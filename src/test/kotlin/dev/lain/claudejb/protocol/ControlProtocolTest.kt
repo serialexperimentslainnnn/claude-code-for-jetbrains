@@ -267,6 +267,38 @@ class ControlProtocolTest {
     }
 
     @Test
+    fun `userDialogCancelled replies with behavior cancelled`() {
+        val root = parse(ControlProtocol.userDialogCancelled("r30"))
+        val response = root.obj("response")
+        assertEquals("success", response.string("subtype"))
+        assertEquals("r30", response.string("request_id"))
+        assertEquals("cancelled", response.obj("response").string("behavior"))
+    }
+
+    @Test
+    fun `userDialogCompleted carries behavior completed and result`() {
+        val result = buildJsonObject { put("choice", "yes") }
+        val inner = parse(ControlProtocol.userDialogCompleted("r31", result)).obj("response").obj("response")
+        assertEquals("completed", inner.string("behavior"))
+        assertEquals(result, inner["result"])
+    }
+
+    @Test
+    fun `elicitationResult omits content when null`() {
+        val inner = parse(ControlProtocol.elicitationResult("r32", "decline")).obj("response").obj("response")
+        assertEquals("decline", inner.string("action"))
+        assertTrue(!inner.containsKey("content"))
+    }
+
+    @Test
+    fun `elicitationResult carries content for accept`() {
+        val content = buildJsonObject { put("name", "ada") }
+        val inner = parse(ControlProtocol.elicitationResult("r33", "accept", content)).obj("response").obj("response")
+        assertEquals("accept", inner.string("action"))
+        assertEquals(content, inner["content"])
+    }
+
+    @Test
     fun `newRequestId is prefixed and unique`() {
         val a = ControlProtocol.newRequestId()
         val b = ControlProtocol.newRequestId()
