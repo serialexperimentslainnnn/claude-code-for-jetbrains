@@ -1,3 +1,11 @@
+## v4.0.2 — 2026-06-10
+
+**Fix: text paste on native-Wayland Linux IDEs.**
+
+On IntelliJ 2026.1+ running the native Wayland toolkit, AWT's clipboard comes up empty, so pasting **plain text** (`Ctrl+V`) into the composer did nothing — while image paste worked, because it already had a `wl-paste`/`xclip` fallback. Text paste now uses the same host-side fallback, reading a genuine `text/*` target. It's guarded so an image-only clipboard (e.g. a KDE screenshot) is never mis-pasted as raw bytes, and copied files (`text/uri-list`) / HTML markup are excluded. X11/XWayland, Windows, and macOS are unaffected.
+
+---
+
 ## v4.0.1 — 2026-06-10
 
 **Protocol upgrade to `claude` 2.1.170 / SDK 0.3.170.**
