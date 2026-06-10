@@ -263,6 +263,31 @@ class ProtocolEventsTest {
         assertEquals("sub", e.info.key.subpath)
     }
 
+    // --- model_refusal_fallback ---
+
+    @Test
+    fun `model_refusal_fallback decodes models category and retracted uuids`() {
+        val line = """{"type":"system","subtype":"model_refusal_fallback","trigger":"refusal",
+            "direction":"retry","original_model":"claude-opus-4-8","fallback_model":"claude-sonnet-4-6",
+            "request_id":"req_1","api_refusal_category":"cyber","api_refusal_explanation":"nope",
+            "retracted_message_uuids":["u1","u2"],"content":"declined","uuid":"x","session_id":"s"}""".trimIndent()
+        val e = parseOne<ClaudeEvent.ModelRefusalFallback>(line)
+        assertEquals("retry", e.info.direction)
+        assertEquals("claude-opus-4-8", e.info.originalModel)
+        assertEquals("claude-sonnet-4-6", e.info.fallbackModel)
+        assertEquals("cyber", e.info.apiRefusalCategory)
+        assertEquals(listOf("u1", "u2"), e.info.retractedMessageUuids)
+    }
+
+    @Test
+    fun `model_refusal_fallback tolerates an older CLI without the optional fields`() {
+        val line = """{"type":"system","subtype":"model_refusal_fallback","trigger":"refusal",
+            "direction":"retry","original_model":"a","fallback_model":"b","content":"x"}""".trimIndent()
+        val e = parseOne<ClaudeEvent.ModelRefusalFallback>(line)
+        assertNull(e.info.apiRefusalCategory)
+        assertTrue(e.info.retractedMessageUuids.isEmpty())
+    }
+
     // --- robustness: never throw on a hostile shape ---
 
     @Test
