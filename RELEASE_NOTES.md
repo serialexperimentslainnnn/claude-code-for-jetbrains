@@ -1,3 +1,11 @@
+## v4.0.3 — 2026-06-10
+
+**Fix: clipboard paste in the chat composer on native-Wayland Linux (the real fix for 4.0.2's symptom).**
+
+On IntelliJ running the native Wayland toolkit, the embedded browser's clipboard is isolated from the system clipboard, so `Ctrl+V` in the composer only pasted things copied *inside* the chat — never text or images from other apps. 4.0.2 added the right host-side reader (`wl-paste`) but it was never reached, because the real problem is *where the paste is triggered*, not how it's read. The composer now routes `Ctrl+V` through the host whenever the Wayland toolkit is active (the same path the **Attach → Image** button already used), so pasting text and images from any app works — including pasting back what a Copy button put on the clipboard. X11/XWayland, Windows, and macOS are unchanged.
+
+---
+
 ## v4.0.2 — 2026-06-10
 
 **Fix: text paste on native-Wayland Linux IDEs.**
