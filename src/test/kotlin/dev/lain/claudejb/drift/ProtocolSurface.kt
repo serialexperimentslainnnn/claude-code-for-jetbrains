@@ -100,6 +100,7 @@ data class ProtocolSurface(
             "thinking_tokens", "notification", "permission_denied", "session_state_changed",
             "api_retry", "commands_changed", "memory_recall", "files_persisted",
             "plugin_install", "hook_started", "hook_progress", "hook_response", "mirror_error",
+            "model_refusal_fallback",
             // system subtype we receive but knowingly leave as Other (URL-elicitation confirmation)
             "elicitation_complete",
             // control requests (binary -> host) we answer
@@ -112,6 +113,7 @@ data class ProtocolSurface(
             "get_settings", "mcp_status", "mcp_call", "mcp_message", "mcp_set_servers", "mcp_reconnect",
             "mcp_toggle", "read_file", "rewind_files", "seed_read_state", "stop_task", "background_tasks",
             "cancel_async_message", "file_suggestions", "reload_plugins", "apply_flag_settings",
+            "get_usage", "register_repo_root", "reload_skills",
         )
     }
 }

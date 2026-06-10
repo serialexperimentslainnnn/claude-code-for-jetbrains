@@ -1287,6 +1287,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 systemNotice("Warning: failed to persist part of the session transcript.")
             }
 
+            is ClaudeEvent.ModelRefusalFallback -> {
+                val i = event.info
+                val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                val to = i.fallbackModel.takeIf { it.isNotBlank() }?.let { " → retried on $it" } ?: " → retried on a fallback model"
+                systemNotice("The model declined to respond$cat$to.")
+            }
+
             is ClaudeEvent.Other -> log.debug("Ignored ${event.type}/${event.subtype}")
         }
     }
