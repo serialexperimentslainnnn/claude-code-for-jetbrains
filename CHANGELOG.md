@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.3] — 2026-06-10
+
+### Fixed
+- **Composer clipboard paste on native-Wayland IDEs (the real fix).** 4.0.2 added a host-side `wl-paste` *read* fallback, but `Ctrl+V` still did nothing — because the bug is the **trigger**, not the read. Under the native Wayland toolkit (`sun.awt.wl.WLToolkit`) the embedded **CEF browser's web clipboard is isolated from the system clipboard**, so the composer's `paste` event only ever saw content copied *inside* the web view, and never reached the host. `Ctrl+V` now routes through the host whenever the Wayland toolkit is active (a `hostClipboard` flag in the meta payload): the paste handler ignores CEF's isolated `clipboardData` and the host reads the real clipboard via `wl-paste`/`xclip` — the same path the **Attach → Image** button already used successfully. Text and image paste from external apps now work, as does pasting back what a Copy button placed on the system clipboard.
+  - Diagnosis (confirmed live): even the IDE's **own editors** can't read the external clipboard under this JBR (AWT/`CopyPasteManager` *reads* are broken on native Wayland — a focus-gated protocol limitation), so `wl-paste` (the `data-control` protocol) is the only mechanism that reaches the Wayland clipboard for reads. Clipboard *writes* (the Copy buttons → `CopyPasteManager.setContents`) already worked.
+
 ## [4.0.2] — 2026-06-10
 
 ### Fixed

@@ -158,8 +158,23 @@ object JcefState {
                     }
                 }
             })
+            // Under the native Wayland toolkit CEF's web clipboard is isolated from the system clipboard,
+            // so the composer must route Ctrl+V through the host (which reads via wl-paste) instead of
+            // trusting the paste event's clipboardData. See JcefChatPanel.PasteClipboard.
+            put("hostClipboard", hostClipboardPreferred)
         }
         return obj.toString()
+    }
+
+    /**
+     * True under the native Wayland toolkit (`sun.awt.wl.WLToolkit`), where CEF's web clipboard is isolated
+     * from the system clipboard and AWT clipboard *reads* are broken (even the IDE's own editors can't paste
+     * external content). The composer then routes paste through the host, which reads via `wl-paste`/`xclip`
+     * — the only mechanism that reaches the Wayland clipboard. Cached: the toolkit can't change at runtime.
+     */
+    private val hostClipboardPreferred: Boolean by lazy {
+        runCatching { java.awt.Toolkit.getDefaultToolkit().javaClass.name == "sun.awt.wl.WLToolkit" }
+            .getOrDefault(false)
     }
 
     /** The model pill label: the binary's displayName when available, else derived from the id, else a default. */
