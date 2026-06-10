@@ -546,3 +546,23 @@ data class MirrorErrorKey(
     val sessionId: String = "",
     val subpath: String? = null,
 )
+
+/**
+ * `system/model_refusal_fallback` — the primary model ended the stream with stop_reason "refusal" and the
+ * turn was retried once on [fallbackModel] (the swap is made persistent for the session; `direction:"retry"`).
+ * "revert"/"sticky" are retained in the enum for SDK-consumer compat and are no longer emitted. The refused
+ * partial leg is retracted: [retractedMessageUuids] names the wire uuids to evict (idempotent on receipt).
+ * [content] is human-readable display prose. [apiRefusalCategory] is an open string ("cyber", "bio", …).
+ */
+@Serializable
+data class ModelRefusalFallbackInfo(
+    val trigger: String = "refusal",
+    val direction: String = "retry",               // retry | revert | sticky (only "retry" is emitted now)
+    @SerialName("original_model") val originalModel: String = "",
+    @SerialName("fallback_model") val fallbackModel: String = "",
+    @SerialName("request_id") val requestId: String? = null,
+    @SerialName("api_refusal_category") val apiRefusalCategory: String? = null,
+    @SerialName("api_refusal_explanation") val apiRefusalExplanation: String? = null,
+    @SerialName("retracted_message_uuids") val retractedMessageUuids: List<String> = emptyList(),
+    val content: String = "",
+)

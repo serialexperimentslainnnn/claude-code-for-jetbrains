@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] — 2026-06-10
+
+**Protocol upgrade to `claude` 2.1.170 / SDK 0.3.170** — `./gradlew checkDrift` flagged four new protocol kinds; reconciled and re-verified green at the new baseline.
+
+### Added
+- **`system/model_refusal_fallback` handling.** When the primary model ends a turn with stop_reason `refusal`, the binary now retries once on a fallback model and emits this system message. The plugin models it (`ModelRefusalFallbackInfo`) and surfaces a transcript notice ("The model declined to respond (\<category\>) → retried on \<fallback-model\>.") instead of silently dropping the frame. Previously the parser left it as `Other`, so a refusal-and-retry was invisible.
+
+### Changed
+- **Drift baseline → `claude` 2.1.170 / SDK 0.3.170.** Triaged the three new host→binary control requests `get_usage`, `register_repo_root`, and `reload_skills` into the known protocol surface (`ProtocolSurface.KNOWN_SUBTYPES`) — the plugin doesn't send them yet, but they're no longer reported as drift. `checkDrift` is green at the new baseline.
+
 ## [4.0.0] — 2026-06-04
 
 **Chat UI rebuilt on JCEF (embedded Chromium), then hardened and extended — all frontend; the Kotlin backend was untouched.** See `RELEASE_NOTES.md` for the full story.
