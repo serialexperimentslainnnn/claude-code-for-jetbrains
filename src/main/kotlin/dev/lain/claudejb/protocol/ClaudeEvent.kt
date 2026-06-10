@@ -148,6 +148,9 @@ sealed interface ClaudeEvent {
     /** `system/mirror_error` — the binary's transcript-mirror batch was dropped (data loss). */
     data class MirrorError(val info: MirrorErrorInfo) : ClaudeEvent
 
+    /** `system/model_refusal_fallback` — the primary model refused; the turn was retried on a fallback model. */
+    data class ModelRefusalFallback(val info: ModelRefusalFallbackInfo) : ClaudeEvent
+
     /** Reply from the binary to a host-initiated control_request, correlated by [requestId]. */
     data class ControlResult(
         val requestId: String,
@@ -212,6 +215,7 @@ object ProtocolParser {
         "hook_progress" -> decode(root, HookProgressInfo.serializer(), ClaudeEvent::HookProgress, "system", root)
         "hook_response" -> decode(root, HookResponseInfo.serializer(), ClaudeEvent::HookResponse, "system", root)
         "mirror_error" -> decode(root, MirrorErrorInfo.serializer(), ClaudeEvent::MirrorError, "system", root)
+        "model_refusal_fallback" -> decode(root, ModelRefusalFallbackInfo.serializer(), ClaudeEvent::ModelRefusalFallback, "system", root)
         else -> listOf(ClaudeEvent.Other("system", root.str("subtype"), root))
     }
 

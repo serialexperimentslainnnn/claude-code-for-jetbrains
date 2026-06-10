@@ -1,3 +1,16 @@
+## v4.0.1 — 2026-06-10
+
+**Protocol upgrade to `claude` 2.1.170 / SDK 0.3.170.**
+
+Keeps the plugin in lock-step with the latest Claude Code binary. The drift detector (`./gradlew checkDrift`) flagged four new protocol kinds in 2.1.170; all are reconciled and the protocol surface is verified green again.
+
+- **Model refusal fallback is now visible.** When the primary model declines a turn (stop_reason `refusal`), the binary retries it once on a fallback model. The plugin now recognises this new `system/model_refusal_fallback` message and shows a transcript notice — e.g. *"The model declined to respond (cyber) → retried on claude-sonnet-4-6."* — instead of silently dropping it, so you always know when a retry happened and which model produced the answer.
+- **Protocol surface re-baselined** to `claude` 2.1.170 / SDK 0.3.170, with the new `get_usage` / `register_repo_root` / `reload_skills` host→binary control requests triaged into the known surface.
+
+No UI or behavioural changes beyond the above; backward-compatible with older binaries (the new fields are all optional).
+
+---
+
 ## v4.0.0 — 2026-06-04
 
 **Chat UI rebuilt on JCEF (embedded Chromium).**
