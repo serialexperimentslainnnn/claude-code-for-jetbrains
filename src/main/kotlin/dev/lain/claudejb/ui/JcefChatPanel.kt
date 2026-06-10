@@ -376,7 +376,8 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                     if (!text.isNullOrEmpty()) {
                         host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
                     } else {
-                        EditorContextProvider.clipboardImageHelp()?.let { notifyClipboard("Couldn't read the clipboard — $it") }
+                        val help = EditorContextProvider.clipboardImageHelp()
+                        notifyClipboard(if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.")
                     }
                 }
             }

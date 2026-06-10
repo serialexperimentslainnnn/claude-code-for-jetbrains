@@ -43,6 +43,7 @@
   var els = null;            // { card, input, send, pills:{provider,model,mode,effort,thinking}, queue, ghost, readout, sendIcon }
   var lastState = null;      // last cc.state payload
   var commands = [];         // from cc.meta
+  var hostClipboard = false; // from cc.meta: native-Wayland toolkit → route paste through the host (wl-paste)
   var ghostText = '';        // current ghost suggestion (empty field only)
   var openMenu = null;       // { el, closer } for an open pill menu
   var paletteState = { items: [], active: 0 };
@@ -661,6 +662,15 @@
   function wireImagePaste(input) {
     if (!input) return;
     input.addEventListener('paste', function (e) {
+      // Native-Wayland toolkit: CEF's web clipboard is isolated from the system clipboard, so
+      // `clipboardData` only ever exposes what was copied *inside* the web view — never the system
+      // selection. Ignore it entirely and let the host read the real clipboard via wl-paste.
+      if (hostClipboard) {
+        e.preventDefault();
+        send({ type: 'pasteClipboard' });
+        return;
+      }
+
       var cd = e.clipboardData || window.clipboardData;
       if (!cd) return;
 
@@ -963,6 +973,7 @@
 
   cc.meta = function (m) {
     commands = (m && Array.isArray(m.commands)) ? m.commands.slice() : [];
+    if (m && typeof m.hostClipboard === 'boolean') hostClipboard = m.hostClipboard;
     // refresh palette list if open
     var p = CC.els && CC.els.palette;
     if (p && p.__built && !p.hasAttribute('hidden')) {
