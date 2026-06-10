@@ -74,4 +74,53 @@ class EditorContextProviderImageTest {
         val txt = File(dir.toFile(), "data.txt").apply { writeText("not an image") }
         assertNull(EditorContextProvider.imageFromFile(txt.absolutePath))
     }
+
+    // --- preferredTextType: the Wayland/X11 clipboard-text guard (image-vs-text selection) ---
+
+    @Test
+    fun `preferredTextType prefers a utf-8 plain-text mime`() {
+        assertEquals(
+            "text/plain;charset=utf-8",
+            EditorContextProvider.preferredTextType(listOf("text/html", "text/plain;charset=utf-8", "text/plain")),
+        )
+    }
+
+    @Test
+    fun `preferredTextType accepts X11 atom targets from xclip`() {
+        // xclip TARGETS for a typical text copy — no text/plain;charset variant, atoms instead.
+        assertEquals(
+            "UTF8_STRING",
+            EditorContextProvider.preferredTextType(listOf("TARGETS", "STRING", "UTF8_STRING", "TEXT")),
+        )
+        assertEquals("STRING", EditorContextProvider.preferredTextType(listOf("TARGETS", "STRING", "TEXT")))
+    }
+
+    @Test
+    fun `preferredTextType falls back to plain then any other text type`() {
+        assertEquals("text/plain", EditorContextProvider.preferredTextType(listOf("text/html", "text/plain")))
+        assertEquals("text/markdown", EditorContextProvider.preferredTextType(listOf("text/markdown")))
+    }
+
+    @Test
+    fun `preferredTextType returns null for an image-only clipboard (the Wayland leak guard)`() {
+        // KDE Plasma screenshot copy: image types + a suggested-filename, but NO real text/* target.
+        val kdeImageTypes = listOf(
+            "image/png", "application/x-qt-image", "x-kde-force-image-copy",
+            "application/x-kde-suggestedfilename", "image/avif", "image/bmp",
+        )
+        assertNull(EditorContextProvider.preferredTextType(kdeImageTypes))
+    }
+
+    @Test
+    fun `preferredTextType excludes uri-list and html (copied files and markup are not a plain paste)`() {
+        // A file copied from a file manager advertises text/uri-list — must NOT be read as pasted text.
+        assertNull(EditorContextProvider.preferredTextType(listOf("text/uri-list")))
+        // html-only (no plain) is not the plain-paste target either.
+        assertNull(EditorContextProvider.preferredTextType(listOf("text/html")))
+    }
+
+    @Test
+    fun `preferredTextType returns null for an empty listing`() {
+        assertNull(EditorContextProvider.preferredTextType(emptyList()))
+    }
 }

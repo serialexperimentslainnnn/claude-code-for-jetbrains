@@ -67,17 +67,34 @@ object EditorContextProvider {
      */
     fun imageFromClipboard(): Attachment.Image? = awtClipboardImage() ?: linuxClipboardImage()
 
-    /** True if the system clipboard currently holds plain text (so a paste is a text paste, not an image). */
-    fun clipboardHasText(): Boolean = runCatching {
-        Toolkit.getDefaultToolkit().systemClipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)
-    }.getOrDefault(false)
+    /**
+     * True if the system clipboard currently holds plain text (so a paste is a text paste, not an image).
+     * AWT first; on Linux under the **native Wayland toolkit** (`sun.awt.wl.WLToolkit`) AWT's clipboard is
+     * unreliable, so we also consult `wl-paste`/`xclip`'s advertised types (a text MIME must be present).
+     */
+    fun clipboardHasText(): Boolean {
+        val awt = runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)
+        }.getOrDefault(false)
+        if (awt) return true
+        return isLinux() && linuxClipboardTextType() != null
+    }
 
-    /** Plain-text contents of the system clipboard, or null. AWT's stringFlavor is reliable even on Wayland. */
-    fun clipboardText(): String? = runCatching {
-        val cb = Toolkit.getDefaultToolkit().systemClipboard
-        if (!cb.isDataFlavorAvailable(DataFlavor.stringFlavor)) return null
-        (cb.getData(DataFlavor.stringFlavor) as? String)?.takeIf { it.isNotEmpty() }
-    }.getOrNull()
+    /**
+     * Plain-text contents of the system clipboard, or null. AWT first; on Linux it falls back to
+     * `wl-paste`/`xclip` (AWT's stringFlavor is empty/unreliable under the native Wayland toolkit). The
+     * fallback only reads a real `text/…` target — never `wl-paste -n` blindly, which on an image-only
+     * clipboard emits raw image bytes.
+     */
+    fun clipboardText(): String? {
+        runCatching {
+            val cb = Toolkit.getDefaultToolkit().systemClipboard
+            if (cb.isDataFlavorAvailable(DataFlavor.stringFlavor)) {
+                (cb.getData(DataFlavor.stringFlavor) as? String)?.takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        return linuxClipboardText()
+    }
 
     private fun awtClipboardImage(): Attachment.Image? = runCatching {
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
@@ -116,6 +133,65 @@ object EditorContextProvider {
         if (wlPaste != null) imageFromUriList(listOf(wlPaste, "-t", "text/uri-list"))?.let { return it }
         if (xclip != null) imageFromUriList(listOf(xclip, "-selection", "clipboard", "-t", "text/uri-list", "-o"))?.let { return it }
         return null
+    }
+
+    /**
+     * Wayland/X11 clipboard **text** via external CLIs (no-op off Linux, or when none are installed) — the
+     * fallback for the native Wayland toolkit, where AWT's stringFlavor is empty. Only a genuine `text/…`
+     * target is read (via [preferredTextType]), so an image-only clipboard never leaks raw bytes here.
+     */
+    private fun linuxClipboardText(): String? {
+        if (!isLinux()) return null
+        findExecutable("wl-paste")?.let { wlPaste ->
+            preferredTextType(listTypes(listOf(wlPaste, "--list-types")))?.let { type ->
+                // -n: don't append the trailing newline wl-paste adds by default.
+                runProcessBytes(listOf(wlPaste, "-t", type, "-n"))?.toString(Charsets.UTF_8)
+                    ?.takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        findExecutable("xclip")?.let { xclip ->
+            preferredTextType(listTypes(listOf(xclip, "-selection", "clipboard", "-t", "TARGETS", "-o")))?.let { type ->
+                runProcessBytes(listOf(xclip, "-selection", "clipboard", "-t", type, "-o"))?.toString(Charsets.UTF_8)
+                    ?.takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** The clipboard's preferred text target name, or null when no `text/…` is offered (cheap presence check). */
+    private fun linuxClipboardTextType(): String? {
+        findExecutable("wl-paste")?.let { wlPaste ->
+            preferredTextType(listTypes(listOf(wlPaste, "--list-types")))?.let { return it }
+        }
+        findExecutable("xclip")?.let { xclip ->
+            preferredTextType(listTypes(listOf(xclip, "-selection", "clipboard", "-t", "TARGETS", "-o")))?.let { return it }
+        }
+        return null
+    }
+
+    /** Run a type-listing command and split its stdout into trimmed non-empty lines (empty on failure). */
+    private fun listTypes(listCmd: List<String>): List<String> =
+        runProcessBytes(listCmd)?.toString(Charsets.UTF_8)
+            ?.lineSequence()?.map { it.trim() }?.filter { it.isNotEmpty() }?.toList()
+            ?: emptyList()
+
+    /**
+     * Choose the best text target from a tool's advertised types/TARGETS, or null when none is textual.
+     * Pure (no I/O) so the image-vs-text guard is unit-testable. Prefers a UTF-8 plain-text target; accepts
+     * X11 atom names (`UTF8_STRING`/`STRING`/`TEXT`) from xclip TARGETS; and **excludes `text/uri-list`**
+     * (copied file paths, handled as an image elsewhere) and `text/html` (markup, not the plain paste).
+     */
+    fun preferredTextType(types: List<String>): String? {
+        fun first(p: (String) -> Boolean) = types.firstOrNull(p)
+        return first { it.equals("text/plain;charset=utf-8", ignoreCase = true) }
+            ?: first { it == "UTF8_STRING" }
+            ?: first { it.equals("text/plain", ignoreCase = true) }
+            ?: first { it == "STRING" || it == "TEXT" }
+            ?: first {
+                it.startsWith("text/", ignoreCase = true) &&
+                    !it.equals("text/uri-list", ignoreCase = true) &&
+                    !it.startsWith("text/html", ignoreCase = true)
+            }
     }
 
     private fun isLinux() = System.getProperty("os.name").orEmpty().lowercase().contains("linux")
@@ -199,8 +275,7 @@ object EditorContextProvider {
 
     /** From a tool's type listing, choose the best image MIME (png, then jpeg, then any image type), or null. */
     private fun pickImageType(listCmd: List<String>): String? {
-        val out = runProcessBytes(listCmd)?.toString(Charsets.UTF_8) ?: return null
-        val types = out.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val types = listTypes(listCmd)
         return types.firstOrNull { it == "image/png" }
             ?: types.firstOrNull { it == "image/jpeg" || it == "image/jpg" }
             ?: types.firstOrNull { it.startsWith("image/") }

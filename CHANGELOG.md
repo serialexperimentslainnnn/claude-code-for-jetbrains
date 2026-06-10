@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.2] — 2026-06-10
+
+### Fixed
+- **Text paste broken on native-Wayland IDEs.** On IntelliJ 2026.1+ running the native Wayland toolkit (`sun.awt.wl.WLToolkit`), AWT's clipboard is empty/unreliable, so `Ctrl+V` of **plain text** into the composer did nothing (image paste already worked — it had a `wl-paste`/`xclip` fallback; text didn't). Text paste now falls back to the same host-side CLIs, reading a real `text/*` target. The selection is guarded (`preferredTextType`) so an **image-only** clipboard — e.g. a KDE screenshot, where a blind `wl-paste -n` emits raw PNG bytes — is never mis-read as text, and `text/uri-list` (a copied file) and `text/html` (markup) are excluded from the plain paste. X11/XWayland and Windows/macOS are unaffected (AWT works there, so the fallback never triggers).
+
 ## [4.0.1] — 2026-06-10
 
 **Protocol upgrade to `claude` 2.1.170 / SDK 0.3.170** — `./gradlew checkDrift` flagged four new protocol kinds; reconciled and re-verified green at the new baseline.
