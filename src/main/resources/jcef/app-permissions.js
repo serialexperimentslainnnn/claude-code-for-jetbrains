@@ -306,6 +306,30 @@
     );
   }
 
+  // Render a unified-diff string as a read-only, colour-coded block (red removed / green added / hunk headers).
+  // Uses textContent per line (never innerHTML) so file contents can't inject markup. Bounded for very large diffs.
+  function renderPermDiff(text) {
+    var pre = h('pre', { class: 'perm-diff' });
+    var code = h('code', {});
+    var lines = String(text).split('\n');
+    var MAX = 400;
+    var n = Math.min(lines.length, MAX);
+    for (var i = 0; i < n; i++) {
+      var line = lines[i];
+      var c0 = line.charAt(0);
+      var cls = 'dl-ctx';
+      if (line.indexOf('@@') === 0) cls = 'dl-hunk';
+      else if (c0 === '+') cls = 'dl-add';
+      else if (c0 === '-') cls = 'dl-del';
+      code.appendChild(h('span', { class: 'diff-line ' + cls, text: line + '\n' }));
+    }
+    if (lines.length > MAX) {
+      code.appendChild(h('span', { class: 'diff-line dl-ctx', text: '… (' + (lines.length - MAX) + ' more lines — use View diff)\n' }));
+    }
+    pre.appendChild(code);
+    return pre;
+  }
+
   function buildPermCard(card) {
     var id = card.id;
     var tool = card.tool;
@@ -322,53 +346,20 @@
     if (card.blockedPath) bodyChildren.push(h('div', { class: 'perm-blocked', text: 'Blocked path: ' + String(card.blockedPath) }));
     if (card.decisionReason) bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
 
-    // Hunk-by-hunk: a checkbox per changed region (all ticked). Accept writes only the ticked hunks.
-    var hunkChecks = [];
-    if (Array.isArray(card.hunks) && card.hunks.length > 1) {
-      var hunkRows = card.hunks.map(function (hk) {
-        var cb = h('input', { attrs: { type: 'checkbox', checked: 'checked' } });
-        cb.checked = true;
-        cb.__hunkIndex = (typeof hk.index === 'number') ? hk.index : 0;
-        cb.addEventListener('change', updateAccept);
-        hunkChecks.push(cb);
-        return h('label', { class: 'perm-hunk' }, cb,
-          h('span', { class: 'perm-hunk-preview', text: (hk.preview != null ? String(hk.preview) : '') || '(change)' }));
-      });
-      bodyChildren.push(h('div', { class: 'perm-hunks' },
-        h('div', { class: 'perm-hunks-head', text: 'Apply selected changes:' }), hunkRows));
+    // Read-only unified diff for reviewable edits: shows exactly what changes (red removed / green added). No
+    // per-line selection — the whole edit is accepted or rejected.
+    if (card.diff != null && String(card.diff).length) {
+      bodyChildren.push(renderPermDiff(String(card.diff)));
     }
 
-    function acceptedHunks() {
-      if (!hunkChecks.length) return undefined;
-      var sel = [];
-      for (var i = 0; i < hunkChecks.length; i++) if (hunkChecks[i].checked) sel.push(hunkChecks[i].__hunkIndex);
-      // all ticked → undefined (normal full accept); otherwise the chosen subset
-      return sel.length === hunkChecks.length ? undefined : sel;
-    }
-
-    function anyHunkChecked() {
-      if (!hunkChecks.length) return true; // no hunk UI → normal accept
-      for (var i = 0; i < hunkChecks.length; i++) if (hunkChecks[i].checked) return true;
-      return false;
-    }
-
-    // Accept with zero hunks ticked is a no-op write (an error for Edit); disable it so the user can't trigger it.
+    // Edits are ATOMIC: accept or reject the whole change. Per-hunk "apply this line, not that one" selection was
+    // removed — picking a subset of a coherent edit produces broken code, and it rendered as a confusing checklist.
+    // The full change is viewable via "View diff" (and the IDE auto-opens the diff tab when the card appears).
     var acceptBtn = h('button', {
       class: 'btn primary',
       text: 'Accept',
-      on: { click: function () {
-        if (!anyHunkChecked()) return;
-        var msg = { type: 'resolvePermission', id: id, allow: true };
-        var hk = acceptedHunks();
-        if (hk !== undefined) msg.hunks = hk;
-        send(msg);
-      } }
+      on: { click: function () { send({ type: 'resolvePermission', id: id, allow: true }); } }
     });
-    function updateAccept() {
-      var ok = anyHunkChecked();
-      if (ok) { acceptBtn.removeAttribute('disabled'); }
-      else { acceptBtn.setAttribute('disabled', 'disabled'); }
-    }
 
     var actions = [
       acceptBtn,

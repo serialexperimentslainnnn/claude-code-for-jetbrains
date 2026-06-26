@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.5] — 2026-06-27
+
+### Changed
+- **Permission cards for edits now show a read-only diff instead of per-line checkboxes.** The previous hunk-by-hunk partial-acceptance UI (a checkbox per changed region) rendered as a confusing checklist and, worse, let you apply an incoherent subset of an edit — a reliable way to produce broken code. Edits are now **atomic**: the card shows a proper colour-coded unified diff (red removed / green added) and you accept or reject the whole change. The full diff is still available via **View diff** and the IDE's auto-opened diff tab. The partial-accept plumbing (`hunkCache`, per-hunk encode/reconstruct in the card path) was removed.
+
 ## [4.0.4] — 2026-06-26
 
 A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in the meantime; protocol re-baselined).
