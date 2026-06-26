@@ -107,7 +107,12 @@
     var node = el('div', { class: 'msg user' });
     node.appendChild(head);
     node.appendChild(body);
-    return { el: node, bodyNode: body, kind: 'md' };
+    // User prompts are shown VERBATIM — never run through marked/markdown. What the
+    // user typed is what the model received; rendering it as Markdown would mangle
+    // literal `*`, backticks, `#`, indentation, etc. 'text' uses textContent (no
+    // parsing, no sanitize) and CSS .msg.user .body keeps white-space: pre-wrap so
+    // newlines/indentation survive.
+    return { el: node, bodyNode: body, kind: 'text' };
   }
 
   function buildAssistant() {
@@ -530,6 +535,23 @@
   // ---- search -------------------------------------------------------------
   var currentQuery = '';
   var searchHits = [];
+  var activeIndex = 0;
+
+  // Move the active highlight to hit [i] (wrapping), scroll it into view, and refresh the counter. The find bar
+  // previously marked the first hit but never scrolled to it and offered no next/prev — you could see "10 matches"
+  // and never reach any of them.
+  function setActiveHit(i) {
+    if (!searchHits.length) { activeIndex = 0; updateFindCount(); return; }
+    var n = searchHits.length;
+    activeIndex = ((i % n) + n) % n; // wrap both directions
+    for (var k = 0; k < n; k++) searchHits[k].classList.remove('active');
+    var hit = searchHits[activeIndex];
+    hit.classList.add('active');
+    try { hit.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* older engines */ }
+    updateFindCount();
+  }
+  function nextHit() { setActiveHit(activeIndex + 1); }
+  function prevHit() { setActiveHit(activeIndex - 1); }
 
   function clearHighlights() {
     var c = conversationEl();
@@ -594,7 +616,10 @@
       total += highlightInNode(rec.bodyNode, lower);
     });
     if (searchHits.length) {
-      searchHits[0].classList.add('active');
+      // On a fresh (non-silent) query, jump to the first hit; on a silent re-highlight (streaming batch) keep the
+      // user's current position if still valid.
+      if (silent) { setActiveHit(Math.min(activeIndex, searchHits.length - 1)); }
+      else { setActiveHit(0); }
     }
     if (!silent) { safeSend({ type: 'search', count: total }); }
   }
@@ -620,7 +645,7 @@
     var q = (findInput && findInput.value) || '';
     if (!q) { findCount.textContent = ''; return; }
     var n = searchHits.length;
-    findCount.textContent = n === 0 ? 'No results' : (n + (n === 1 ? ' match' : ' matches'));
+    findCount.textContent = n === 0 ? 'No results' : ((activeIndex + 1) + ' / ' + n);
   }
 
   function ensureFindBar() {
@@ -647,7 +672,12 @@
     findInput.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' || e.keyCode === 27) {
         e.preventDefault();
+        e.stopPropagation();
         closeFindBar();
+      } else if (e.key === 'Enter' || e.keyCode === 13) {
+        // Enter → next match, Shift+Enter → previous (standard find-bar navigation).
+        e.preventDefault();
+        if (e.shiftKey) prevHit(); else nextHit();
       }
     });
 
@@ -701,6 +731,10 @@
       toggleReasoningFolds();
     } else if ((key === 'Escape' || e.keyCode === 27) && findBar && !findBar.hidden) {
       e.preventDefault();
+      // Stop the event here so closing the find bar doesn't ALSO reach the composer's Escape handler, which
+      // would interrupt the running turn (capture phase runs before the composer's bubble handler).
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
       closeFindBar();
     }
   }, true); // capture phase — beat in-view handlers; IDE-level capture is handled host-side if needed

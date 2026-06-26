@@ -110,6 +110,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var strictMcpConfig: Boolean = false; private set
     @Volatile var outputStyle: String = "default"; private set
     @Volatile var turnActive: Boolean = false; private set
+    /** True between an interrupt request and its ack/timeout/turn-end — drives the Stop button's "Interrupting…" label. */
+    @Volatile var interrupting: Boolean = false; private set
     @Volatile var rateLimit: RateLimitInfo? = null; private set
 
     // --- live state surfaced by the system/* events; read by the GUI / diagnostics / tests ---
@@ -224,6 +226,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // restart's old-process termination callback (which arrives asynchronously, after the new process is up)
     // is ignored instead of tearing down the freshly-started session. See start()/onTerminated().
     @Volatile private var generation = 0
+    // True from the moment start() dispatches its launch until that launch publishes the process (or bails). Set
+    // synchronously on the EDT in start() so a second send()→start() during the (multi-second) env-resolution
+    // window can't spawn a SECOND claude process for the same session. Cleared by the launch's own pooled block
+    // (only when it still owns the current generation) and reset by stop()/dispose() so a restart can proceed.
+    @Volatile private var starting = false
     /**
      * Pending-prompt buffer. [ArrayDeque] is NOT thread-safe; **the queue is only ever touched on the EDT**
      * (send / sendSideQuestion / removeQueued / pump wrap their queue access in [edt]). Do not access it from a
@@ -325,7 +332,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * "process up".
      */
     fun start(resume: Boolean = sessionId != null): Boolean {
-        if (isRunning()) return true
+        // `starting` blocks a concurrent launch (the double-spawn bug): two send()→start() calls in the
+        // env-resolution window both saw isRunning()==false and each spawned a process. start() runs on the EDT,
+        // so this check/set is race-free between start() calls.
+        if (isRunning() || starting) return true
         val settings = ClaudeSettings.getInstance(project)
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run {
             notifyMissingBinary()
@@ -343,33 +353,44 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
+        starting = true
         reconciler.onMessageBoundary()
         val launchGen = ++generation // this launch's generation; the process's onTerminated is gated on it
 
         // Off the EDT: env resolution sources a shell (seconds) and process spawn can block. Hand back to the EDT
         // for the state mutations the GUI observes (ready/fireState/pump) and the queue invariant.
         ApplicationManager.getApplication().executeOnPooledThread {
-            val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
-            val opts = launchOptions()
-            val proc = ClaudeProcess(
-                binary = binary,
-                workDir = workDir,
-                args = SessionLauncher.buildArgs(opts, resume, SessionLauncher.mcpConfigJson(opts)),
-                nodeOverride = settings.nodePath,
-                extraEnv = env,
-                onEvent = ::onEvent,
-                onTerminated = { code -> onTerminated(launchGen, code) },
-            )
-            process = proc
-            // ClaudeProcess.start() may throw if the process fails to spawn — surface it instead of leaving a
-            // half-initialized session that never becomes ready.
-            val started = runCatching { proc.start() }
-            if (started.isFailure) {
-                process = null
-                log.warn("Failed to start the claude process", started.exceptionOrNull())
-                notifyError("Failed to start Claude Code: ${started.exceptionOrNull()?.message ?: "unknown error"}")
-                return@executeOnPooledThread
-            }
+            try {
+                val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
+                // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
+                // launch is stale — don't spawn an orphan process nothing will ever tear down.
+                if (launchGen != generation) return@executeOnPooledThread
+                val opts = launchOptions()
+                val proc = ClaudeProcess(
+                    binary = binary,
+                    workDir = workDir,
+                    args = SessionLauncher.buildArgs(opts, resume, SessionLauncher.mcpConfigJson(opts)),
+                    nodeOverride = settings.nodePath,
+                    extraEnv = env,
+                    onEvent = ::onEvent,
+                    onTerminated = { code -> onTerminated(launchGen, code) },
+                )
+                process = proc
+                // ClaudeProcess.start() may throw if the process fails to spawn — surface it instead of leaving a
+                // half-initialized session that never becomes ready.
+                val started = runCatching { proc.start() }
+                if (started.isFailure) {
+                    process = null
+                    log.warn("Failed to start the claude process", started.exceptionOrNull())
+                    notifyError("Failed to start Claude Code: ${started.exceptionOrNull()?.message ?: "unknown error"}")
+                    return@executeOnPooledThread
+                }
+                // If a teardown raced in between the gen-check and now, destroy the freshly-spawned orphan.
+                if (launchGen != generation) {
+                    proc.destroy()
+                    if (process === proc) process = null
+                    return@executeOnPooledThread
+                }
 
             // Optional handshake → rich command/model/agent metadata for the GUI menus.
             controlClient.query(
@@ -397,11 +418,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // `system/init` line *after* the first user turn — not on launch. So we must NOT gate readiness on
             // the Init event (that would deadlock: pump() waits for ready, ready waits for a prompt). We're
             // ready as soon as the process is up; Init, when it later arrives, just back-fills sessionId/model.
-            edt {
-                ready = true
-                transcript.add(Speaker.SYSTEM, "Claude Code ready.")
-                fireState()
-                pump()
+                edt {
+                    ready = true
+                    transcript.add(Speaker.SYSTEM, "Claude Code ready.")
+                    fireState()
+                    pump()
+                }
+            } finally {
+                // Release the launch guard, but only if we still own the current generation — a newer start()
+                // bumped it and is now the owner, so it must keep `starting` set.
+                if (launchGen == generation) starting = false
             }
         }
         return true
@@ -449,7 +475,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process?.destroy()
         process = null
         turnActive = false
+        interrupting = false
         ready = false
+        starting = false // any in-flight launch is now stale (generation bumped above); let a restart proceed
         // Reset per-turn live state so a stale figure/chip doesn't linger into a resumed session (restart path).
         liveThinkingTokens = 0
         promptSuggestion = null
@@ -609,10 +637,36 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         edt { fireState() }
     }
 
+    /**
+     * Interrupts the active turn. Sent as a **correlated** control request (via [controlClient]) so the binary's
+     * `control_response` — or the watchdog timeout — reliably clears the turn state. The previous fire-and-forget
+     * write left `turnActive` stuck forever (the ack was discarded) and added a permanent "Interrupting…" transcript
+     * row that re-rendered on every state push, so the turn never appeared to stop.
+     */
     fun interrupt() {
         if (!isRunning()) return
-        write(ControlProtocol.interruptRequest(ControlProtocol.newRequestId()))
-        systemNotice("Interrupting…")
+        edt {
+            if (interrupting) return@edt // already interrupting — don't double-send or re-clear the queue
+            // Cancel queued prompts so the interrupt doesn't immediately re-pump a brand-new turn (which read as
+            // "it never stops"). Invalidate pending permission cards for the same reason.
+            queue.clear()
+            cards.clear()
+            interrupting = true
+            fireState()
+            controlClient.query(
+                buildRequest = ControlProtocol::interruptRequest,
+                onResult = { _: JsonObject? -> edt { finishInterrupt() } },
+                decode = { it },
+            )
+        }
+    }
+
+    /** Clears the interrupt/turn state once the binary acks (or the watchdog times out). Idempotent. */
+    private fun finishInterrupt() {
+        interrupting = false
+        turnActive = false
+        liveThinkingTokens = 0
+        fireState()
     }
 
     // -----------------------------------------------------------------------
@@ -1133,6 +1187,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 tokens.foldIntoSession()
                 reconciler.onMessageBoundary()
                 turnActive = false
+                interrupting = false // the turn ended (possibly via our interrupt) — clear the transient label
                 liveThinkingTokens = 0
                 if (event.result.isError) {
                     // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
@@ -1294,6 +1349,31 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 systemNotice("The model declined to respond$cat$to.")
             }
 
+            is ClaudeEvent.ModelRefusalNoFallback -> edt {
+                // Refusal with no fallback configured → the turn ends in error. Surface it (the content is display
+                // prose) so a refused turn never ends silently.
+                val i = event.info
+                val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                val msg = i.content.ifBlank { "The model declined to respond$cat and no fallback model was configured." }
+                transcript.add(Speaker.ERROR, msg)
+            }
+
+            is ClaudeEvent.Informational -> {
+                // Generic loop banner. Only surface the more prominent levels (suggestion/warning) plus any blocking
+                // message; info/notice are already implied by the turn state and would just add noise.
+                val i = event.info
+                val text = i.content.trim()
+                if (text.isNotEmpty() && (i.level == "warning" || i.level == "suggestion" || i.preventContinuation)) {
+                    systemNotice(if (i.level == "warning") "Warning: $text" else text)
+                }
+            }
+
+            is ClaudeEvent.WorkerShuttingDown -> {
+                // Live-tail only: a resumed session may replay historical instances, so don't tear anything down —
+                // just log it. (Reasons like host_exit/remote_control_disabled are host-set, not user input.)
+                log.info("worker_shutting_down: ${event.info.reason}")
+            }
+
             is ClaudeEvent.Other -> log.debug("Ignored ${event.type}/${event.subtype}")
         }
     }
@@ -1309,6 +1389,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         controlClient.failAll("process gone")
         edt {
             turnActive = false
+            interrupting = false
             ready = false
             liveThinkingTokens = 0
             promptSuggestion = null
@@ -1527,8 +1608,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     override fun dispose() {
+        // Abandon the current process generation (like stop() does) so the destroy() below — and any launch still
+        // in flight — is treated as stale: its async onTerminated must NOT run the "exited unexpectedly" error
+        // path / ERROR attention for a tab the user deliberately closed, and a mid-launch pooled block must not
+        // publish an orphan process.
+        generation++
+        starting = false
         // Stop the shared quota-poll timer so the disposed session leaks no EDT timer.
         quotaPollTimer.stop()
+        // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
+        cancelPendingElicitations()
         // EOF first (lets the binary exit cleanly) then destroy the tree — same order as stop().
         process?.closeStdin()
         process?.destroy()

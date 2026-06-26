@@ -29,6 +29,7 @@ object JcefState {
 
         val obj = buildJsonObject {
             put("turnActive", session.turnActive)
+            put("interrupting", session.interrupting)
             put("running", session.isRunning())
 
             // Live reasoning suffix while a thinking block is accumulating; null when there's nothing to show.

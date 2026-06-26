@@ -293,10 +293,20 @@ object EditorContextProvider {
         // Discard stderr (don't merge it into stdout: that would corrupt image bytes, and leaving it
         // unread can fill the pipe and hang the process). We only consume stdout.
         val proc = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-        val bytes = proc.inputStream.readBytes()
-        if (!proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) { proc.destroyForcibly(); return null }
-        if (proc.exitValue() != 0) return null
-        bytes.takeIf { it.isNotEmpty() }
+        // Read stdout on a separate thread with a deadline. `readBytes()` is unbounded and blocks until EOF, so a
+        // clipboard owner that never closes the pipe would otherwise hang the caller forever (the EDT, before the
+        // paste handlers were moved off-EDT). On timeout, kill the process and give up.
+        val reader = java.util.concurrent.CompletableFuture.supplyAsync {
+            runCatching { proc.inputStream.readBytes() }.getOrNull()
+        }
+        val bytes = try {
+            reader.get(3, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            proc.destroyForcibly(); reader.cancel(true); return@runCatching null
+        }
+        if (!proc.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) { proc.destroyForcibly(); return@runCatching null }
+        if (proc.exitValue() != 0) return@runCatching null
+        bytes?.takeIf { it.isNotEmpty() }
     }.getOrNull()
 
     /** Reads an image file from disk, detecting media type by extension, as an [Attachment.Image], or null. */

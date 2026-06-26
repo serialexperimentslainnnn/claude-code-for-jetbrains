@@ -329,6 +329,7 @@
         var cb = h('input', { attrs: { type: 'checkbox', checked: 'checked' } });
         cb.checked = true;
         cb.__hunkIndex = (typeof hk.index === 'number') ? hk.index : 0;
+        cb.addEventListener('change', updateAccept);
         hunkChecks.push(cb);
         return h('label', { class: 'perm-hunk' }, cb,
           h('span', { class: 'perm-hunk-preview', text: (hk.preview != null ? String(hk.preview) : '') || '(change)' }));
@@ -345,17 +346,32 @@
       return sel.length === hunkChecks.length ? undefined : sel;
     }
 
+    function anyHunkChecked() {
+      if (!hunkChecks.length) return true; // no hunk UI → normal accept
+      for (var i = 0; i < hunkChecks.length; i++) if (hunkChecks[i].checked) return true;
+      return false;
+    }
+
+    // Accept with zero hunks ticked is a no-op write (an error for Edit); disable it so the user can't trigger it.
+    var acceptBtn = h('button', {
+      class: 'btn primary',
+      text: 'Accept',
+      on: { click: function () {
+        if (!anyHunkChecked()) return;
+        var msg = { type: 'resolvePermission', id: id, allow: true };
+        var hk = acceptedHunks();
+        if (hk !== undefined) msg.hunks = hk;
+        send(msg);
+      } }
+    });
+    function updateAccept() {
+      var ok = anyHunkChecked();
+      if (ok) { acceptBtn.removeAttribute('disabled'); }
+      else { acceptBtn.setAttribute('disabled', 'disabled'); }
+    }
+
     var actions = [
-      h('button', {
-        class: 'btn primary',
-        text: 'Accept',
-        on: { click: function () {
-          var msg = { type: 'resolvePermission', id: id, allow: true };
-          var hk = acceptedHunks();
-          if (hk !== undefined) msg.hunks = hk;
-          send(msg);
-        } }
-      }),
+      acceptBtn,
       h('button', {
         class: 'btn danger',
         text: 'Reject',
@@ -373,7 +389,7 @@
       actions.push(h('button', {
         class: 'btn ghost perm-always',
         text: 'Always allow',
-        on: { click: function () { send({ type: 'alwaysAllow', tool: tool }); } }
+        on: { click: function () { send({ type: 'alwaysAllow', tool: tool, id: id }); } }
       }));
     }
 
@@ -398,13 +414,44 @@
   function permissions(list) {
     var region = mount();
     if (!region) return;
-    // Re-render on each call: clear then rebuild (simple + correct).
-    region.innerHTML = '';
-    if (!list || !Array.isArray(list) || list.length === 0) return;
-    for (var i = 0; i < list.length; i++) {
-      var el = buildCard(list[i]);
-      if (el) region.appendChild(el);
+    if (!list || !Array.isArray(list)) list = [];
+
+    // Reconcile by card id rather than wiping + rebuilding the whole region. A blunt innerHTML='' on every push
+    // (the host re-pushes on ANY permission change — a second card arriving, one resolving) destroyed the
+    // in-progress state of the OTHER cards: typed elicitation fields, AskUserQuestion selections, unticked hunk
+    // checkboxes. Keeping the existing DOM node for an id already shown preserves all of that.
+    var existing = {};
+    var n = region.children.length;
+    for (var i = 0; i < n; i++) {
+      var node0 = region.children[i];
+      var cid = node0.getAttribute ? node0.getAttribute('data-card-id') : null;
+      if (cid != null) existing[cid] = node0;
     }
+
+    var wanted = {};
+    var ordered = [];
+    for (var j = 0; j < list.length; j++) {
+      var card = list[j];
+      if (!card || card.id == null) continue;
+      var key = String(card.id);
+      wanted[key] = true;
+      var node = existing[key];
+      if (!node) {
+        node = buildCard(card);
+        if (node) node.setAttribute('data-card-id', key);
+      }
+      if (node) ordered.push(node);
+    }
+
+    // Drop cards that are no longer pending.
+    for (var k = region.children.length - 1; k >= 0; k--) {
+      var child = region.children[k];
+      var ck = child.getAttribute ? child.getAttribute('data-card-id') : null;
+      if (ck == null || !wanted[ck]) region.removeChild(child);
+    }
+
+    // Append in list order; appendChild MOVES an existing node (keeping its state) rather than recreating it.
+    for (var m = 0; m < ordered.length; m++) region.appendChild(ordered[m]);
   }
 
   window.cc = window.cc || {};

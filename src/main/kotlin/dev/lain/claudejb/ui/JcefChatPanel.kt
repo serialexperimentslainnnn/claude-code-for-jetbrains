@@ -4,6 +4,7 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -92,7 +93,12 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     // ── TranscriptModel.Listener ─────────────────────────────────────────────────────────────────────────
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {
-        structural = true
+        // Append-at-tail (the common streaming case) leaves every existing row's order unchanged, so we only need
+        // to send the NEW row (the dirty path, same as a streaming text update) instead of re-serializing the
+        // whole transcript on every added row — the previous unconditional `structural = true` was O(N²) across a
+        // turn and made the transcript visibly flicker. A middle insert shifts following rows' orders, so it still
+        // needs a full structural resend.
+        if (index < session.transcript.entries.size - 1) structural = true
         dirty.add(entry.id)
         ensureTimer()
     }
@@ -292,6 +298,48 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         ensureTimer()
     }
 
+    /**
+     * Ctrl+V: read the system clipboard host-side (reliable on Wayland) on a POOLED thread, then apply on the EDT.
+     * The Wayland fallback shells out to `wl-paste`/`xclip` and reads their stdout with a deadline — doing that on
+     * the EDT (as before) froze the IDE whenever the clipboard owner was slow/hung. Image → attach; else text →
+     * insert at the caret.
+     */
+    private fun pasteFromClipboardOffEdt() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val img = EditorContextProvider.imageFromClipboard()
+            val text = if (img == null) EditorContextProvider.clipboardText() else null
+            val help = if (img == null && text.isNullOrEmpty()) EditorContextProvider.clipboardImageHelp() else null
+            ApplicationManager.getApplication().invokeLater({
+                when {
+                    img != null -> addAttachment(img)
+                    !text.isNullOrEmpty() ->
+                        host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
+                    else -> notifyClipboard(
+                        if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.",
+                    )
+                }
+            }, ModalityState.any())
+        }
+    }
+
+    /** Explicit "Paste image" / image-only Ctrl+V — same off-EDT read, image-only handling. */
+    private fun pasteImageFromClipboardOffEdt(notify: Boolean) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val img = EditorContextProvider.imageFromClipboard()
+            val shouldNotify = img == null && (notify || !EditorContextProvider.clipboardHasText())
+            val help = if (shouldNotify) EditorContextProvider.clipboardImageHelp() else null
+            ApplicationManager.getApplication().invokeLater({
+                when {
+                    img != null -> addAttachment(img)
+                    shouldNotify -> notifyClipboard(
+                        if (help != null) "Couldn't read an image from the clipboard — $help"
+                        else "No image found in the clipboard.",
+                    )
+                }
+            }, ModalityState.any())
+        }
+    }
+
     // ── Inbound dispatch (EDT) ───────────────────────────────────────────────────────────────────────────
 
     private fun onBridgeMessage(json: String) {
@@ -310,7 +358,12 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             is JcefBridge.Msg.ResolvePermission -> {
                 val ctx = hunkCache.remove(m.id)
                 val accepted = m.acceptedHunks
-                if (m.allow && ctx != null && accepted != null && accepted.size < ctx.hunks.size) {
+                if (m.allow && accepted != null && accepted.isEmpty() && ctx != null && ctx.hunks.isNotEmpty()) {
+                    // Zero hunks selected = nothing to apply. A partial accept of an empty set would send a no-op
+                    // edit (for Edit/MultiEdit, old_string == new_string, which the binary rejects as an error the
+                    // model then sees). Treat "accept nothing" as a deny instead.
+                    session.resolvePermission(m.id, false)
+                } else if (m.allow && ctx != null && accepted != null && accepted.size < ctx.hunks.size) {
                     // Partial accept: write only the chosen hunks (the binary still does the write).
                     // Re-read disk first — if the file changed since the card was shown, the cached line
                     // snapshot (and its hunks) no longer apply, so fall back to a normal full accept rather
@@ -334,8 +387,13 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
             is JcefBridge.Msg.AlwaysAllow -> {
                 ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
-                session.pendingPermissions().firstOrNull { it.toolName == m.tool }
-                    ?.let { session.resolvePermission(it.requestId, true) }
+                // Resolve THE card the button lives on (by requestId), not just the first pending card with that
+                // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
+                // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
+                val pending = session.pendingPermissions()
+                val target = pending.firstOrNull { it.requestId == m.id }
+                    ?: pending.firstOrNull { it.toolName == m.tool }
+                target?.let { session.resolvePermission(it.requestId, true) }
             }
             is JcefBridge.Msg.ViewDiff -> {
                 session.pendingPermissions().firstOrNull { it.requestId == m.id }
@@ -365,42 +423,14 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             JcefBridge.Msg.RequestAttachData -> pushAttachData()
             is JcefBridge.Msg.AttachPath ->
                 addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
-            JcefBridge.Msg.PasteClipboard -> {
-                // Ctrl+V: read the system clipboard host-side (reliable on Wayland). Image → attach;
-                // else plain text → insert it into the composer at the caret.
-                val img = EditorContextProvider.imageFromClipboard()
-                if (img != null) {
-                    addAttachment(img)
-                } else {
-                    val text = EditorContextProvider.clipboardText()
-                    if (!text.isNullOrEmpty()) {
-                        host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
-                    } else {
-                        val help = EditorContextProvider.clipboardImageHelp()
-                        notifyClipboard(if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.")
-                    }
-                }
-            }
-            is JcefBridge.Msg.PasteClipboardImage -> {
-                val img = EditorContextProvider.imageFromClipboard()
-                when {
-                    img != null -> addAttachment(img)
-                    // Notify on the explicit "Paste image" action, OR on Ctrl+V when the clipboard has
-                    // no text (so it was probably an image we couldn't read — likely a missing CLI tool).
-                    m.notify || !EditorContextProvider.clipboardHasText() -> {
-                        val help = EditorContextProvider.clipboardImageHelp()
-                        notifyClipboard(
-                            if (help != null) "Couldn't read an image from the clipboard — $help"
-                            else "No image found in the clipboard."
-                        )
-                    }
-                }
-            }
+            JcefBridge.Msg.PasteClipboard -> pasteFromClipboardOffEdt()
+            is JcefBridge.Msg.PasteClipboardImage -> pasteImageFromClipboardOffEdt(m.notify)
             is JcefBridge.Msg.Attach -> addAttachment(Attachment.Image(m.name, m.mediaType, m.base64))
             is JcefBridge.Msg.McpReconnect -> { session.reconnectMcp(m.name); requestMcp() }
             is JcefBridge.Msg.McpToggle -> { session.toggleMcp(m.name, m.enabled); requestMcp() }
             is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
             JcefBridge.Msg.Ready -> {
+                host.markWebReady() // the web app is alive — cancel the first-open self-heal watchdog
                 pushTheme(); pushMetaState(); pushPermissions(); pushAttachments(); pushSession(); requestMcp(); requestVersion(); fullResync()
             }
             JcefBridge.Msg.OpenPalette -> {} // client-side overlay; nothing to do backend-side

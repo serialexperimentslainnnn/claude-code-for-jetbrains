@@ -23,10 +23,14 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
     // The assistant text/thinking entry currently being grown by deltas (null when no live block is open).
     private var liveAssistant: TranscriptEntry? = null
     private var liveThinking: TranscriptEntry? = null
+    // The thinking entry of the CURRENT message, kept even after a text delta closed the live thinking block, so the
+    // finalized `AssistantThinking` block can REPLACE it instead of appending a duplicate at the end (which left the
+    // "Thought process" fold out of order, after the answer). Reset on every message boundary.
+    private var settledThinking: TranscriptEntry? = null
 
     /** Appends a top-level assistant text delta, starting a new entry if none is live. Ends any live thinking. */
     fun appendAssistant(delta: String) {
-        liveThinking = null
+        liveThinking = null // close the growing thinking block, but keep settledThinking for finalize-replace
         val entry = liveAssistant
         if (entry == null) liveAssistant = transcript.add(Speaker.ASSISTANT, delta)
         else transcript.append(entry, delta)
@@ -42,15 +46,24 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
     /** Appends a top-level thinking delta, starting a new entry if none is live. */
     fun appendThinking(delta: String) {
         val entry = liveThinking
-        if (entry == null) liveThinking = transcript.add(Speaker.THINKING, delta)
-        else transcript.append(entry, delta)
+        if (entry == null) {
+            liveThinking = transcript.add(Speaker.THINKING, delta)
+            settledThinking = liveThinking
+        } else {
+            transcript.append(entry, delta)
+        }
     }
 
-    /** Replaces the live thinking entry with its finalized text (or adds one), then closes the block. */
+    /**
+     * Replaces the message's thinking entry with its finalized text, then closes the block. Uses [settledThinking]
+     * (the entry the deltas built) even when a text delta already cleared [liveThinking] — otherwise the finalized
+     * block would be appended as a SECOND, out-of-order "Thought process" after the answer.
+     */
     fun finalizeThinking(full: String) {
-        val entry = liveThinking
+        val entry = liveThinking ?: settledThinking
         if (entry != null) transcript.replaceText(entry, full) else transcript.add(Speaker.THINKING, full)
         liveThinking = null
+        settledThinking = null
     }
 
     /**
@@ -61,6 +74,7 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
     fun onMessageBoundary() {
         liveAssistant = null
         liveThinking = null
+        settledThinking = null
     }
 
     /**

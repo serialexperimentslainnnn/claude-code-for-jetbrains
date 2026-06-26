@@ -35,7 +35,9 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         @JvmField var model: String = ClaudeSession.DEFAULT_MODEL
         @JvmField var effort: String = "medium"
         @JvmField var permissionMode: String = "default"
-        @JvmField var thinkingTokens: Int = 0
+        // Adaptive thinking ON by default (any positive value = on; see ClaudeSession.THINKING_ON). The model
+        // decides depth; this just enables the `--thinking adaptive --thinking-display summarized` launch flags.
+        @JvmField var thinkingTokens: Int = ClaudeSession.THINKING_ON
         @JvmField var includePartialMessages: Boolean = true
         @JvmField var settingSources: String = "user,project,local"
         @JvmField var allowedTools: String = ""

@@ -138,7 +138,7 @@ object JcefBridge {
         data class ResolvePermission(val id: String, val allow: Boolean, val acceptedHunks: List<Int>? = null) : Msg
         data class ResolveQuestion(val id: String, val answers: Map<String, String>) : Msg
         data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : Msg
-        data class AlwaysAllow(val tool: String) : Msg
+        data class AlwaysAllow(val tool: String, val id: String) : Msg
         data class ViewDiff(val id: String) : Msg
         data class ViewDiffByTool(val toolUseId: String) : Msg
         data class RevertEdit(val toolUseId: String) : Msg
@@ -193,7 +193,7 @@ object JcefBridge {
                 Msg.ResolveQuestion(str("id").orEmpty(), answers)
             }
             "resolveElicitation" -> Msg.ResolveElicitation(str("id").orEmpty(), str("action").orEmpty(), obj["content"] as? JsonObject)
-            "alwaysAllow" -> Msg.AlwaysAllow(str("tool").orEmpty())
+            "alwaysAllow" -> Msg.AlwaysAllow(str("tool").orEmpty(), str("id").orEmpty())
             "viewDiff" -> Msg.ViewDiff(str("id").orEmpty())
             "viewDiffByTool" -> Msg.ViewDiffByTool(str("toolUseId").orEmpty())
             "revertEdit" -> Msg.RevertEdit(str("toolUseId").orEmpty())
