@@ -486,7 +486,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         controlClient.failAll("process gone")
         taskTracker.clear()
         hookNarrator.clear()
-        edt { cards.clear(); fireState() }
+        edt { cards.clear(); diffs.clearReviewDiffs(); fireState() }
     }
 
     // -----------------------------------------------------------------------
@@ -659,6 +659,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // "it never stops").
             queue.clear()
             cards.clear()
+            diffs.clearReviewDiffs()
             interrupting = true
             fireState()
             controlClient.query(
@@ -685,6 +686,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     /** Broker callback (off-EDT): a tool needs the user's decision. Queue it for the UI to render. */
     private fun presentPermission(request: PendingPermission) = edt {
         cards.present(request)
+        // Reviewable edits: open an EDITABLE diff in the IDE so the user can review AND tweak the change before
+        // accepting (Accept writes whatever they leave in the editor). Auto-approve modes use diffs.autoOpenDiff.
+        if (request.reviewable && request.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
+            diffs.openReviewDiff(request.requestId, request.toolName, request.input)
+        }
         fireAttention(AttentionReason.PERMISSION)
     }
 
@@ -744,14 +750,25 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (allow) {
             if (request.reviewable) {
                 // Snapshot/refresh stay on the ORIGINAL input: they describe the real file (before-text + path),
-                // independent of any narrowed payload (e.g. hunk-by-hunk partial acceptance) we actually send.
+                // independent of any narrowed payload (e.g. an edited review diff) we actually send.
                 DiffPresenter.filePathOf(request.input)?.let { diffs.markForRefresh(it) }
                 // Snapshot before answering allow (the binary writes right after), so "View diff" works from the
                 // transcript once the transient approval diff has closed. Synchronous read — small project files.
                 request.toolUseId?.let { diffs.captureForReview(request.toolName, request.input, it) }
             }
-            // The UI may override the tool input to narrow what the binary writes (partial acceptance).
-            val effectiveInput = overrideInput ?: request.input
+            // If an editable review diff was open and the user TWEAKED the proposed content, write THEIR version:
+            // re-encode the tool input so the binary writes the edited text (file_path preserved). Closes the diff.
+            // Fail-safe: no edit (or read-only viewer) → reviewOverride is null → the binary writes its own version.
+            val reviewOverride = diffs.takeReviewEdit(requestId)?.let { (currentText, editedText) ->
+                dev.lain.claudejb.diff.HunkSelection.encodeInput(request.toolName, request.input, currentText, editedText)
+            }
+            val effectiveInput = overrideInput ?: reviewOverride ?: request.input
+            // If the user edited the proposed content (or an override narrowed the write), repoint the captured
+            // snapshot at the EFFECTIVE input so the transcript's inline diff + "View diff" show what was actually
+            // written — not Claude's original proposal.
+            if (request.reviewable && effectiveInput !== request.input) {
+                request.toolUseId?.let { diffs.updateSnapshotInput(it, effectiveInput) }
+            }
             write(ControlProtocol.permissionAllow(requestId, effectiveInput))
             systemNotice("Approved ${request.headline}")
             // Approving an ExitPlanMode plan leaves plan mode: the plugin is the source of truth for
@@ -761,6 +778,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 changePermissionMode(PermissionMode.DEFAULT.wire)
             }
         } else {
+            diffs.closeReviewDiff(requestId) // reject → discard the review diff tab
             write(ControlProtocol.permissionDeny(requestId, denyMessage ?: "User rejected the ${request.toolName} request."))
             systemNotice("Rejected ${request.headline}")
         }
@@ -1626,6 +1644,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         quotaPollTimer.stop()
         // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
         cancelPendingElicitations()
+        diffs.clearReviewDiffs()
         // EOF first (lets the binary exit cleanly) then destroy the tree — same order as stop().
         process?.closeStdin()
         process?.destroy()

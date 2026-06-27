@@ -42,6 +42,40 @@ class DiffLifecycleManager(private val project: Project) {
     /** Paths touched this turn, refreshed in the VFS once the turn ends (or eagerly on approval). */
     private val pendingRefresh = java.util.Collections.synchronizedSet(HashSet<String>())
 
+    /** Open editable review diffs, keyed by permission requestId, so accept/reject can capture-then-close them. */
+    private val reviewDiffs = ConcurrentHashMap<String, DiffPresenter.ReviewDiff>()
+
+    /**
+     * Opens an editable review diff for a reviewable edit permission card (default/plan mode — auto-approve modes
+     * use [autoOpenDiff] instead), keyed by [requestId]. Called from the EDT (permission present path).
+     */
+    fun openReviewDiff(requestId: String, toolName: String, input: JsonObject) {
+        if (reviewDiffs.containsKey(requestId)) return
+        DiffPresenter.openReviewDiff(project, toolName, input)?.let { reviewDiffs[requestId] = it }
+    }
+
+    /**
+     * Resolves the review diff for [requestId] on accept: closes the tab and, if the user edited the proposed text,
+     * returns the (currentText, editedText) so the caller can narrow the write to exactly what the user left.
+     * Returns null when there was no review diff or the proposed text is unchanged. EDT-only (reads the document).
+     */
+    fun takeReviewEdit(requestId: String): Pair<String, String>? {
+        val rd = reviewDiffs.remove(requestId) ?: return null
+        val edited = runCatching { rd.proposed.text }.getOrNull()
+        DiffPresenter.closeDiff(project, rd.file)
+        return if (edited != null && edited != rd.originalProposed) rd.currentText to edited else null
+    }
+
+    /** Closes the review diff for [requestId] without capturing (reject). EDT-only. */
+    fun closeReviewDiff(requestId: String) {
+        reviewDiffs.remove(requestId)?.let { DiffPresenter.closeDiff(project, it.file) }
+    }
+
+    /** Closes every open review diff (stop / interrupt / dispose). EDT-only. */
+    fun clearReviewDiffs() {
+        reviewDiffs.keys.toList().forEach { closeReviewDiff(it) }
+    }
+
     /**
      * Captures the file's pre-write contents for a reviewable tool call and persists them keyed by [toolUseId]
      * so the change stays re-diffable from the transcript long after the transient approval diff has closed.
@@ -78,6 +112,12 @@ class DiffLifecycleManager(private val project: Project) {
 
     /** The persisted pre-write snapshot for a reviewable tool call, or null if none was captured (e.g. rejected). */
     fun snapshot(toolUseId: String): EditSnapshot? = editSnapshots.get(toolUseId)
+
+    /**
+     * Updates a captured snapshot's input to what was actually written (e.g. the user's edited review diff), so the
+     * transcript's inline diff and "View diff" show the real change rather than Claude's original proposal.
+     */
+    fun updateSnapshotInput(toolUseId: String, input: JsonObject) = editSnapshots.updateInput(toolUseId, input)
 
     /** Records a path touched this turn for a later VFS refresh. Off-EDT safe. */
     fun markForRefresh(path: String) {

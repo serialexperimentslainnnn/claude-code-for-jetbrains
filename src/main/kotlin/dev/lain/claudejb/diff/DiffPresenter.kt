@@ -4,6 +4,7 @@ import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.chains.SimpleDiffRequestChain
 import com.intellij.diff.editor.ChainDiffVirtualFile
 import com.intellij.diff.requests.SimpleDiffRequest
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
@@ -104,6 +105,51 @@ object DiffPresenter {
         FileEditorManager.getInstance(project).openFile(vFile, false)
         OpenedDiffsService.getInstance(project).register(vFile)
         return vFile
+    }
+
+    /**
+     * An open editable review diff: the diff tab [file], the EDITABLE "proposed" [proposed] document (the user can
+     * tweak it before accepting), and the [currentText]/[originalProposed] baselines used to detect an edit.
+     */
+    data class ReviewDiff(
+        val file: VirtualFile,
+        val proposed: Document,
+        val currentText: String,
+        val originalProposed: String,
+    )
+
+    /**
+     * Opens an EDITABLE review diff (Current | Proposed) in the editor area and returns a [ReviewDiff] handle so the
+     * caller can read back the (possibly user-edited) proposed text on accept and close the tab. The proposed side
+     * is a writable in-memory document; if the platform viewer renders it read-only, the handle simply reports no
+     * edit (the caller falls back to the binary's own write — never a wrong write). EDT-only. Null when the change
+     * can't be reconstructed (missing file_path, etc.).
+     */
+    fun openReviewDiff(project: Project, toolName: String, input: JsonObject, currentSnapshot: String? = null): ReviewDiff? {
+        val path = filePathOf(input) ?: return null
+        val file = File(path)
+        val current = currentSnapshot ?: if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""
+        val proposedText = proposedContent(toolName, input, current) ?: return null
+        val fileType = FileTypeManager.getInstance().getFileTypeByFileName(file.name)
+        val factory = DiffContentFactory.getInstance()
+        // createEditable (NOT create) marks the proposed side writable so the diff viewer lets the user TWEAK it
+        // before accepting; plain create() renders it read-only.
+        val proposedDoc = factory.createEditable(project, proposedText, fileType)
+        val title = "Claude · ${file.name}"
+        val request = SimpleDiffRequest(
+            title,
+            factory.create(project, current, fileType),
+            proposedDoc,
+            "Current: ${file.name}",
+            "Proposed by Claude — edit before accepting",
+        )
+        val vFile = ChainDiffVirtualFile(SimpleDiffRequestChain(request), title)
+        // Opening the diff must NEVER break permission resolution — if the editor manager can't open it (e.g. a
+        // headless test environment, or any platform error) degrade gracefully to "no review diff".
+        val opened = runCatching { FileEditorManager.getInstance(project).openFile(vFile, false) }.isSuccess
+        if (!opened) return null
+        OpenedDiffsService.getInstance(project).register(vFile)
+        return ReviewDiff(vFile, proposedDoc.document, current, proposedText)
     }
 
     /**

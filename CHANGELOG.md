@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] — 2026-06-27
+
+### Added
+- **Editable diff review for edits.** When Claude asks to Edit/Write/MultiEdit a file, the plugin now **auto-opens an editable diff** in the IDE editor (Current | Proposed) — not just in acceptEdits/bypass mode. The proposed side is created with `DiffContentFactory.createEditable`, so you can **tweak the proposed content right in the editor** before approving; **Accept writes your edited version** (the tool input is re-encoded via `HunkSelection.encodeInput` so the binary writes exactly what you left), and the diff **closes automatically** on accept/reject. The captured snapshot is repointed at the effective input, so the transcript's inline diff and **"View diff"** reflect what was *actually* written (your edit), not Claude's original proposal. Fail-safe: if you change nothing — or the platform renders the proposed side read-only — Accept falls back to writing Claude's original proposed content, never a wrong write. Review diffs are also closed on stop/interrupt/dispose.
+
 ## [4.0.5] — 2026-06-27
 
 ### Changed
