@@ -647,8 +647,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (!isRunning()) return
         edt {
             if (interrupting) return@edt // already interrupting — don't double-send or re-clear the queue
+            // Release any pending permission/question/elicitation request BEFORE clearing the cards, so the binary
+            // isn't left blocked waiting for a decision after the interrupt (a can_use_tool blocks the turn).
+            // Elicitations get an ElicitResult cancel; everything else an explicit deny. No "Rejected" transcript
+            // spam — this is teardown, not a user action.
+            cancelPendingElicitations()
+            cards.all().filter { it.elicitation == null }.forEach {
+                write(ControlProtocol.permissionDeny(it.requestId, "Interrupted."))
+            }
             // Cancel queued prompts so the interrupt doesn't immediately re-pump a brand-new turn (which read as
-            // "it never stops"). Invalidate pending permission cards for the same reason.
+            // "it never stops").
             queue.clear()
             cards.clear()
             interrupting = true

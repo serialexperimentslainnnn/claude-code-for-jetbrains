@@ -383,8 +383,12 @@
   // dropped the highlighted item under the cursor.
   function menuSig(def) {
     var opts = currentOptions(def);
-    var sig = '';
-    for (var i = 0; i < opts.length; i++) sig += opts[i].selected ? '1' : '0';
+    // Key on BOTH the option set (labels) and the selection, so the open menu also rebuilds when the option list
+    // itself changes mid-stream (e.g. system/init adds/removes a model), not only when the selection flips.
+    var sig = opts.length + '|';
+    for (var i = 0; i < opts.length; i++) {
+      sig += (opts[i].selected ? '1' : '0') + (opts[i].label != null ? String(opts[i].label) : '') + '';
+    }
     return sig;
   }
 

@@ -540,18 +540,21 @@
   // Move the active highlight to hit [i] (wrapping), scroll it into view, and refresh the counter. The find bar
   // previously marked the first hit but never scrolled to it and offered no next/prev — you could see "10 matches"
   // and never reach any of them.
-  function setActiveHit(i) {
+  function setActiveHit(i, scroll) {
     if (!searchHits.length) { activeIndex = 0; updateFindCount(); return; }
     var n = searchHits.length;
     activeIndex = ((i % n) + n) % n; // wrap both directions
     for (var k = 0; k < n; k++) searchHits[k].classList.remove('active');
     var hit = searchHits[activeIndex];
     hit.classList.add('active');
-    try { hit.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* older engines */ }
+    // Only scroll on an explicit navigation (fresh query / next / prev). The silent re-highlight that runs on
+    // every streaming batch must NOT scroll, or it would yank the viewport to the active match on every frame
+    // and fight auto-follow.
+    if (scroll) { try { hit.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* older engines */ } }
     updateFindCount();
   }
-  function nextHit() { setActiveHit(activeIndex + 1); }
-  function prevHit() { setActiveHit(activeIndex - 1); }
+  function nextHit() { setActiveHit(activeIndex + 1, true); }
+  function prevHit() { setActiveHit(activeIndex - 1, true); }
 
   function clearHighlights() {
     var c = conversationEl();
@@ -616,10 +619,10 @@
       total += highlightInNode(rec.bodyNode, lower);
     });
     if (searchHits.length) {
-      // On a fresh (non-silent) query, jump to the first hit; on a silent re-highlight (streaming batch) keep the
-      // user's current position if still valid.
-      if (silent) { setActiveHit(Math.min(activeIndex, searchHits.length - 1)); }
-      else { setActiveHit(0); }
+      // Fresh (non-silent) query → jump+scroll to the first hit. Silent re-highlight (streaming batch) → only
+      // restore the active class at the current position, NEVER scroll (that yanked the viewport every frame).
+      if (silent) { setActiveHit(Math.min(activeIndex, searchHits.length - 1), false); }
+      else { setActiveHit(0, true); }
     }
     if (!silent) { safeSend({ type: 'search', count: total }); }
   }
