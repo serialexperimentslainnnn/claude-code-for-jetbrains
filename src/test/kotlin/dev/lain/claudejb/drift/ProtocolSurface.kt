@@ -100,7 +100,7 @@ data class ProtocolSurface(
             "thinking_tokens", "notification", "permission_denied", "session_state_changed",
             "api_retry", "commands_changed", "memory_recall", "files_persisted",
             "plugin_install", "hook_started", "hook_progress", "hook_response", "mirror_error",
-            "model_refusal_fallback",
+            "model_refusal_fallback", "informational", "model_refusal_no_fallback", "worker_shutting_down",
             // system subtype we receive but knowingly leave as Other (URL-elicitation confirmation)
             "elicitation_complete",
             // control requests (binary -> host) we answer

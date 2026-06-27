@@ -4,6 +4,7 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -59,11 +60,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private val attachments = LinkedHashMap<String, Attachment>()
     private var nextAttachmentId = 0L
 
-    // Per-request hunk context for partial diff acceptance, computed on the EDT in pushPermissions. Declared
-    // before init {} because the constructor's pushPermissions() call (re)prunes this map — Kotlin initializes
-    // properties in declaration order, so a later declaration would still be null when init runs (NPE).
-    private val hunkCache = HashMap<String, HunkCtx>()
-
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -92,7 +88,12 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     // ── TranscriptModel.Listener ─────────────────────────────────────────────────────────────────────────
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {
-        structural = true
+        // Append-at-tail (the common streaming case) leaves every existing row's order unchanged, so we only need
+        // to send the NEW row (the dirty path, same as a streaming text update) instead of re-serializing the
+        // whole transcript on every added row — the previous unconditional `structural = true` was O(N²) across a
+        // turn and made the transcript visibly flicker. A middle insert shifts following rows' orders, so it still
+        // needs a full structural resend.
+        if (index < session.transcript.entries.size - 1) structural = true
         dirty.add(entry.id)
         ensureTimer()
     }
@@ -154,44 +155,34 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         )
     }
 
-    private data class HunkCtx(
-        val toolName: String, val input: kotlinx.serialization.json.JsonObject,
-        val currentLines: List<String>, val proposedLines: List<String>,
-        val hunks: List<dev.lain.claudejb.diff.Hunk>,
-    )
-
     private fun pushPermissions() {
         val perms = session.pendingPermissions()
-        // Drop cached hunk contexts for permissions that are no longer pending (resolved elsewhere,
-        // cleared on stop/interrupt, or never routed through us) so the cache can't leak across a session.
-        hunkCache.keys.retainAll(perms.mapTo(HashSet()) { it.requestId })
-        val hunksByRequest = computeHunks(perms)
+        val diffByRequest = computeDiffs(perms)
         host.exec(
             "window.cc.permissions && window.cc.permissions(" +
-                JcefBridge.permissionsJson(perms, hunksByRequest) + ")"
+                JcefBridge.permissionsJson(perms, diffByRequest) + ")"
         )
     }
 
-    /** For each reviewable Edit/Write/MultiEdit permission, compute its hunks (current vs proposed) and cache them. */
-    private fun computeHunks(perms: List<dev.lain.claudejb.permission.PendingPermission>): Map<String, List<dev.lain.claudejb.diff.Hunk>> {
-        val out = HashMap<String, List<dev.lain.claudejb.diff.Hunk>>()
+    /**
+     * For each reviewable Edit/Write/MultiEdit permission, compute a read-only unified diff (current vs proposed)
+     * so the card can show what's changing in red/green. Edits are accepted/rejected as a whole — there is no
+     * per-line selection (it produced incoherent, broken code).
+     */
+    private fun computeDiffs(perms: List<dev.lain.claudejb.permission.PendingPermission>): Map<String, String> {
+        val out = HashMap<String, String>()
         for (p in perms) {
             if (!p.reviewable || p.toolName !in DiffPresenter.REVIEWABLE_TOOLS) continue
-            val cached = hunkCache[p.requestId]
-            if (cached != null) { out[p.requestId] = cached.hunks; continue }
             val path = DiffPresenter.filePathOf(p.input) ?: continue
-            // Cap the synchronous (EDT) disk read + diff: hunk-by-hunk review is meaningless for huge files,
-            // and reading one on the EDT would freeze the UI. Oversized files just skip the hunk UI — a
-            // normal full accept still works (the binary does its own read/write).
+            // Cap the synchronous (EDT) disk read + diff: a multi-MB file would freeze the UI, and an inline diff
+            // is meaningless at that size. Oversized files skip the inline diff (View diff still works); a normal
+            // accept/reject is unaffected (the binary does its own read/write).
             val file = java.io.File(path)
             if (file.isFile && file.length() > MAX_HUNK_FILE_BYTES) continue
             val current = runCatching { file.takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
             val proposed = DiffPresenter.proposedContent(p.toolName, p.input, current) ?: continue
-            val hunks = DiffPresenter.computeHunks(current, proposed)
-            if (hunks.size > 1) {
-                hunkCache[p.requestId] = HunkCtx(p.toolName, p.input, current.split("\n"), proposed.split("\n"), hunks)
-                out[p.requestId] = hunks
-            }
+            val diff = DiffPresenter.unifiedDiff(current, proposed).takeIf { it.isNotBlank() } ?: continue
+            out[p.requestId] = diff
         }
         return out
     }
@@ -292,6 +283,48 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         ensureTimer()
     }
 
+    /**
+     * Ctrl+V: read the system clipboard host-side (reliable on Wayland) on a POOLED thread, then apply on the EDT.
+     * The Wayland fallback shells out to `wl-paste`/`xclip` and reads their stdout with a deadline — doing that on
+     * the EDT (as before) froze the IDE whenever the clipboard owner was slow/hung. Image → attach; else text →
+     * insert at the caret.
+     */
+    private fun pasteFromClipboardOffEdt() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val img = EditorContextProvider.imageFromClipboard()
+            val text = if (img == null) EditorContextProvider.clipboardText() else null
+            val help = if (img == null && text.isNullOrEmpty()) EditorContextProvider.clipboardImageHelp() else null
+            ApplicationManager.getApplication().invokeLater({
+                when {
+                    img != null -> addAttachment(img)
+                    !text.isNullOrEmpty() ->
+                        host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
+                    else -> notifyClipboard(
+                        if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.",
+                    )
+                }
+            }, ModalityState.any())
+        }
+    }
+
+    /** Explicit "Paste image" / image-only Ctrl+V — same off-EDT read, image-only handling. */
+    private fun pasteImageFromClipboardOffEdt(notify: Boolean) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val img = EditorContextProvider.imageFromClipboard()
+            val shouldNotify = img == null && (notify || !EditorContextProvider.clipboardHasText())
+            val help = if (shouldNotify) EditorContextProvider.clipboardImageHelp() else null
+            ApplicationManager.getApplication().invokeLater({
+                when {
+                    img != null -> addAttachment(img)
+                    shouldNotify -> notifyClipboard(
+                        if (help != null) "Couldn't read an image from the clipboard — $help"
+                        else "No image found in the clipboard.",
+                    )
+                }
+            }, ModalityState.any())
+        }
+    }
+
     // ── Inbound dispatch (EDT) ───────────────────────────────────────────────────────────────────────────
 
     private fun onBridgeMessage(json: String) {
@@ -307,35 +340,18 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             is JcefBridge.Msg.ChangeVibe -> { ChatTheme.setVibeMode(m.on); broadcastTheme() }
             is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
             is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
-            is JcefBridge.Msg.ResolvePermission -> {
-                val ctx = hunkCache.remove(m.id)
-                val accepted = m.acceptedHunks
-                if (m.allow && ctx != null && accepted != null && accepted.size < ctx.hunks.size) {
-                    // Partial accept: write only the chosen hunks (the binary still does the write).
-                    // Re-read disk first — if the file changed since the card was shown, the cached line
-                    // snapshot (and its hunks) no longer apply, so fall back to a normal full accept rather
-                    // than write content reconstructed from a stale snapshot (which would silently no-op or
-                    // clobber the external change).
-                    val cachedText = ctx.currentLines.joinToString("\n")
-                    val diskText = DiffPresenter.filePathOf(ctx.input)
-                        ?.let { runCatching { java.io.File(it).takeIf { f -> f.isFile }?.readText() }.getOrNull() }
-                    if (diskText != null && diskText == cachedText) {
-                        val selected = dev.lain.claudejb.diff.HunkSelection.reconstruct(
-                            ctx.currentLines, ctx.proposedLines, ctx.hunks, accepted.toSet())
-                        val override = dev.lain.claudejb.diff.HunkSelection.encodeInput(ctx.toolName, ctx.input, cachedText, selected)
-                        session.resolvePermission(m.id, true, overrideInput = override)
-                    } else {
-                        session.resolvePermission(m.id, true) // diverged on disk → full accept, binary reconciles
-                    }
-                } else {
-                    session.resolvePermission(m.id, m.allow)
-                }
-            }
+            // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
+            is JcefBridge.Msg.ResolvePermission -> session.resolvePermission(m.id, m.allow)
             is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
             is JcefBridge.Msg.AlwaysAllow -> {
                 ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
-                session.pendingPermissions().firstOrNull { it.toolName == m.tool }
-                    ?.let { session.resolvePermission(it.requestId, true) }
+                // Resolve THE card the button lives on (by requestId), not just the first pending card with that
+                // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
+                // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
+                val pending = session.pendingPermissions()
+                val target = pending.firstOrNull { it.requestId == m.id }
+                    ?: pending.firstOrNull { it.toolName == m.tool }
+                target?.let { session.resolvePermission(it.requestId, true) }
             }
             is JcefBridge.Msg.ViewDiff -> {
                 session.pendingPermissions().firstOrNull { it.requestId == m.id }
@@ -365,42 +381,14 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             JcefBridge.Msg.RequestAttachData -> pushAttachData()
             is JcefBridge.Msg.AttachPath ->
                 addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
-            JcefBridge.Msg.PasteClipboard -> {
-                // Ctrl+V: read the system clipboard host-side (reliable on Wayland). Image → attach;
-                // else plain text → insert it into the composer at the caret.
-                val img = EditorContextProvider.imageFromClipboard()
-                if (img != null) {
-                    addAttachment(img)
-                } else {
-                    val text = EditorContextProvider.clipboardText()
-                    if (!text.isNullOrEmpty()) {
-                        host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
-                    } else {
-                        val help = EditorContextProvider.clipboardImageHelp()
-                        notifyClipboard(if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.")
-                    }
-                }
-            }
-            is JcefBridge.Msg.PasteClipboardImage -> {
-                val img = EditorContextProvider.imageFromClipboard()
-                when {
-                    img != null -> addAttachment(img)
-                    // Notify on the explicit "Paste image" action, OR on Ctrl+V when the clipboard has
-                    // no text (so it was probably an image we couldn't read — likely a missing CLI tool).
-                    m.notify || !EditorContextProvider.clipboardHasText() -> {
-                        val help = EditorContextProvider.clipboardImageHelp()
-                        notifyClipboard(
-                            if (help != null) "Couldn't read an image from the clipboard — $help"
-                            else "No image found in the clipboard."
-                        )
-                    }
-                }
-            }
+            JcefBridge.Msg.PasteClipboard -> pasteFromClipboardOffEdt()
+            is JcefBridge.Msg.PasteClipboardImage -> pasteImageFromClipboardOffEdt(m.notify)
             is JcefBridge.Msg.Attach -> addAttachment(Attachment.Image(m.name, m.mediaType, m.base64))
             is JcefBridge.Msg.McpReconnect -> { session.reconnectMcp(m.name); requestMcp() }
             is JcefBridge.Msg.McpToggle -> { session.toggleMcp(m.name, m.enabled); requestMcp() }
             is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
             JcefBridge.Msg.Ready -> {
+                host.markWebReady() // the web app is alive — cancel the first-open self-heal watchdog
                 pushTheme(); pushMetaState(); pushPermissions(); pushAttachments(); pushSession(); requestMcp(); requestVersion(); fullResync()
             }
             JcefBridge.Msg.OpenPalette -> {} // client-side overlay; nothing to do backend-side
@@ -512,7 +500,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         livePanels.remove(this)
         session.transcript.removeListener(this)
         session.removeListener(this)
-        hunkCache.clear()
         timer.stop()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }

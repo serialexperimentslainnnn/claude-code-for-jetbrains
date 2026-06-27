@@ -300,8 +300,12 @@
       }
       if (e.key === 'Escape') {
         if (openMenu) { closeMenu(); e.preventDefault(); return; }
-        e.preventDefault();
-        send({ type: 'interrupt' });
+        // Only interrupt when a turn is actually running and we're not already interrupting — otherwise Escape
+        // in an idle composer would fire a pointless interrupt request.
+        if (lastState && lastState.turnActive && !lastState.interrupting) {
+          e.preventDefault();
+          send({ type: 'interrupt' });
+        }
         return;
       }
       if (e.key === 'Tab' && e.shiftKey) {
@@ -340,6 +344,9 @@
 
   function onSendClick(e) {
     e.preventDefault();
+    if (lastState && lastState.interrupting) {
+      return; // interrupt already in flight; the button is showing "Interrupting…"
+    }
     if (lastState && lastState.turnActive) {
       send({ type: 'interrupt' });
     } else {
@@ -371,6 +378,20 @@
     return f.options;
   }
 
+  // A cheap signature of which option is selected for a pill, so renderState only rebuilds an OPEN menu when the
+  // selection actually changed — not on every (frequent, streaming) state push, which made the menu flicker and
+  // dropped the highlighted item under the cursor.
+  function menuSig(def) {
+    var opts = currentOptions(def);
+    // Key on BOTH the option set (labels) and the selection, so the open menu also rebuilds when the option list
+    // itself changes mid-stream (e.g. system/init adds/removes a model), not only when the selection flips.
+    var sig = opts.length + '|';
+    for (var i = 0; i < opts.length; i++) {
+      sig += (opts[i].selected ? '1' : '0') + (opts[i].label != null ? String(opts[i].label) : '') + '';
+    }
+    return sig;
+  }
+
   function togglePillMenu(def, anchorEl) {
     if (openMenu && openMenu.pill === def.key) { closeMenu(); return; }
     closeMenu();
@@ -385,7 +406,8 @@
           attrs: { role: 'option' },
           on: { click: function (e) { e.preventDefault(); e.stopPropagation(); chooseOption(def, o); } }
         }, h('span', { class: 'menu-item-label', text: o.label != null ? String(o.label) : '' }));
-        if (o.selected) item.appendChild(h('span', { class: 'menu-check', text: '✓' }));
+        // The selected ✓ is drawn by CSS (.menu-item.selected::after) — don't ALSO append a span here, or the
+        // chosen item shows two ticks.
         menu.appendChild(item);
       })(opts[i]);
     }
@@ -395,7 +417,7 @@
     positionMenu(menu, anchorEl);
 
     anchorEl.classList.add('pill-open');
-    openMenu = { el: menu, pill: def.key, anchor: anchorEl };
+    openMenu = { el: menu, pill: def.key, anchor: anchorEl, sig: menuSig(def) };
   }
 
   // Place a fixed popup above its anchor by default, clamped to the viewport on all sides so
@@ -779,13 +801,22 @@
 
   function renderSendMode(s) {
     if (!els || !els.send) return;
-    if (s.turnActive) {
+    if (s.interrupting) {
+      // Interrupt in flight: show a disabled "Interrupting…" state until the host clears it (ack/timeout/turn-end).
       els.send.classList.add('stop');
+      els.send.classList.add('interrupting');
+      els.send.title = 'Interrupting…';
+      els.send.setAttribute('aria-label', 'Interrupting');
+      els.send.innerHTML = stopGlyph();
+    } else if (s.turnActive) {
+      els.send.classList.add('stop');
+      els.send.classList.remove('interrupting');
       els.send.title = 'Stop';
       els.send.setAttribute('aria-label', 'Stop');
       els.send.innerHTML = stopGlyph();
     } else {
       els.send.classList.remove('stop');
+      els.send.classList.remove('interrupting');
       els.send.title = 'Send';
       els.send.setAttribute('aria-label', 'Send');
       els.send.innerHTML = sendGlyph();
@@ -802,14 +833,18 @@
     var newGhost = (s.suggestion != null) ? String(s.suggestion) : '';
     ghostText = newGhost;
     renderGhost();
-    // if a menu is open, refresh its selection by reopening
-    if (openMenu) {
+    // If a pill menu is open, only rebuild it when its selection actually changed — reopening on every state
+    // push (frequent during streaming) made the menu flicker and de-selected the item under the cursor. The
+    // attach menu (__attach) is never touched here; it has its own refresh path (cc.attachData).
+    if (openMenu && openMenu.pill !== '__attach') {
       var key = openMenu.pill;
       var def = null;
       for (var i = 0; i < PILL_DEFS.length; i++) if (PILL_DEFS[i].key === key) def = PILL_DEFS[i];
-      var anchor = openMenu.anchor;
-      closeMenu();
-      if (def && anchor) togglePillMenu(def, anchor);
+      if (def && menuSig(def) !== openMenu.sig) {
+        var anchor = openMenu.anchor;
+        closeMenu();
+        togglePillMenu(def, anchor);
+      }
     }
   }
 

@@ -2,7 +2,9 @@ package dev.lain.claudejb.ui.jcef
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.Disposer
+import com.intellij.util.Alarm
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
@@ -67,6 +69,23 @@ class JcefHost(
     /** JS strings queued before the page was ready. EDT-only. */
     private val pending = LinkedList<String>()
 
+    /** The assembled page, kept so the first-open self-heal can reload it via `loadHTML`. */
+    private var page: Page? = null
+
+    /** True once the web app has actually announced itself (the `ready` bridge message reached us). EDT-only. */
+    private var webReady: Boolean = false
+
+    /** One-shot guard so the self-heal reload can't loop. EDT-only. */
+    private var reloadedOnce: Boolean = false
+
+    /**
+     * First-open self-heal: if the very first scheme-served load comes up blank (the process-global scheme
+     * handler can race the first browser's `loadURL`, yielding a page with no scripts → no `__ccSend` → a dead
+     * chat that only a manual tab-reopen fixed), this watchdog reloads the page via `loadHTML` (independent of
+     * the scheme) so the chat heals itself. Cancelled as soon as the web app announces ready.
+     */
+    private val readyWatchdog = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
+
     val component: JComponent
 
     init {
@@ -103,6 +122,7 @@ class JcefHost(
             // Prefer serving from the secure-context origin (real HTTP security headers); fall back to a raw
             // data-page load (the hash-pinned CSP still applies via the page meta tag) if registration fails.
             val page = buildPage()
+            this.page = page
             if (registerScheme(page)) b.loadURL(PAGE_URL) else b.loadHTML(page.html)
         }
     }
@@ -119,6 +139,17 @@ class JcefHost(
             } else {
                 pending.add(js)
             }
+        }
+    }
+
+    /**
+     * The web app announced it is alive (the `ready` bridge message). Cancels the first-open self-heal watchdog.
+     * Called by the panel when it receives `Msg.Ready`. Idempotent.
+     */
+    fun markWebReady() {
+        runOnEdt {
+            webReady = true
+            readyWatchdog.cancelAllRequests()
         }
     }
 
@@ -143,9 +174,28 @@ class JcefHost(
                     while (pending.isNotEmpty()) {
                         executeNow(b, pending.poll())
                     }
+                    armReadyWatchdog(b)
                 }
             }
         }, b.cefBrowser)
+    }
+
+    /**
+     * Arms the first-open self-heal: if the web app hasn't announced ready a short while after load-end, the
+     * scheme-served page likely came up blank — reload it once via `loadHTML` (scheme-independent) so the chat
+     * heals itself instead of staying dead until the user reopens the tab. EDT-only.
+     */
+    private fun armReadyWatchdog(b: JBCefBrowser) {
+        if (webReady || reloadedOnce) return
+        readyWatchdog.cancelAllRequests()
+        readyWatchdog.addRequest({
+            if (!webReady && !reloadedOnce) {
+                reloadedOnce = true
+                ready = false
+                log.warn("JCEF chat did not become ready after load — reloading via loadHTML (first-open self-heal)")
+                page?.let { b.loadHTML(it.html) }
+            }
+        }, READY_WATCHDOG_MS)
     }
 
     private fun installNavigationGuards(b: JBCefBrowser) {
@@ -233,6 +283,11 @@ class JcefHost(
     private class Page(val html: String, val headers: Map<String, String>)
 
     private companion object {
+        private val log = logger<JcefHost>()
+
+        /** How long to wait after load-end for the web app's `ready` before the self-heal reload kicks in. */
+        private const val READY_WATCHDOG_MS = 2500
+
         // A synthetic, network-less origin under the reserved `.localhost` namespace. Chromium treats
         // `*.localhost` as a potentially-trustworthy (secure) context, so the cross-origin-isolation and
         // Clear-Site-Data headers actually take effect — yet our scheme handler intercepts every request, so no

@@ -17,6 +17,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
@@ -43,14 +44,16 @@ import javax.swing.JList
  */
 class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
+    // NB: a ToolWindowFactory is an APPLICATION-level extension — one instance serves every open project. These
+    // maps are keyed by ClaudeSession (unique per session across projects), so they never collide between
+    // projects. The tool window, however, must be resolved per-project on demand ([resolveToolWindow]) — caching
+    // it in a field would make a second project's window overwrite the first's and misdirect attention checks.
     /** Maps each live session to its tab, so a background session can target its own badge/notification. */
     private val contents = HashMap<ClaudeSession, Content>()
     /** Per-session throttle for attention notifications (badge is never throttled). */
     private val lastNotified = HashMap<ClaudeSession, Long>()
-    private var toolWindow: ToolWindow? = null
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        this.toolWindow = toolWindow
         val manager = ChatSessionManager.getInstance(project)
         val cm = toolWindow.contentManager
 
@@ -89,13 +92,16 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     /** Adds a tab for [session], wires it, and starts its process. */
     private fun openChat(project: Project, cm: ContentManager, session: ClaudeSession) {
         val panel = JcefChatPanel(project, session)
-        val content = ContentFactory.getInstance().createContent(panel, session.title, false)
+        val content = ContentFactory.getInstance().createContent(panel, tabTitle(session.title), false)
         content.isCloseable = true
+        content.description = session.title // full title as the tab tooltip
         content.setDisposer(panel)
         contents[session] = content
         session.addListener(object : SessionListener {
             override fun onAttention(reason: AttentionReason) = onSessionAttention(project, cm, session, reason)
-            override fun onTitleChanged() { contents[session]?.displayName = session.title }
+            override fun onTitleChanged() {
+                contents[session]?.let { it.displayName = tabTitle(session.title); it.description = session.title }
+            }
         })
         cm.addContent(content)
         cm.setSelectedContent(content)
@@ -111,7 +117,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * Otherwise badge the tab (always) and raise a throttled notification. Fired on the EDT.
      */
     private fun onSessionAttention(project: Project, cm: ContentManager, session: ClaudeSession, reason: AttentionReason) {
-        val tw = toolWindow
+        val tw = resolveToolWindow(project)
         val content = contents[session] ?: return
         val onScreen = tw != null && tw.isVisible && cm.selectedContent?.component === content.component
         if (onScreen) return
@@ -135,10 +141,14 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             )
             .addAction(NotificationAction.createSimpleExpiring("Open") {
                 contents[session]?.let { cm.setSelectedContent(it); it.setIcon(null) }
-                toolWindow?.activate(null)
+                resolveToolWindow(project)?.activate(null)
             })
             .notify(project)
     }
+
+    /** Resolves this project's Claude Code tool window on demand (the factory caches no per-project window). */
+    private fun resolveToolWindow(project: Project): ToolWindow? =
+        ToolWindowManager.getInstance(project).getToolWindow("Claude Code")
 
     private fun activePanel(cm: ContentManager): JcefChatPanel? = cm.selectedContent?.component as? JcefChatPanel
 
@@ -370,6 +380,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     private fun truncate(s: String, max: Int): String = if (s.length <= max) s else s.take(max - 1) + "…"
 
+    /** Keeps tab labels short so many open chats don't push the tab strip off-screen; full title lives in the tooltip. */
+    private fun tabTitle(title: String): String = truncate(title.trim().ifBlank { "Chat" }, TAB_TITLE_MAX)
+
     /** Minimal HTML escaping so user-supplied titles/prompts can't break the cell's HTML rendering. */
     private fun escapeHtml(s: String): String =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -434,6 +447,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     companion object {
         /** Min gap between attention notifications for the same session, to avoid spam. */
         const val NOTIFY_THROTTLE_MS = 3000L
+
+        /** Max characters in a chat tab label before it's ellipsized (full title stays in the tooltip). */
+        const val TAB_TITLE_MAX = 22
 
         /**
          * Opens (or focuses) the Diff History / rollback tab for [session] in the Claude Code tool window.

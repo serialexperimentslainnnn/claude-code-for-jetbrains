@@ -329,6 +329,10 @@
     // Clear.
     while (panel.firstChild) panel.removeChild(panel.firstChild);
 
+    // Cards live inside a centred .dash-inner grid (the grid/gap CSS targets `.dashboard > .dash-inner`; without
+    // this wrapper the cards stacked with no layout). The wrapper also caps the width to the reading column.
+    var inner = h('div', { class: 'dash-inner' });
+
     var s = lastSession || {};
     var cards = [
       buildContextCard(s.context),
@@ -341,16 +345,17 @@
 
     var any = false;
     for (var i = 0; i < cards.length; i++) {
-      if (cards[i]) { panel.appendChild(cards[i]); any = true; }
+      if (cards[i]) { inner.appendChild(cards[i]); any = true; }
     }
 
     if (!any) {
-      panel.appendChild(h('div', { class: 'dash-card dash-empty' },
+      inner.appendChild(h('div', { class: 'dash-card dash-empty' },
         h('div', { class: 'dash-title', text: 'Session' }),
         h('div', { class: 'stat-row' },
           h('span', { class: 'stat-label', text: 'No session data yet.' }))
       ));
     }
+    panel.appendChild(inner);
   }
 
   // ---------------------------------------------------------------------------
@@ -387,14 +392,18 @@
 
   function applyVisibility() {
     if (!panel || !toggleBtn) return;
+    var conv = conversation();
     if (shown) {
       panel.removeAttribute('hidden');
       panel.classList.add('open');
+      // Hide the transcript while the dashboard fills the conversation area — the dock (composer) stays visible.
+      if (conv) conv.setAttribute('hidden', '');
       toggleBtn.textContent = 'Chat';
       toggleBtn.classList.add('active');
     } else {
       panel.setAttribute('hidden', '');
       panel.classList.remove('open');
+      if (conv) conv.removeAttribute('hidden');
       toggleBtn.textContent = 'Session';
       toggleBtn.classList.remove('active');
     }

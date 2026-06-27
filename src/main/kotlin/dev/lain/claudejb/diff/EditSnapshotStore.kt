@@ -57,4 +57,14 @@ class EditSnapshotStore {
     }
 
     fun get(toolUseId: String): EditSnapshot? = byToolUseId[toolUseId]
+
+    /**
+     * Replaces the stored [input] for [toolUseId] while keeping the captured before-text, so a later diff reflects
+     * what was ACTUALLY written — e.g. after the user edited the proposed content in the review diff and we narrowed
+     * the write to their version. No-op if no snapshot exists for [toolUseId] (or it's blank).
+     */
+    fun updateInput(toolUseId: String, input: JsonObject) {
+        if (toolUseId.isBlank()) return
+        byToolUseId.computeIfPresent(toolUseId) { _, snap -> snap.copy(input = input) }
+    }
 }
