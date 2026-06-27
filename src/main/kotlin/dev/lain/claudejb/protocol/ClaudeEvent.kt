@@ -151,6 +151,15 @@ sealed interface ClaudeEvent {
     /** `system/model_refusal_fallback` — the primary model refused; the turn was retried on a fallback model. */
     data class ModelRefusalFallback(val info: ModelRefusalFallbackInfo) : ClaudeEvent
 
+    /** `system/informational` — a generic loop text banner (status/hook feedback/slash output) at a render level. */
+    data class Informational(val info: InformationalInfo) : ClaudeEvent
+
+    /** `system/model_refusal_no_fallback` — the model refused and no fallback was configured; the turn ends in error. */
+    data class ModelRefusalNoFallback(val info: ModelRefusalNoFallbackInfo) : ClaudeEvent
+
+    /** `system/worker_shutting_down` — graceful worker teardown with a reason (live-tail signal only). */
+    data class WorkerShuttingDown(val info: WorkerShuttingDownInfo) : ClaudeEvent
+
     /** Reply from the binary to a host-initiated control_request, correlated by [requestId]. */
     data class ControlResult(
         val requestId: String,
@@ -178,7 +187,7 @@ object ProtocolParser {
             "assistant" -> parseAssistant(root)
             "user" -> parseUser(root)
             "stream_event" -> parseStreamEvent(root)
-            "result" -> listOf(ClaudeEvent.Result(ClaudeJson.decodeFromJsonElement(ResultMessage.serializer(), root)))
+            "result" -> decode(root, ResultMessage.serializer(), ClaudeEvent::Result, type, root)
             "control_request" -> parseControlRequest(root)
             "control_response" -> parseControlResponse(root)
             "rate_limit_event" -> parseRateLimit(root)
@@ -193,7 +202,7 @@ object ProtocolParser {
     }
 
     private fun parseSystem(root: JsonObject): List<ClaudeEvent> = when (root.str("subtype")) {
-        "init" -> listOf(ClaudeEvent.Init(ClaudeJson.decodeFromJsonElement(SystemInit.serializer(), root)))
+        "init" -> decode(root, SystemInit.serializer(), ClaudeEvent::Init, "system", root)
         "local_command_output" -> listOf(ClaudeEvent.LocalCommandOutput(root.str("content").orEmpty()))
         "status" -> parseStatus(root)
         "compact_boundary" -> parseCompactBoundary(root)
@@ -216,6 +225,9 @@ object ProtocolParser {
         "hook_response" -> decode(root, HookResponseInfo.serializer(), ClaudeEvent::HookResponse, "system", root)
         "mirror_error" -> decode(root, MirrorErrorInfo.serializer(), ClaudeEvent::MirrorError, "system", root)
         "model_refusal_fallback" -> decode(root, ModelRefusalFallbackInfo.serializer(), ClaudeEvent::ModelRefusalFallback, "system", root)
+        "informational" -> decode(root, InformationalInfo.serializer(), ClaudeEvent::Informational, "system", root)
+        "model_refusal_no_fallback" -> decode(root, ModelRefusalNoFallbackInfo.serializer(), ClaudeEvent::ModelRefusalNoFallback, "system", root)
+        "worker_shutting_down" -> decode(root, WorkerShuttingDownInfo.serializer(), ClaudeEvent::WorkerShuttingDown, "system", root)
         else -> listOf(ClaudeEvent.Other("system", root.str("subtype"), root))
     }
 
@@ -269,7 +281,7 @@ object ProtocolParser {
     private fun parseAssistant(root: JsonObject): List<ClaudeEvent> {
         val parentToolUseId = root.str("parent_tool_use_id")
         val inner = (root["message"] as? JsonObject)
-            ?.let { ClaudeJson.decodeFromJsonElement(AssistantInner.serializer(), it) }
+            ?.let { runCatching { ClaudeJson.decodeFromJsonElement(AssistantInner.serializer(), it) }.getOrNull() }
             ?: return listOf(ClaudeEvent.Other("assistant", null, root))
         val out = ArrayList<ClaudeEvent>(inner.content.size)
         for (block in inner.content) {
@@ -343,12 +355,13 @@ object ProtocolParser {
         val requestId = root.str("request_id") ?: return emptyList()
         val request = root["request"] as? JsonObject ?: return emptyList()
         return when (request.str("subtype")) {
-            "can_use_tool" -> listOf(
-                ClaudeEvent.PermissionRequest(
-                    requestId,
-                    ClaudeJson.decodeFromJsonElement(CanUseToolRequest.serializer(), request),
-                )
-            )
+            // A malformed can_use_tool MUST NOT throw: the exception would escape the reader loop and the binary
+            // would block FOREVER waiting for a permission reply that never comes (the turn hangs). On a decode
+            // failure, reply with an error (UnsupportedControlRequest) so the binary is never left waiting —
+            // mirroring the elicitation branch below.
+            "can_use_tool" -> runCatching {
+                listOf(ClaudeEvent.PermissionRequest(requestId, ClaudeJson.decodeFromJsonElement(CanUseToolRequest.serializer(), request)))
+            }.getOrDefault(listOf(ClaudeEvent.UnsupportedControlRequest(requestId, "can_use_tool")))
             // hook_callback: the binary fired a hook and blocks on a HookJSONOutput reply (HookBroker owns the decision).
             "hook_callback" -> listOf(ClaudeEvent.HookCallback(requestId, request))
             // request_user_dialog: a tool-driven blocking dialog of an open-union kind — answered {behavior:"cancelled"}.

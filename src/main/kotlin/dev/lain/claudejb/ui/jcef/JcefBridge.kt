@@ -59,7 +59,7 @@ object JcefBridge {
         JsonArray(items.map { (e, order) -> entryJson(e, order) }).toString()
 
     /** One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). */
-    fun permissionJson(p: PendingPermission, hunks: List<dev.lain.claudejb.diff.Hunk> = emptyList()): JsonObject = buildJsonObject {
+    fun permissionJson(p: PendingPermission, diff: String? = null): JsonObject = buildJsonObject {
         put("id", p.requestId)
         put("tool", p.toolName)
         put("title", p.title)
@@ -71,10 +71,9 @@ object JcefBridge {
         p.description?.let { put("description", it) }
         p.decisionReason?.let { put("decisionReason", it) }
         p.blockedPath?.let { put("blockedPath", it) }
-        // Hunks for partial ("hunk-by-hunk") acceptance — only worth showing when there's more than one.
-        if (hunks.size > 1) put("hunks", buildJsonArray {
-            hunks.forEach { hk -> add(buildJsonObject { put("index", hk.index); put("preview", hk.preview) }) }
-        })
+        // A read-only unified diff for reviewable edits, so the card shows what's changing (red/green) — edits are
+        // accepted/rejected as a whole; there is no per-line selection (that produced incoherent, broken code).
+        diff?.takeIf { it.isNotBlank() }?.let { put("diff", it) }
         p.questions?.let { qs ->
             put("questions", buildJsonArray {
                 qs.forEach { q ->
@@ -116,8 +115,8 @@ object JcefBridge {
         }
     }
 
-    fun permissionsJson(list: List<PendingPermission>, hunksByRequest: Map<String, List<dev.lain.claudejb.diff.Hunk>> = emptyMap()): String =
-        JsonArray(list.map { permissionJson(it, hunksByRequest[it.requestId] ?: emptyList()) }).toString()
+    fun permissionsJson(list: List<PendingPermission>, diffByRequest: Map<String, String> = emptyMap()): String =
+        JsonArray(list.map { permissionJson(it, diffByRequest[it.requestId]) }).toString()
 
     // ── JS → Kotlin : parsing ──────────────────────────────────────────────────────────────────────────
 
@@ -135,10 +134,10 @@ object JcefBridge {
         data class ChangeVibe(val on: Boolean) : Msg
         data class ChangeProvider(val id: String) : Msg
         data class RemoveQueued(val index: Int) : Msg
-        data class ResolvePermission(val id: String, val allow: Boolean, val acceptedHunks: List<Int>? = null) : Msg
+        data class ResolvePermission(val id: String, val allow: Boolean) : Msg
         data class ResolveQuestion(val id: String, val answers: Map<String, String>) : Msg
         data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : Msg
-        data class AlwaysAllow(val tool: String) : Msg
+        data class AlwaysAllow(val tool: String, val id: String) : Msg
         data class ViewDiff(val id: String) : Msg
         data class ViewDiffByTool(val toolUseId: String) : Msg
         data class RevertEdit(val toolUseId: String) : Msg
@@ -183,17 +182,13 @@ object JcefBridge {
             "changeVibe" -> Msg.ChangeVibe(bool("on"))
             "changeProvider" -> Msg.ChangeProvider(str("id").orEmpty())
             "removeQueued" -> Msg.RemoveQueued(obj["index"]?.jsonPrimitive?.intOrNull ?: -1)
-            "resolvePermission" -> Msg.ResolvePermission(
-                str("id").orEmpty(),
-                bool("allow"),
-                (obj["hunks"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.intOrNull },
-            )
+            "resolvePermission" -> Msg.ResolvePermission(str("id").orEmpty(), bool("allow"))
             "resolveQuestion" -> {
                 val answers = (obj["answers"] as? JsonObject).orEmptyAnswers()
                 Msg.ResolveQuestion(str("id").orEmpty(), answers)
             }
             "resolveElicitation" -> Msg.ResolveElicitation(str("id").orEmpty(), str("action").orEmpty(), obj["content"] as? JsonObject)
-            "alwaysAllow" -> Msg.AlwaysAllow(str("tool").orEmpty())
+            "alwaysAllow" -> Msg.AlwaysAllow(str("tool").orEmpty(), str("id").orEmpty())
             "viewDiff" -> Msg.ViewDiff(str("id").orEmpty())
             "viewDiffByTool" -> Msg.ViewDiffByTool(str("toolUseId").orEmpty())
             "revertEdit" -> Msg.RevertEdit(str("toolUseId").orEmpty())

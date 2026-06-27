@@ -198,13 +198,10 @@
       copy.setAttribute("role", "button");
       copy.setAttribute("tabindex", "0");
       copy.textContent = "Copy";
-      copy.addEventListener("click", (function (codeEl) {
-        return function (ev) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          CC.send({ type: "copy", text: codeEl.textContent });
-        };
-      })(code));
+      // No per-node listener here: CC.markdown decorates a DETACHED fragment and
+      // returns holder.innerHTML, which serializes away any attached listener. The
+      // click/keyboard is handled by the single delegated handler below (works on
+      // the live DOM after the string is assigned).
       head.appendChild(copy);
 
       pre.insertBefore(head, code);
@@ -318,7 +315,7 @@
   // colours on a single hue. A timer keeps cycling regardless.
   function vibeStep() {
     if (!vibeOn) return;
-    vibeHue = (vibeHue + 3) % 360;
+    vibeHue = (vibeHue + 6) % 360; // faster rainbow — ~1.8s per full cycle (was ~5.4s); see also the timer below
     var s = document.documentElement.style;
     var h = vibeHue;
     s.setProperty("--accent", hsl(h, 90, 60));
@@ -337,7 +334,7 @@
     if (on) {
       if (body) body.classList.add("vibe");
       vibeStep();
-      if (!vibeTimer) vibeTimer = window.setInterval(vibeStep, 45);
+      if (!vibeTimer) vibeTimer = window.setInterval(vibeStep, 30);
     } else {
       if (vibeTimer) { window.clearInterval(vibeTimer); vibeTimer = 0; }
       if (body) body.classList.remove("vibe");
@@ -428,10 +425,74 @@
   }, true);
 
   // ---------------------------------------------------------------------------
+  // Delegated code-block Copy. The per-block listener can't survive CC.markdown's
+  // detached-fragment serialization (see decorateCodeBlocks), so resolve the copy
+  // intent here on the live DOM. Covers both the markdown code blocks and any
+  // other .copy affordance that carries no own handler.
+  // ---------------------------------------------------------------------------
+  function copyTargetText(copyEl) {
+    var pre = copyEl.closest ? copyEl.closest("pre") : null;
+    if (!pre) {
+      // Walk up manually for very old engines / detached cases.
+      var n = copyEl.parentNode;
+      while (n && n.tagName !== "PRE") n = n.parentNode;
+      pre = n;
+    }
+    var code = pre ? pre.querySelector("code") : null;
+    return code ? code.textContent : "";
+  }
+  function flashCopied(copyEl) {
+    var prev = copyEl.textContent;
+    copyEl.textContent = "Copied";
+    copyEl.classList.add("copied");
+    setTimeout(function () {
+      copyEl.textContent = prev;
+      copyEl.classList.remove("copied");
+    }, 1200);
+  }
+  function handleCopyFromCodeHead(ev, copyEl) {
+    var text = copyTargetText(copyEl);
+    if (!text) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    CC.send({ type: "copy", text: text });
+    flashCopied(copyEl);
+  }
+  document.addEventListener("click", function (ev) {
+    var node = ev.target;
+    while (node && node !== document) {
+      if (node.className && ("" + node.className).indexOf("copy") >= 0 &&
+          node.parentNode && ("" + (node.parentNode.className || "")).indexOf("code-head") >= 0) {
+        handleCopyFromCodeHead(ev, node);
+        return;
+      }
+      node = node.parentNode;
+    }
+  }, true);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" && ev.key !== " " && ev.key !== "Spacebar") return;
+    var node = ev.target;
+    if (node && node.className && ("" + node.className).indexOf("copy") >= 0 &&
+        node.parentNode && ("" + (node.parentNode.className || "")).indexOf("code-head") >= 0) {
+      handleCopyFromCodeHead(ev, node);
+    }
+  }, true);
+
+  // ---------------------------------------------------------------------------
   // Announce readiness once the page has loaded.
   // ---------------------------------------------------------------------------
+  // Announce ready, but ONLY once the host has injected window.__ccSend (it does so on load-end). If the page
+  // script runs before that injection (a fast/cached load), a single CC.send is silently dropped and the host
+  // never learns the web app is alive — the dead-chat-on-first-open bug. Poll briefly until the bridge exists.
   function announceReady() {
-    CC.send({ type: "ready" });
+    var tries = 0;
+    (function attempt() {
+      if (typeof window.__ccSend === "function") {
+        CC.send({ type: "ready" });
+        return;
+      }
+      if (tries++ < 200) { setTimeout(attempt, 50); } // ~10s ceiling, then give up
+    })();
   }
   if (document.readyState === "complete" || document.readyState === "interactive") {
     // Defer so later modules (transcript/composer/permissions) finish wiring

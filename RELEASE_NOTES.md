@@ -1,3 +1,34 @@
+## v4.1.0 — 2026-06-27
+
+**Editable diff review for edits.**
+
+When Claude asks to Edit/Write/MultiEdit a file, the plugin now **auto-opens an editable diff** in the IDE editor (Current | Proposed) on the permission request — not just in acceptEdits/bypass mode. You can **tweak the proposed content right in the editor** before approving; **Accept writes your edited version** (the tool input is re-encoded so the binary writes exactly what you left), and the diff **closes automatically** on accept/reject. The transcript's inline diff and **"View diff"** reflect what was *actually* written (your edit), not Claude's original proposal. Fail-safe: if you change nothing — or the platform renders the proposed side read-only — Accept writes Claude's original proposal, never a wrong write.
+
+---
+
+## v4.0.5 — 2026-06-27
+
+**Permission cards for edits show a read-only diff instead of per-line checkboxes.**
+
+The old hunk-by-hunk partial-acceptance UI (a checkbox per changed region) rendered as a confusing checklist and let you apply an incoherent subset of an edit — a reliable way to produce broken code. Edits are now **atomic**: the card shows a colour-coded unified diff (red removed / green added) and you accept or reject the whole change. The full diff is still available via **View diff** and the IDE's auto-opened diff tab.
+
+---
+
+## v4.0.4 — 2026-06-26
+
+**A broad bug-fix + UX pass** (the `claude` binary auto-updated to 2.1.193 in the meantime; protocol re-baselined to SDK 0.3.193).
+
+- **Interrupt** actually stops the turn now — Esc / Stop clears the turn on the binary's ack/timeout instead of looping "Interrupting…" forever; queued prompts and pending permission requests are flushed/denied.
+- **Chat dead on first open** self-heals (the web app retries until the bridge exists; the host reloads the page if it doesn't come alive) — no more closing & reopening the tab.
+- **User prompts render verbatim** (never as Markdown); the code-block **Copy** button works; duplicate/out-of-order **"Thought process"** fixed.
+- **Menu flicker + de-selection** while streaming fixed; single ✓ in prompt menus; Esc on the find bar no longer interrupts; the find bar scrolls/navigates (Enter / Shift+Enter).
+- **Adaptive thinking on by default**; faster Vibe Mode; **responsive** composer / find bar / chips and truncated tab titles.
+- **"Always allow"** resolves the exact card; permission re-push no longer wipes in-progress input; the session dashboard no longer covers the composer; clipboard paste runs off-EDT (no IDE freeze on a hung Wayland clipboard).
+- Latent fixes: double-`claude`-spawn guard + mid-launch orphan prevention, `dispose()` generation bump, a malformed `can_use_tool` can't hang the turn, and a per-project tool window (no cross-project shared state).
+- Models the new `system/informational` · `model_refusal_no_fallback` · `worker_shutting_down` protocol subtypes.
+
+---
+
 ## v4.0.3 — 2026-06-10
 
 **Fix: clipboard paste in the chat composer on native-Wayland Linux (the real fix for 4.0.2's symptom).**

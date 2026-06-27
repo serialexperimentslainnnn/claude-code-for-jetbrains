@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] — 2026-06-27
+
+### Added
+- **Editable diff review for edits.** When Claude asks to Edit/Write/MultiEdit a file, the plugin now **auto-opens an editable diff** in the IDE editor (Current | Proposed) — not just in acceptEdits/bypass mode. The proposed side is created with `DiffContentFactory.createEditable`, so you can **tweak the proposed content right in the editor** before approving; **Accept writes your edited version** (the tool input is re-encoded via `HunkSelection.encodeInput` so the binary writes exactly what you left), and the diff **closes automatically** on accept/reject. The captured snapshot is repointed at the effective input, so the transcript's inline diff and **"View diff"** reflect what was *actually* written (your edit), not Claude's original proposal. Fail-safe: if you change nothing — or the platform renders the proposed side read-only — Accept falls back to writing Claude's original proposed content, never a wrong write. Review diffs are also closed on stop/interrupt/dispose.
+
+## [4.0.5] — 2026-06-27
+
+### Changed
+- **Permission cards for edits now show a read-only diff instead of per-line checkboxes.** The previous hunk-by-hunk partial-acceptance UI (a checkbox per changed region) rendered as a confusing checklist and, worse, let you apply an incoherent subset of an edit — a reliable way to produce broken code. Edits are now **atomic**: the card shows a proper colour-coded unified diff (red removed / green added) and you accept or reject the whole change. The full diff is still available via **View diff** and the IDE's auto-opened diff tab. The partial-accept plumbing (`hunkCache`, per-hunk encode/reconstruct in the card path) was removed.
+
+## [4.0.4] — 2026-06-26
+
+A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in the meantime; protocol re-baselined).
+
+### Fixed
+- **Interrupt never actually stopped.** Esc / the Stop button sent the `interrupt` control request fire-and-forget with no response handler, so the binary's ack was discarded, `turnActive` never cleared, and the "Interrupting…" line — added as a permanent transcript row — re-rendered on every state push (the looping "Interrupting" the turn never escaped). Interrupt now goes through the correlated control client (clears the turn on ack/timeout), shows a transient **Interrupting…** state on the Stop button (no transcript spam), **flushes the queued prompts** so it can't immediately re-pump a new turn, and clears pending permission cards.
+- **Chat dead on first open** (had to close & reopen the tab). The JS `ready` handshake could fire before the host injected `window.__ccSend`, dropping the message; and a process-global scheme race could serve a blank page. The handshake is now self-healing: the web app retries `ready` until the bridge exists, and the host reloads via `loadHTML` if the page doesn't come alive shortly after load.
+- **User prompts were rendered as Markdown.** A prompt containing `*`, `#`, backticks or indentation got mangled. User messages now render **verbatim** (plain text, whitespace preserved); Markdown rendering is reserved for model output.
+- **Dead "Copy" button** on model code blocks — the per-block click listener was lost when the decorated fragment was serialized to HTML. Copy is now a delegated handler (click + keyboard).
+- **"Thought process" duplicated / out of order.** A finalized thinking block was appended as a second, post-answer entry instead of replacing the streamed one. Reconciliation now tracks the message's thinking entry and replaces in place.
+- **Menu flicker + de-selection while streaming.** The composer rebuilt pills and closed/reopened the open menu on every (frequent) state push. It now updates incrementally and only rebuilds an open menu when its selection actually changed. The transcript no longer re-serializes the whole conversation on every appended row (was O(N²)).
+- **Two checkmarks** on the selected item in prompt menus (CSS `::after` + a JS span) — now one.
+- **Esc closing the find bar also interrupted the turn** — the find-bar Escape now stops propagation.
+- **"Always allow" could approve the wrong pending card** (it matched by tool name); it now resolves the exact card. **Accepting zero hunks** is treated as a deny (it used to send a no-op edit the model saw as an error).
+- **Permission re-push wiped in-progress card state** (typed elicitation fields, question selections, unticked hunks) — cards are now reconciled by id.
+- **Session dashboard** layout was broken (missing `.dash-inner` grid wrapper; the overlay covered the composer) and now lays out correctly without hiding the composer.
+- **Clipboard paste froze the IDE** on a slow/hung clipboard owner (the Wayland `wl-paste`/`xclip` read ran on the EDT with an unbounded read). Reads now run off-EDT with a deadline.
+- **Find bar** now scrolls to the active match and supports Enter / Shift+Enter navigation with an `i / n` counter.
+
+### Changed
+- **Adaptive thinking is ON by default** for new installs.
+- **Vibe Mode** rainbow is ~3× faster (and coherent between the JCEF and Swing sides).
+- **Responsive UI**: the composer control bar wraps instead of clipping pills, the find bar and chips are fluid, and chat tab titles are truncated (full title in the tooltip) so many open chats don't push the tab strip off-screen.
+
+### Internal
+- **Latent concurrency/lifecycle fixes:** a `starting` guard + generation re-checks prevent a double `claude` spawn and an orphaned process when a tab is closed mid-launch; `dispose()` now bumps the generation (no spurious "exited unexpectedly"); a malformed `can_use_tool` can no longer throw and hang the turn (it replies with an error); the `ToolWindowFactory` no longer caches a per-project window in shared state.
+- **Protocol re-baselined to `claude` 2.1.193 / SDK 0.3.193** — models the new `system/informational`, `model_refusal_no_fallback` and `worker_shutting_down` subtypes; `./gradlew checkDrift` green.
+
 ## [4.0.3] — 2026-06-10
 
 ### Fixed

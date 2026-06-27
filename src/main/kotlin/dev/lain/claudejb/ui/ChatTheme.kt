@@ -50,8 +50,10 @@ object ChatTheme {
     // animation speed and desync), and closing the tab that toggled Vibe Mode doesn't leave the others frozen on a
     // static rainbow with no driver. The timer runs only while at least one panel is registered AND vibing.
     private val vibeRepaints = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
-    private val vibeTimer = javax.swing.Timer(50) {
-        vibeHue = (vibeHue + 0.012f) % 1f
+    // Faster rainbow (~1.8s per full cycle, coherent with the JCEF side in app-core.js vibeStep): 30ms tick × 0.018
+    // hue step ≈ 55 steps per rotation.
+    private val vibeTimer = javax.swing.Timer(30) {
+        vibeHue = (vibeHue + 0.018f) % 1f
         vibeRepaints.forEach { it() }
     }
 
