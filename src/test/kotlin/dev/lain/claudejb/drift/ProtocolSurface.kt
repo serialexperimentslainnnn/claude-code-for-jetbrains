@@ -101,6 +101,7 @@ data class ProtocolSurface(
             "api_retry", "commands_changed", "memory_recall", "files_persisted",
             "plugin_install", "hook_started", "hook_progress", "hook_response", "mirror_error",
             "model_refusal_fallback", "informational", "model_refusal_no_fallback", "worker_shutting_down",
+            "background_tasks_changed", "control_request_progress",
             // system subtype we receive but knowingly leave as Other (URL-elicitation confirmation)
             "elicitation_complete",
             // control requests (binary -> host) we answer
@@ -114,6 +115,9 @@ data class ProtocolSurface(
             "mcp_toggle", "read_file", "rewind_files", "seed_read_state", "stop_task", "background_tasks",
             "cancel_async_message", "file_suggestions", "reload_plugins", "apply_flag_settings",
             "get_usage", "register_repo_root", "reload_skills",
+            // thin-client control requests we knowingly don't send: models come from the `initialize` reply, and
+            // the plan / workspace-diff dialogs are the remote thin client's, not ours.
+            "list_models", "get_plan", "get_workspace_diff",
         )
     }
 }

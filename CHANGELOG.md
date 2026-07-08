@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] — 2026-07-08
+
+**Protocol upgrade to `claude` 2.1.204 / SDK 0.3.204** — `./gradlew checkDrift` flagged five new protocol kinds; reconciled and re-verified green at the new baseline.
+
+### Added
+- **`system/background_tasks_changed`** is now modeled and surfaced as a **"Background tasks"** card in the session dashboard (with Stop). It's a **level** signal — the binary re-sends the *full* live set on every membership change — so unlike the edge-derived Subagents list it can never wedge a stale "running" indicator on a missed start/stop bookend. Kept deliberately separate from the subagent stream (the SDK leaves their relative ordering unspecified and forbids correlating them); reset to empty whenever the CLI process restarts.
+- **`system/control_request_progress`** is now modeled: progress for a host-originated control request (currently `side_question`, i.e. `/btw`). An `api_retry` status carries the same retry counters as `system/api_retry` and is surfaced the same way instead of being dropped; `started` is logged.
+
+### Internal
+- Triaged three thin-client host→binary control requests the plugin knowingly does not send — `list_models` (models come from the `initialize` reply), `get_plan`, `get_workspace_diff` — into `ProtocolSurface.KNOWN_SUBTYPES`.
+- Baseline bumped to `sdk=0.3.204` / `binary=2.1.204`; `checkDrift` green.
+
 ## [4.1.0] — 2026-06-27
 
 ### Added

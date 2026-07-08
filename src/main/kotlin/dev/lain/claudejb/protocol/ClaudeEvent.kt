@@ -160,6 +160,12 @@ sealed interface ClaudeEvent {
     /** `system/worker_shutting_down` — graceful worker teardown with a reason (live-tail signal only). */
     data class WorkerShuttingDown(val info: WorkerShuttingDownInfo) : ClaudeEvent
 
+    /** `system/background_tasks_changed` — the full live background-task set (level signal, REPLACE semantics). */
+    data class BackgroundTasksChanged(val info: BackgroundTasksChangedInfo) : ClaudeEvent
+
+    /** `system/control_request_progress` — progress for a host-originated control request (side_question). */
+    data class ControlRequestProgress(val info: ControlRequestProgressInfo) : ClaudeEvent
+
     /** Reply from the binary to a host-initiated control_request, correlated by [requestId]. */
     data class ControlResult(
         val requestId: String,
@@ -228,6 +234,8 @@ object ProtocolParser {
         "informational" -> decode(root, InformationalInfo.serializer(), ClaudeEvent::Informational, "system", root)
         "model_refusal_no_fallback" -> decode(root, ModelRefusalNoFallbackInfo.serializer(), ClaudeEvent::ModelRefusalNoFallback, "system", root)
         "worker_shutting_down" -> decode(root, WorkerShuttingDownInfo.serializer(), ClaudeEvent::WorkerShuttingDown, "system", root)
+        "background_tasks_changed" -> decode(root, BackgroundTasksChangedInfo.serializer(), ClaudeEvent::BackgroundTasksChanged, "system", root)
+        "control_request_progress" -> decode(root, ControlRequestProgressInfo.serializer(), ClaudeEvent::ControlRequestProgress, "system", root)
         else -> listOf(ClaudeEvent.Other("system", root.str("subtype"), root))
     }
 
