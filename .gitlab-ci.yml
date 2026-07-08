@@ -50,10 +50,32 @@ test:
       junit: build/test-results/test/TEST-*.xml
     expire_in: 14 days
 
+# Frontend (JCEF web app) unit tests — vitest + jsdom over src/main/resources/jcef/*.js. Node image (the default
+# temurin image has no Node). Devtools only; nothing here ships in the plugin. `npm ci` uses the committed lockfile.
+frontend-test:
+  stage: test
+  image: node:22
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .npm/
+  variables:
+    CI: "true"    # switches vitest to the JUnit reporter (see vitest.config.js)
+  script:
+    - npm ci --cache .npm --prefer-offline
+    - npm test
+  artifacts:
+    when: always
+    paths:
+      - build/reports/frontend/
+    reports:
+      junit: build/reports/frontend/junit.xml
+    expire_in: 14 days
+
 # IntelliJ Plugin Verifier — must stay Compatible with IU-261 and IU-262 (EAP/RC), no internal/deprecated APIs.
 verify:
   stage: verify
-  needs: ["test"]
+  needs: ["test", "frontend-test"]
   script:
     - ./gradlew --no-daemon --stacktrace verifyPlugin
   artifacts:
