@@ -1,3 +1,17 @@
+## v4.2.0 — 2026-07-08
+
+**Protocol upgrade to `claude` 2.1.204 / SDK 0.3.204**, plus a new dashboard card.
+
+**🗂 Background tasks in the session dashboard.** The plugin now understands the binary's `background_tasks_changed` signal and shows a **Background tasks** card (with **Stop**) listing everything running in the background. It's a *level* signal — the full live set is re-sent on every change — so unlike the Subagents list it can never get stuck showing work that already finished.
+
+**🔁 Retry progress for `/btw`.** Progress for long-running side questions is now recognised: an API retry is surfaced as a "Retrying (attempt n/m)…" notice instead of being silently dropped.
+
+- Models the new `system/background_tasks_changed` and `system/control_request_progress` messages.
+- Triages the new `list_models`, `get_plan` and `get_workspace_diff` control requests (thin-client only; the plugin reads its model catalog from the `initialize` reply).
+- Backward-compatible with older binaries.
+
+---
+
 ## v4.1.0 — 2026-06-27
 
 This release folds in everything since v4.0.3 — the intermediate 4.0.4 / 4.0.5 builds were never published separately, so all of their fixes ship here.

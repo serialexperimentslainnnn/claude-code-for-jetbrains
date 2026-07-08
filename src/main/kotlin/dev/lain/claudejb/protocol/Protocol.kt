@@ -604,3 +604,41 @@ data class ModelRefusalNoFallbackInfo(
 data class WorkerShuttingDownInfo(
     val reason: String = "",
 )
+
+/** One live background task as reported by the `system/background_tasks_changed` level signal. */
+@Serializable
+data class BackgroundTaskInfo(
+    @SerialName("task_id") val taskId: String = "",
+    @SerialName("task_type") val taskType: String = "",
+    val description: String = "",
+)
+
+/**
+ * `system/background_tasks_changed` (SDK 0.3.204) — the FULL set of live background tasks, re-emitted whenever
+ * membership changes (start, completion, kill, a foreground agent being backgrounded).
+ *
+ * A **level** signal with REPLACE semantics: swap the tracked set for [tasks] on every payload, never pair edges.
+ * The SDK is explicit that this must NOT be correlated with the `task_started`/`task_notification` edge stream
+ * (ordering between them is unspecified). It is per-process — nothing is emitted at startup — so consumers must
+ * reset to the empty set whenever the CLI process (re)starts.
+ */
+@Serializable
+data class BackgroundTasksChangedInfo(
+    val tasks: List<BackgroundTaskInfo> = emptyList(),
+)
+
+/**
+ * `system/control_request_progress` (SDK 0.3.204) — progress for a long-running **host-originated** control
+ * request (currently only `side_question`, i.e. `/btw`), correlated by [requestId]. [status] is `started` (the
+ * worker accepted the request and launched the work) or `api_retry`, which carries the same retry counters as
+ * `system/api_retry` and is present only for that status.
+ */
+@Serializable
+data class ControlRequestProgressInfo(
+    @SerialName("request_id") val requestId: String = "",
+    val status: String = "",                       // started | api_retry
+    val attempt: Int? = null,
+    @SerialName("max_retries") val maxRetries: Int? = null,
+    @SerialName("retry_delay_ms") val retryDelayMs: Long? = null,
+    @SerialName("error_status") val errorStatus: Int? = null,
+)
