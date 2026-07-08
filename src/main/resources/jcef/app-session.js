@@ -72,7 +72,10 @@
     );
   }
 
-  function card(title, body) {
+  // `wide` cards span the whole grid row (.dash-card.wide { grid-column: 1 / -1 }). Use it for anything with rows
+  // that need horizontal room — the context legend, and the server/task lists whose name column would otherwise
+  // collapse to an ellipsis inside a 260px column.
+  function card(title, body, wide) {
     // body may be a node, an array of nodes, or empty. Hide when nothing renders.
     var children = [];
     if (Array.isArray(body)) {
@@ -82,7 +85,7 @@
     }
     if (!children.length) return null;
     var head = h('div', { class: 'dash-title', text: title });
-    return h('div', { class: 'dash-card' }, head, children);
+    return h('div', { class: 'dash-card' + (wide ? ' wide' : '') }, head, children);
   }
 
   // ---------------------------------------------------------------------------
@@ -151,7 +154,7 @@
       }
     }
 
-    return card('Context', children);
+    return card('Context', children, true);
   }
 
   function buildCostCard(cost) {
@@ -224,7 +227,7 @@
         stopBtn
       ));
     }
-    return card('Subagents', rows);
+    return card('Subagents', rows, true);
   }
 
   // Live background tasks, from the `background_tasks_changed` LEVEL signal: the host always sends the CURRENT
@@ -261,7 +264,7 @@
         stopBtn
       ));
     }
-    return card('Background tasks', rows);
+    return card('Background tasks', rows, true);
   }
 
   // status → mcp-dot class. Defensive: unknown maps to nothing extra.
@@ -333,11 +336,14 @@
         }
       });
 
+      // `.toggle` is a 32x18 switch whose knob is an absolutely-positioned ::after — it must NOT carry text, or the
+      // label overflows the pill and the knob paints on top of it ("Dis●ble"). The state is conveyed by the switch
+      // itself; the accessible name lives in title/aria-label.
       var toggleEl = h('span', {
         class: disabled ? 'toggle' : 'toggle on',
-        attrs: { role: 'button', tabindex: '0' },
+        attrs: { role: 'switch', tabindex: '0', 'aria-checked': disabled ? 'false' : 'true',
+                 'aria-label': disabled ? 'Enable server' : 'Disable server' },
         title: disabled ? 'Enable' : 'Disable',
-        text: disabled ? 'Enable' : 'Disable',
         on: {
           click: (function (name, enabled) {
             return function (ev) {
@@ -355,7 +361,7 @@
         h('span', { class: 'mcp-actions' }, reconnectBtn, toggleEl)
       ));
     }
-    return card('MCP servers', rows);
+    return card('MCP servers', rows, true);
   }
 
   // ---------------------------------------------------------------------------

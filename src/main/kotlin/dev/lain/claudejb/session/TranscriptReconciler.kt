@@ -43,10 +43,17 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
         liveAssistant = null
     }
 
-    /** Appends a top-level thinking delta, starting a new entry if none is live. */
+    /**
+     * Appends a top-level thinking delta, starting a new entry if none is live.
+     *
+     * A blank delta never *opens* a block: with REDACTED thinking (Opus 4.8+) the model streams no reasoning text
+     * at all, and creating an entry for it rendered an empty "Thought process" fold. Once a block is open a blank
+     * delta is a harmless no-op append.
+     */
     fun appendThinking(delta: String) {
         val entry = liveThinking
         if (entry == null) {
+            if (delta.isBlank()) return // nothing to show — don't open an empty fold
             liveThinking = transcript.add(Speaker.THINKING, delta)
             settledThinking = liveThinking
         } else {
@@ -61,7 +68,13 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
      */
     fun finalizeThinking(full: String) {
         val entry = liveThinking ?: settledThinking
-        if (entry != null) transcript.replaceText(entry, full) else transcript.add(Speaker.THINKING, full)
+        when {
+            // Redacted thinking (Opus 4.8+) finalizes as an EMPTY block. Never open a fold for it, and never blank
+            // out a fold that already streamed real reasoning text — keep what the user was shown.
+            full.isBlank() -> Unit
+            entry != null -> transcript.replaceText(entry, full)
+            else -> transcript.add(Speaker.THINKING, full)
+        }
         liveThinking = null
         settledThinking = null
     }
