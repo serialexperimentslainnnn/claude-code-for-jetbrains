@@ -125,6 +125,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var promptSuggestion: String? = null; private set
     /** Observable map of subagent tasks keyed by task_id (task_started/progress/updated/notification). */
     val subagentTasks: Map<String, TaskProgressInfo> get() = taskTracker.tasks
+    /**
+     * The live background-task set from `system/background_tasks_changed` — a LEVEL signal (REPLACE semantics),
+     * deliberately independent of [subagentTasks] (the SDK forbids correlating the level with the edge stream).
+     */
+    val backgroundTasks: List<dev.lain.claudejb.protocol.BackgroundTaskInfo> get() = taskTracker.backgroundTasks
 
     // Token counters live in [TokenAccountant]; these getters keep the public field names the UI already reads.
     // Live = the currently-streaming message's running totals (folded into the session counters at message_start
@@ -1398,6 +1403,26 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // Live-tail only: a resumed session may replay historical instances, so don't tear anything down —
                 // just log it. (Reasons like host_exit/remote_control_disabled are host-set, not user input.)
                 log.info("worker_shutting_down: ${event.info.reason}")
+            }
+
+            is ClaudeEvent.BackgroundTasksChanged -> edt {
+                // LEVEL signal: swap the tracked set for the payload. Never paired with the task_* edge stream
+                // (the SDK leaves their relative ordering unspecified), so it can't wedge a stale running indicator.
+                taskTracker.replaceBackgroundTasks(event.info.tasks)
+                fireState()
+            }
+
+            is ClaudeEvent.ControlRequestProgress -> {
+                // Progress for one of OUR long-running control requests (currently only side_question, i.e. /btw).
+                // `started` just means the worker accepted it — the transcript already shows the question. An
+                // `api_retry` carries the same counters as system/api_retry, so surface it the same way.
+                val i = event.info
+                if (i.status == "api_retry") {
+                    val of = (i.maxRetries ?: 0).takeIf { it > 0 }?.let { "/$it" } ?: ""
+                    systemNotice("Retrying (attempt ${i.attempt ?: 1}$of)…")
+                } else {
+                    log.debug("control_request_progress: ${i.status} for ${i.requestId}")
+                }
             }
 
             is ClaudeEvent.Other -> log.debug("Ignored ${event.type}/${event.subtype}")

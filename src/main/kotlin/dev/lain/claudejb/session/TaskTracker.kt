@@ -1,5 +1,6 @@
 package dev.lain.claudejb.session
 
+import dev.lain.claudejb.protocol.BackgroundTaskInfo
 import dev.lain.claudejb.protocol.TaskNotificationInfo
 import dev.lain.claudejb.protocol.TaskProgressInfo
 import dev.lain.claudejb.protocol.TaskStartedInfo
@@ -20,8 +21,27 @@ import java.util.concurrent.ConcurrentHashMap
 class TaskTracker {
     private val backing = ConcurrentHashMap<String, TaskProgressInfo>()
 
+    /**
+     * The live background-task set from the `system/background_tasks_changed` **level** signal.
+     *
+     * Deliberately kept SEPARATE from [tasks] (the edge-derived subagent map): the SDK is explicit that the level
+     * and the `task_started`/`task_notification` edge stream must not be correlated — their relative ordering is
+     * unspecified and the level carries ids only. Per-process: reset by [clear] (stop/terminate), because nothing
+     * is emitted at startup and a stale set would otherwise survive a CLI restart.
+     */
+    @Volatile
+    private var backgroundBacking: List<BackgroundTaskInfo> = emptyList()
+
     /** Immutable snapshot of the live tasks, keyed by `task_id`. */
     val tasks: Map<String, TaskProgressInfo> get() = backing.toMap()
+
+    /** Immutable snapshot of the live background tasks (level signal). */
+    val backgroundTasks: List<BackgroundTaskInfo> get() = backgroundBacking
+
+    /** REPLACE semantics: swap the tracked background-task set for the payload of a `background_tasks_changed`. */
+    fun replaceBackgroundTasks(tasks: List<BackgroundTaskInfo>) {
+        backgroundBacking = tasks
+    }
 
     /**
      * A subagent task began. Honors `skip_transcript`: ambient/housekeeping tasks are not tracked.
@@ -68,8 +88,9 @@ class TaskTracker {
         return !info.skipTranscript
     }
 
-    /** Drop all tracked tasks. */
+    /** Drop all tracked tasks (edge-derived map AND the per-process background-task level set). */
     fun clear() {
         backing.clear()
+        backgroundBacking = emptyList()
     }
 }

@@ -21,21 +21,24 @@ import kotlinx.serialization.json.put
  *   cost:     { usd:Number|null, input, output, cacheWrite, cacheRead } | null,
  *   account:  { email, org, plan, provider } | null,
  *   subagents:[{ id, desc, type, status, tokens, tools }],
+ *   backgroundTasks:[{ id, desc, type }],
  *   model:    String|null,
  *   cwd:      String|null,
  *   version:  String|null
  * }
  * </pre>
  *
- * Every card is null-safe: absent data emits JSON `null` (objects) or `[]` (subagents). The dashboard
- * frontend hides any card whose data is null/empty, so a partially-populated session renders cleanly.
+ * Every card is null-safe: absent data emits JSON `null` (objects) or `[]` (subagents/backgroundTasks). The
+ * dashboard frontend hides any card whose data is null/empty, so a partially-populated session renders cleanly.
  *
  * Sources:
  *  - context  ← [ClaudeSession.lastContextUsage] (the cached `get_context_usage` result);
  *  - cost     ← [ClaudeSession.lastSessionCost] (raw `get_session_cost` JsonObject); the per-component token
  *               tally is decoded from an `apiUsage` block when present and the USD figure from a cost field;
  *  - account  ← [ClaudeSession.account];
- *  - subagents← [ClaudeSession.subagentTasks];
+ *  - subagents← [ClaudeSession.subagentTasks] (edge-derived: task_started/progress/updated/notification);
+ *  - backgroundTasks ← [ClaudeSession.backgroundTasks] (the `background_tasks_changed` LEVEL signal — always the
+ *    current set, so it cannot wedge on a missed edge; deliberately NOT correlated with `subagents`);
  *  - model    ← [ClaudeSession.model];
  *  - cwd/version: [ClaudeSession] exposes no synchronous getter for either (cwd arrives only ephemerally on
  *    the `system/init` event and the binary version only via an async control request), so both are emitted
@@ -49,6 +52,7 @@ object JcefSessionData {
             put("cost", costJson(session) ?: JsonNull)
             put("account", accountJson(session) ?: JsonNull)
             put("subagents", subagentsJson(session))
+            put("backgroundTasks", backgroundTasksJson(session))
             // Always emit a friendly model label (even on a default session where session.model is null)
             // and the known working dir, so the Session card is never empty — the prior nulls made the
             // whole dashboard collapse to "No session data yet" on a fresh/idle session.
@@ -143,6 +147,21 @@ object JcefSessionData {
                 put("status", task.status)
                 put("tokens", task.usage.totalTokens)
                 put("tools", task.usage.toolUses)
+            }
+        }
+    }
+
+    /**
+     * One row per live background task: `{ id, desc, type }`; empty array when none. Sourced from the
+     * `background_tasks_changed` LEVEL signal, so it always reflects the *current* set — it can't wedge on a
+     * missed edge the way the subagent list can, and it is deliberately not correlated with it.
+     */
+    private fun backgroundTasksJson(session: ClaudeSession) = buildJsonArray {
+        session.backgroundTasks.forEach { task ->
+            addJsonObject {
+                put("id", task.taskId)
+                put("desc", task.description)
+                put("type", task.taskType)
             }
         }
     }

@@ -227,6 +227,43 @@
     return card('Subagents', rows);
   }
 
+  // Live background tasks, from the `background_tasks_changed` LEVEL signal: the host always sends the CURRENT
+  // set, so this list can never wedge on a missed start/stop bookend the way the edge-derived Subagents list can.
+  // Deliberately a separate card — the two streams must not be correlated.
+  function buildBackgroundTasksCard(tasks) {
+    if (!Array.isArray(tasks) || !tasks.length) return null;
+    var rows = [];
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i] || {};
+      var id = t.id;
+      var desc = t.desc != null ? String(t.desc) : '';
+      var type = t.type != null ? String(t.type) : '';
+
+      var stopBtn = h('span', {
+        class: 'btn',
+        attrs: { role: 'button', tabindex: '0' },
+        text: 'Stop',
+        on: {
+          click: (function (taskId) {
+            return function (ev) {
+              ev.preventDefault(); ev.stopPropagation();
+              if (taskId != null) send({ type: 'stopTask', taskId: taskId });
+            };
+          })(id)
+        }
+      });
+
+      rows.push(h('div', { class: 'subagent-row' },
+        h('div', { class: 'subagent-main' },
+          h('span', { class: 'subagent-desc', text: desc || (type || 'Background task') }),
+          type ? h('span', { class: 'subagent-meta', text: type }) : null
+        ),
+        stopBtn
+      ));
+    }
+    return card('Background tasks', rows);
+  }
+
   // status → mcp-dot class. Defensive: unknown maps to nothing extra.
   var MCP_STATUS_CLASS = {
     'connected': 'connected',
@@ -340,6 +377,7 @@
       buildAccountCard(s.account),
       buildEnvCard(s),
       buildSubagentsCard(s.subagents),
+      buildBackgroundTasksCard(s.backgroundTasks),
       buildMcpCard(lastMcp)
     ];
 
