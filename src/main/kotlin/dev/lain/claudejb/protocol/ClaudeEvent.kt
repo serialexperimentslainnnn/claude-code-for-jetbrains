@@ -326,7 +326,13 @@ object ProtocolParser {
                 val delta = event["delta"] as? JsonObject ?: return emptyList()
                 when (delta.str("type")) {
                     "text_delta" -> delta.str("text")?.let { listOf(ClaudeEvent.TextDelta(it)) } ?: emptyList()
-                    "thinking_delta" -> delta.str("thinking")?.let { listOf(ClaudeEvent.ThinkingDelta(it)) } ?: emptyList()
+                    // REDACTED thinking (Opus 4.8+): the block streams only a `signature_delta` and any
+                    // `thinking_delta` carries an EMPTY string — `str()` returns "" (not null), so an unguarded
+                    // `?.let` used to emit a delta and open an empty "Thought process" fold with nothing in it.
+                    // Mirror the finalized-block guard: no text, no event.
+                    "thinking_delta" -> delta.str("thinking")?.takeIf { it.isNotEmpty() }
+                        ?.let { listOf(ClaudeEvent.ThinkingDelta(it)) } ?: emptyList()
+                    // `signature_delta` (the redacted-thinking signature) carries no displayable content.
                     else -> emptyList()
                 }
             }

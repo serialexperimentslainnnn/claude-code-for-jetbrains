@@ -6,6 +6,10 @@
 
 **🔁 Retry progress for `/btw`.** Progress for long-running side questions is now recognised: an API retry is surfaced as a "Retrying (attempt n/m)…" notice instead of being silently dropped.
 
+**🧠 Fixed: empty "Thought process" on newer models.** Opus 4.8 emits **redacted** thinking — no reasoning text at all, only a signature. The plugin was opening an empty "Thought process" fold for it that never filled. Now there's simply no fold when there's no reasoning to show.
+
+**🔌 Fixed: the MCP servers card layout.** The *Reconnect* button and the enable/disable switch overlapped each other, and the switch's knob painted on top of its own label. The actions row now lays out correctly, the switch is a real switch, and long server names ellipsize instead of pushing the buttons out of the row.
+
 - Models the new `system/background_tasks_changed` and `system/control_request_progress` messages.
 - Triages the new `list_models`, `get_plan` and `get_workspace_diff` control requests (thin-client only; the plugin reads its model catalog from the `initialize` reply).
 - Backward-compatible with older binaries.

@@ -848,13 +848,21 @@ mark.cc-hit.active { background: var(--accent); color: var(--bg); }
 
 /* ── MCP server rows ────────────────────────────────────────────────────────── */
 .mcp-row {
-  display: flex; align-items: center; gap: 10px;
+  /* Wrap (rather than crush) when the card is narrow: the actions drop to their own line instead of squeezing
+     the server name down to a single ellipsised character. */
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 6px;
   padding: 8px 0; font-size: 12.5px;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 .mcp-row:first-of-type { border-top: none; }
-.mcp-row .mcp-name { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* min-width is a FLOOR, not 0: with `min-width: 0` the name yielded all its space to the status + buttons and
+   collapsed to "c…". It still ellipsises, just never below a readable width. */
+.mcp-row .mcp-name { flex: 1 1 auto; min-width: 12ch; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-row .mcp-status { flex: 0 0 auto; color: var(--dim); font-size: 11px; font-family: var(--mono); }
+/* Actions live on ONE line next to the status. Without this the span was a plain inline box, so the Reconnect
+   button and the toggle switch wrapped onto separate lines and overlapped. */
+.mcp-row .mcp-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.mcp-row .mcp-actions .btn { padding: 5px 10px; font-size: 11.5px; }
 .mcp-dot {
   width: 8px; height: 8px; border-radius: var(--radius-pill); flex: 0 0 auto;
   background: var(--dim);
