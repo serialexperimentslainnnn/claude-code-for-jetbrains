@@ -299,6 +299,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             onAutoReviewed = diffs::autoOpenDiff,
             projectRoot = project.basePath,
             isRemembered = { toolName, input -> ClaudeSettings.getInstance(project).isToolAlwaysAllowed(toolName, input) },
+            // Credentials / private keys / credential-dumping commands: never auto-approved, whatever the mode.
+            sensitiveVerdict = { toolName, input ->
+                ClaudeSettings.getInstance(project).sensitiveVerdict(toolName, input, project.basePath)
+            },
+            onSensitiveDenied = { toolName ->
+                edt {
+                    transcript.add(
+                        Speaker.SYSTEM,
+                        "Blocked $toolName: MCP servers and Skills may not read credentials or private keys. " +
+                            "Allow it in Settings → Claude Code if you meant it.",
+                    )
+                }
+                fireState()
+            },
         )
     }
 
@@ -355,6 +369,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // hasn't been trusted for it, ask once before running anything. Declining aborts the launch rather than
         // silently executing code that arrived with an untrusted repo. Runs on the EDT (start()'s contract).
         if (!ensureExecTrust(settings)) return false
+        // Network-share gate: refuse to root an autonomous agent — shell, IDE reach, coding/offensive ability — on
+        // a remote / network / foreign mount. That is a lateral-movement launchpad, not a project. No override:
+        // whoever needs the unrestricted tool has `claude` on the CLI (and, there, Anthropic's own controls). The
+        // deliberate friction — you cannot casually relocate a 90 GB network dir to local disk — is the point.
+        if (RemoteMounts.isRemote(project.basePath)) {
+            refuseRemoteProject(project.basePath)
+            return false
+        }
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
@@ -1536,6 +1558,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             .notify(project)
     }
 
+    /** The network-share gate fired: tell the user why, in the transcript and as an error notification. EDT. */
+    private fun refuseRemoteProject(root: String?) {
+        val where = root ?: "this location"
+        val msg = "Claude Code will not run on a network or remote drive ($where). Running an autonomous agent " +
+            "rooted on shared storage is a security risk it refuses by design — move the project to a local disk. " +
+            "For unrestricted use, run the `claude` CLI directly."
+        edt {
+            transcript.add(Speaker.ERROR, msg)
+            fireState()
+        }
+        notifyError(msg)
+        starting = false
+    }
+
     /** Offer the sign-in once per auth-failure streak (see [loginPrompted]). EDT-confined. */
     private fun maybePromptLogin() {
         // Only the Anthropic provider uses OAuth login. On a third-party provider an auth failure means a
@@ -1760,7 +1796,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          * negative means the IDE keeps showing stale files, so we err towards refreshing.
          */
         private val MUTATING_TOOL_NAME = Regex(
-            "(edit|write|create|delete|remove|move|rename|patch|format|refactor|replace|insert|save)",
+            // Mutations AND executors: an MCP `execute_terminal_command` / `run_configuration` can write anything,
+            // just like Bash — so it must trigger a project-tree refresh too (a real gap the code review caught).
+            "(edit|write|create|delete|remove|move|rename|patch|format|refactor|replace|insert|save|" +
+                "exec|execute|run|terminal|shell|command|apply|generate|build|install)",
             RegexOption.IGNORE_CASE,
         )
 

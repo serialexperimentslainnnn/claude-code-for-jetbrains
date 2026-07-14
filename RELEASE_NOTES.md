@@ -1,5 +1,15 @@
 ## v4.3.1 — 2026-07-14
 
+## 🛡 Deterministic sensitive-data protection
+
+A new permission-layer control evaluates **every** tool call before it can be auto-approved. It is deterministic and enforced outside the model: the classification and verdict are the plugin's, independent of anything the model or a prompt injection can say.
+
+**What it covers.** Calls that touch credential or key material — SSH/GPG keys, cloud and cluster credentials, database and shell-history secrets, browser and password-manager stores, crypto wallets, and the access tokens of well-known AI agents and code hosts. Patterns match by structure, so the same rule covers Linux, macOS, Windows (`C:\Users\…\.ssh`) and WSL (`/mnt/c/Users/…\.ssh`). Credential-dumping and exfiltration commands (secret exports, reverse shells, offensive tooling) are covered too, evaluated after resolving symlinks and `..` on disk and after normalising common shell obfuscation (broken quotes, `$IFS`, a path hidden in a variable, a base64 payload piped to a shell).
+
+**How it decides.** The agent's own tools require an explicit permission card whenever a call is flagged — **including in `acceptEdits` and `bypassPermissions`**. MCP servers and Skills are denied access to that material rather than prompted. Access that reaches another user's home, a network or UNC mount, or a foreign WSL drive is denied for every caller. The blacklist is configurable additively (you can widen it, not narrow it), and a session will not start when the project is located on a remote or network-mounted drive.
+
+**Scope.** Detecting a path concealed inside an arbitrary shell string is best-effort and can be widened over time; the enforcement of a match, however, is absolute and cannot be overridden by the model. See `SECURITY.md` for the full model.
+
 ## 🔗 Jump to code, straight from the conversation
 
 **Claude names a file, you click it, you are there.** The conversation stops being a wall of text you have to translate back into your project.
