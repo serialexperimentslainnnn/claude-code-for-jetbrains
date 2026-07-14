@@ -12,8 +12,10 @@ import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.util.xmlb.XmlSerializerUtil
+import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.process.EnvScriptLoader
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.RemoteMounts
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -60,6 +62,14 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         @JvmField var enableFileCheckpointing: Boolean = true
         /** Remembered fallback choice when native rewind is unavailable: "" = ask, "ide" = revert via IDE, "never" = do nothing. */
         @JvmField var rewindFallback: String = ""
+
+        // --- Sensitive-data guard (see permission/SensitiveGuard.kt) — a HARD LOCK, no on/off toggle ------
+        /**
+         * EXTRA sensitive-path globs, one per line — **added** to the built-in blacklist, never replacing it. The
+         * guard itself has no off switch and MCP/Skills have no opt-in: deterministic code the model cannot argue
+         * with. The only knob is making the net wider.
+         */
+        @JvmField var sensitiveExtraGlobs: String = ""
 
         // --- Advanced launch options (neutral defaults = flag omitted) ------------------------------
         /** `--max-turns N`: cap conversation turns. 0 = no cap (flag omitted). */
@@ -221,6 +231,35 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
     @Suppress("UNUSED_PARAMETER")
     fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean =
         toolName.isNotBlank() && toolName in alwaysAllowSet()
+
+    /** The active sensitive-path globs: the built-in blacklist **plus** the user's extras (additive, never less). */
+    fun sensitiveGlobs(): List<String> {
+        val extra = state.sensitiveExtraGlobs.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+        return SensitiveGuard.SENSITIVE_GLOBS + extra
+    }
+
+    /**
+     * The guard's deterministic verdict for a tool call (see [SensitiveGuard]) for this [projectRoot]. No off
+     * switch: this is enforcement, not advice. Foreign-territory and remote-mount inputs come from [RemoteMounts].
+     */
+    fun sensitiveVerdict(toolName: String, input: JsonObject, projectRoot: String?): SensitiveGuard.Verdict =
+        SensitiveGuard.verdict(toolName, input, sensitivePolicy(projectRoot))
+
+    /** Assembles the pure [SensitiveGuard.Policy] from settings + this host's mounts + the open project. */
+    fun sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
+        val snap = RemoteMounts.snapshot()
+        return SensitiveGuard.Policy(
+            globs = sensitiveGlobs(),
+            home = System.getProperty("user.home"),
+            currentUser = System.getProperty("user.name"),
+            guardedRoots = snap.remoteRoots,
+            blockForeignWslMounts = snap.isWsl,
+            projectRoot = projectRoot,
+            // Canonicalise on disk so a symlink or `..` cannot launder a path past the rules by hiding its target.
+            // Off the EDT already (broker callback runs on the reader thread); a failure just leaves the literal.
+            pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
+        )
+    }
 
     /** Adds [toolName] to the remembered "Always allow" set (idempotent) and persists. */
     fun rememberToolAlwaysAllow(toolName: String) {

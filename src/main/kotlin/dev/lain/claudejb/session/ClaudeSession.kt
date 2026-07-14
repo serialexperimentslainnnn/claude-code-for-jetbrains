@@ -299,6 +299,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             onAutoReviewed = diffs::autoOpenDiff,
             projectRoot = project.basePath,
             isRemembered = { toolName, input -> ClaudeSettings.getInstance(project).isToolAlwaysAllowed(toolName, input) },
+            // Credentials / private keys / credential-dumping commands: never auto-approved, whatever the mode.
+            sensitiveVerdict = { toolName, input ->
+                ClaudeSettings.getInstance(project).sensitiveVerdict(toolName, input, project.basePath)
+            },
+            onSensitiveDenied = { toolName ->
+                edt {
+                    transcript.add(
+                        Speaker.SYSTEM,
+                        "Blocked $toolName: MCP servers and Skills may not read credentials or private keys. " +
+                            "Allow it in Settings → Claude Code if you meant it.",
+                    )
+                }
+                fireState()
+            },
         )
     }
 
@@ -355,6 +369,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // hasn't been trusted for it, ask once before running anything. Declining aborts the launch rather than
         // silently executing code that arrived with an untrusted repo. Runs on the EDT (start()'s contract).
         if (!ensureExecTrust(settings)) return false
+        // Network-share gate: refuse to root an autonomous agent — shell, IDE reach, coding/offensive ability — on
+        // a remote / network / foreign mount. That is a lateral-movement launchpad, not a project. No override:
+        // whoever needs the unrestricted tool has `claude` on the CLI (and, there, Anthropic's own controls). The
+        // deliberate friction — you cannot casually relocate a 90 GB network dir to local disk — is the point.
+        if (RemoteMounts.isRemote(project.basePath)) {
+            refuseRemoteProject(project.basePath)
+            return false
+        }
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
@@ -727,6 +749,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     meta = dto.meta,
                     toolUseId = dto.toolUseId,
                     parentToolUseId = dto.parentToolUseId,
+                    filePath = dto.filePath,
                 )
             }
         }
@@ -1168,11 +1191,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 }
                 transcript.add(
                     Speaker.TOOL,
-                    formatToolUse(event.name, event.input),
+                    formatToolUse(event.name, event.input, workingDir),
                     meta = event.name,
                     toolUseId = event.id,
                     parentToolUseId = event.parentToolUseId,
                     toolState = ToolState.LOADING, // just dispatched → light blue, until progress/result arrive
+                    // Project-relative file for the card's jump-to-code link (null for non-file tools).
+                    filePath = toolFilePath(event.name, event.input, workingDir),
                 )
                 // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
                 // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including
@@ -1192,6 +1217,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // closes the tab and hands back the persisted pre-write snapshot for the inline diff below.
                 transcript.setToolState(event.toolUseId, if (event.isError) ToolState.ERROR else ToolState.FINISHED)
                 val snap = diffs.onToolResult(event.toolUseId)
+                // Refresh the VFS NOW, on each successful write — not once at the end of the turn. Until the IDE
+                // sees the file on disk it does not exist for it: the editor shows stale contents, and a
+                // jump-to-code link on the card resolves to nothing (LocalFileSystem returns null), so clicking it
+                // did nothing until the turn finished. Edit/Write refresh exactly the paths they touched; Bash and
+                // mutating MCP tools can change anything, so those mark the project tree dirty instead.
+                if (!event.isError) {
+                    diffs.refreshTouched()
+                    if (mayHaveWrittenUnknownFiles(transcript.toolNameOf(event.toolUseId))) diffs.refreshProjectTree()
+                }
                 // For a reviewable write we captured the pre-write contents at approval time: render the actual
                 // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
                 // the output box shows what changed. The diff text is self-contained, so it also survives a
@@ -1524,6 +1558,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             .notify(project)
     }
 
+    /** The network-share gate fired: tell the user why, in the transcript and as an error notification. EDT. */
+    private fun refuseRemoteProject(root: String?) {
+        val where = root ?: "this location"
+        val msg = "Claude Code will not run on a network or remote drive ($where). Running an autonomous agent " +
+            "rooted on shared storage is a security risk it refuses by design — move the project to a local disk. " +
+            "For unrestricted use, run the `claude` CLI directly."
+        edt {
+            transcript.add(Speaker.ERROR, msg)
+            fireState()
+        }
+        notifyError(msg)
+        starting = false
+    }
+
     /** Offer the sign-in once per auth-failure streak (see [loginPrompted]). EDT-confined. */
     private fun maybePromptLogin() {
         // Only the Anthropic provider uses OAuth login. On a third-party provider an auth failure means a
@@ -1736,16 +1784,79 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit",
         )
 
-        /** Concise one-line representation of a tool call, mirroring the CLI's "Tool(arg)" bullets. */
-        fun formatToolUse(name: String, input: JsonObject): String {
+        /** Tools whose `file_path` names a project file the transcript can hyperlink (jump-to-code). */
+        val FILE_TOOLS = setOf("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
+
+        /**
+         * A name that reads like a mutation, for tools we do NOT know — i.e. MCP ones (`replace_text_in_file`,
+         * `create_new_file`, `apply_patch`, `reformat_file`, `rename_refactoring`…). Applied ONLY to unknown tools:
+         * on a built-in it would misfire (`TodoWrite` contains "write" and touches no file at all).
+         *
+         * Generous on purpose. A false positive costs one async VFS refresh the IDE coalesces away; a false
+         * negative means the IDE keeps showing stale files, so we err towards refreshing.
+         */
+        private val MUTATING_TOOL_NAME = Regex(
+            // Mutations AND executors: an MCP `execute_terminal_command` / `run_configuration` can write anything,
+            // just like Bash — so it must trigger a project-tree refresh too (a real gap the code review caught).
+            "(edit|write|create|delete|remove|move|rename|patch|format|refactor|replace|insert|save|" +
+                "exec|execute|run|terminal|shell|command|apply|generate|build|install)",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /**
+         * True when [toolName] may have changed files we cannot name — so the IDE must re-scan the project tree
+         * rather than a known list of paths.
+         *
+         * `Bash` always qualifies (a `mv`, a formatter, a codegen script). The file tools never do: their paths are
+         * known and refreshed exactly. Every other built-in reads. Anything else is an MCP tool, judged by name.
+         *
+         * PURE — no IDE, unit-testable.
+         */
+        fun mayHaveWrittenUnknownFiles(toolName: String?): Boolean {
+            val name = toolName?.takeIf { it.isNotBlank() } ?: return false
+            if (name == "Bash") return true
+            if (name in FILE_TOOLS || name in BUILTIN_TOOLS) return false
+            return MUTATING_TOOL_NAME.containsMatchIn(name)
+        }
+
+        /**
+         * The tool call's file argument as a path **relative to [projectRoot]**, or null when the tool takes no
+         * file / the path escapes the project (an absolute path outside the root stays absolute — we show the
+         * truth, and the jump-to-code gate refuses to open it anyway).
+         *
+         * PURE (no IDE): [projectRoot] is passed in, so this is unit-testable.
+         */
+        fun toolFilePath(name: String, input: JsonObject, projectRoot: String?): String? {
+            if (name !in FILE_TOOLS) return null
+            val path = input.str("file_path")?.takeIf { it.isNotBlank() } ?: return null
+            return relativizeToRoot(path, projectRoot)
+        }
+
+        /** `/abs/root/src/Foo.kt` + root `/abs/root` → `src/Foo.kt`. Leaves anything outside the root untouched. */
+        fun relativizeToRoot(path: String, projectRoot: String?): String {
+            val root = projectRoot?.takeIf { it.isNotBlank() } ?: return path
+            val normRoot = root.trimEnd('/', '\\')
+            // Compare with the platform separator normalised, so Windows paths relativise too.
+            val p = path.replace('\\', '/')
+            val r = normRoot.replace('\\', '/')
+            if (!p.startsWith("$r/")) return path
+            return p.removePrefix("$r/")
+        }
+
+        /**
+         * Concise one-line representation of a tool call, mirroring the CLI's "Tool(arg)" bullets. File tools show
+         * the path **relative to the project** — `Read(src/main/kotlin/permission/PermissionBroker.kt)` — rather
+         * than a bare file name, so the row says *which* file and the frontend can hyperlink it.
+         */
+        fun formatToolUse(name: String, input: JsonObject, projectRoot: String? = null): String {
             val arg = when (name) {
                 "Bash" -> input.str("command")
-                "Read", "Edit", "Write", "MultiEdit", "NotebookEdit" -> input.str("file_path")?.substringAfterLast('/')
+                in FILE_TOOLS -> toolFilePath(name, input, projectRoot)
                 "Glob", "Grep" -> input.str("pattern")
                 "Task" -> input.str("description")
                 "WebFetch" -> input.str("url")
                 "WebSearch" -> input.str("query")
-                else -> input.str("file_path")?.substringAfterLast('/') ?: input.str("path")
+                else -> input.str("file_path")?.let { relativizeToRoot(it, projectRoot) } ?: input.str("path")
             }
             return if (!arg.isNullOrBlank()) "$name($arg)" else name
         }

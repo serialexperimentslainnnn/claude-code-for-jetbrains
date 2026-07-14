@@ -22,6 +22,9 @@ data class EntryDTO(
     val meta: String? = null,
     val toolUseId: String? = null,
     val parentToolUseId: String? = null,
+    /** For a file tool: the file it acts on, project-relative — the transcript's jump-to-code link (see
+     *  [ClaudeSession.toolFilePath]). Null on every other row, and on any row parsed without a project root. */
+    val filePath: String? = null,
 )
 
 /**
@@ -61,8 +64,8 @@ object SessionTranscriptReader {
      * only the last N reconstructed entries are kept (tail), keeping ordering intact and dropping orphan tool
      * outputs whose tool_use call fell outside the window. [maxEntries] = null (default) loads the full transcript.
      */
-    fun readEntries(sessionId: String, maxEntries: Int? = null): List<EntryDTO> =
-        SessionStore.readLines(sessionId)?.let { parseEntries(it, maxEntries) } ?: emptyList()
+    fun readEntries(sessionId: String, maxEntries: Int? = null, projectRoot: String? = null): List<EntryDTO> =
+        SessionStore.readLines(sessionId)?.let { parseEntries(it, maxEntries, projectRoot) } ?: emptyList()
 
     /**
      * Maps raw JSONL [lines] to the plugin's transcript model. Pure and unit-testable; never throws — a
@@ -73,7 +76,7 @@ object SessionTranscriptReader {
      * originating TOOL call is not also in the window is dropped (orphan output), rather than reconstructing it
      * without its call. A null (default), zero, or negative [maxEntries] returns every entry.
      */
-    fun parseEntries(lines: List<String>, maxEntries: Int? = null): List<EntryDTO> {
+    fun parseEntries(lines: List<String>, maxEntries: Int? = null, projectRoot: String? = null): List<EntryDTO> {
         val out = ArrayList<EntryDTO>()
         for (line in lines) {
             if (line.isBlank()) continue
@@ -81,7 +84,7 @@ object SessionTranscriptReader {
             runCatching {
                 when (obj["type"]?.jsonPrimitive?.contentOrNull) {
                     "user" -> parseUser(obj, out)
-                    "assistant" -> parseAssistant(obj, out)
+                    "assistant" -> parseAssistant(obj, out, projectRoot)
                     else -> Unit
                 }
             }
@@ -126,7 +129,7 @@ object SessionTranscriptReader {
         }
     }
 
-    private fun parseAssistant(obj: JsonObject, out: MutableList<EntryDTO>) {
+    private fun parseAssistant(obj: JsonObject, out: MutableList<EntryDTO>, projectRoot: String?) {
         val content = (obj["message"] as? JsonObject)?.get("content") as? JsonArray ?: return
         for (el in content) {
             val block = el as? JsonObject ?: continue
@@ -140,7 +143,15 @@ object SessionTranscriptReader {
                     val name = block["name"]?.jsonPrimitive?.contentOrNull ?: continue
                     val input = block["input"] as? JsonObject ?: JsonObject(emptyMap())
                     val id = block["id"]?.jsonPrimitive?.contentOrNull
-                    out += EntryDTO("TOOL", ClaudeSession.formatToolUse(name, input), meta = name, toolUseId = id)
+                    // Same label + jump-to-code path as a LIVE tool call: a restored conversation must not show
+                    // absolute paths (and dead cards) where a live one shows a project-relative link.
+                    out += EntryDTO(
+                        "TOOL",
+                        ClaudeSession.formatToolUse(name, input, projectRoot),
+                        meta = name,
+                        toolUseId = id,
+                        filePath = ClaudeSession.toolFilePath(name, input, projectRoot),
+                    )
                 }
             }
         }

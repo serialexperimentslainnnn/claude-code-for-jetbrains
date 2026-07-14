@@ -323,6 +323,26 @@ details.fold .fold-body p:first-child { margin-top: 0; }
 .tool-out pre code { font-size: 12px; }
 /* coloured unified diff inside a tool card */
 .tool-out pre.diff code { display: block; }
+/* ── jump-to-code links (jb://open) ─────────────────────────────────────────── */
+/* Used for file paths on tool cards and for paths/symbols detected in model text. Painted in the IDE's OWN
+   hyperlink colour (--link, the familiar blue, theme-correct in light and dark) rather than the product's coral
+   accent: a link should read as a link, not as branding. Subtle enough not to shout in a dense transcript. */
+/* NB the `.body a.jb-link` selector: `.body a` above paints ordinary Markdown links with the coral accent, and it
+   would out-specify a bare `.jb-link` — which is why jump-to-code links inside model text came out coral while the
+   identical ones on tool cards (not under `.body`) came out blue. Both selectors must beat it.
+   The colour fallbacks matter too: the first paint can happen before the host has pushed the theme vars. */
+.jb-link,
+.body a.jb-link {
+  color: var(--link, #589df6); text-decoration: none; cursor: pointer;
+  border-bottom: 1px dashed color-mix(in srgb, var(--link, #589df6) 45%, transparent);
+}
+.jb-link:hover,
+.body a.jb-link:hover {
+  text-decoration: none; border-bottom-style: solid; border-radius: 3px;
+  background: var(--link-soft, rgba(88, 157, 246, 0.14));
+}
+.tool-head .jb-link { font-family: var(--mono); }
+
 .diff-line { display: block; white-space: pre-wrap; }
 .diff-line.dl-add { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
 .diff-line.dl-del { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }

@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.diff.EditSnapshot
@@ -134,8 +135,31 @@ class DiffLifecycleManager(private val project: Project) {
         val paths = synchronized(pendingRefresh) { pendingRefresh.toList().also { pendingRefresh.clear() } }
         if (paths.isEmpty()) return
         val files = paths.map { File(it) }
+        // The PARENTS matter: refreshIoFiles only refreshes files the VFS already knows about, and a file the tool
+        // has just CREATED is not one of them — there is nothing there to refresh, so it stayed invisible to the
+        // IDE (stale editor, dead jump-to-code link) until something else re-scanned its directory. Re-scanning the
+        // parent is what makes the new child appear.
+        val targets = (files.mapNotNull { it.parentFile }.distinct() + files)
         ApplicationManager.getApplication().invokeLater(
-            { LocalFileSystem.getInstance().refreshIoFiles(files, true, false, null) },
+            { LocalFileSystem.getInstance().refreshIoFiles(targets, true, false, null) },
+            ModalityState.nonModal(),
+        )
+    }
+
+    /**
+     * Refreshes the whole project tree in the VFS, asynchronously.
+     *
+     * For a tool that writes files we know (Edit/Write) [refreshTouched] refreshes exactly those paths. But a
+     * `Bash` command — or an MCP tool that edits — can touch anything: a `mv`, a formatter, a codegen script. We
+     * do not know *what* changed, so we mark the project root dirty and let the IDE work it out. Async and
+     * write-safe ([ModalityState.nonModal], same reason as [refreshTouched]); the IDE coalesces the work, so an
+     * unchanged tree costs next to nothing.
+     */
+    fun refreshProjectTree() {
+        val root = project.basePath ?: return
+        val dir = LocalFileSystem.getInstance().findFileByPath(root) ?: return
+        ApplicationManager.getApplication().invokeLater(
+            { VfsUtil.markDirtyAndRefresh(/* async = */ true, /* recursive = */ true, /* reloadChildren = */ true, dir) },
             ModalityState.nonModal(),
         )
     }

@@ -79,6 +79,11 @@ class PermissionBroker(
     private val isRemembered: (toolName: String, input: JsonObject) -> Boolean = { _, _ -> false },
     /** Project root for turning absolute paths into relative ones in permission cards. */
     private val projectRoot: String? = null,
+    /** The verdict for a call that trips the sensitive-data guard — see [SensitiveGuard]. ALLOW when disabled. */
+    private val sensitiveVerdict: (toolName: String, input: JsonObject) -> SensitiveGuard.Verdict =
+        { _, _ -> SensitiveGuard.Verdict.ALLOW },
+    /** A third-party (MCP/Skill) call was refused access to a sensitive path — surface it in the transcript. */
+    private val onSensitiveDenied: (toolName: String) -> Unit = {},
 ) {
 
     fun handle(requestId: String, request: CanUseToolRequest) {
@@ -105,6 +110,23 @@ class PermissionBroker(
         if (request.toolName == "ExitPlanMode") {
             present(planPresentable(requestId, request))
             return
+        }
+        // The sensitive-data guard runs BEFORE the mode is even looked at, so `bypassPermissions`, `acceptEdits`
+        // and "Always allow" simply never reach their fast paths for a call that trips it (see [SensitiveGuard]).
+        // The mode itself is untouched — this branch just never falls through to it.
+        //   MCP / Skills → denied outright: third-party code has no business reading the user's keys.
+        //   The agent's own tools → the user authorises it, explicitly, every time.
+        when (sensitiveVerdict(request.toolName, request.input)) {
+            SensitiveGuard.Verdict.DENY -> {
+                respond(ControlProtocol.permissionDeny(requestId, SENSITIVE_DENIED))
+                onSensitiveDenied(request.toolName)
+                return
+            }
+            SensitiveGuard.Verdict.ASK -> {
+                present(presentable(requestId, request, request.toolName in DiffPresenter.REVIEWABLE_TOOLS))
+                return
+            }
+            SensitiveGuard.Verdict.ALLOW -> Unit // not our business — the normal flow runs below
         }
         val mode = permissionMode()
         val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
@@ -203,4 +225,11 @@ class PermissionBroker(
         "WebSearch" -> input.str("query") ?: ""
         else -> DiffPresenter.filePathOf(input)?.let { relativize(it) } ?: ""
     }.take(2000)
+
+    companion object {
+        /** Told to the MODEL when a third-party (MCP/Skill) call is refused a secret — so it stops retrying. */
+        const val SENSITIVE_DENIED: String =
+            "Denied by the IDE: this call touches credentials or private keys, and MCP servers and Skills are not " +
+                "allowed to read them. Ask the user to run it themselves, or to allow it in Settings."
+    }
 }

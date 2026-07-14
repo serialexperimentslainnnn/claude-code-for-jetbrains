@@ -1,6 +1,9 @@
 package dev.lain.claudejb.ui
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.ide.actions.RevealFileAction
+import com.intellij.ide.highlighter.ArchiveFileType
+import com.intellij.ide.projectView.ProjectView
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -8,6 +11,8 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.wm.ToolWindowId
+import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.context.EditorContextProvider
@@ -367,6 +372,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             JcefBridge.Msg.OpenDiffHistory -> ClaudeToolWindowFactory.openDiffHistoryFor(project, session)
             is JcefBridge.Msg.ResolveElicitation -> session.resolveElicitation(m.id, m.action, m.content)
             is JcefBridge.Msg.Open -> openUrl(m.url)
+            is JcefBridge.Msg.ResolveLinks -> resolveLinksOffEdt(m)
             is JcefBridge.Msg.Copy -> CopyPasteManager.getInstance().setContents(StringSelection(m.text))
             is JcefBridge.Msg.RemoveAttachment -> { attachments.remove(m.id); pushAttachments() }
             JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(project).forEach {
@@ -425,23 +431,111 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         }
     }
 
-    /** Opens the file from a `jb://open?file=<encoded-abs>&line=N` link in the editor, gated to the root. */
+    /**
+     * Answers the transcript's `resolveLinks` request on a POOLED thread: symbol resolution walks the Go-to-Symbol
+     * index (PSI, inside a read action) and file resolution hits the disk — neither belongs on the EDT, where a
+     * cold index would freeze the IDE mid-conversation. The reply is pushed back on the EDT.
+     *
+     * Unresolved candidates are simply absent from the reply, so the frontend leaves them as plain text: a path
+     * that doesn't exist, or a word that isn't a symbol, never becomes a dead link.
+     */
+    private fun resolveLinksOffEdt(m: JcefBridge.Msg.ResolveLinks) {
+        if (m.paths.isEmpty() && m.symbols.isEmpty()) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val resolved = runCatching {
+                LinkResolver.resolvePaths(project, m.paths) + LinkResolver.resolveSymbols(project, m.symbols)
+            }.getOrDefault(emptyList())
+            if (resolved.isEmpty()) return@executeOnPooledThread
+            ApplicationManager.getApplication().invokeLater({
+                host.exec("window.cc.links && window.cc.links(" + JcefBridge.linksJson(m.rowId, resolved) + ")")
+            }, ModalityState.any())
+        }
+    }
+
+    /**
+     * Turns a link's `file` param into an absolute path: `~/…` is expanded, an absolute path is taken as-is, and a
+     * relative one is resolved against the project root. Returns null when a relative path has no root to resolve
+     * against. The caller still gates the result with [LinkResolver.isOpenable] — this only *builds* the path, it
+     * does not authorise it.
+     */
+    private fun resolveAgainstRoot(raw: String): String? {
+        val f = java.io.File(LinkResolver.expandHome(raw))
+        if (f.isAbsolute) return f.path
+        val root = project.basePath ?: return null
+        return java.io.File(root, f.path).path
+    }
+
+    /** Opens the file from a `jb://open?file=<encoded-path>&line=N` link in the editor, gated by [LinkResolver]. */
     private fun openJbLink(url: String) {
         val query = url.substringAfter('?', "")
         val params = query.split('&').mapNotNull {
             val k = it.substringBefore('=', ""); val v = it.substringAfter('=', "")
             if (k.isEmpty()) null else k to runCatching { java.net.URLDecoder.decode(v, Charsets.UTF_8) }.getOrDefault(v)
         }.toMap()
-        val path = params["file"] ?: return
-        if (!DiffPresenter.isWithinRoot(path, project.basePath)) return // never escape the project root
+        val raw = params["file"] ?: return
+        // A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
+        // one. Either way this only builds the path — the gate below is what authorises it, and it is the single
+        // place that decides, so a hand-crafted `jb://` URL cannot reach a file we would not have linked.
+        val path = resolveAgainstRoot(raw) ?: return
+        if (!LinkResolver.isOpenable(path, project.basePath)) return // project or the user's own home, nothing else
+        // refreshAndFind, not find: a file Claude has just written may not be in the VFS yet, and a plain lookup
+        // would return null — the link would silently do nothing until the IDE next refreshed. (The session also
+        // refreshes on every successful write; this is the belt to that pair of braces.)
+        val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByPath(path) ?: return
+        // A directory — and an ARCHIVE, which has no meaningful editor either (opening `foo.zip` would just show a
+        // binary buffer) — belong in the tree, not in an editor tab. Revealing them there is the useful action:
+        // you can then right-click → Copy full path, Open in Files, expand the archive…
+        if (vf.isDirectory || vf.fileType is ArchiveFileType) {
+            revealDirectory(vf)
+            return
+        }
         val line = (params["line"]?.toIntOrNull() ?: 1).coerceAtLeast(1) - 1
-        val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(path) ?: return
         com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line, 0).navigate(true)
+        selectInProjectView(vf)
+    }
+
+    /**
+     * Mirrors *Autoscroll from Source*: the opened file is also selected in the **Project view**, so you can see
+     * where it lives. Deliberately unobtrusive — `requestFocus = false` keeps the caret in the editor you just
+     * jumped into, and the tool window is NOT force-opened: if you keep the tree hidden, a link click has no
+     * business popping it open. A file outside the project (in the home) simply isn't in the tree, so we skip it.
+     */
+    private fun selectInProjectView(file: com.intellij.openapi.vfs.VirtualFile) {
+        if (!DiffPresenter.isWithinRoot(file.path, project.basePath)) return
+        val tw = ToolWindowManager.getInstance(project).getToolWindow(ToolWindowId.PROJECT_VIEW) ?: return
+        if (!tw.isVisible) return
+        runCatching { ProjectView.getInstance(project).select(null, file, false) }
+    }
+
+    /**
+     * Reveals something that has no editor to open (a directory, an archive). Inside the project it belongs to the
+     * **Project view** — select and expand it there, activating the tool window: unlike the file case, selecting
+     * into a hidden tree would make the click look like it did nothing at all. Outside the project (in the user's
+     * home) it isn't in the tree, so the only sensible target is the OS file manager. Already gated by
+     * [LinkResolver.isOpenable] before we get here.
+     */
+    private fun revealDirectory(target: com.intellij.openapi.vfs.VirtualFile) {
+        if (DiffPresenter.isWithinRoot(target.path, project.basePath)) {
+            val select = { ProjectView.getInstance(project).select(null, target, true) }
+            val tw = ToolWindowManager.getInstance(project).getToolWindow(ToolWindowId.PROJECT_VIEW)
+            if (tw != null) tw.activate(select, true) else select()
+        } else {
+            RevealFileAction.openDirectory(java.io.File(target.path))
+        }
     }
 
     // ── Tool-window actions ──────────────────────────────────────────────────────────────────────────────
 
-    fun focusInput() = host.exec("window.cc.focusInput && window.cc.focusInput()")
+    /**
+     * The component the tool-window `Content` hands keyboard focus to — resolved **lazily**, since CEF's real input
+     * component only exists once the native browser has been created, well after the tab is built. Without it the
+     * platform has nowhere to put the focus when the tab is selected (a `JBPanel` is not focusable).
+     * See [ClaudeToolWindowFactory.openChat].
+     */
+    fun focusTarget(): javax.swing.JComponent? = host.inputComponent()
+
+    /** Focus the chat: the browser takes the keyboard focus, and the caret lands in the composer. */
+    fun focusInput() = host.requestFocus()
 
     fun showCommandPalette() = host.exec("window.cc.openPalette && window.cc.openPalette()")
 
