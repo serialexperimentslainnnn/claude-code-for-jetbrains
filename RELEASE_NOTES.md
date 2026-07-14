@@ -1,3 +1,19 @@
+## v4.3.1 — 2026-07-14
+
+**Jump to code, straight from the conversation** — plus the fix for a focus bug that made a fresh chat tab unusable, and files that appear in the IDE the moment Claude writes them.
+
+**🧩 Now installs on 2025.1.** The compatibility floor drops from build 252 to **251** — as far back as the plugin reaches without shipping a single deprecated API call. Verified Compatible on 2025.1 → the latest EAP/RC.
+
+**💾 The IDE now sees Claude's writes immediately.** The virtual file system was only refreshed at the *end* of a turn, so until Claude went idle the editor showed stale contents and a jump-to-code link on a freshly written file opened nothing at all (the IDE did not know the file existed yet). Every successful write now refreshes right away — by exact path for `Edit`/`Write`, and by re-scanning the project tree after a `Bash` command or a file-mutating MCP tool, which can change anything. Newly *created* files are picked up too: refreshing a file the VFS has never heard of is a no-op, so their parent directory is re-scanned as well.
+
+**🔗 Files, directories and symbols in the transcript are now links.** A file tool's card shows the file it acts on **relative to the project** — `Read(src/main/kotlin/permission/PermissionBroker.kt)` instead of a bare file name — and the path is clickable: it opens the file in the editor, at the right line, and selects it in the Project view. In Claude's prose, paths (`src/Foo.kt`, `a/b.py:42`, `~/.claude`), **directories** (`build/`, which reveal and expand in the Project view — or open in the file manager when they live outside the project) and **symbols** (`PermissionBroker`) become links too. Even a bare file name works: `app.css:190` is how a developer cites a file, and it resolves through the IDE's file index — including files in *excluded* folders like `build/`, which no index knows about. Archives reveal in the tree instead of opening a useless binary buffer.
+
+Nothing is ever linked on a guess: every candidate is confirmed by the IDE first — the file must exist, the symbol must be an **unambiguous** declaration. Two `app.css` in the tree means no link at all, rather than a jump to an arbitrary one, and anything it cannot resolve stays plain text. So a link is never dead and never lies. Symbols go through *Go to Symbol*, so this works in every JetBrains IDE, not just the Java/Kotlin ones. A link can only ever point inside the project or inside your own home — never at `/etc/passwd`, never at another user's files, not even through a symlink.
+
+**💬 Fixed: a chat tab could come up unusable — the composer refused to take focus.** Opening a new tab (or, sometimes, just loading the IDE) left a chat you could not click into; the only cure was closing and reopening the tool window. Two independent causes, both now fixed the IntelliJ way: the tab never told the platform *where* its keyboard focus lives (so the focus went nowhere, and a raw AWT focus request was refused because the IDE arbitrates focus itself), and CEF was told it had the focus **before its page existed** — so a browser that had just loaded believed it was unfocused and painted no caret, even while your keystrokes were arriving. The focus is now handed over by the `ContentManager` as part of selecting the tab, and confirmed to the web view once the chat has actually come up.
+
+---
+
 ## v4.2.0 — 2026-07-08
 
 **Protocol upgrade to `claude` 2.1.204 / SDK 0.3.204**, plus a new dashboard card.

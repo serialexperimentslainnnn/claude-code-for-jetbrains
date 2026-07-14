@@ -33,6 +33,9 @@ object JcefTheme {
         val border = JBColor.border()
         val accent = ChatTheme.ACCENT
         val danger = NamedColorUtil.getErrorForeground()
+        // Hyperlinks use the IDE's OWN link colour (the familiar blue, and correct in every theme) rather than the
+        // product's coral accent — a jump-to-code link should look like a link, not like branding.
+        val link = JBUI.CurrentTheme.Link.Foreground.ENABLED
 
         val labelFont = UIUtil.getLabelFont()
         val monoFamily = scheme.getFont(EditorFontType.PLAIN)?.family
@@ -48,6 +51,8 @@ object JcefTheme {
             put("border", hex(border))
             put("accent", hex(accent))
             put("accentSoft", rgba(accent, 0.16))
+            put("link", hex(link))
+            put("linkSoft", rgba(link, 0.14))
             put("codeBg", hex(editorBg))
             put("success", "#2e9e4f")
             put("warning", "#c9920a")

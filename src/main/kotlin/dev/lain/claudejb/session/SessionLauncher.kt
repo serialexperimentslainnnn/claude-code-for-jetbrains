@@ -1,10 +1,9 @@
 package dev.lain.claudejb.session
 
-import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.util.SystemInfo
+import dev.lain.claudejb.util.InstalledPlugins
 import java.io.File
 
 /**
@@ -22,6 +21,9 @@ import java.io.File
 object SessionLauncher {
 
     private val log = thisLogger()
+
+    /** JetBrains' bundled MCP Server plugin — the one we drive over stdio when IDE tools are enabled. */
+    private const val MCP_SERVER_PLUGIN_ID = "com.intellij.mcpServer"
 
     /**
      * Immutable snapshot of every launch-affecting session option. Mirrors the fields [ClaudeSession] reads inside
@@ -121,8 +123,7 @@ object SessionLauncher {
      * directory matches the camelCase tail of its id — for `com.intellij.mcpServer` that's `mcpServer`).
      */
     fun resolveStdioParams(opts: LaunchOptions): McpConfigBuilder.StdioParams? {
-        val pid = PluginId.getId("com.intellij.mcpServer")
-        if (!PluginManager.isPluginInstalled(pid)) return null
+        if (!InstalledPlugins.isEnabled(MCP_SERVER_PLUGIN_ID)) return null
         val pluginLib = findMcpServerLib() ?: return null
         val javaBin = File(File(System.getProperty("java.home"), "bin"), if (SystemInfo.isWindows) "java.exe" else "java")
         return McpConfigBuilder.StdioParams(javaBin, pluginLib, PathManager.getLibPath(), opts.ideMcpPort)

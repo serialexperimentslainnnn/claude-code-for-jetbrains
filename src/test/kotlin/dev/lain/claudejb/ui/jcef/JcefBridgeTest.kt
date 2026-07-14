@@ -8,6 +8,7 @@ import dev.lain.claudejb.protocol.ElicitField
 import dev.lain.claudejb.session.Speaker
 import dev.lain.claudejb.session.ToolState
 import dev.lain.claudejb.session.TranscriptEntry
+import dev.lain.claudejb.ui.LinkResolver
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
@@ -251,6 +252,68 @@ class JcefBridgeTest {
     fun `parse stopTask carries taskId`() {
         val m = JcefBridge.parse("""{"type":"stopTask","taskId":"task42"}""") as JcefBridge.Msg.StopTask
         assertEquals("task42", m.taskId)
+    }
+
+    // ── jump-to-code links ───────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `entryJson carries the project-relative filePath of a file tool and omits it elsewhere`() {
+        val tool = TranscriptEntry(
+            1L, Speaker.TOOL, "Read(src/Foo.kt)", meta = "Read", toolUseId = "t1", filePath = "src/Foo.kt",
+        )
+        assertEquals("src/Foo.kt", JcefBridge.entryJson(tool, 0)["filePath"]!!.jsonPrimitive.content)
+        assertNull(JcefBridge.entryJson(TranscriptEntry(2L, Speaker.ASSISTANT, "hi"), 1)["filePath"])
+    }
+
+    @Test
+    fun `parse resolveLinks carries the row id and both candidate lists`() {
+        val m = JcefBridge.parse(
+            """{"type":"resolveLinks","rowId":42,"paths":["src/Foo.kt","a.py:7"],"symbols":["PermissionBroker"]}"""
+        ) as JcefBridge.Msg.ResolveLinks
+        assertEquals(42L, m.rowId)
+        assertEquals(listOf("src/Foo.kt", "a.py:7"), m.paths)
+        assertEquals(listOf("PermissionBroker"), m.symbols)
+    }
+
+    @Test
+    fun `parse resolveLinks is total on missing, blank and non-string candidates`() {
+        val m = JcefBridge.parse("""{"type":"resolveLinks"}""") as JcefBridge.Msg.ResolveLinks
+        assertEquals(-1L, m.rowId)
+        assertTrue(m.paths.isEmpty())
+        assertTrue(m.symbols.isEmpty())
+        // Malformed candidates must not throw: non-strings and blanks are dropped, the rest survives.
+        val junk = JcefBridge.parse(
+            """{"type":"resolveLinks","rowId":1,"paths":["ok.kt","",{"a":1}],"symbols":"nope"}"""
+        ) as JcefBridge.Msg.ResolveLinks
+        assertEquals(listOf("ok.kt"), junk.paths)
+        assertTrue(junk.symbols.isEmpty())
+    }
+
+    @Test
+    fun `linksJson answers with the row id and only the resolved tokens`() {
+        val json = JcefBridge.linksJson(
+            7L,
+            listOf(
+                LinkResolver.Resolved("src/Foo.kt", "src/Foo.kt", null),
+                LinkResolver.Resolved("PermissionBroker", "src/permission/PermissionBroker.kt", 31),
+            ),
+        )
+        val o = Json.parseToJsonElement(json).jsonObject
+        assertEquals(7, o["rowId"]!!.jsonPrimitive.int)
+        val links = o["links"]!!.jsonArray
+        assertEquals(2, links.size)
+        assertEquals("src/Foo.kt", links[0].jsonObject["token"]!!.jsonPrimitive.content)
+        assertNull(links[0].jsonObject["line"]) // no line → the key is absent, not null
+        assertEquals("PermissionBroker", links[1].jsonObject["token"]!!.jsonPrimitive.content)
+        assertEquals("src/permission/PermissionBroker.kt", links[1].jsonObject["path"]!!.jsonPrimitive.content)
+        assertEquals(31, links[1].jsonObject["line"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `linksJson with nothing resolved is an empty link list, never null`() {
+        val o = Json.parseToJsonElement(JcefBridge.linksJson(3L, emptyList())).jsonObject
+        assertEquals(3, o["rowId"]!!.jsonPrimitive.int)
+        assertTrue(o["links"]!!.jsonArray.isEmpty())
     }
 
     @Test

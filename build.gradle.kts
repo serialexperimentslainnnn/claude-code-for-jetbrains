@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "4.2.0"
+version = "4.3.1"
 
 repositories {
     mavenCentral()
@@ -238,10 +238,14 @@ intellijPlatform {
     pluginConfiguration {
         // id/name/vendor/description live in META-INF/plugin.xml; only compatibility range is set here.
         ideaVersion {
-            // Floor 252 (2025.2): the JCEF UI rebuild is verified from 2025.2 onward, and we compile against
-            // that same build (create("IC","2025.2") above) so no API below the floor can leak in. The ceiling
-            // tracks the latest verified EAP/RC branch (see pluginVerification.select below).
-            sinceBuild = "252"
+            // Floor 251 (2025.1): as far back as the plugin reaches WITHOUT shipping a deprecated API — the hard
+            // limit is `FileChooserDescriptorFactory.multiFiles()/singleDir()` in FilePickerHelper, which does not
+            // exist before 251 (verified: NoSuchMethodError on IC-242/IC-243), and whose pre-251 equivalents are
+            // deprecated on current IDEs. A runtime `if` would not help — the verifier reads bytecode, so the
+            // broken reference ships either way. Users pinned to 2024.x would need a separate 242-targeted build
+            // (JetBrains' documented approach for a range where the API actually changed).
+            // The ceiling tracks the latest verified EAP/RC branch (see pluginVerification.select below).
+            sinceBuild = "251"
             untilBuild = "262.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
@@ -264,15 +268,24 @@ intellijPlatform {
         // the verifier proceed to the actual binary-compatibility / internal-API checks we care about.
         freeArgs = listOf("-mute", "TemplateWordInPluginName")
         ides {
-            // No hardcoded path in the repo: a developer can point the verifier at a local IDE install to skip
-            // the download via -PlocalIdePath=<dir> or the LOCAL_IDE_PATH env var. When that's unset/missing (or
-            // on CI), fall back to recommended() — which also spans the plugin's whole declared range incl. the
-            // since-build FLOOR (251), the gate that catches a too-new API like multiFiles/singleDir.
-            val localIde = (providers.gradleProperty("localIdePath").orNull
+            // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
+            // downloads, via -PlocalIdePath=<dir>[,<dir>…] or the LOCAL_IDE_PATH env var (comma-separated). This is
+            // what makes an OFFLINE verification of the whole declared range possible — download.jetbrains.com is
+            // not always reachable from every network, and the verifier is the only thing that catches a *binary*
+            // incompatibility (see InstalledPlugins: `PluginId` is a Kotlin class since 2025.2, so `PluginId.getId`
+            // compiles fine and then dies with NoSuchFieldError on 242–251).
+            // When unset/missing (or on CI), fall back to recommended() — which spans the plugin's whole declared
+            // range including the since-build FLOOR, the gate that catches a too-new API.
+            val localIdes = (providers.gradleProperty("localIdePath").orNull
                 ?: providers.environmentVariable("LOCAL_IDE_PATH").orNull)
-                ?.let { file(it) }?.takeIf { it.exists() }
-            if (localIde != null && !providers.environmentVariable("CI").isPresent) {
-                local(localIde)
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?.map { file(it) }
+                ?.filter { it.exists() }
+                .orEmpty()
+            if (localIdes.isNotEmpty() && !providers.environmentVariable("CI").isPresent) {
+                localIdes.forEach { local(it) }
             } else {
                 recommended()
             }

@@ -4,6 +4,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.util.Alarm
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.jcef.JBCefApp
@@ -143,14 +144,50 @@ class JcefHost(
     }
 
     /**
-     * The web app announced it is alive (the `ready` bridge message). Cancels the first-open self-heal watchdog.
-     * Called by the panel when it receives `Msg.Ready`. Idempotent.
+     * The web app announced it is alive (the `ready` bridge message). Cancels the first-open self-heal watchdog,
+     * and settles the keyboard focus. Called by the panel when it receives `Msg.Ready`. Idempotent.
      */
     fun markWebReady() {
         runOnEdt {
             webReady = true
             readyWatchdog.cancelAllRequests()
+            // THE focus fix (see requestFocus): CEF is told it has the focus only now, once the page it must paint
+            // the caret in actually exists.
+            if (inputComponent()?.isFocusOwner == true) grantCefFocus()
         }
+    }
+
+    /**
+     * Give the chat the keyboard focus, the IntelliJ way: [IdeFocusManager] arbitrates focus in the IDE, and a raw
+     * `Component.requestFocusInWindow()` issued while it is settling its own is simply dropped.
+     *
+     * The AWT focus is only half of it. CEF keeps its OWN focus flag, and a freshly loaded page starts with it
+     * cleared — so a tab whose browser owns the focus *before* its page has loaded (a tab opened while the IDE is
+     * running: the `ContentManager` hands the focus over on selection, ~500ms before the page is up) ends up
+     * taking keystrokes with no caret to show for it. Hence [grantCefFocus] is (re)applied from [markWebReady],
+     * when the chat is actually there — not here, where the page may not exist yet.
+     */
+    fun requestFocus() {
+        runOnEdt {
+            val target = inputComponent() ?: return@runOnEdt
+            if (target.isFocusOwner) grantCefFocus() else IdeFocusManager.getGlobalInstance().requestFocus(target, true)
+        }
+    }
+
+    /** Tell CEF it has the focus and put the caret in the composer. EDT-only; safe before the page is up. */
+    private fun grantCefFocus() {
+        runCatching { browser?.cefBrowser?.setFocus(true) }
+        exec("window.cc.focusInput && window.cc.focusInput()")
+    }
+
+    /**
+     * The component that actually receives keystrokes — **not** [JBCefBrowser.getComponent], which is a wrapper
+     * panel and is not focusable. Null until the native browser has been created, so callers must resolve it
+     * lazily rather than capture it once.
+     */
+    fun inputComponent(): JComponent? {
+        val b = browser ?: return null
+        return runCatching { b.cefBrowser.uiComponent }.getOrNull() as? JComponent
     }
 
     /** Optional eager teardown; both the browser and the JS query are also registered with the parent disposable,

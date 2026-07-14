@@ -386,9 +386,170 @@
     return rec;
   }
 
+  // Build a `jb://open` href for a PROJECT-RELATIVE path (+ optional 1-based line). The host resolves it against
+  // the project root and refuses anything outside it (isWithinRoot), so this never needs an absolute path.
+  function jbHref(relPath, line) {
+    var u = 'jb://open?file=' + encodeURIComponent(String(relPath));
+    if (line) { u += '&line=' + encodeURIComponent(String(line)); }
+    return u;
+  }
+
+  // A file tool's label — `Read(src/main/kotlin/permission/PermissionBroker.kt)` — with the PATH as a clickable
+  // jump-to-code link. The path is inserted via textContent (never innerHTML), so a hostile path can't inject
+  // markup; the delegated <a> handler in app-core routes the click to the host.
+  function renderToolLabel(nameEl, text, filePath) {
+    if (!nameEl) { return; }
+    var label = text == null ? '' : String(text);
+    var p = String(filePath);
+    var at = label.indexOf(p);
+    if (at < 0) { nameEl.textContent = label; return; } // path not in the label — render plainly
+    while (nameEl.firstChild) { nameEl.removeChild(nameEl.firstChild); }
+    nameEl.appendChild(document.createTextNode(label.slice(0, at)));
+    var a = el('a', { class: 'jb-link', text: p, attrs: { href: jbHref(p), title: 'Open ' + p } });
+    // The card head toggles collapse on click — don't collapse it just because the user followed the link.
+    a.addEventListener('click', function (e) { e.stopPropagation(); });
+    nameEl.appendChild(a);
+    nameEl.appendChild(document.createTextNode(label.slice(at + p.length)));
+  }
+
+  // ---- jump-to-code in model text ------------------------------------------
+  // The transcript can only GUESS what's a path or a symbol, so we never link blindly: candidates are sent to the
+  // host, which answers with the ones it could actually resolve (file exists / symbol is an unambiguous
+  // declaration in the project). Only those become links — no dead hyperlinks.
+
+  // A path candidate — FILE or DIRECTORY alike; the host is the one that knows which, and whether it exists.
+  // Something only looks like a path if at least one of these holds (a bare word like `build` is NOT a path — it
+  // would be a guess, and every prose word would end up in the batch):
+  //   1. it is ANCHORED     — `~/.claude`, `./a/b.py`, `/tmp/x` (a leading ~/ ./ ../ or /);
+  //   2. it has SEGMENTS    — `src/main/kotlin`, `build/`, `a/b.py:42` (a slash inside);
+  //   3. it has an EXTENSION— `Foo.kt`, `build.gradle.kts:12`.
+  // Each alternative matches the path WHOLE (final segment included, trailing slash optional). Matching only up to
+  // a slash is what used to chop `src/main/kotlin/dev/ui` into a `src/main/kotlin/dev/` link with `ui` dangling
+  // outside it. A `:42` line suffix may follow any of them.
+  var PATH_RE = new RegExp(
+    '(?:' +
+      '(?:~\\/|\\.{1,2}\\/|\\/)[\\w.-]+(?:\\/[\\w.-]+)*\\/?' + // 1. anchored
+      '|' +
+      '[\\w.-]+\\/(?:[\\w.-]+\\/?)*' +                          // 2. has segments (incl. a trailing-slash dir)
+      '|' +
+      '[\\w.-]+\\.[A-Za-z][\\w]{0,9}' +                         // 3. bare name with an extension
+    ')(?::\\d+)?',
+    'g',
+  );
+  // A plausible symbol: CamelCase (PermissionBroker) or a call (resolvePermission()). Deliberately conservative —
+  // the host rejects anything that isn't a real declaration anyway, this just keeps the batch small.
+  var SYMBOL_RE = /\b([A-Z][A-Za-z0-9]{2,}|[a-z][A-Za-z0-9]{2,}(?=\(\)))\b/g;
+
+  function collectCandidates(root) {
+    var paths = {}, symbols = {};
+    // Only look inside inline code spans and plain text — never inside fenced code blocks (a whole file's source
+    // would flood the batch with noise) and never inside an existing link.
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentNode;
+        while (p && p !== root) {
+          var t = p.tagName;
+          if (t === 'A') { return NodeFilter.FILTER_REJECT; }
+          if (t === 'PRE') { return NodeFilter.FILTER_REJECT; }
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var n, m;
+    while ((n = walker.nextNode())) {
+      var txt = n.nodeValue || '';
+      PATH_RE.lastIndex = 0;
+      while ((m = PATH_RE.exec(txt))) { paths[m[0]] = true; }
+      var inCode = n.parentNode && n.parentNode.tagName === 'CODE';
+      if (inCode) { // symbols only inside `code spans` — prose would produce mostly noise
+        SYMBOL_RE.lastIndex = 0;
+        while ((m = SYMBOL_RE.exec(txt))) { symbols[m[1]] = true; }
+      }
+    }
+    return { paths: Object.keys(paths), symbols: Object.keys(symbols) };
+  }
+
+  function requestLinks(rec, entry) {
+    if (!rec || !rec.bodyNode) { return; }
+    var c = collectCandidates(rec.bodyNode);
+    if (!c.paths.length && !c.symbols.length) { return; }
+    safeSend({ type: 'resolveLinks', rowId: entry.id, paths: c.paths, symbols: c.symbols });
+  }
+
+  // Host answered: turn the confirmed tokens into links, in place, without re-rendering the row.
+  function applyLinks(payload) {
+    if (!payload || payload.rowId == null) { return; }
+    var rec = rows.get(payload.rowId);
+    if (!rec || !rec.bodyNode) { return; }
+    var links = Array.isArray(payload.links) ? payload.links : [];
+    if (!links.length) { return; }
+    // Longest token first, so `Foo.kt:42` wins over `Foo.kt`.
+    links.sort(function (a, b) { return String(b.token).length - String(a.token).length; });
+    for (var i = 0; i < links.length; i++) { linkifyToken(rec.bodyNode, links[i]); }
+  }
+
+  // A token may only be linked as a WHOLE token — never as a fragment of something bigger. Without this, a
+  // resolved `src/main/kotlin/dev/ui` would also linkify inside `src/main/kotlin/dev/ui/Fantasma.kt` (a file that
+  // does NOT exist), and a resolved `Session` would light up inside `ClaudeSession`. So: no path/word character
+  // may sit right before or right after the match.
+  var TOKEN_LEFT = /[\w.\-/~]/;
+  var TOKEN_RIGHT = /[\w.\-/]/;
+  function atTokenBoundary(txt, at, token) {
+    if (at > 0 && TOKEN_LEFT.test(txt.charAt(at - 1))) { return false; }
+    var after = txt.charAt(at + token.length);
+    return !(after && TOKEN_RIGHT.test(after));
+  }
+
+  // Replace every whole-token occurrence of link.token in root's text nodes with an <a>. The link text is set via
+  // textContent (never innerHTML), so a hostile token cannot inject markup.
+  function linkifyToken(root, link) {
+    var token = String(link.token || '');
+    if (!token) { return; }
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentNode;
+        while (p && p !== root) {
+          if (p.tagName === 'A' || p.tagName === 'PRE') { return NodeFilter.FILTER_REJECT; }
+          p = p.parentNode;
+        }
+        return (n.nodeValue && n.nodeValue.indexOf(token) >= 0) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    var targets = [], n;
+    while ((n = walker.nextNode())) { targets.push(n); }
+    for (var i = 0; i < targets.length; i++) {
+      var node = targets[i];
+      var txt = node.nodeValue;
+      var frag = document.createDocumentFragment();
+      var from = 0, hit = false;
+      // Walk EVERY occurrence in this node (the old code linked only the first one and dropped the rest).
+      for (var at = txt.indexOf(token); at >= 0; at = txt.indexOf(token, at + token.length)) {
+        if (!atTokenBoundary(txt, at, token)) { continue; }
+        frag.appendChild(document.createTextNode(txt.slice(from, at)));
+        frag.appendChild(el('a', {
+          class: 'jb-link', text: token,
+          attrs: { href: jbHref(link.path, link.line), title: 'Open ' + link.path + (link.line ? ':' + link.line : '') }
+        }));
+        from = at + token.length;
+        hit = true;
+      }
+      if (!hit) { continue; } // nothing was a whole token here — leave the node exactly as it was
+      frag.appendChild(document.createTextNode(txt.slice(from)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
   function updateRow(rec, entry) {
-    // refresh body text (tool name for TOOL)
-    setBody(rec, entry.text);
+    // refresh body text (tool name for TOOL). A file tool renders its path as a jump-to-code link.
+    if (rec.speaker === 'TOOL' && entry.filePath) {
+      renderToolLabel(rec.bodyNode, entry.text, entry.filePath);
+    } else {
+      setBody(rec, entry.text);
+      // Model prose/code spans: ask the host to confirm which paths/symbols are real, then link those. Only for
+      // settled assistant rows — doing it per streaming delta would spam the host and fight the re-render.
+      if (rec.speaker === 'ASSISTANT' && entry.state !== 'RUNNING') { requestLinks(rec, entry); }
+    }
     rec.text = entry.text;
     rec.meta = entry.meta;
     rec.state = entry.state;
@@ -515,6 +676,11 @@
   };
 
   // ---- public: cc.clear ---------------------------------------------------
+  // Host's answer to `resolveLinks`: upgrade the confirmed tokens in that row to jump-to-code links.
+  cc.links = function (payload) {
+    try { applyLinks(payload); } catch (e) { /* linkification is best-effort — never break the transcript */ }
+  };
+
   cc.clear = function () {
     rows.clear();
     toolCards.clear();
