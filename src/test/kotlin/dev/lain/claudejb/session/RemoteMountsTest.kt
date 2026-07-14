@@ -1,0 +1,73 @@
+package dev.lain.claudejb.session
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+
+/**
+ * The pure half of [RemoteMounts] — parsing `/proc/mounts` and deciding whether a path is remote against a fixed
+ * snapshot. The impure half (reading `/proc`, `FileStore`) is exercised by the live suites; the decision logic,
+ * which is what gates whether an agent may start, is unit-tested here.
+ */
+class RemoteMountsTest {
+
+    private val procMounts = """
+        proc /proc proc rw,nosuid 0 0
+        /dev/sda1 / ext4 rw,relatime 0 0
+        /dev/sda2 /home ext4 rw,relatime 0 0
+        server:/export /net/nfs nfs4 rw,relatime 0 0
+        //winbox/share /mnt/smb cifs rw 0 0
+        user@host:/data /mnt/sshfs fuse.sshfs rw,nosuid 0 0
+        tmpfs /run/user/1000 tmpfs rw 0 0
+    """.trimIndent()
+
+    @Test
+    fun `parseMounts extracts mount points and fstypes`() {
+        val mounts = RemoteMounts.parseMounts(procMounts)
+        assertTrue(mounts.any { it.point == "/net/nfs" && it.type == "nfs4" })
+        assertTrue(mounts.any { it.point == "/mnt/smb" && it.type == "cifs" })
+        assertTrue(mounts.any { it.point == "/mnt/sshfs" && it.type == "fuse.sshfs" })
+        assertTrue(mounts.any { it.point == "/" && it.type == "ext4" })
+    }
+
+    @Test
+    fun `parseMounts un-escapes an octal space in a mount point`() {
+        val one = RemoteMounts.parseMounts("""dev /mnt/My\040Drive vfat rw 0 0""").single()
+        assertEquals("/mnt/My Drive", one.point)
+    }
+
+    @Test
+    fun `a local project is not remote`() {
+        val snap = RemoteMounts.Snapshot(remoteRoots = listOf("/net/nfs", "/mnt/smb"), isWsl = false)
+        assertFalse(RemoteMounts.isRemote("/home/me/proj", snap))
+    }
+
+    @Test
+    fun `a project on a network mount IS remote`() {
+        val snap = RemoteMounts.Snapshot(remoteRoots = listOf("/net/nfs", "/mnt/smb"), isWsl = false)
+        assertTrue(RemoteMounts.isRemote("/net/nfs/team/proj", snap))
+        assertTrue(RemoteMounts.isRemote("/mnt/smb/shared/repo", snap))
+    }
+
+    @Test
+    fun `a UNC project is remote regardless of the mount table`() {
+        val snap = RemoteMounts.Snapshot(remoteRoots = emptyList(), isWsl = false)
+        assertTrue(RemoteMounts.isRemote("""\\fileserver\projects\app""", snap))
+    }
+
+    @Test
+    fun `under WSL a project on a foreign mount is remote, on mnt-c it is not`() {
+        val snap = RemoteMounts.Snapshot(remoteRoots = emptyList(), isWsl = true)
+        assertTrue(RemoteMounts.isRemote("/mnt/d/work/proj", snap))
+        assertTrue(RemoteMounts.isRemote("/mnt/z/share/proj", snap))
+        assertFalse(RemoteMounts.isRemote("/mnt/c/Users/me/proj", snap))
+    }
+
+    @Test
+    fun `a blank path is not remote`() {
+        val snap = RemoteMounts.Snapshot(remoteRoots = emptyList(), isWsl = false)
+        assertFalse(RemoteMounts.isRemote(null, snap))
+        assertFalse(RemoteMounts.isRemote("", snap))
+    }
+}

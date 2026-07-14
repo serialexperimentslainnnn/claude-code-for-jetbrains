@@ -1,10 +1,9 @@
 package dev.lain.claudejb.process
 
-import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.SystemInfo
+import dev.lain.claudejb.util.InstalledPlugins
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 
 /**
@@ -24,10 +23,10 @@ import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 object TerminalLauncher {
 
     private val log = thisLogger()
-    private val TERMINAL_PLUGIN = PluginId.getId("org.jetbrains.plugins.terminal")
+    private const val TERMINAL_PLUGIN_ID = "org.jetbrains.plugins.terminal"
 
     /** True when the bundled IDE Terminal plugin is installed and enabled. Public API only (Marketplace-safe). */
-    fun isAvailable(): Boolean = PluginManager.isPluginInstalled(TERMINAL_PLUGIN)
+    fun isAvailable(): Boolean = InstalledPlugins.isEnabled(TERMINAL_PLUGIN_ID)
 
     /**
      * Builds the shell command that launches the `claude` login flow, **always using the binary's absolute

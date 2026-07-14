@@ -50,4 +50,16 @@ describe('JS↔CSS class contract', () => {
     const stale = [...GRANDFATHERED].filter((c) => !used.has(c)).sort();
     expect(stale).toEqual([]);
   });
+
+  /**
+   * Specificity, not markup — a class of bug the DOM tests are blind to. `.body a` paints ordinary Markdown links
+   * with the coral accent and OUT-SPECIFIES a bare `.jb-link`, so jump-to-code links inside model text rendered
+   * coral while the identical ones on tool cards (outside `.body`) rendered blue. The override must stay.
+   */
+  it('jump-to-code links out-specify the generic .body a rule', () => {
+    const css = fs.readFileSync(path.join(JCEF, 'app.css'), 'utf8');
+    if (/\.body\s+a\s*\{[^}]*color\s*:/.test(css)) {
+      expect(css).toMatch(/\.body\s+a\.jb-link/); // the more specific override that beats it
+    }
+  });
 });

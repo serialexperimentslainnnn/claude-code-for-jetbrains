@@ -1,3 +1,33 @@
+## v4.3.1 — 2026-07-14
+
+## 🛡 Deterministic sensitive-data protection
+
+A new permission-layer control evaluates **every** tool call before it can be auto-approved. It is deterministic and enforced outside the model: the classification and verdict are the plugin's, independent of anything the model or a prompt injection can say.
+
+**What it covers.** Calls that touch credential or key material — SSH/GPG keys, cloud and cluster credentials, database and shell-history secrets, browser and password-manager stores, crypto wallets, and the access tokens of well-known AI agents and code hosts. Patterns match by structure, so the same rule covers Linux, macOS, Windows (`C:\Users\…\.ssh`) and WSL (`/mnt/c/Users/…\.ssh`). Credential-dumping and exfiltration commands (secret exports, reverse shells, offensive tooling) are covered too, evaluated after resolving symlinks and `..` on disk and after normalising common shell obfuscation (broken quotes, `$IFS`, a path hidden in a variable, a base64 payload piped to a shell).
+
+**How it decides.** The agent's own tools require an explicit permission card whenever a call is flagged — **including in `acceptEdits` and `bypassPermissions`**. MCP servers and Skills are denied access to that material rather than prompted. Access that reaches another user's home, a network or UNC mount, or a foreign WSL drive is denied for every caller. The blacklist is configurable additively (you can widen it, not narrow it), and a session will not start when the project is located on a remote or network-mounted drive.
+
+**Scope.** Detecting a path concealed inside an arbitrary shell string is best-effort and can be widened over time; the enforcement of a match, however, is absolute and cannot be overridden by the model. See `SECURITY.md` for the full model.
+
+## 🔗 Jump to code, straight from the conversation
+
+**Claude names a file, you click it, you are there.** The conversation stops being a wall of text you have to translate back into your project.
+
+**On tool cards.** A file tool now names its file **the way you think about it** — `Read(src/main/kotlin/permission/PermissionBroker.kt)`, relative to the project, not a bare `PermissionBroker.kt` that tells you nothing about *which* one. And it is a link: it opens the file in the editor **at the right line** and selects it in the Project view, so you can see where it lives.
+
+**In Claude's own words.** Paths (`src/Foo.kt`, `a/b.py:42`, `~/.claude`), **directories** (`build/` — revealed and expanded in the Project view, or opened in your file manager when they live outside the project) and **symbols** (`PermissionBroker` → straight to its declaration) all become links. Even the way developers actually cite a file works: **`app.css:190`**, a bare name and a line, resolves through the IDE's file index — and through a bounded on-disk scan for *excluded* folders like `build/`, which no index knows about. Archives reveal in the tree instead of opening a useless binary buffer.
+
+**And it never lies to you.** The transcript can only *guess* what is a path or a symbol — so nothing is linked on a guess: the IDE confirms every candidate first, and links only what it can resolve **unambiguously**. Two files named `app.css`? No link at all, rather than a jump to an arbitrary one. A path that does not exist stays plain text. A link is never dead, and never takes you somewhere you did not ask for. Symbols resolve through *Go to Symbol*, so this works in **every** JetBrains IDE, not just the Java/Kotlin ones — and a link can only ever point inside your project or your own home, never at `/etc/passwd`, never at another user's files, not even through a symlink.
+
+### Also in this release
+
+**💾 The IDE sees Claude's writes immediately.** The virtual file system was only refreshed at the *end* of a turn, so until Claude went idle the editor showed stale contents — and a link to a file Claude had just written opened nothing at all, because the IDE did not know that file existed yet. Every successful write now refreshes at once: by exact path for `Edit`/`Write`, and by re-scanning the project tree after a `Bash` command or a file-mutating MCP tool, which can change anything. Newly *created* files are picked up too (refreshing a file the VFS has never heard of is a no-op, so its parent directory is re-scanned as well).
+
+**💬 Fixed: a chat tab could come up unusable — the composer refused to take focus.** A new tab (and sometimes the tabs restored at startup) gave you a chat you could not click into; the only cure was closing and reopening the tool window. And even when keystrokes did arrive, a fresh tab showed **no caret**. Both are gone: the tab now tells the platform where its keyboard focus lives and lets the IDE hand it over, and the web view is told it has the focus once the chat actually exists — which is when there is a caret to paint.
+
+---
+
 ## v4.2.0 — 2026-07-08
 
 **Protocol upgrade to `claude` 2.1.204 / SDK 0.3.204**, plus a new dashboard card.

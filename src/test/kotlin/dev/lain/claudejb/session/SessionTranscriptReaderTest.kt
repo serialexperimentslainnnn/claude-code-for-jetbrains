@@ -52,6 +52,35 @@ class SessionTranscriptReaderTest {
         assertEquals("Bash", e.meta)
         assertEquals("toolu_1", e.toolUseId)
         assertTrue(e.text.isNotBlank())
+        assertNull(e.filePath) // not a file tool → nothing to jump to
+    }
+
+    /**
+     * Regression: a RESTORED conversation must render its tool cards exactly like a live one — project-relative
+     * path, and a jump-to-code link. The restore path used to call `formatToolUse` with no project root, so
+     * reopening the IDE turned every card into a bare absolute path with no link.
+     */
+    @Test
+    fun `a restored file tool keeps the project-relative path and its jump-to-code link`() {
+        val root = "/home/u/proj"
+        val lines = listOf(
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2",""" +
+                """"name":"Read","input":{"file_path":"$root/src/main/Foo.kt"}}]}}"""
+        )
+        val e = SessionTranscriptReader.parseEntries(lines, projectRoot = root).single()
+        assertEquals("Read(src/main/Foo.kt)", e.text)
+        assertEquals("src/main/Foo.kt", e.filePath)
+    }
+
+    @Test
+    fun `without a project root a restored file tool falls back to the raw path and no link`() {
+        val lines = listOf(
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_3",""" +
+                """"name":"Read","input":{"file_path":"/home/u/proj/src/main/Foo.kt"}}]}}"""
+        )
+        val e = SessionTranscriptReader.parseEntries(lines).single()
+        assertEquals("Read(/home/u/proj/src/main/Foo.kt)", e.text)
+        assertEquals("/home/u/proj/src/main/Foo.kt", e.filePath)
     }
 
     @Test

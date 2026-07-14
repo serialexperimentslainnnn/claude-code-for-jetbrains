@@ -13,6 +13,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -42,6 +43,8 @@ object JcefBridge {
         e.meta?.let { put("meta", it) }
         e.toolUseId?.let { put("toolUseId", it) }
         e.parentToolUseId?.let { put("parent", it) }
+        // Project-relative file for a file tool → the frontend renders the card label as a jump-to-code link.
+        e.filePath?.let { put("filePath", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         // A completed Edit/Write/MultiEdit card is reviewable: the frontend shows a "View diff"
@@ -143,6 +146,13 @@ object JcefBridge {
         data class RevertEdit(val toolUseId: String) : Msg
         object OpenDiffHistory : Msg
         data class Open(val url: String) : Msg
+
+        /**
+         * The transcript detected jump-to-code candidates in a settled row and asks the host which are real. Only
+         * the resolved ones become links, so a path that doesn't exist (or a word that isn't a symbol) never turns
+         * into a dead hyperlink. Answered with `cc.links({ rowId, links: [...] })`.
+         */
+        data class ResolveLinks(val rowId: Long, val paths: List<String>, val symbols: List<String>) : Msg
         data class Copy(val text: String) : Msg
         // Stage 2 — attachments (composer chips, drag/drop/paste, file picker).
         data class RemoveAttachment(val id: String) : Msg
@@ -194,6 +204,11 @@ object JcefBridge {
             "revertEdit" -> Msg.RevertEdit(str("toolUseId").orEmpty())
             "openDiffHistory" -> Msg.OpenDiffHistory
             "open" -> Msg.Open(str("url").orEmpty())
+            "resolveLinks" -> Msg.ResolveLinks(
+                (obj["rowId"] as? JsonPrimitive)?.longOrNull ?: -1L,
+                strList(obj["paths"]),
+                strList(obj["symbols"]),
+            )
             "copy" -> Msg.Copy(str("text").orEmpty())
             "removeAttachment" -> Msg.RemoveAttachment(str("id").orEmpty())
             "pickFiles" -> Msg.PickFiles
@@ -216,4 +231,26 @@ object JcefBridge {
         this?.entries?.mapNotNull { (k, v) ->
             (v as? JsonPrimitive)?.contentOrNull?.let { k to it }
         }?.toMap().orEmpty()
+
+    /** A JSON array of strings → a Kotlin list (non-strings and non-arrays are dropped, never thrown on). */
+    private fun strList(el: kotlinx.serialization.json.JsonElement?): List<String> =
+        (el as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.filter { it.isNotBlank() }.orEmpty()
+
+    /**
+     * The answer to a `resolveLinks` request: `{ rowId, links:[{ token, path, line? }] }`. Only tokens the host
+     * could actually resolve appear — the frontend links exactly those and leaves the rest as plain text.
+     */
+    fun linksJson(rowId: Long, resolved: List<dev.lain.claudejb.ui.LinkResolver.Resolved>): String =
+        buildJsonObject {
+            put("rowId", rowId)
+            put("links", buildJsonArray {
+                resolved.forEach { r ->
+                    add(buildJsonObject {
+                        put("token", r.token)
+                        put("path", r.path)
+                        r.line?.let { put("line", it) }
+                    })
+                }
+            })
+        }.toString()
 }

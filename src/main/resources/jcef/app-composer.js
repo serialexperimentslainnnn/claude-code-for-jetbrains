@@ -246,6 +246,10 @@
     // sync the initial auto-follow state to the transcript (retry shortly in case the bus isn't ready)
     applyFollow();
     setTimeout(applyFollow, 60);
+
+    // Claim the DOM focus as soon as the composer exists. Only half the story: a page cannot grant itself the
+    // IDE's keyboard focus — the host hands the browser that (JcefHost.requestFocus / markWebReady).
+    els.input.focus();
     return true;
   }
 
@@ -1025,6 +1029,7 @@
     if (!ensureBuilt() || !els || !els.input) return;
     els.input.focus();
   };
+
 
   // Host inserts clipboard text into the composer at the caret (Ctrl+V text path on Wayland).
   cc.insertText = function (text) {

@@ -93,6 +93,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun openChat(project: Project, cm: ContentManager, session: ClaudeSession) {
         val panel = JcefChatPanel(project, session)
         val content = ContentFactory.getInstance().createContent(panel, tabTitle(session.title), false)
+        // Tell the platform WHERE the keyboard focus of this tab lives. Without it the ContentManager has nowhere
+        // to put focus when the tab is selected — a JBPanel isn't focusable — so the embedded browser never gets
+        // it: the composer looked alive but refused to take a click, and any focus round-trip through the IDE
+        // (a dialog closing, another tool window) dropped focus into the void and left the chat wedged.
+        // Resolved LAZILY (a Computable, not a fixed component): CEF's real input component doesn't exist yet at
+        // this point — the native browser is created later, when the tab is first shown.
+        content.setPreferredFocusedComponent { panel.focusTarget() }
         content.isCloseable = true
         content.description = session.title // full title as the tab tooltip
         content.setDisposer(panel)
@@ -104,10 +111,14 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             }
         })
         cm.addContent(content)
-        cm.setSelectedContent(content)
+        // requestFocus = true: the ContentManager performs the focus transfer AS PART OF the selection — the same
+        // path a manual tab switch takes. Selecting without it and then asking for the focus ourselves loses the
+        // race: "New chat" is a toolbar action, and the platform restores focus to wherever it was when an action
+        // finishes, stepping on our request. (The caret itself is settled later, when the page is up — see
+        // JcefHost.markWebReady.)
+        cm.setSelectedContent(content, /* requestFocus = */ true)
         ClaudeSettings.getInstance(project).applyTo(session)
         session.start()
-        panel.focusInput()
     }
 
     /**
@@ -217,7 +228,15 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 .filter { SessionStore.exists(it) }
                 .ifEmpty { listOfNotNull(SessionTranscriptReader.listSessions(project).firstOrNull()?.sessionId) }
             val restored = ids
-                .map { RestoredSession(it, SessionTitleReader.readTitle(it), SessionTranscriptReader.readEntries(it, SessionTranscriptReader.DEFAULT_RESTORE_CAP)) }
+                .map {
+                    RestoredSession(
+                        it,
+                        SessionTitleReader.readTitle(it),
+                        SessionTranscriptReader.readEntries(
+                            it, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+                        ),
+                    )
+                }
             ApplicationManager.getApplication().invokeLater({
                 if (restored.isEmpty()) {
                     openChat(project, cm, manager.create())
@@ -261,7 +280,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
         val sourceTitle = source.title
         ApplicationManager.getApplication().executeOnPooledThread {
-            val entries = SessionTranscriptReader.readEntries(sourceId, SessionTranscriptReader.DEFAULT_RESTORE_CAP)
+            val entries = SessionTranscriptReader.readEntries(
+                sourceId, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+            )
             ApplicationManager.getApplication().invokeLater({
                 val manager = ChatSessionManager.getInstance(project)
                 val s = manager.create()
@@ -294,7 +315,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                     .setItemChosenCallback { ref ->
                         // Re-read the transcript off-EDT, then build/open the tab on the EDT.
                         ApplicationManager.getApplication().executeOnPooledThread {
-                            val entries = SessionTranscriptReader.readEntries(ref.sessionId, SessionTranscriptReader.DEFAULT_RESTORE_CAP)
+                            val entries = SessionTranscriptReader.readEntries(
+                                ref.sessionId, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+                            )
                             ApplicationManager.getApplication().invokeLater({
                                 val manager = ChatSessionManager.getInstance(project)
                                 val s = manager.create()

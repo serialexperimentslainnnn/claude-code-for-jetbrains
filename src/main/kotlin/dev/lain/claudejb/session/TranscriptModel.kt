@@ -24,6 +24,12 @@ class TranscriptEntry(
     /** Set when this entry belongs to a subagent (Task): the Agent's tool_use id it nests under. */
     val parentToolUseId: String? = null,
     toolState: ToolState = ToolState.FINISHED,
+    /**
+     * For a file tool (Read/Edit/Write/…): the file it acts on, **relative to the project root**. Drives the
+     * transcript's jump-to-code link on the tool card. Null on every other row. Kept relative on purpose — the web
+     * view never needs the user's absolute paths; the host resolves it against the root (and gates on it).
+     */
+    val filePath: String? = null,
 ) {
     var text: String = text
         internal set
@@ -72,8 +78,9 @@ class TranscriptModel {
         toolUseId: String? = null,
         parentToolUseId: String? = null,
         toolState: ToolState = ToolState.FINISHED,
+        filePath: String? = null,
     ): TranscriptEntry {
-        val entry = TranscriptEntry(nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState)
+        val entry = TranscriptEntry(nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath)
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry
             if (parentToolUseId != null) parentOf[toolUseId] = parentToolUseId
@@ -150,6 +157,9 @@ class TranscriptModel {
         entry.text = text
         listeners.forEach { it.onUpdated(entry) }
     }
+
+    /** The tool's name for a `tool_use_id` (the TOOL row's `meta`), or null when the call is unknown here. */
+    fun toolNameOf(toolUseId: String): String? = byToolUseId[toolUseId]?.meta
 
     /** Update a tool call's lifecycle [state] (and optional [elapsedSeconds]) by its [toolUseId], then notify. */
     fun setToolState(toolUseId: String, state: ToolState, elapsedSeconds: Double? = null) {
