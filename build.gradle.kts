@@ -244,9 +244,12 @@ intellijPlatform {
             // deprecated on current IDEs. A runtime `if` would not help — the verifier reads bytecode, so the
             // broken reference ships either way. Users pinned to 2024.x would need a separate 242-targeted build
             // (JetBrains' documented approach for a range where the API actually changed).
-            // The ceiling tracks the latest verified EAP/RC branch (see pluginVerification.select below).
+            // Ceiling widened to 263.* ahead of the 2026.3 EAP: the API is stable and clean across 251→262
+            // (all Compatible, zero deprecations), so we declare the next branch preemptively. verifyPlugin's
+            // select block (below) already reaches 263.* and will verify against a real 263 build as soon as one
+            // ships — until then it resolves to the latest 262 EAP, which is Compatible.
             sinceBuild = "251"
-            untilBuild = "262.*"
+            untilBuild = "263.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
         changeNotes = provider { latestReleaseNotesHtml() }
@@ -289,10 +292,10 @@ intellijPlatform {
             } else {
                 recommended()
             }
-            // Always validate against the NEWEST EAP/RC available before promising it via the plugin's
-            // untilBuild. The range upper bound is kept one branch ahead (263.*) so that when the next EAP
-            // ships the verifier picks it up automatically; today it simply resolves to the latest 262 build.
-            // The plugin's own untilBuild (pluginConfiguration above) stays at the latest *verified* branch.
+            // Always validate against the NEWEST EAP/RC available. The range upper bound (263.*) matches the
+            // plugin's declared untilBuild, which was widened to 263.* preemptively (the API is clean across
+            // 251→262); until a 2026.3/263 EAP ships this resolves to the latest 262 build, and it will verify
+            // against a real 263 automatically the moment one is published.
             select {
                 types = listOf(IntelliJPlatformType.IntellijIdeaCommunity)
                 channels = listOf(ProductRelease.Channel.EAP, ProductRelease.Channel.RC)
