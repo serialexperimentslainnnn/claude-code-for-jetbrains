@@ -61,8 +61,11 @@ object RemoteMounts {
     fun isRemote(path: String?, snap: Snapshot = snapshot()): Boolean {
         if (path.isNullOrBlank()) return false
         val p = path.replace('\\', '/')
+        // WSL: /mnt/c is the local Windows disk — the sanctioned drive, never remote. Every other /mnt/* is a
+        // foreign/second/network Windows drive. This is decided BEFORE the fstype checks below, because WSL2
+        // surfaces /mnt/c over 9p/drvfs and it would otherwise be flagged as a network mount (the reported bug).
+        if (snap.isWsl && p.startsWith("/mnt/")) return !(p == "/mnt/c" || p.startsWith("/mnt/c/"))
         if (SensitiveGuardUnc.isUnc(p)) return true
-        if (snap.isWsl && p.startsWith("/mnt/") && !p.startsWith("/mnt/c/") && p != "/mnt/c") return true
         if (snap.remoteRoots.any { under(p, it) }) return true
         // Cross-platform fallback: ask the JVM what filesystem backs the path (catches macOS/Windows shares that
         // never appear in /proc). Best-effort — an unreadable path just isn't flagged here.
@@ -79,11 +82,18 @@ object RemoteMounts {
     // ── detection ────────────────────────────────────────────────────────────────────────────────────────
 
     private fun detect(): Snapshot {
+        val wsl = detectWsl()
         val mountsFile = listOf("/proc/self/mounts", "/proc/mounts").map(::File).firstOrNull { it.canRead() }
         val content = mountsFile?.let { runCatching { it.readText() }.getOrNull() }
-        val remoteRoots = content?.let { parseMounts(it).filter { m -> m.type.lowercase() in REMOTE_FS_TYPES }.map { m -> m.point } }
+        val remoteRoots = content
+            ?.let { parseMounts(it).filter { m -> m.type.lowercase() in REMOTE_FS_TYPES }.map { m -> m.point } }
             .orEmpty()
-        return Snapshot(remoteRoots = remoteRoots, isWsl = detectWsl())
+            // Under WSL, every /mnt/* mount is a Windows drive surfaced over 9p/drvfs — including the local C:.
+            // Those are governed by the dedicated /mnt/c rule (isRemote / blockForeignWslMounts), so they must NOT
+            // be treated as generic network mounts here, or /mnt/c (the sanctioned local disk) is flagged remote
+            // and the plugin refuses to start on a perfectly normal WSL project.
+            .filterNot { wsl && it.startsWith("/mnt/") }
+        return Snapshot(remoteRoots = remoteRoots, isWsl = wsl)
     }
 
     /** PURE: `/proc/mounts` text → the mount points and their fstypes. Unit-tested. */

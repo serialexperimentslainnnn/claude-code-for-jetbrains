@@ -1,3 +1,9 @@
+## v4.3.2 — 2026-07-23
+
+**Fix: the plugin now starts on a WSL project under `/mnt/c`.** WSL2 exposes the Windows `C:` drive over the 9p protocol, which the network-drive detector treated as a remote mount — so the deterministic security layer, which refuses to launch an agent rooted on a network share, was blocking perfectly normal WSL projects on `C:`. `/mnt/c` is now correctly recognised as the local Windows disk (every other `/mnt/*` drive stays foreign, as intended). No other change.
+
+---
+
 ## v4.3.1 — 2026-07-14
 
 ## 🛡 Deterministic sensitive-data protection

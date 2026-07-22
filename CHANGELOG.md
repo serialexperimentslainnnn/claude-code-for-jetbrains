@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.2] — 2026-07-23
+
+### Fixed
+- **WSL: the security layer no longer refuses to start on a `/mnt/c` project.** WSL2 mounts the Windows `C:` drive over 9p, which is in `RemoteMounts.REMOTE_FS_TYPES`, so `detect()` put `/mnt/c` into `remoteRoots` and the startup gate (`RemoteMounts.isRemote`) treated a normal `C:\` project as a network share and aborted the launch; the same `remoteRoots` also fed `SensitiveGuard`'s foreign-territory rule. Fixed in two layers: `detect()` no longer treats any `/mnt/*` mount as a generic remote root under WSL (those are governed by the dedicated `/mnt/c` rule), and `isRemote` exempts `/mnt/c` (and its subtree) before the fstype checks as defense in depth. Every other `/mnt/*` drive stays foreign. Regression tests added (`RemoteMountsTest`).
+
 ## [4.3.1] — 2026-07-14
 
 **Jump to code from the conversation**, a chat tab that actually takes the keyboard focus, and an IDE that sees Claude's writes as they happen.
