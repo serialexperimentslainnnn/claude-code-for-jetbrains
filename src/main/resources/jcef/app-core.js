@@ -169,54 +169,86 @@
   function decorateCodeBlocks(root) {
     if (!root) return;
     var blocks = root.querySelectorAll("pre > code");
-    for (var i = 0; i < blocks.length; i++) {
-      var code = blocks[i];
-      var pre = code.parentNode;
-      if (!pre || pre.getAttribute("data-cc-decorated") === "1") continue;
-      pre.setAttribute("data-cc-decorated", "1");
+    for (var i = 0; i < blocks.length; i++) { decorateOneCodeBlock(blocks[i]); }
+  }
 
-      // Derive language from the `language-xxx` class hljs/marked emit.
-      var lang = "";
-      var cls = (code.className || "").split(/\s+/);
-      for (var c = 0; c < cls.length; c++) {
-        if (cls[c].indexOf("language-") === 0) {
-          lang = cls[c].slice("language-".length);
-          break;
-        }
+  // Decorates a SINGLE `pre > code` pair with the code-head bar (language label + Copy button) and
+  // syntax highlighting. Extracted from decorateCodeBlocks so a caller that already has one specific
+  // <code> in hand (e.g. a tool-output block built by hand, not parsed from markdown) can reuse the exact
+  // same chrome — including the Copy button, which needs no per-node listener since the click/keyboard is
+  // handled by the single delegated handler below (works on any live `.code-head .copy`, wherever it came from).
+  // Idempotent: a `pre` already decorated (data-cc-decorated="1") is left untouched on a later call.
+  function decorateOneCodeBlock(code) {
+    var pre = code && code.parentNode;
+    if (!pre || pre.getAttribute("data-cc-decorated") === "1") return;
+    pre.setAttribute("data-cc-decorated", "1");
+
+    // Derive language from the `language-xxx` class hljs/marked emit; absent one, label stays generic.
+    var lang = "";
+    var cls = (code.className || "").split(/\s+/);
+    for (var c = 0; c < cls.length; c++) {
+      if (cls[c].indexOf("language-") === 0) {
+        lang = cls[c].slice("language-".length);
+        break;
       }
+    }
 
-      var head = document.createElement("div");
-      head.className = "code-head";
+    var head = document.createElement("div");
+    head.className = "code-head";
 
-      var label = document.createElement("span");
-      label.className = "code-lang";
-      label.textContent = lang || "text";
-      head.appendChild(label);
+    var label = document.createElement("span");
+    label.className = "code-lang";
+    label.textContent = lang || "text";
+    head.appendChild(label);
 
-      var copy = document.createElement("span");
-      copy.className = "copy";
-      copy.setAttribute("role", "button");
-      copy.setAttribute("tabindex", "0");
-      copy.textContent = "Copy";
-      // No per-node listener here: CC.markdown decorates a DETACHED fragment and
-      // returns holder.innerHTML, which serializes away any attached listener. The
-      // click/keyboard is handled by the single delegated handler below (works on
-      // the live DOM after the string is assigned).
-      head.appendChild(copy);
+    var copy = document.createElement("span");
+    copy.className = "copy";
+    copy.setAttribute("role", "button");
+    copy.setAttribute("tabindex", "0");
+    copy.textContent = "Copy";
+    head.appendChild(copy);
 
-      pre.insertBefore(head, code);
+    pre.insertBefore(head, code);
 
-      // Syntax-highlight the code element.
-      try {
-        if (typeof window.hljs !== "undefined" && window.hljs && typeof window.hljs.highlightElement === "function") {
-          window.hljs.highlightElement(code);
-        }
-      } catch (e) {
-        // Highlighting is best-effort.
+    // Syntax-highlight the code element.
+    try {
+      if (typeof window.hljs !== "undefined" && window.hljs && typeof window.hljs.highlightElement === "function") {
+        window.hljs.highlightElement(code);
       }
+    } catch (e) {
+      // Highlighting is best-effort.
     }
   }
   CC.decorateCodeBlocks = decorateCodeBlocks;
+  CC.decorateOneCodeBlock = decorateOneCodeBlock;
+
+  // Extension → hljs language alias, restricted to languages actually registered in the vendored bundle
+  // (highlight.min.js is a curated subset, not the full hljs distribution). An unmapped/unknown extension
+  // returns null — decorateOneCodeBlock then leaves the `language-xxx` class unset, and hljs.highlightElement
+  // still runs its own autodetection, so the block is never left unhighlighted, just less precisely labelled.
+  var EXT_LANG = {
+    kt: "kotlin", kts: "kotlin", java: "java",
+    js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+    ts: "typescript", tsx: "typescript",
+    json: "json", xml: "xml", html: "xml", htm: "xml", svg: "xml", xsd: "xml", xsl: "xml", plist: "xml",
+    yml: "yaml", yaml: "yaml", sh: "bash", bash: "bash", zsh: "bash",
+    py: "python", rb: "ruby", go: "go", rs: "rust",
+    c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
+    cs: "csharp", php: "php", pl: "perl", pm: "perl", lua: "lua", sql: "sql",
+    css: "css", scss: "scss", less: "less", md: "markdown", markdown: "markdown",
+    ini: "ini", cfg: "ini", conf: "ini", properties: "ini",
+    swift: "swift", r: "r", graphql: "graphql", gql: "graphql", vb: "vbnet",
+    wasm: "wasm", wat: "wasm", m: "objectivec", mm: "objectivec", txt: "plaintext",
+  };
+  CC.languageForPath = function (path) {
+    var p = String(path || "");
+    var base = p.split(/[\\/]/).pop() || "";
+    if (/^makefile$/i.test(base)) { return "makefile"; }
+    var dot = base.lastIndexOf(".");
+    if (dot < 0 || dot === base.length - 1) { return null; }
+    var ext = base.slice(dot + 1).toLowerCase();
+    return EXT_LANG[ext] || null;
+  };
 
   // ---------------------------------------------------------------------------
   // Tiny event bus: on(event, fn) / emit(event, ...args).

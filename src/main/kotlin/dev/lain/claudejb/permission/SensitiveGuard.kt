@@ -4,6 +4,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for,
@@ -102,9 +106,16 @@ object SensitiveGuard {
         /**
          * Optional **canonicaliser**: given a candidate path, return its real on-disk path (symlinks and `..`
          * resolved), or null if it cannot be resolved. Injected by the IDE side because it touches the filesystem;
-         * the guard stays pure. When present, every candidate is judged on BOTH its literal and its resolved form,
-         * so a symlink `proj/innocent → ~/.ssh/id_rsa`, or `proj/../../../etc/shadow`, cannot launder a path past
-         * the rules by hiding its true target. A resolver that throws or returns null just leaves the literal.
+         * the guard stays pure. When present, every RESOLVABLE-looking candidate (see [looksResolvable]) is judged
+         * on BOTH its literal and its resolved form, so a symlink `proj/innocent → ~/.ssh/id_rsa`, or
+         * `proj/../../../etc/shadow`, cannot launder a path past the rules by hiding its true target. A resolver
+         * that throws, returns null, or is too slow (see [expandWithResolved]) just leaves the literal.
+         *
+         * **Caller contract — this WILL be called from whatever thread invokes [verdict]/[reason]/[classify].**
+         * A typical implementation (`File(x).canonicalPath`) is a blocking syscall with **no JDK-level timeout and
+         * no interrupt**: on a hung/unresponsive network mount it can block the calling thread forever. [SensitiveGuard]
+         * defends against that itself (bounded, off-thread, per [expandWithResolved]) — but do not add further
+         * blocking work inside this lambda beyond a single stat-like call, since the bound assumes that shape.
          */
         val pathResolver: ((String) -> String?)? = null,
     )
@@ -279,15 +290,76 @@ object SensitiveGuard {
         return null
     }
 
-    /** Each candidate, plus — when a resolver is configured — its canonical real path. Deduped, order-stable. */
+    /**
+     * Each candidate, plus — when a resolver is configured — its canonical real path. Deduped, order-stable.
+     *
+     * **This is the fix for a real incident**: `pathCandidates` treats every bare word of a `Bash` command as a
+     * candidate (`pathish` requires no path separator), so an ordinary command like `git commit -m 'fix: env
+     * parsing'` used to produce a resolver call — a synchronous, unbounded, uninterruptible `stat()` — for EVERY
+     * token (`git`, `commit`, `-m`, `fix:`, `env`, `parsing`…). That ran on the single thread that reads the
+     * `claude` process's entire stdout stream, so a slow or hung filesystem (a stale network mount, WSL's 9p) froze
+     * the whole transcript, not just one card — silently, since `runCatching` swallowed the eventual failure but
+     * not the wait. Introduced alongside this class, caught only by a live report, never by a unit test (pure
+     * functions don't model a hung syscall) — hence the two independent bounds below, not just one:
+     *
+     *  1. [looksResolvable] filters out candidates that cannot plausibly be a path AT ALL (most Bash tokens) before
+     *     ever calling the resolver — this is what makes an ordinary command cheap again;
+     *  2. even a resolvable candidate is only given [RESOLVE_TIMEOUT_MS] on a background thread ([resolveWithTimeout]) —
+     *     this is what keeps a single `~/.ssh/id_rsa`-shaped argument, on a genuinely hung mount, from freezing
+     *     anything: the reader thread moves on, at worst missing that one candidate's canonical form.
+     * Capped at [MAX_RESOLVE_CANDIDATES] resolvable candidates as a third, coarser bound against a command crafted
+     * with dozens of real-looking paths.
+     */
     private fun expandWithResolved(paths: List<String>, policy: Policy): List<String> {
         val resolver = policy.pathResolver ?: return paths
         val out = LinkedHashSet<String>()
+        var resolved = 0
         for (p in paths) {
             out += p
-            runCatching { resolver(p) }.getOrNull()?.let { out += normalize(it, policy.home) }
+            if (resolved >= MAX_RESOLVE_CANDIDATES || !looksResolvable(p)) continue
+            resolved++
+            resolveWithTimeout(resolver, p)?.let { out += normalize(it, policy.home) }
         }
         return out.toList()
+    }
+
+    /**
+     * Cheap, no-I/O pre-filter: could [token] plausibly BE a filesystem path? Most words in a shell command
+     * (subcommands, flags, flag values, commit messages) cannot — they have no separator and no home/drive marker.
+     * Requiring one before ever touching the resolver is what keeps ordinary `Bash` calls fast; a real path
+     * (`~/.ssh/id_rsa`, `./script.sh`, `/etc/passwd`, `C:\Users\bob\x`) always has one.
+     */
+    private fun looksResolvable(token: String): Boolean =
+        token.startsWith("~") || token.contains('/') || token.contains('\\')
+
+    /**
+     * Runs [resolver] on a background thread and waits at most [RESOLVE_TIMEOUT_MS] — never on the caller's thread.
+     * On timeout, exception, or rejection, returns null (the literal candidate is still judged; only its resolved
+     * form is missing). [future.cancel] cannot actually stop a blocked native `stat()` (Java has no safe way to do
+     * that), so a genuinely hung call leaks one idle daemon thread in [resolverExecutor] rather than ever blocking
+     * the process's stdout-reading thread — the trade this class exists to make.
+     */
+    private fun resolveWithTimeout(resolver: (String) -> String?, path: String): String? {
+        val future = runCatching { resolverExecutor.submit(Callable { resolver(path) }) }.getOrNull() ?: return null
+        return try {
+            future.get(RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            future.cancel(true)
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Cap on how many candidates per call get a (bounded, off-thread) resolve attempt — a coarse third bound. */
+    private const val MAX_RESOLVE_CANDIDATES = 16
+
+    /** How long a single resolver call may run before we give up on it and move on. */
+    private const val RESOLVE_TIMEOUT_MS = 200L
+
+    /** Daemon threads only — must never keep the JVM alive, and a stuck one (see [resolveWithTimeout]) is expected. */
+    private val resolverExecutor = Executors.newCachedThreadPool { r ->
+        Thread(r, "SensitiveGuard-resolver").apply { isDaemon = true }
     }
 
     // ── rule: foreign territory ──────────────────────────────────────────────────────────────────────────
@@ -318,10 +390,23 @@ object SensitiveGuard {
     private fun underForeignMnt(path: String): Boolean =
         path.startsWith("/mnt/") && !path.startsWith("/mnt/c/") && path != "/mnt/c"
 
-    /** `\\server\share` / `//server/share` — remote by construction, on any OS. */
+    /**
+     * `\\server\share` / `//server/share` — remote by construction, on any OS.
+     *
+     * **Real incident**: a `//`-prefixed value isn't necessarily UNC — an ordinary C/JS-style line comment
+     * (`// see below`) starts with `//` too, and [normalize] preserves that leading `//` (by design, so a real
+     * UNC path survives normalization). The old check only asked "is the third character not another slash",
+     * which a comment's leading space trivially satisfies — so `Edit`'s `old_string`/`new_string` (walked as a
+     * path candidate like any other string leaf, see [pathCandidates]) flagged FOREIGN and hard-denied a
+     * completely ordinary edit, for the agent's own trusted tool, with no way to override it. A real UNC
+     * hostname never contains whitespace; a comment almost always does right after the slashes — so require the
+     * host segment (up to the next `/`) to be non-blank AND whitespace-free.
+     */
     fun isUnc(path: String): Boolean {
         val p = path.replace('\\', '/')
-        return p.startsWith("//") && p.length > 2 && p[2] != '/'
+        if (!p.startsWith("//") || p.length <= 2 || p[2] == '/') return false
+        val host = p.substring(2).substringBefore('/')
+        return host.isNotBlank() && host.none { it.isWhitespace() }
     }
 
     private fun under(path: String, root: String): Boolean {
@@ -337,6 +422,19 @@ object SensitiveGuard {
     }
 
     fun runsDangerousCommand(input: JsonObject): Boolean = dangerousCommand(input) != null
+
+    /**
+     * True when [input] carries a command/script string under a command-shaped key ([COMMAND_KEY]: `command`,
+     * `cmd`, `script`, `shell`, `exec`, `run`, `args`/`argv`…) — i.e. this call executes something, whatever the
+     * underlying shell (Bash, PowerShell, cmd.exe, sh, zsh…) and whatever the tool is named (the native `Bash`
+     * tool, or an MCP tool like `execute_terminal_command`). A UI concern (the transcript uses this to render the
+     * call's output as a copyable code block) built on the exact same detection the security rules already rely
+     * on, so the two can never quietly drift apart into disagreeing about "is this a command".
+     */
+    fun isCommandCall(input: JsonObject): Boolean = commandCandidates(input).isNotEmpty()
+
+    /** The raw command/script string [isCommandCall] detected, for rendering — `null` when there isn't one. */
+    fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()
 
     private fun dangerousCommand(input: JsonObject): String? {
         for (command in commandCandidates(input)) {
@@ -387,6 +485,17 @@ object SensitiveGuard {
     }
 
     /** `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`. Only literal, single-token assignments; good enough for the net. */
+    /**
+     * `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`.
+     *
+     * **Real incident**: `String.replace(Regex, String)` treats the replacement argument as a *replacement
+     * template* — `$1`/`${name}` are group references, not literal text. `v` is arbitrary shell-assigned text an
+     * attacker (or an ordinary script) fully controls, e.g. `k=${OTHER}/x`: passing it straight to `replace()`
+     * throws `IllegalArgumentException: Illegal group reference` from deep inside `java.util.regex.Matcher`,
+     * uncaught, crashing `verdict()` for every `Bash` call with such an assignment — confirmed live via a stack
+     * trace in idea.log. [java.util.regex.Matcher.quoteReplacement] escapes `\`/`$` so `v` is substituted
+     * literally, exactly as intended.
+     */
     private fun substituteAssignments(command: String): String {
         val assign = Regex("""(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|]+)""")
         val vars = HashMap<String, String>()
@@ -394,7 +503,8 @@ object SensitiveGuard {
         if (vars.isEmpty()) return command
         var s = command
         for ((k, v) in vars) {
-            s = s.replace(Regex("""\$\{$k\}"""), v).replace(Regex("""\$$k(?![A-Za-z0-9_])"""), v)
+            val literal = java.util.regex.Matcher.quoteReplacement(v)
+            s = s.replace(Regex("""\$\{$k\}"""), literal).replace(Regex("""\$$k(?![A-Za-z0-9_])"""), literal)
         }
         return s
     }

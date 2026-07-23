@@ -1,6 +1,12 @@
 ## v4.3.2 — 2026-07-23
 
-**Fix: the plugin now starts on a WSL project under `/mnt/c`.** WSL2 exposes the Windows `C:` drive over the 9p protocol, which the network-drive detector treated as a remote mount — so the deterministic security layer, which refuses to launch an agent rooted on a network share, was blocking perfectly normal WSL projects on `C:`. `/mnt/c` is now correctly recognised as the local Windows disk (every other `/mnt/*` drive stays foreign, as intended). No other change.
+**⌨️ The command you ran, right on the card — no need to expand it.** A `Bash`/PowerShell/MCP-exec call now shows the exact command as its own copyable code block, right under the header, visible whether the card is collapsed or open. The title no longer crams the whole command into the tool name — it just tells you which tool ran — and a command call gets its own distinct look (a left accent) so it stands out at a glance.
+
+**🎨 Syntax highlighting for diffs, and for Read/Write/Edit output.** File content and coloured diffs in a tool card are now syntax-highlighted from the file's extension, on top of the existing added/removed line colouring.
+
+**🛡 Fixed two false-triggers in the sensitive-data lock.** An everyday `Edit`/`Write` touching a line with a `//` comment could get silently **denied outright** — the lock's UNC-network-path check mistook the comment's leading `//` for a Windows network share, and a foreign-territory hit denies regardless of how trusted the tool is. And a `Bash` command that assigned a shell variable containing `$`/`${...}` (e.g. `k=${OTHER}/x`) could **crash the permission check entirely**, leaving that call stuck with no response ever sent back. Both are fixed; neither required weakening what the lock actually protects.
+
+**Fix: the plugin now starts on a WSL project under `/mnt/c`.** WSL2 exposes the Windows `C:` drive over the 9p protocol, which the network-drive detector treated as a remote mount — so the deterministic security layer, which refuses to launch an agent rooted on a network share, was blocking perfectly normal WSL projects on `C:`. `/mnt/c` is now correctly recognised as the local Windows disk (every other `/mnt/*` drive stays foreign, as intended).
 
 ---
 

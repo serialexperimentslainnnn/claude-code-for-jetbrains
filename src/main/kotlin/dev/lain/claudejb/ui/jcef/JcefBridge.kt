@@ -45,6 +45,9 @@ object JcefBridge {
         e.parentToolUseId?.let { put("parent", it) }
         // Project-relative file for a file tool → the frontend renders the card label as a jump-to-code link.
         e.filePath?.let { put("filePath", it) }
+        // The raw command text for a command call (Bash, PowerShell, MCP…) → the frontend renders it as its
+        // own copyable code block in the tool card, instead of plain text in the collapsed header.
+        e.commandText?.let { put("command", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         // A completed Edit/Write/MultiEdit card is reviewable: the frontend shows a "View diff"

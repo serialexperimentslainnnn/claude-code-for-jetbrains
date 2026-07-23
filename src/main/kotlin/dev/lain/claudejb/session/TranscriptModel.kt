@@ -30,6 +30,14 @@ class TranscriptEntry(
      * view never needs the user's absolute paths; the host resolves it against the root (and gates on it).
      */
     val filePath: String? = null,
+    /**
+     * Set on a [Speaker.TOOL] row whose call executes a command (`Bash`, or any tool — including MCP ones —
+     * whose input carries a command/script argument) to the raw command/script text; see
+     * [dev.lain.claudejb.permission.SensitiveGuard.commandText]. Drives the command's own copyable code block in
+     * the tool card, and is looked up later, when that call's [Speaker.TOOL_OUTPUT] arrives, to decide whether to
+     * render its output as a copyable code block rather than plain text. Null on every other row.
+     */
+    val commandText: String? = null,
 ) {
     var text: String = text
         internal set
@@ -79,8 +87,11 @@ class TranscriptModel {
         parentToolUseId: String? = null,
         toolState: ToolState = ToolState.FINISHED,
         filePath: String? = null,
+        commandText: String? = null,
     ): TranscriptEntry {
-        val entry = TranscriptEntry(nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath)
+        val entry = TranscriptEntry(
+            nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath, commandText,
+        )
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry
             if (parentToolUseId != null) parentOf[toolUseId] = parentToolUseId
@@ -160,6 +171,12 @@ class TranscriptModel {
 
     /** The tool's name for a `tool_use_id` (the TOOL row's `meta`), or null when the call is unknown here. */
     fun toolNameOf(toolUseId: String): String? = byToolUseId[toolUseId]?.meta
+
+    /** The raw command text behind `tool_use_id`, or null when it isn't a command call — see [TranscriptEntry.commandText]. */
+    fun commandTextOf(toolUseId: String): String? = byToolUseId[toolUseId]?.commandText
+
+    /** True when the call behind `tool_use_id` executes a command — see [TranscriptEntry.commandText]. */
+    fun isCommandCall(toolUseId: String): Boolean = commandTextOf(toolUseId) != null
 
     /** Update a tool call's lifecycle [state] (and optional [elapsedSeconds]) by its [toolUseId], then notify. */
     fun setToolState(toolUseId: String, state: ToolState, elapsedSeconds: Double? = null) {

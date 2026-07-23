@@ -16,6 +16,7 @@ import dev.lain.claudejb.diff.EditSnapshot
 import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
+import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.process.ClaudeLoginFlow
@@ -1198,6 +1199,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     toolState = ToolState.LOADING, // just dispatched → light blue, until progress/result arrive
                     // Project-relative file for the card's jump-to-code link (null for non-file tools).
                     filePath = toolFilePath(event.name, event.input, workingDir),
+                    // The raw command/script text, when this call executes one — drives its own copyable code
+                    // block in the tool card, and is remembered so ToolResult can decide, once the output lands,
+                    // whether to render it as a copyable code block too. Covers Bash, PowerShell, and any MCP
+                    // tool that executes a command (detected by input shape, not tool name).
+                    commandText = SensitiveGuard.commandText(event.input),
                 )
                 // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
                 // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including
@@ -1240,9 +1246,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 } else {
                     val text = event.content.trim()
                     if (text.isNotBlank()) {
+                        // meta is a space-separated tag set here, not a single value: a command's output can be
+                        // BOTH "command" (render as a copyable code block) AND "error" (the call failed) at once —
+                        // e.g. a failing build's stderr is exactly the kind of output you want to copy out.
+                        val tags = buildList {
+                            if (transcript.isCommandCall(event.toolUseId)) add("command")
+                            if (event.isError) add("error")
+                        }
                         transcript.addToolOutput(
                             event.toolUseId, text, parentToolUseId = event.parentToolUseId,
-                            meta = if (event.isError) "error" else null,
+                            meta = tags.joinToString(" ").ifBlank { null },
                         )
                     }
                 }
