@@ -7,12 +7,14 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.add
+import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import kotlin.system.measureTimeMillis
 
 /**
  * The deterministic sensitive-data lock ([SensitiveGuard]) — exhaustive on purpose: this is enforcement code the
@@ -212,6 +214,49 @@ class SensitiveGuardTest {
         assertFalse(SensitiveGuard.isUnc("/home/me/x"))
         assertFalse(SensitiveGuard.isUnc("///etc")) // not a host
     }
+
+    // ── real incident: an ordinary `//` line comment is not a UNC path ────────────────────────────────────
+    // pathCandidates walks EVERY string leaf, including Edit's old_string/new_string — a JS/C/Kotlin comment
+    // line ("// see below") starts with `//` just like `\\server\share` does after backslash normalization,
+    // and the old isUnc() only checked "third char isn't another slash", which a comment's leading space
+    // trivially satisfies. That misclassified an everyday Edit as FOREIGN territory — a DENY with no opt-out,
+    // even though Edit is a fully trusted agent tool (FOREIGN denies regardless of trust).
+    @Test
+    fun `a line comment starting with slash-slash is not mistaken for a UNC path`() {
+        assertFalse(SensitiveGuard.isUnc("// a plain comment explaining something"))
+        assertFalse(SensitiveGuard.isUnc("// jump-to-code links (jb://open)"))
+    }
+
+    @Test
+    fun `editing a comment line is ALLOWED, not denied as foreign territory`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/src/App.kt")
+            put("old_string", "// jump-to-code links (jb://open)")
+            put("new_string", "// jump-to-code links (jb://open), revised")
+        }
+        assertEquals(Verdict.ALLOW, v("Edit", input))
+    }
+
+    // ── isCommandCall: the same detection the transcript reuses to render output as a code block ────────────
+
+    @Test
+    fun `Bash is a command call`() {
+        assertTrue(SensitiveGuard.isCommandCall(bash("ls -la")))
+    }
+
+    @Test
+    fun `an MCP tool executing something is a command call too — no tool-name matching involved`() {
+        val terminalInput = buildJsonObject { put("command", "Get-ChildItem") } // PowerShell, via an MCP tool
+        assertTrue(SensitiveGuard.isCommandCall(terminalInput))
+        val argvInput = buildJsonObject { putJsonArray("args") { add("dir") } }
+        assertTrue(SensitiveGuard.isCommandCall(argvInput))
+    }
+
+    @Test
+    fun `a tool with no command-shaped key is not a command call`() {
+        assertFalse(SensitiveGuard.isCommandCall(read("/home/me/proj/Foo.kt")))
+        assertFalse(SensitiveGuard.isCommandCall(buildJsonObject { put("pattern", "TODO") })) // Grep
+    }
 }
 
 // ── modo paranoia: anti-evasión (deobfuscación + canonicalización) ─────────────────────────────────────
@@ -255,6 +300,19 @@ class SensitiveGuardEvasionTest {
         assertTrue(SensitiveGuard.deobfuscate("k=/etc/shadow; cat \$k").contains("cat /etc/shadow"))
     }
 
+    // ── real incident: an assigned value containing `$`/regex-replacement syntax crashed verdict() ──────────
+    // Confirmed live via a stack trace in idea.log: java.lang.IllegalArgumentException: Illegal group reference,
+    // from Matcher.appendReplacement, three frames under SensitiveGuard.substituteAssignments — an assigned
+    // value was passed straight to String.replace(Regex, String), which treats it as a REPLACEMENT TEMPLATE
+    // ($1/${name} are group refs, not literal text), and it crashed the whole can_use_tool handshake (no
+    // response ever sent) for an ordinary Bash call. Must never throw, whatever the assigned value looks like.
+    @Test
+    fun `deobfuscate never throws when an assigned value itself contains dollar-brace syntax`() {
+        assertDoesNotThrow { SensitiveGuard.deobfuscate("k=\${OTHER}/x; cat \$k") }
+        assertDoesNotThrow { SensitiveGuard.deobfuscate("k=\$1_literal; echo \$k") }
+        assertDoesNotThrow { v("Bash", bash("k=\${OTHER}/x; cat \$k")) }
+    }
+
     @Test
     fun `a symlink inside the project pointing at a key is caught via the resolver`() {
         // proj/innocent.txt is really ~/.ssh/id_rsa
@@ -277,4 +335,87 @@ class SensitiveGuardEvasionTest {
         val policy = base.copy(pathResolver = { it })
         assertEquals(SensitiveGuard.Verdict.ALLOW, v("Read", read("/home/me/proj/src/Foo.kt"), policy))
     }
+}
+
+/**
+ * Regression coverage for a live incident: [SensitiveGuard.Policy.pathResolver] (`File(x).canonicalPath`, a
+ * blocking, uninterruptible, timeout-less syscall) used to be invoked for EVERY bare word of a `Bash` command,
+ * because `pathish()` requires no path separator — so an ordinary `git commit -m 'fix: env parsing'` triggered a
+ * resolver call for `git`, `commit`, `-m`, `fix:`, `env`, `parsing`. That ran on the single thread reading the
+ * `claude` process's entire stdout stream, so a slow/hung mount froze the whole transcript, not just one card.
+ *
+ * These tests would have caught it: a resolver that COUNTS its calls proves the fix ("ordinary commands invoke
+ * it near-zero times"), and a resolver that sleeps past the timeout proves `verdict()` still returns promptly
+ * ("a hung filesystem cannot freeze the caller").
+ */
+class SensitiveGuardResolverPerformanceTest {
+
+    private val home = "/home/me"
+    private val basePolicy = SensitiveGuard.Policy(home = home, currentUser = "me", projectRoot = "/home/me/proj")
+    private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
+    private fun read(path: String) = buildJsonObject { put("file_path", path) }
+
+    /** A resolver that counts invocations and always returns the input unchanged (a no-op, correctness-neutral). */
+    private fun countingResolver(): Pair<(String) -> String?, () -> Int> {
+        var calls = 0
+        return ({ p: String -> calls++; p } to { calls })
+    }
+
+    @Test
+    fun `an ordinary Bash command invokes the resolver zero times — the bug's exact reproduction`() {
+        val (resolver, callCount) = countingResolver()
+        val policy = basePolicy.copy(pathResolver = resolver)
+        SensitiveGuard.verdict("Bash", bash("git commit -m 'fix: env parsing'"), policy)
+        assertEquals(0, callCount(), "bare words with no path separator must never reach the resolver")
+    }
+
+    @Test
+    fun `a Bash command with a real path only resolves that one token`() {
+        val (resolver, callCount) = countingResolver()
+        val policy = basePolicy.copy(pathResolver = resolver)
+        SensitiveGuard.verdict("Bash", bash("./gradlew test && echo done"), policy)
+        // Exactly one slash-containing token: "./gradlew". Everything else ("test", "echo", "done", "&&") is not.
+        assertEquals(1, callCount())
+    }
+
+    @Test
+    fun `resolvable candidates are capped, even in a command crafted with many real-looking paths`() {
+        val (resolver, callCount) = countingResolver()
+        val policy = basePolicy.copy(pathResolver = resolver)
+        val manyPaths = (1..40).joinToString(" ") { "/tmp/f$it" }
+        SensitiveGuard.verdict("Bash", bash("tar czf out.tar $manyPaths"), policy)
+        assertTrue(callCount() <= 16, "expected the resolve cap to apply, got $callCount calls")
+    }
+
+    @Test
+    fun `a resolver stuck on a hung mount cannot freeze verdict() — it returns within the timeout budget`() {
+        val policy = basePolicy.copy(pathResolver = { _ ->
+            Thread.sleep(5_000) // simulates a stat() on an unresponsive network mount
+            null
+        })
+        val elapsedMs = measureTimeMillis {
+            SensitiveGuard.verdict("Read", read("/home/me/.ssh/id_rsa"), policy)
+        }
+        assertTrue(elapsedMs < 2_000, "verdict() took ${elapsedMs}ms — the hung resolver blocked the caller")
+    }
+
+    @Test
+    fun `a hung resolver still lets the LITERAL candidate be judged — only its resolved form is missing`() {
+        // Even though the resolver never returns in time, the literal path itself is a known credential glob,
+        // so the verdict must still be correct — a timeout must never silently downgrade to ALLOW.
+        val policy = basePolicy.copy(pathResolver = { _ -> Thread.sleep(5_000); "/should/never/see/this" })
+        assertEquals(SensitiveGuard.Verdict.ASK, SensitiveGuard.verdict("Read", read("/home/me/.ssh/id_rsa"), policy))
+    }
+
+    @Test
+    fun `symlink laundering through a fast resolver is still caught (no regression from the perf fix)`() {
+        val policy = basePolicy.copy(pathResolver = { raw ->
+            if (raw.endsWith("/proj/innocent.txt")) "/home/me/.ssh/id_rsa" else raw
+        })
+        assertEquals(
+            SensitiveGuard.Verdict.ASK,
+            SensitiveGuard.verdict("Read", read("/home/me/proj/innocent.txt"), policy),
+        )
+    }
+
 }

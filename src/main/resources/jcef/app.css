@@ -323,6 +323,23 @@ details.fold .fold-body p:first-child { margin-top: 0; }
 .tool-out pre code { font-size: 12px; }
 /* coloured unified diff inside a tool card */
 .tool-out pre.diff code { display: block; }
+/* command/PowerShell/etc. output: the same code-head + Copy chrome as a markdown code fence (via
+   CC.decorateOneCodeBlock), scoped to fit inside a tool card — no outer margin/border/shadow, the card already
+   has its own. `.tool-out pre` scrolls the WHOLE pre (head included); here the scroll region is the code element
+   only, so the head bar (and its Copy button) never scrolls out of view on long output. */
+.tool-out pre.command { overflow: hidden; }
+.tool-out pre.command code { display: block; max-height: 380px; overflow: auto; }
+/* the executed COMMAND itself — a sibling of .tool-out (see .tool-cmd below), NOT gated by .open: you should
+   see what ran without expanding the card, only its output/result stays behind the collapse toggle. */
+.tool-cmd:empty { display: none; } /* no command on this tool → the container takes up no space at all */
+.tool-cmd { border-top: 1px solid var(--border); }
+.tool-cmd pre.command-src {
+  margin: 0; border: none; border-radius: 0; background: var(--code-bg); box-shadow: none; overflow: hidden;
+}
+.tool-cmd pre.command-src code { font-size: 12px; display: block; max-height: 160px; overflow: auto; }
+/* a command-executing tool's own look: a distinct left accent on the whole card, so it reads as "this ran
+   something" at a glance, even before you've located the code block. */
+.tool.cmd-tool { border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border)); }
 /* ── jump-to-code links (jb://open) ─────────────────────────────────────────── */
 /* Used for file paths on tool cards and for paths/symbols detected in model text. Painted in the IDE's OWN
    hyperlink colour (--link, the familiar blue, theme-correct in light and dark) rather than the product's coral

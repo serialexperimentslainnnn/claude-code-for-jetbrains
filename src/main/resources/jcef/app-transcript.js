@@ -216,6 +216,10 @@
     head.appendChild(restoreBtn);
     node.__restoreBtn = restoreBtn;
     head.appendChild(el('span', { class: 'chev', text: '▾' })); // ▾
+    // The executed command's own code block (command-executing tools only) — a SIBLING of .tool-out, not
+    // nested inside it, so it stays visible whether the card is collapsed or open (see renderCommandBlock).
+    // Empty (no command) → collapses to nothing via the `.tool-cmd:empty` CSS rule, no JS bookkeeping needed.
+    var cmd = el('div', { class: 'tool-cmd' });
     var out = el('div', { class: 'tool-out' });
     // Nested subagent activity (rows whose `parent` is this tool's id) lands here,
     // distinct from this tool's own routed output (.tool-out).
@@ -224,9 +228,11 @@
       node.classList.toggle('open');
     });
     node.appendChild(head);
+    node.appendChild(cmd);
     node.appendChild(out);
     node.appendChild(children);
     node.__nameNode = name;
+    node.__cmdNode = cmd;
     node.__outNode = out;
     node.__childrenNode = children;
     node.__elapsedNode = elapsed;
@@ -336,29 +342,78 @@
     }
     var codeEl = block.querySelector('code');
     if (codeEl) {
+      // `meta` is a space-separated tag set here (see ClaudeSession.kt), not a single value: a command's
+      // output can be "command error" at once (a failing build's stderr is exactly what you want to copy).
+      var tags = (' ' + (entry.meta || '') + ' ');
+      var fileLang = (window.CC && typeof CC.languageForPath === 'function') ? CC.languageForPath(card.__filePath) : null;
       if (entry.meta === 'diff') {
-        renderDiff(codeEl, entry.text == null ? '' : String(entry.text));
+        renderDiff(codeEl, entry.text == null ? '' : String(entry.text), fileLang);
         block.classList.add('diff');
+        block.classList.remove('command');
+      } else if (tags.indexOf(' command ') >= 0) {
+        // Command/PowerShell/etc. output: render with the SAME chrome as a markdown code fence (a code-head
+        // bar + Copy button, via the shared decorator), so the click/keyboard copy handling in app-core.js
+        // just works — it is delegated by class name, not wired per-node.
+        block.classList.remove('diff');
+        block.classList.add('command');
+        codeEl.textContent = entry.text == null ? '' : String(entry.text);
+        if (window.CC && typeof CC.decorateOneCodeBlock === 'function') {
+          CC.decorateOneCodeBlock(codeEl);
+          var langLabel = block.querySelector('.code-lang');
+          // Generic label — we deliberately don't guess Bash vs PowerShell vs cmd.exe from the tool name.
+          if (langLabel) { langLabel.textContent = 'shell'; }
+        }
       } else {
         block.classList.remove('diff');
+        block.classList.remove('command');
         codeEl.textContent = entry.text == null ? '' : String(entry.text);
+        // A file tool's plain output (Read's dump, Write/Edit's confirmation) — the same code-head+Copy chrome
+        // as a markdown fence, with syntax highlighting from the file's extension when known (falls back to
+        // hljs's own autodetection when it isn't — see CC.languageForPath).
+        if (card.__filePath && window.CC && typeof CC.decorateOneCodeBlock === 'function') {
+          if (fileLang) { codeEl.className = 'language-' + fileLang; }
+          CC.decorateOneCodeBlock(codeEl);
+        }
       }
     }
     return true;
   }
 
-  // Render a unified diff with per-line colour (added/removed/hunk/context).
-  function renderDiff(codeEl, text) {
+  // Render a unified diff with per-line colour (added/removed/hunk/context), and — when `lang` is a hljs
+  // language the vendored bundle knows — per-line syntax highlighting layered UNDER that colour (hljs escapes
+  // the code text itself, so this is exactly as safe as the highlightElement() path markdown fences already use).
+  function renderDiff(codeEl, text, lang) {
     codeEl.innerHTML = '';
     var lines = String(text).split('\n');
+    var hljs = window.hljs;
+    var canHighlight = !!(lang && hljs && typeof hljs.getLanguage === 'function' && hljs.getLanguage(lang) &&
+      typeof hljs.highlight === 'function');
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       var c0 = line.charAt(0);
+      var isHunk = line.indexOf('@@') === 0;
       var cls = 'dl-ctx';
-      if (line.indexOf('@@') === 0) { cls = 'dl-hunk'; }
+      if (isHunk) { cls = 'dl-hunk'; }
       else if (c0 === '+') { cls = 'dl-add'; }
       else if (c0 === '-') { cls = 'dl-del'; }
-      codeEl.appendChild(el('span', { class: 'diff-line ' + cls, text: (i < lines.length - 1 ? line + '\n' : line) }));
+      var span = el('span', { class: 'diff-line ' + cls });
+      var trailingNl = i < lines.length - 1;
+      var highlighted = false;
+      // Unified diff lines start with a marker column (+/-/space); hunk headers don't carry code and are
+      // left plain. Highlight only the code AFTER that marker, so the marker itself is never mangled.
+      if (!isHunk && canHighlight && line.length > 0) {
+        try {
+          var hi = hljs.highlight(line.slice(1), { language: lang, ignoreIllegals: true }).value;
+          span.appendChild(document.createTextNode(c0));
+          span.insertAdjacentHTML('beforeend', hi);
+          if (trailingNl) { span.appendChild(document.createTextNode('\n')); }
+          highlighted = true;
+        } catch (e) {
+          // Highlighting is best-effort — fall through to the plain-text line below.
+        }
+      }
+      if (!highlighted) { span.textContent = trailingNl ? line + '\n' : line; }
+      codeEl.appendChild(span);
     }
   }
 
@@ -382,8 +437,36 @@
     if (entry.speaker === 'TOOL') {
       var icNode = rec.el.querySelector('.ic');
       if (icNode) { icNode.innerHTML = toolIconSvg(entry.meta); }
+      // The raw command text (Bash/PowerShell/MCP…) is fixed for the life of this row — render it once, as its
+      // own copyable code block RIGHT UNDER THE HEADER (.tool-cmd, a sibling of .tool-out — not gated by the
+      // collapse toggle), so you see what ran without expanding the card. `cmd-tool` gives the whole card its
+      // own look (a distinct accent), and the header keeps just the tool name — no raw command text there.
+      if (entry.command) {
+        renderCommandBlock(rec.el.__cmdNode, entry.command);
+        rec.el.classList.add('cmd-tool');
+      }
+      // Fixed for the row's life — remembered so a LATER TOOL_OUTPUT (Read/Write/Edit file content, or a diff)
+      // can pick the right hljs language from the file extension instead of guessing or staying unhighlighted.
+      rec.el.__filePath = entry.filePath || null;
     }
     return rec;
+  }
+
+  // The command a tool call executes, as its own code-head+Copy block — same chrome as the output blocks
+  // (via the shared decorator), so Copy just works via the delegated handler in app-core.js.
+  function renderCommandBlock(cmdNode, commandText) {
+    if (!cmdNode) { return; }
+    var block = el('pre', { class: 'command-src' });
+    var code = el('code', {});
+    code.textContent = String(commandText);
+    block.appendChild(code);
+    cmdNode.appendChild(block);
+    if (window.CC && typeof CC.decorateOneCodeBlock === 'function') {
+      CC.decorateOneCodeBlock(code);
+      var langLabel = block.querySelector('.code-lang');
+      // Generic label — we deliberately don't guess Bash vs PowerShell vs cmd.exe from the tool name.
+      if (langLabel) { langLabel.textContent = 'shell'; }
+    }
   }
 
   // Build a `jb://open` href for a PROJECT-RELATIVE path (+ optional 1-based line). The host resolves it against
@@ -542,7 +625,11 @@
 
   function updateRow(rec, entry) {
     // refresh body text (tool name for TOOL). A file tool renders its path as a jump-to-code link.
-    if (rec.speaker === 'TOOL' && entry.filePath) {
+    if (rec.speaker === 'TOOL' && entry.command) {
+      // Command-executing tools show the command in their own code block (.tool-cmd, see createRow) — the
+      // title just names the tool, it doesn't also cram the raw command text in there.
+      setBody(rec, entry.meta || entry.text);
+    } else if (rec.speaker === 'TOOL' && entry.filePath) {
       renderToolLabel(rec.bodyNode, entry.text, entry.filePath);
     } else {
       setBody(rec, entry.text);
