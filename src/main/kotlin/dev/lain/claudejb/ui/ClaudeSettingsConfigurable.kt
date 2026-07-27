@@ -22,6 +22,7 @@ import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import dev.lain.claudejb.ui.jcef.JcefState
 import java.awt.GridLayout
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
@@ -114,15 +115,16 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private var modelListener: SessionListener? = null
     private var modelListenerSession: ClaudeSession? = null
 
-    /** Renders a model value (e.g. `default`, `sonnet`) as its human label ("Default (recommended)"); falls back
-     *  to the raw value for custom/unknown entries. Only affects the dropdown popup — the editable text field
-     *  still shows the value (what we send to the binary), so power users can type a custom id. */
+    /** Renders a model value (e.g. `sonnet`) as its versioned human label ("Sonnet 5"); falls back to the raw
+     *  value for custom/unknown entries. Shares the exact label logic the composer uses ([JcefState]), so the two
+     *  selectors never disagree. Only affects the dropdown popup — the editable text field still shows the value
+     *  (what we send to the binary), so power users can type a custom id. */
     private val modelRenderer = object : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
         ): java.awt.Component {
             val raw = (value as? String).orEmpty()
-            val pretty = currentModels.firstOrNull { it.value == raw }?.displayName?.ifBlank { null } ?: raw
+            val pretty = currentModels.firstOrNull { it.value == raw }?.let { JcefState.modelDisplayLabel(it) } ?: raw
             return super.getListCellRendererComponent(list, pretty, index, isSelected, cellHasFocus)
         }
     }
@@ -300,7 +302,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         val s = settings.state
         providerCombo.selectedItem = settings.provider
         onProviderSelectionChanged()
-        modelCombo.selectedItem = s.model
+        // A legacy install may still have the removed "default" alias persisted — show the concrete tier it now
+        // resolves to, so the dialog never displays an option we no longer offer (saving then pins it).
+        modelCombo.selectedItem = if (s.model == ClaudeSession.RECOMMENDED_ALIAS) ClaudeSession.DEFAULT_MODEL else s.model
         effortCombo.selectedItem = s.effort
         modeCombo.selectedItem = s.permissionMode
         thinkingCheck.isSelected = s.thinkingTokens > 0
@@ -334,7 +338,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         currentModels = opts
         val preserved = (modelCombo.editor?.item as? String)
             ?: (modelCombo.selectedItem as? String)
-        modelCombo.model = DefaultComboBoxModel(opts.map { it.value }.toTypedArray())
+        // Drop the floating "default" alias — the concrete tier is what we offer (matches the composer list).
+        val values = opts.map { it.value }.filter { it != ClaudeSession.RECOMMENDED_ALIAS }
+        modelCombo.model = DefaultComboBoxModel(values.toTypedArray())
         if (!preserved.isNullOrBlank()) modelCombo.selectedItem = preserved
     }
 

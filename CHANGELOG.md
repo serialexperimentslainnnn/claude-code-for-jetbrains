@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.3] — 2026-07-27
+
+### Changed
+- **The model picker is now fully driven by the binary's own catalog, with the version on every entry.** The list was already autodetected from the `initialize` handshake, but it labelled each model with the binary's `displayName` — which omits the version ("Opus (1M context)", "Sonnet") — so you couldn't tell Opus 4.8 from Opus 5 at a glance. Each entry now shows the versioned label the binary carries in its `description` ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5"). The same label logic backs both the composer pill/menu and the Settings combo, so they never disagree.
+- **The floating "default" alias is no longer offered as a selectable model, and the default is pinned to the concrete Opus tier.** The binary exposes both a `default` alias and the concrete `opus[1m]` value that it currently resolves to — the same model listed twice, the alias with no version. The alias is now filtered out of both selectors, and a fresh install defaults to the concrete Opus (`ClaudeSession.DEFAULT_MODEL`), so the choice stays on Opus even if the binary later re-points its recommendation. `preferredDefault` falls back to the binary's own recommended alias (then to the first listed model) if a binary ever ships without the pinned value, so the plugin never selects a model the binary doesn't offer. A legacy install with `default` persisted is migrated to the concrete tier on display/save.
+
+### Fixed
+- **Removed a hardcoded `"Default · Opus 4.8"` model label.** The composer pill fell back to that literal string whenever the selected model was unset or the `default` alias — which went stale the moment the recommended tier moved to Opus 5, showing "Opus 4.8" for what was actually Opus 5. The label is now always derived from the live catalog (or from the model id as a last resort), never a baked-in version.
+
+### Internal
+- Protocol drift baseline advanced to SDK `0.3.220` / `claude` `2.1.220` (`./gradlew checkDrift` green; protocol surface unchanged).
+
 ## [4.3.2] — 2026-07-23
 
 ### Added
