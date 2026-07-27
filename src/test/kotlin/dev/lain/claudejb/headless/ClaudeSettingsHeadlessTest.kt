@@ -1,6 +1,7 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import kotlinx.serialization.json.JsonObject
 
@@ -22,7 +23,9 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test defaults are correct`() {
-        assertEquals("default", settings.state.model)
+        // Fresh installs pin the concrete Opus tier, not the binary's floating "default" alias.
+        assertEquals(ClaudeSession.DEFAULT_MODEL, settings.state.model)
+        assertEquals("opus[1m]", settings.state.model)
         assertTrue(settings.restoreOpenChatsOnStartup)
         assertTrue(settings.state.restoreOpenChatsOnStartup)
     }

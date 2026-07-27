@@ -1,3 +1,11 @@
+## v4.3.3 — 2026-07-27
+
+**🧬 The model picker shows the version now — and picks Opus for you.** The list of models is read straight from the binary (it always was), but it used to label each one without its version — "Opus (1M context)", "Sonnet" — so you couldn't tell Opus 4.8 from Opus 5. Every model now shows its version ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5"), in both the composer and Settings. The vague "Default" entry — which was just Opus listed a second time, with no version — is gone, and a fresh install defaults to the concrete Opus tier and stays there. A stale hardcoded "Opus 4.8" label that lingered on the pill is gone too.
+
+**Maintenance:** protocol baseline refreshed to the latest `claude` 2.1.220 / SDK 0.3.220 (no protocol changes).
+
+---
+
 ## v4.3.2 — 2026-07-23
 
 **⌨️ The command you ran, right on the card — no need to expand it.** A `Bash`/PowerShell/MCP-exec call now shows the exact command as its own copyable code block, right under the header, visible whether the card is collapsed or open. The title no longer crams the whole command into the tool name — it just tells you which tool ran — and a command call gets its own distinct look (a left accent) so it stands out at a glance.

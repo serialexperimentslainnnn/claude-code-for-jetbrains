@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.StatusLineFormatter
@@ -53,16 +54,22 @@ object JcefState {
             })
 
             // model { label, options[{value,label,selected}] }
+            // The list is autodetected from the binary's `initialize` catalog. We drop the floating "default"
+            // alias (it duplicated the concrete tier and showed no version) and label each entry with its version
+            // (see modelDisplayLabel), so Opus 5 vs Sonnet 5 vs Haiku 4.5 read at a glance.
+            val selectedModel = session.model ?: session.preferredDefaultModel()
             put("model", buildJsonObject {
                 put("label", modelLabel(session))
                 put("options", buildJsonArray {
-                    session.models.forEach { m ->
-                        addJsonObject {
-                            put("value", m.value)
-                            put("label", m.displayName.ifBlank { deriveModelLabel(m.value) })
-                            put("selected", m.value == session.model)
+                    session.models
+                        .filter { it.value != ClaudeSession.RECOMMENDED_ALIAS }
+                        .forEach { m ->
+                            addJsonObject {
+                                put("value", m.value)
+                                put("label", modelDisplayLabel(m))
+                                put("selected", m.value == selectedModel)
+                            }
                         }
-                    }
                 })
             })
 
@@ -178,24 +185,39 @@ object JcefState {
             .getOrDefault(false)
     }
 
-    /** The model pill label: the binary's displayName when available, else derived from the id, else a default. */
+    /**
+     * The pill/menu label for a model, WITH its version — everything derived from the binary's own catalog, so it
+     * stays correct as tiers change (no hardcoded version anywhere). The binary's `displayName` omits the version
+     * ("Opus (1M context)"); the version lives in `description` ("Opus 5 with 1M context · Best for everyday…").
+     * We prefer the description's lead segment (before the " · " tagline) because it carries the version; fall back
+     * to `displayName`, then to a label derived from the id.
+     */
+    internal fun modelDisplayLabel(m: ModelInfo): String {
+        val descHead = m.description.substringBefore(" · ").trim()
+        return when {
+            descHead.isNotBlank() -> descHead
+            m.displayName.isNotBlank() -> m.displayName
+            else -> deriveModelLabel(m.value)
+        }
+    }
+
+    /** The model pill label: the catalog's versioned label for the selected model, else derived from its id. */
     fun modelLabel(session: ClaudeSession): String {
-        val id = session.model
-        val fromBinary = session.models.firstOrNull { it.value == id }?.displayName?.takeIf { it.isNotBlank() }
-        if (fromBinary != null) return fromBinary
-        if (id == null) return "Default · Opus 4.8"
+        val id = session.model ?: session.preferredDefaultModel()
+        session.models.firstOrNull { it.value == id }?.let { return modelDisplayLabel(it) }
         return deriveModelLabel(id)
     }
 
-    /** Turns a model id like "claude-opus-4-8" into a friendly label like "Opus 4.8". */
-    private fun deriveModelLabel(id: String): String {
-        if (id.isBlank() || id == "default") return "Default · Opus 4.8"
-        val core = id.removePrefix("claude-")
+    /** Turns a model id like "claude-opus-4-8" into a friendly label like "Opus 4.8"; a last resort when the binary
+     *  catalog carries no metadata for it. Strips an alias suffix like "opus[1m]" → "Opus" (no version to show). */
+    internal fun deriveModelLabel(id: String): String {
+        val core = id.removePrefix("claude-").substringBefore('[').trim()
+        if (core.isBlank()) return "Claude"
         // Split family from the version digits: "opus-4-8" → family "opus", version ["4","8"].
         val parts = core.split('-')
         val versionStart = parts.indexOfFirst { it.toIntOrNull() != null }
         if (versionStart <= 0) {
-            return core.split('-').joinToString(" ") { p -> p.replaceFirstChar { it.uppercase() } }
+            return parts.joinToString(" ") { p -> p.replaceFirstChar { it.uppercase() } }
         }
         val family = parts.subList(0, versionStart)
             .joinToString(" ") { p -> p.replaceFirstChar { it.uppercase() } }

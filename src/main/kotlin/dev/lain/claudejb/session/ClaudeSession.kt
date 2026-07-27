@@ -438,6 +438,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     availableOutputStyles = info.availableOutputStyles
                     account = info.account
                     if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
+                    // Graceful fallback: the pin ([DEFAULT_MODEL]) was chosen before the catalog was known. If this
+                    // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
+                    // so we never sit on a model it can't honour. Only touches the pin, never an explicit choice.
+                    if (model == DEFAULT_MODEL && info.models.isNotEmpty() && info.models.none { it.value == DEFAULT_MODEL }) {
+                        changeModel(preferredDefault(info.models))
+                    }
                     edt { fireMetadata() }
                 },
             )
@@ -869,8 +875,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // -----------------------------------------------------------------------
 
     fun changeModel(value: String?) {
-        model = value
-        if (isRunning()) write(ControlProtocol.setModelRequest(ControlProtocol.newRequestId(), value))
+        // "default" is no longer a selectable model (the UI pins a concrete tier). Map any legacy/persisted
+        // "default" to the preferred concrete model so both the display and what's sent to the binary agree;
+        // null stays null (unset — the Init handler fills it from the binary's reported model).
+        val resolved = if (value == RECOMMENDED_ALIAS) preferredDefaultModel() else value
+        model = resolved
+        if (isRunning()) write(ControlProtocol.setModelRequest(ControlProtocol.newRequestId(), resolved))
         fireState()
     }
 
@@ -1744,6 +1754,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      *  editable so a custom id can still be typed before then. */
     fun modelOptions(): List<ModelInfo> = models
 
+    /** The concrete model to select in place of the removed "default" alias — see [preferredDefault]. */
+    fun preferredDefaultModel(): String = preferredDefault(models)
+
     companion object {
         const val NOTIFICATION_GROUP = "Claude Code"
 
@@ -1754,8 +1767,30 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          *  ChatPanels observing this session — one timer per session, not one per tab. */
         const val QUOTA_POLL_MS = 60_000
 
-        /** Default model on a fresh install: the binary's "default" alias (currently the recommended Opus tier). */
-        const val DEFAULT_MODEL = "default"
+        /**
+         * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating
+         * "default" alias), so the choice stays on Opus even if the binary later re-points its recommendation.
+         * [preferredDefault] falls back to the binary's own recommended alias if a binary ever ships without this
+         * concrete value, so we never select a model it doesn't offer.
+         */
+        const val DEFAULT_MODEL = "opus[1m]"
+
+        /** The binary's floating "recommended" alias — resolved server-side to whatever tier it currently favours.
+         *  We no longer offer it as a selectable option (it duplicated the concrete tier and hid the version). */
+        const val RECOMMENDED_ALIAS = "default"
+
+        /**
+         * The concrete model to use when the persisted choice is the removed [RECOMMENDED_ALIAS] (legacy installs)
+         * or unset: the pinned [DEFAULT_MODEL] when this binary offers it, else the binary's own recommended alias,
+         * else whatever it lists first — so the result is always a model the binary actually has. Pure for tests;
+         * [models] is empty before the handshake, in which case it returns the pin optimistically.
+         */
+        fun preferredDefault(models: List<ModelInfo>, pinned: String = DEFAULT_MODEL): String = when {
+            models.isEmpty() -> pinned
+            models.any { it.value == pinned } -> pinned
+            models.any { it.value == RECOMMENDED_ALIAS } -> RECOMMENDED_ALIAS
+            else -> models.first().value
+        }
 
         /** Sentinel "extended thinking on" value: adaptive thinking is on/off, so any positive budget means on. */
         const val THINKING_ON = 1
