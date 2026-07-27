@@ -1,82 +1,116 @@
 # Claude Code Native
 
-A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not as a terminal wrapper, but as a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, and full protocol-level access to the `claude` binary.
+[![Version](https://img.shields.io/badge/version-4.3.3-E07B5A)](CHANGELOG.md)
+[![IDE](https://img.shields.io/badge/JetBrains-2025.1%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-653%20JVM%20%2B%2044%20frontend-success)](#testing)
+
+A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not a terminal wrapper, but a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, a deterministic security layer, and full protocol-level access to the `claude` binary.
 
 > **Goal:** surpass AI Assistant and the official plugin (currently just a terminal launcher). Built to present to Anthropic.
+
+## Why this plugin
+
+- **No Node, no TS SDK at runtime.** It speaks the `claude` binary's `stream-json` + control protocol directly from Kotlin/JVM. One long-lived process per chat tab.
+- **Nothing is mirrored from terminal output.** Every state — compaction, cost, hooks, subagents, MCP health — is reconstructed natively from the protocol's structured fields.
+- **Diffs are real IDE diffs.** Edits open in the editor's own `DiffManager`, editable before you approve, never a modal dialog.
+- **A security layer the model can't argue with.** Deterministic, out-of-band Kotlin gates every tool call before any auto-approval — see [Security](#security).
 
 ## Features
 
 ### Chat & transcript
-- **Streaming chat** — token-by-token rendering in an embedded web (JCEF) transcript, multi-chat tabs. The transcript, composer, and permission/dashboard cards are an inlined web app (no CDN, strict CSP); diffs stay native via the IDE's `DiffManager`.
-- **Collapsible tool calls** — each tool card folds its output via a disclosure triangle; outputs anchor under their own call. Tool cards show live state by colour: sky-blue while in flight (pulsing while working), green when finished, with elapsed time.
-- **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically
-- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages shown in the UI
-- **Output follow toggle** — pin to the streaming bottom, or scroll up to read history mid-stream without losing your place
-- **Markdown rendering** — bold, inline code, syntax-highlighted code blocks, tables, strikethrough, GFM task lists, nested lists
+- **Streaming chat** — token-by-token rendering in an embedded web (JCEF) transcript, with multi-chat tabs. The transcript, composer and permission/dashboard cards are an inlined web app (no CDN, strict CSP); diffs stay native via the IDE's `DiffManager`.
+- **Command calls read like a terminal you can copy** — a `Bash`/PowerShell/MCP-exec call shows the exact command as its own copyable code block right under the header, visible without expanding the card, and the card gets its own accent. Detection is by input *shape*, not tool name, so any command-executing tool is covered.
+- **Syntax highlighting** — code blocks, `Read`/`Write`/`Edit` output and coloured diffs are highlighted from the file's extension (~35 languages), painted in the IDE's own syntax colours.
+- **Collapsible tool calls** — each card folds its output; outputs anchor under their own call. Live state by colour: sky-blue in flight (pulsing while working), green finished, red on error, with elapsed time.
+- **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically.
+- **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages are shown and reorderable.
+- **Find in transcript** (Ctrl/Cmd+F) with hit navigation, **output-follow toggle**, and **Markdown** with tables, strikethrough, GFM task lists and nested lists.
 
 ### Permissions & diff review
-- **Permission-gated diff review** — Edit/Write proposals shown as an in-editor diff tab with inline Accept/Reject cards (no modal dialogs)
-- **Persistent diff + hunk-by-hunk** — re-open any edit's diff from its transcript card ("View diff"), and accept only selected hunks on the permission card (the binary writes just that subset)
-- **"Always allow" per tool** — skip a tool's prompt for the rest of the project (revocable in Settings); reviewable writes stay confined to the project root
-- **MCP elicitation cards** — when an MCP server asks for input, it appears as an inline card (never a dialog): a URL flow opens an **http/https-only** link (an untrusted server can't open `file:`/`javascript:` schemes) with Accept/Cancel, and a form renders a labeled input per schema field
-- **Diff History tab + rollback** — lists every Edit/Write in the session with a `+a/-b` summary, **View diff** and per-edit **Revert**, plus a **Roll back all changes** action. Reverting a file-creating Write deletes the file; reverting an edit restores the prior contents.
+- **Editable diff review** — Edit/Write/MultiEdit proposals auto-open an **editable** diff in the editor (Current | Proposed) *on the permission request*, in every mode. Tweak the proposed content before accepting and **Accept writes your edited version**; the transcript diff and "View diff" then show what was really written.
+- **Inline permission cards** — Accept/Reject in the conversation, never a modal. A reviewable edit shows a read-only colour diff (red removed / green added) on the card. Edits are **atomic**: accepting an incoherent subset of an edit reliably broke code, so per-hunk selection was removed in 4.0.5.
+- **"Always allow" per tool** — skip a tool's prompt for the rest of the project (revocable in Settings); reviewable writes stay confined to the project root.
+- **MCP elicitation cards** — when an MCP server asks for input it appears inline (never a dialog): a URL flow opens an **http/https-only** link (an untrusted server can't reach `file:`/`javascript:`), a form renders a labeled input per schema field.
+- **Diff History tab + rollback** — every Edit/Write in the session with a `+a/-b` summary, **View diff**, per-edit **Revert**, and **Roll back all changes**. Reverting a file-creating Write deletes the file.
+- **Native rewind** — "Restore" asks Claude Code to `rewind_files` to that turn, with a confirmed IDE-side per-file revert as fallback.
 
 ### Editor integration
-- **"Explain with Claude"** — editor right-click action sends the selection to chat; `path:line` references in replies are clickable (jump to file/line)
-- **Rich IDE attachments** — attach the current file / selection / clipboard image, drag & drop or paste (Ctrl/Cmd+V) images straight into the composer, pick files and directories from a native chooser, or select from your open and recently-opened files. Chips show the real file-type icon and are clickable to open.
-- **`jb://open` links** — file paths in replies (with or without line numbers) become clickable links, project-confined
+- **Editor actions** — right-click to **Explain with Claude**, **Add Selection to Claude Context**, or **Add File to Claude Context**.
+- **Jump to code** — a file tool card names its file *relative to the project* and links it; paths, directories and symbols in Claude's replies become links **only after the IDE confirms them** (via the file index and *Go to Symbol*, so it works in every JetBrains IDE). Ambiguous or non-existent candidates stay plain text — a link is never dead.
+- **Rich attachments** — current file / selection / clipboard image, drag & drop or paste images into the composer, native file & directory chooser, open and recent files. Chips show the real file-type icon and open on click.
+- **Live VFS refresh** — every successful write refreshes the IDE immediately (by exact path for `Edit`/`Write`, re-scanning the tree after `Bash` or a mutating MCP tool), including newly created files.
 
 ### Sessions
-- **Session history** — reads the `claude` binary's own session files (the source of truth): "Open Previous Session…" lists the project's past chats by their real title, and on startup the tabs you had open (or your most recent session) are reopened and re-attached via `--resume`. The plugin stores no transcripts of its own — only which tabs were open (in `workspace.xml`).
-- **Session management** — rename, fork, and delete past sessions (binary session files remain the source of truth)
-- **Session notifications + tab badge** — a background session needing attention (permission, finished turn, error) notifies you and badges its tab
+- **Session history from the binary's own files** — the source of truth. "Open Previous Session…" lists the project's past chats by their real title; on startup your open tabs (or the most recent session) are re-attached via `--resume`. The plugin stores **no transcripts** — only which tabs were open, in `workspace.xml`.
+- **Session management** — rename, fork and delete past sessions.
+- **Attention notifications + tab badge** — a background session needing you (permission, finished turn, error) notifies and badges its tab; suppressed for the chat already on screen.
 
 ### Model & runtime controls
-- **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw` (Ctrl+K)
-- **Model / effort / permission-mode / thinking controls** — live chips in the composer, no restart needed
-- **Provider selector (Anthropic / DeepSeek)** — switch between the official Anthropic endpoint (your subscription/login) and DeepSeek's Anthropic-compatible API (`/anthropic`). Each provider's API key is isolated in the IDE password safe and credentials are never reused across providers. Verified tool-call compatible with DeepSeek V4 Pro.
-- **Advanced launch options** — max turns, max budget (USD), fallback model, extra `--add-dir` roots, beta flags, strict MCP config
-- **Plan mode** — ExitPlanMode plan cards with decision reasons and blocked-path context
-- **Native hooks** — `hook_callback` answered host-side (the real tool gate is still `can_use_tool`); each hook the binary runs also shows as a single transcript row that updates from "running…" to ✓/✗
-- **Predicted next prompt** — the binary's `prompt_suggestion` appears as a dismissible chip above the composer; click to drop it into the input (you review and send it yourself)
+- **Autodetected, versioned model picker** — the model list comes straight from the binary's `initialize` catalog, and each entry shows its **version** ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5") rather than a version-less label. No model name or version is hardcoded anywhere; new tiers appear on their own. Fresh installs pin the concrete Opus tier.
+- **Live chips** — model · permission mode · effort · thinking, changeable mid-session without a restart.
+- **Full slash-command palette** — every command from the `initialize` handshake, plus client-side `/btw`.
+- **Provider selector (Anthropic / DeepSeek)** — the official Anthropic endpoint (your subscription/login) or DeepSeek's Anthropic-compatible API. Each provider's key is isolated in the IDE password safe and never reused across providers.
+- **Advanced launch options** — max turns, max budget (USD), fallback model, extra `--add-dir` roots, beta flags, strict MCP config.
+- **Plan mode**, **native hooks** (each hook run shows as one transcript row that evolves to ✓/✗), and a **predicted next prompt** chip you review before sending.
 
 ### Usage & diagnostics
-- **Session dashboard** — a toggle in the chat view flips the transcript to an overlay dashboard with a context breakdown (segmented by category), usage & cost (in / out / cache, USD when the binary reports it), account (email / org / plan / provider), the active model, the in-flight subagents (with Stop), and MCP server health (status dot + reconnect / enable-disable per server)
-- **Usage & cost** — the dashboard shows the authoritative cumulative token breakdown (input / cache write / cache read / output, from the binary's `get_session_cost`) and session cost; a compact context/output readout sits under the composer. _(The standalone quota/reset bar from the Swing UI is not yet re-ported.)_
-- **Live token counter** — a live reasoning-token estimate (`thinking_tokens`) and output count surface in the composer readout mid-turn
-- **Memory recall** — a collapsible "Recalled N memories" row shows which memories (scope · path · snippet) influenced the turn
-- **Subagents** — in-flight `Task` subagents appear in the dashboard with running tokens / tool-uses and a Stop button
-- **Account & diagnostics** — Account info, Binary Version, Effective Settings, and an interactive MCP-runtime dialog in the gear menu
+- **Session dashboard** — an overlay with the context breakdown by category, usage & cost (in / out / cache, USD when the binary reports it), account (email / org / plan / provider), active model, **background tasks** and in-flight **subagents** (both with Stop), and MCP server health with per-server reconnect / enable-disable.
+- **Live token counter** — a reasoning-token estimate and output count in the composer readout mid-turn.
+- **Memory recall** — a collapsible "Recalled N memories" row showing which memories (scope · path · snippet) influenced the turn.
+- **Account & diagnostics** — Account info, Binary Version, Effective Settings and an interactive MCP-runtime dialog in the gear menu.
 
-### Login & setup
-- **Native `/login`** — PTY-based OAuth flow (pty4j): the plugin opens your browser, collects the code in the IDE, and signs you in — no terminal tab needed. Works on the reworked terminal (2025.2+) and classic terminal alike.
-- **`AskUserQuestion` support** — multi-select option cards rendered natively, with full-width wrapped labels/descriptions/preview
+### Login & look
+- **Native `/login`** — PTY-based OAuth: the plugin opens your browser, collects the code in the IDE and signs you in. No terminal tab needed.
+- **`AskUserQuestion`** — multi-select option cards rendered natively with wrapped labels, descriptions and previews.
+- **IDE-themed** — surfaces, text, borders and syntax colours follow the active theme (light/dark), with the Claude coral as the accent and custom icons on every tool call.
+- **🌈 Vibe Coder Mode** — opt-in toggle that animates the accent through the rainbow and swaps the avatar for a Nyan Cat. Off by default.
 
-### Look & feel
-- **IDE-themed UI** — surfaces, text, and borders follow the active IDE theme (light/dark)
-- **Native visual identity** — custom icons on every tool call (bash, read, edit, search, web, task…), the attach button, and chips, with the Claude coral as the accent
-- **Two-row composer** — model · mode · effort · thinking pills (each with its own icon and hover glow) on top; toggles + attach + neon Play/Stop on the bottom. Coral focus ring while you type, editor-font prompt.
-- **🌈 Vibe Coder Mode** — opt-in toggle that animates the coral accent through the rainbow and swaps the avatar for a Nyan Cat. Purely for fun; off by default.
+## Security
+
+The plugin ships a **deterministic sensitive-data lock** (`permission/SensitiveGuard`). It is not a model-side guardrail: the classification is out-of-band Kotlin with no model input, evaluated in `PermissionBroker.handle` **before any auto-approval branch**. Because the binary is always launched in `default` mode, every call arrives as a control request — so the verdict is the plugin's to make, and it holds under `acceptEdits` and `bypassPermissions` alike.
+
+**What it classifies**
+
+| Category | Examples |
+|---|---|
+| Credential / key material | SSH & GPG keys, cloud and cluster credentials, DB and shell-history secrets, browser and password-manager stores, crypto wallets, AI-agent and code-host tokens |
+| Dangerous commands | Credential dumps, file exfiltration, network-piped-to-shell, LOLBINs, recognised offensive tooling |
+| Foreign territory | Another user's home, UNC / network mounts, non-`/mnt/c` WSL drives |
+
+Patterns are **structural**, so one rule covers Linux, macOS, Windows (`C:\Users\…\.ssh`) and WSL (`/mnt/c/Users/…`). The whole input object is walked for path-like values — not a fixed key list — so an MCP tool naming its argument `target` or `destination` is still covered. Paths are canonicalized on disk (symlinks, `..`) and commands pass a de-obfuscation stage (broken quotes, `$IFS`, variable substitution, base64 payloads) before matching.
+
+**How it decides** — by trust of the caller, as an allowlist:
+
+- the agent's **own tools** → an explicit permission card, **every time**, in every mode;
+- **MCP servers and Skills** → denied outright; third-party code has no business reading your keys;
+- **foreign territory** → denied for everyone.
+
+No setting relaxes these. The only knob is `sensitiveExtraGlobs`, which is **additive** — you can widen the blacklist, never empty it. Paths under the project root are exempt from the credential and foreign rules (your repo is the sanctioned zone); dangerous-command classification is location-independent. A session refuses to start when the project itself sits on a remote or network-mounted path.
+
+Detecting a path concealed inside an arbitrary shell string is best-effort and can be widened over time; the **enforcement** of a match is absolute. See [`SECURITY.md`](SECURITY.md) for the full model and reporting policy.
+
+Separately: jump-to-code links can only ever open inside the project or your own home (canonical, symlink-safe), while the **write** gate stays project-only.
 
 ## Requirements
 
 - **JetBrains IDE** 2025.1 or newer (build 251+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with **JCEF enabled** (bundled with the IDE's JBR by default; the chat UI is an embedded web view)
-- **`claude` CLI** installed and accessible on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
-  - Install: `npm install -g @anthropic-ai/claude-code` or follow [claude.ai/code](https://claude.ai/code)
-  - If it's in a custom location, set the executable path (and, if needed, environment variables) in **Settings → Tools → Claude Code**
-- **Auth** reused from the binary (Claude subscription / OAuth or `ANTHROPIC_API_KEY`)
+- **`claude` CLI** installed and on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
+  - Install: `npm install -g @anthropic-ai/claude-code`, or follow [claude.ai/code](https://claude.ai/code)
+  - Custom location? Set the executable path (and any environment variables) in **Settings → Tools → Claude Code**
+- **Auth** reused from the binary (Claude subscription / OAuth, or `ANTHROPIC_API_KEY`)
 
 ## Installation
 
 **From the JetBrains Marketplace** (recommended):
 
-1. In the IDE: **Settings → Plugins → Marketplace**
+1. **Settings → Plugins → Marketplace**
 2. Search for **"Claude Code Native"**
 3. Install and restart
 
-The Marketplace listing tracks the latest release. This GitHub repository is the **source of truth for the code** — releases are published to the Marketplace, not as binary attachments here.
+The Marketplace listing tracks the latest release. This repository is the **source of truth for the code**; signed release archives are also attached to each [GitHub release](https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/releases).
 
-**From source:** see [Build from source](#build-from-source) below.
+**From source:** see [Build from source](#build-from-source).
 
 ## Usage
 
@@ -84,59 +118,101 @@ Open the **Claude Code** tool window (right side panel, same area as AI Assistan
 
 | Shortcut | Action |
 |---|---|
-| Enter | Send message |
-| Shift+Enter | New line in composer |
-| Ctrl+K | Slash-command palette |
-| Ctrl+O | Toggle extended thinking |
-| Esc | Interrupt running agent |
+| `Enter` | Send message |
+| `Shift+Enter` | New line in composer |
+| `Shift+Tab` | Cycle permission mode |
+| `Esc` | Interrupt the running turn |
+| `Ctrl/Cmd+F` | Find in transcript |
+| `Ctrl/Cmd+O` | Collapse / expand reasoning ("Thought process") |
+| `/` in an empty composer | Slash-command palette (also the **Commands** toolbar button) |
+| `Tab` | Accept the predicted-prompt suggestion into the composer |
 
-- **Model / Mode / Effort chips** — click to change at any time
-- **Gear icon** — advanced settings (thinking tokens, allowed tools, etc.)
-- **New Chat button** — opens a fresh tab
+- **Chips** (model · mode · effort · thinking) — click to change at any time, no restart
+- **Toolbar** — New Chat, Interrupt, Commands, Diff History, Close All Diffs
+- **Gear menu** — settings, account & diagnostics, the formatted session dashboard
 
-File edit proposals open as a diff tab in the editor; an inline Accept/Reject card in the chat lets you review without leaving the conversation.
+File edit proposals open as an editable diff tab in the editor, with an inline Accept/Reject card in the chat so you review without leaving the conversation.
 
 ### IDE tools (MCP) — optional
 
-Let Claude query the IDE directly (diagnostics, open files, usages, …) via JetBrains' own MCP server. It is **off by default** and takes two steps:
+Let Claude query the IDE directly (diagnostics, open files, usages, …) via JetBrains' own MCP server. **Off by default**, two steps:
 
-1. **Enable JetBrains' MCP Server plugin.** Install/enable the bundled **MCP Server** plugin (Settings ▸ Plugins) and confirm it is running.
-2. **Turn it on here.** Go to **Settings ▸ Claude Code ▸ IDE tools (MCP)**, tick *Enable JetBrains IDE tools (MCP)*, pick the **transport** (`sse` is the default; `streamable-http` is the alternative) and set the **port** if you changed it from `64342`. Apply, then start a **new chat** (the setting is applied when the `claude` process launches).
+1. **Enable JetBrains' MCP Server plugin** (Settings ▸ Plugins) and confirm it is running.
+2. **Turn it on here** — **Settings ▸ Claude Code ▸ IDE tools (MCP)**: tick *Enable JetBrains IDE tools (MCP)*, pick the **transport** (`sse` default, `streamable-http` or `stdio`) and the **port** if you changed it from `64342`. Apply, then start a **new chat** (the setting applies when the `claude` process launches).
 
-For the `stdio` transport or a remote server, choose **custom** and paste the server JSON from JetBrains into the box. This also works unchanged on Windows (the pasted config carries the right paths and ports for your install).
+You can also register **custom MCP servers** as a JSON object of `name → server`. Both are merged into a single `--mcp-config`.
 
-> ⚠ **Security:** `sse`/`streamable-http` use JetBrains' localhost endpoint, which any process on your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you trust. Every IDE tool call is still gated by the in-chat permission prompt.
+> ⚠ **Security:** `sse`/`streamable-http` use JetBrains' localhost endpoint, which any process on your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you trust. Every IDE tool call is still gated by the permission prompt *and* by the [sensitive-data lock](#security).
 
 ## Build from source
 
-Requires JDK 21. The Gradle wrapper is included.
+Requires **JDK 21** (the IDE runs on JBR 21). The Gradle wrapper is included.
 
 ```bash
 JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
+# → build/distributions/claude-code-native-4.3.3.zip
 ```
 
-Output: `build/distributions/claude-code-native-4.2.0.zip`
+Install it with **Settings → Plugins → ⚙ → Install Plugin from Disk**.
 
 ```bash
-./gradlew runIde        # sandbox IDE with the plugin loaded
-./gradlew verifyPlugin  # IntelliJ plugin verifier
+./gradlew runIde         # sandbox IDE with the plugin loaded
+./gradlew test           # unit + headless + integration (JVM)
+./gradlew verifyPlugin   # IntelliJ plugin verifier across the declared range
+./gradlew checkDrift     # protocol drift vs. the latest SDK + binary
+./gradlew koverHtmlReport
+npm test                 # frontend suite (vitest + jsdom)
 ```
+
+`verifyPlugin` can run **fully offline** against locally extracted IDEs:
+
+```bash
+./gradlew verifyPlugin -PlocalIdePath=/path/to/idea-A,/path/to/idea-B
+```
+
+### Testing
+
+The suite is a real pyramid — **653 JVM tests + 44 frontend**, 0 failures:
+
+- **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker` and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
+- **headless component** — `BasePlatformTestCase` in-process, for the project services and the settings UI;
+- **integration** — a real `ClaudeSession` driven against the deterministic `bin/fake-claude` stand-in with JSONL fixtures;
+- **UI end-to-end** — RemoteRobot, gated behind `-PuiTest.enabled=true`;
+- **frontend** — vitest + jsdom loading the real inlined `resources/jcef/*.js`, including a JS↔CSS class contract.
 
 ## How it works
 
-The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio protocol — no Node.js or TS SDK at runtime. One long-lived process per chat session handles streaming input/output. The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is included as a **protocol reference only** and is not distributed.
+The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio protocol — no Node.js or TS SDK at runtime. One long-lived process per chat session handles streaming input and output; `can_use_tool` control requests are answered by the plugin, so **the binary writes the file** only after your approval.
 
-See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details, and verified empirical facts about the binary's behavior.
+The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is kept as a **protocol reference only** and is not distributed. `./gradlew checkDrift` updates the SDK and binary to latest and reports any protocol kind the plugin doesn't model yet.
+
+See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and verified empirical facts about the binary's behaviour.
 
 ## Status
 
-**v4.3.2** — fixes the deterministic security layer refusing to start on a WSL project under `/mnt/c`: WSL2 exposes the Windows `C:` drive over 9p, which the network-drive detector mistook for a remote mount. `/mnt/c` is now recognised as the local Windows disk (every other `/mnt/*` drive stays foreign). **v4.3.1** — **deterministic sensitive-data protection** for tool calls, plus jump-to-code links, per-write VFS refresh, and a chat-focus fix. A pre-authorization gate (`permission/SensitiveGuard`) evaluates every `can_use_tool` request before any auto-approval, independent of permission mode. It classifies calls that touch credential or key material (SSH/GPG keys, cloud and cluster credentials, database and shell-history secrets, browser and password-manager stores, and AI-agent/code-host access tokens — matched by structural globs across Linux, macOS, Windows and WSL), run credential-dumping or exfiltration commands (evaluated after on-disk path canonicalization and shell de-obfuscation), or reach foreign territory (another user's home, a network/UNC mount, a non-`/mnt/c` WSL drive). The agent's own tools then require explicit confirmation **even under `acceptEdits`/`bypassPermissions`**; MCP servers and Skills are denied, and foreign-territory access is denied for all callers. The built-in blacklist is additive-only, and a session refuses to start when the project is on a remote or network-mounted path. **Jump to code:** file tool cards name their file relative to the project and link it, and paths, directories and symbols in Claude's responses become links once the IDE confirms them as unambiguous (via *Go to Symbol*, so it works in every JetBrains IDE), confined to the project or the user's home. Also fixed: a new chat tab could come up unable to take keyboard focus, or with no visible caret; and the VFS is refreshed per write — including newly created files and paths a `Bash` command touches — rather than once per turn. **v4.2.0** — **protocol upgrade to `claude` 2.1.204 / SDK 0.3.204** plus a new dashboard card. The binary's `background_tasks_changed` signal is now modeled and surfaced as a **Background tasks** card (with Stop) in the session dashboard: it's a *level* signal (the full live set is re-sent on every change), so unlike the edge-derived Subagents list it can never wedge showing work that already finished. Retry progress for long-running `/btw` side questions (`control_request_progress`) is surfaced as a "Retrying…" notice instead of being dropped, and the new `list_models` / `get_plan` / `get_workspace_diff` thin-client control requests are triaged into the known surface. Backward-compatible with older binaries. **v4.1.0** — **editable diff review for edits**: when Claude asks to Edit/Write/MultiEdit, the plugin auto-opens an **editable** diff in the IDE (Current | Proposed) on the permission request — not just in acceptEdits/bypass mode. You can **tweak the proposed change right in the editor** before approving; **Accept writes your edited version** (fail-safe to Claude's original proposal when you change nothing), the transcript inline diff and "View diff" reflect the **real** written change, and the diff closes automatically on accept/reject. **v4.0.5** — the permission card for an edit now shows a **read-only colour diff** (red removed / green added) instead of per-line checkboxes: edits are **atomic** (accept/reject the whole change), since applying an incoherent subset of an edit reliably broke code. **v4.0.4** — a broad **bug-fix + UX pass** (protocol re-baselined to `claude` 2.1.193 / SDK 0.3.193): the **interrupt** actually stops the turn now (no more looping "Interrupting…"), **first-open dead chat** self-heals (no reopen-the-tab workaround), **user prompts render verbatim** (never Markdown), the code-block **Copy** button works, duplicate/out-of-order **"Thought process"** fixed, menu **flicker/de-selection** during streaming gone, **adaptive thinking on by default**, a **responsive** composer/find/chips, a faster Vibe Mode, plus latent concurrency/lifecycle fixes (double-spawn guard, `dispose()` generation bump, `can_use_tool` decode can't hang, per-project tool window). **v4.0.3** — **clipboard paste fixed in the composer on native-Wayland Linux**: under `sun.awt.wl.WLToolkit` the embedded CEF browser's clipboard is isolated from the system clipboard, so `Ctrl+V` only pasted things copied inside the chat. The composer now routes paste through the host (which reads via `wl-paste`/`xclip`, the same path the Attach→Image button used), so text and images from any app paste correctly. **v4.0.2** — added the host-side `wl-paste`/`xclip` clipboard *read* fallback for native Wayland (where AWT's clipboard read is broken); the user-visible paste fix landed in 4.0.3. **v4.0.1** — **protocol upgrade to `claude` 2.1.170 / SDK 0.3.170**: the drift detector flagged four new protocol kinds, all reconciled. The new `system/model_refusal_fallback` message is recognised and surfaced as a transcript notice (the primary model declined and the turn was retried on a fallback model — previously dropped silently); the `get_usage` / `register_repo_root` / `reload_skills` host→binary control requests are triaged into the known surface. Backward-compatible with older binaries. **v4.0.0** — **the chat UI was rebuilt on JCEF (embedded Chromium)**: a modern streaming transcript, a web composer (attachments, image drag-drop & paste), native permission / question / elicitation cards, and a session dashboard (context breakdown, cost, account, MCP health, subagents) — all an inlined web app under a strict CSP (no CDN), with diffs still native via the IDE's `DiffManager`. The old Swing chat UI and its tests were removed. **Requires JetBrains 2025.2+ (build 252+) with JCEF.** A follow-up **expert-consensus review** then hardened the new surface: hunk-by-hunk partial accept re-reads disk and falls back to a full accept if the file changed (no stale writes), the hunk cache can't leak, large files skip the EDT hunk-diff, the `sms:` link scheme is restored alongside `data:image/`/`jb:` (with `data:text/html` still blocked), and the rewind-fallback dialog moved off a deprecated API for a zero-deprecation, `verifyPlugin`-Compatible build. **v3.3.0** — **the full binary→host protocol surface, mapped into the UI**: native MCP **elicitation** cards (URL gated to http/https, or a form built from the request's schema) and correct `request_user_dialog` handling (both previously errored), a clickable **predicted-next-prompt** chip, a **live reasoning-token** estimate, evolving **hook-execution** rows, a **memory-recall** row, and tool-use-summary / file-upload notices. Adds an on-demand **protocol drift detector** (`./gradlew checkDrift`) that updates the SDK + binary to latest and reports any unmodeled protocol kind. Protocol surface verified against SDK 0.3.162 / `claude` 2.1.162. **v3.2.1** — provider selector (Anthropic / DeepSeek) with per-provider isolated keys, and a reasoning-toggle persistence fix. **v2.2.2** (test pyramid + gated UI suite) — completes the automated **test pyramid** (unit → headless `BasePlatformTestCase` → integration against a `fake-claude` stand-in → RemoteRobot UI) and the **maintenance workflow**: CI, tag-driven release/publish, nightly UI tests, SDK/binary drift detection, plus `SECURITY.md`/`CONTRIBUTING.md`/docs. No runtime change vs. 2.2.0. **v2.2.0** — Marketplace-publishable again: migrated the bundled MCP plugin lookup off the internal `findEnabledPlugin` API. **Model picker reflects the binary's actual options** by their human label (`Default (recommended)`/`Sonnet`/`Haiku`) and refreshes live when `initialize` lands; default model now `default` (binary chooses recommended tier). **Path:line links work inside backticks** (`` `src/Foo.kt:42` `` becomes a clickable monospaced link, still project-confined). Protocol surface bumped to SDK 0.3.161 / `claude` 2.1.161 (`ModelInfo` carries effort/thinking/fast/auto capabilities, `AccountInfo` carries provider; new `system/*` events tolerated). Built on **v2.1.0**: persistent diff from the transcript ("View diff" on every edit card, in any permission mode), hunk-by-hunk partial acceptance, wrapped AskUserQuestion options, improved Markdown (strikethrough, task lists, nested lists), "Explain with Claude" editor action + jump-to-code links (project-confined), "Always allow" per tool (revocable in Settings), and background-session notifications with tab badges (suppressed only for the chat on screen; "Open" dismisses the notification). **Session history reads the binary's own session files** as the source of truth — real titles (as `--resume`), "Open Previous Session…" lists the project's sessions, and on startup the open tabs (or the most recent session) are restored; the plugin persists no transcripts, only the open-tab ids in `workspace.xml`. Internally, permission-mode/effort/transport are now typed enums. Builds on v2.0.x: reliability & security hardening (EDT-freeze fix, in-flight control resolution + watchdog, project-root write confinement, trust-on-open gate) and opt-in IDE tools over MCP. Supported on JetBrains IDEs build 251 (2025.1) through the latest EAP/RC — 4.3.1 lowered the floor from 252 to 251, as far back as the platform API reaches without shipping a deprecated call.
+**v4.3.3** — the model picker now shows each model's **version** ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5") in both the composer and Settings; previously the binary's version-less labels made Opus 4.8 and Opus 5 indistinguishable. The vague "Default" entry — the same Opus listed twice, without a version — is gone, fresh installs pin the concrete Opus tier, and a stale hardcoded "Opus 4.8" label was removed. Protocol re-baselined to `claude` 2.1.220 / SDK 0.3.220.
 
-See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full changelog.
+Verified **Compatible** on IC-251, IC-252, IU-253, IU-261 and IU-262, with **zero deprecated or internal API**. `untilBuild` is declared `263.*` ahead of the 2026.3 EAP; the verifier picks up a real 263 build automatically once one is published.
+
+Recent highlights: the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); the background-tasks dashboard card (4.2.0); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
+
+Full history in [`CHANGELOG.md`](CHANGELOG.md) and [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | Architecture, protocol, empirical binary behaviour |
+| [`SECURITY.md`](SECURITY.md) | Threat model, the sensitive-data lock, reporting policy |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute |
+| [`docs/FAQ.md`](docs/FAQ.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common questions and fixes |
+| [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md) · [`docs/DRIFT_DETECTION.md`](docs/DRIFT_DETECTION.md) | Binary compatibility policy and drift detection |
+| [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
+| [`docs/TELEMETRY.md`](docs/TELEMETRY.md) | What is (and isn't) collected — spoiler: nothing |
 
 ## Disclaimer
 
-Unofficial, community-built, open-source plugin. **Not affiliated with, sponsored by, or endorsed by Anthropic or JetBrains.** It requires the user's own separately-installed `claude` CLI and their own Claude subscription or API key — no credentials are bundled or provided.
+Unofficial, community-built, open-source plugin. **Not affiliated with, sponsored by, or endorsed by Anthropic or JetBrains.** It requires your own separately-installed `claude` CLI and your own Claude subscription or API key — no credentials are bundled or provided.
 
 "Claude" and "Claude Code" are trademarks of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related names are trademarks of JetBrains s.r.o. Used here for identification only.
 
