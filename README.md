@@ -1,9 +1,9 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-4.3.3-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-4.4.0-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.1%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-653%20JVM%20%2B%2044%20frontend-success)](#testing)
+[![Tests](https://img.shields.io/badge/tests-663%20JVM%20%2B%2044%20frontend-success)](#testing)
 
 A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not a terminal wrapper, but a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, a deterministic security layer, and full protocol-level access to the `claude` binary.
 
@@ -83,10 +83,12 @@ Patterns are **structural**, so one rule covers Linux, macOS, Windows (`C:\Users
 **How it decides** — by trust of the caller, as an allowlist:
 
 - the agent's **own tools** → an explicit permission card, **every time**, in every mode;
-- **MCP servers and Skills** → denied outright; third-party code has no business reading your keys;
-- **foreign territory** → denied for everyone.
+- **MCP servers and Skills** → denied outright by default; third-party code has no business reading your keys;
+- **foreign territory** → denied for everyone by default.
 
-No setting relaxes these. The only knob is `sensitiveExtraGlobs`, which is **additive** — you can widen the blacklist, never empty it. Paths under the project root are exempt from the credential and foreign rules (your repo is the sanctioned zone); dangerous-command classification is location-independent. A session refuses to start when the project itself sits on a remote or network-mounted path.
+**Per-rule toggles (Settings ▸ Claude Code ▸ Security).** Credentials, dangerous commands, and each of the three foreign-territory checks (other users' homes, network/UNC mounts, foreign WSL drives) can each be switched off independently — all **ON** by default. Turning one off is never a silent allow: detection still runs, a hit is only *downgraded* from an automatic DENY to a permission card shown every time, to every caller. There's no toggle that makes a match invisible.
+
+The sensitive-path list itself has a separate, always-additive knob: `sensitiveExtraGlobs` widens the blacklist, never empties it. Paths under the project root are exempt from the credential and foreign rules (your repo is the sanctioned zone); dangerous-command classification is location-independent. A session refuses to start when the project itself sits on a remote or network-mounted path.
 
 Detecting a path concealed inside an arbitrary shell string is best-effort and can be widened over time; the **enforcement** of a match is absolute. See [`SECURITY.md`](SECURITY.md) for the full model and reporting policy.
 
@@ -172,7 +174,7 @@ npm test                 # frontend suite (vitest + jsdom)
 
 ### Testing
 
-The suite is a real pyramid — **653 JVM tests + 44 frontend**, 0 failures:
+The suite is a real pyramid — **663 JVM tests + 44 frontend**, 0 failures:
 
 - **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker` and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
 - **headless component** — `BasePlatformTestCase` in-process, for the project services and the settings UI;
@@ -190,11 +192,11 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and ver
 
 ## Status
 
-**v4.3.3** — the model picker now shows each model's **version** ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5") in both the composer and Settings; previously the binary's version-less labels made Opus 4.8 and Opus 5 indistinguishable. The vague "Default" entry — the same Opus listed twice, without a version — is gone, fresh installs pin the concrete Opus tier, and a stale hardcoded "Opus 4.8" label was removed. Protocol re-baselined to `claude` 2.1.220 / SDK 0.3.220.
+**v4.4.0** — each rule in the [security lock](#security) is now independently switchable (Settings ▸ Claude Code ▸ Security), all ON by default; disabling one only ever downgrades an automatic block to a permission card, never to a silent allow. Also fixed: several of the CLI's own native tools (background tasks, cron, worktrees, and more) had fallen off the plugin's trusted-tool allowlist as the CLI grew, so they were hard-denied exactly like a blocked third-party MCP call — the allowlist is now current.
 
 Verified **Compatible** on IC-251, IC-252, IU-253, IU-261 and IU-262, with **zero deprecated or internal API**. `untilBuild` is declared `263.*` ahead of the 2026.3 EAP; the verifier picks up a real 263 build automatically once one is published.
 
-Recent highlights: the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); the background-tasks dashboard card (4.2.0); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
+Recent highlights: the model picker showing each model's real version (4.3.3); the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); the background-tasks dashboard card (4.2.0); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
 
 Full history in [`CHANGELOG.md`](CHANGELOG.md) and [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 

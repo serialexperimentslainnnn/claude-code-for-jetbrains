@@ -28,6 +28,25 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         assertEquals("opus[1m]", settings.state.model)
         assertTrue(settings.restoreOpenChatsOnStartup)
         assertTrue(settings.state.restoreOpenChatsOnStartup)
+        // Security toggles (Settings ▸ Claude Code ▸ Security) all default ON — a fresh install reproduces the
+        // original hard lock exactly; the user must explicitly soften a rule.
+        assertTrue(settings.state.securityBlockCredentials)
+        assertTrue(settings.state.securityBlockDangerousCommands)
+        assertTrue(settings.state.securityBlockForeignOtherUserHome)
+        assertTrue(settings.state.securityBlockForeignNetworkMounts)
+        assertTrue(settings.state.securityBlockForeignWslMounts)
+    }
+
+    fun `test sensitivePolicy wires the security toggles through`() {
+        settings.state.securityBlockCredentials = false
+        settings.state.securityBlockForeignWslMounts = false
+        val policy = settings.sensitivePolicy(projectRoot = null)
+        assertFalse(policy.enforceCredentials)
+        assertFalse(policy.enforceForeignWslMounts)
+        // Untouched toggles stay at their default.
+        assertTrue(policy.enforceDangerousCommands)
+        assertTrue(policy.enforceForeignOtherUserHome)
+        assertTrue(policy.enforceForeignNetworkMounts)
     }
 
     fun `test state mutation survives getState loadState round-trip`() {

@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "4.3.3"
+version = "4.4.0"
 
 repositories {
     mavenCentral()

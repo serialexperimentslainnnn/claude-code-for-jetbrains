@@ -1,3 +1,11 @@
+## v4.4.0 — 2026-07-28
+
+**🔓 Security toggles — Settings ▸ Claude Code ▸ Security.** The five rules behind the plugin's deterministic sensitive-data lock (credentials, dangerous commands, and the three foreign-territory checks — another user's home, network/UNC mounts, foreign WSL drives) can now be switched off individually, if you specifically need to. They're all **ON by default**, so nothing changes unless you go looking. Turning one off is never a silent allow: the lock still watches for it, it just shows you a permission card instead of blocking automatically — every time, for every caller, MCP servers and Skills included. Every block or prompt from the lock now also tells you exactly where to change it.
+
+**🛠 Fixed: several of Claude's own native tools were treated like a blocked MCP server.** As the CLI grew its own orchestration surface — background tasks, cron jobs, worktrees, and more — the plugin's allowlist of "trusted, first-party" tools hadn't kept up, so calls from tools like `TaskCreate`, `CronList`, or `EnterWorktree` were silently hard-denied instead of asking, exactly as if they were a blocked third-party MCP call. The allowlist is now current with the CLI's real tool set.
+
+---
+
 ## v4.3.3 — 2026-07-27
 
 **🧬 The model picker shows the version now — and picks Opus for you.** The list of models is read straight from the binary (it always was), but it used to label each one without its version — "Opus (1M context)", "Sonnet" — so you couldn't tell Opus 4.8 from Opus 5. Every model now shows its version ("Opus 5 with 1M context", "Sonnet 5", "Haiku 4.5"), in both the composer and Settings. The vague "Default" entry — which was just Opus listed a second time, with no version — is gone, and a fresh install defaults to the concrete Opus tier and stays there. A stale hardcoded "Opus 4.8" label that lingered on the pill is gone too.

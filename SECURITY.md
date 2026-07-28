@@ -146,8 +146,8 @@ name their way in:
 - the agent's own tools → a permission card **every time, even in
   `bypassPermissions` / `acceptEdits`** (the plugin launches the binary in
   `default` mode always, so it answers every `can_use_tool`);
-- **MCP servers and Skills → denied outright**, no opt-in;
-- **foreign territory → denied for everyone.**
+- **MCP servers and Skills → denied outright** by default;
+- **foreign territory → denied for everyone** by default.
 
 And the plugin **refuses to start at all** with the project rooted on a network
 or remote drive: an autonomous agent — shell, IDE reach, coding ability — on
@@ -156,9 +156,19 @@ casually relocate a network directory) is the point. Whoever wants the
 unrestricted tool has the `claude` CLI, where the controls are Anthropic's.
 
 The project root is the one **sanctioned zone**: a file you brought into your own
-repo is yours, under your responsibility. Everything else is off-limits, with no
-setting to soften it — the escape hatch is "copy it into your project," on
-purpose.
+repo is yours, under your responsibility.
+
+**Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security).** Each rule —
+credentials, dangerous commands, and each of the three foreign-territory checks
+(other users' homes, network/UNC mounts, foreign WSL drives) — has its own
+on/off switch, defaulting **ON** (the behaviour above, exactly). Turning one off
+is **never a silent allow**: detection still runs unconditionally, and a hit is
+only *downgraded* from an automatic DENY to a permission card — shown every
+time, to every caller, MCP and Skills included. There is no toggle that makes a
+match invisible. This exists for a real, legitimate case (a project that
+genuinely lives on a corporate network share, say) without gutting the model:
+you still see and decide every hit, you just decide it yourself instead of the
+lock deciding it for you.
 
 **What is heuristic, stated plainly:** *detection* of a path inside an arbitrary
 shell string is best-effort — an obfuscation cleverer than the de-obfuscator, or

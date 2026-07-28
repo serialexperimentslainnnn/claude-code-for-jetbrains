@@ -257,6 +257,107 @@ class SensitiveGuardTest {
         assertFalse(SensitiveGuard.isCommandCall(read("/home/me/proj/Foo.kt")))
         assertFalse(SensitiveGuard.isCommandCall(buildJsonObject { put("pattern", "TODO") })) // Grep
     }
+
+    // ── real incident: AGENT_TOOLS had gone stale as the CLI grew its own orchestration surface ──────────────
+    // Background-task management (TaskCreate/TaskGet/…), cron, worktrees and friends are the agent's OWN native
+    // tools — not in the allowlist meant every one of these silently fell into the untrusted-caller branch and
+    // got hard-DENIED exactly like a blocked MCP server, indistinguishable from the user's chair.
+    @Test
+    fun `the CLI's own orchestration tools are trusted, not treated as third-party`() {
+        for (tool in listOf(
+            "Agent", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop",
+            "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "SendMessage",
+            "EnterPlanMode", "EnterWorktree", "ExitWorktree",
+            "ListMcpResources", "ReadMcpResourceDir", "ReadMcpResource", "RefreshMcpTools",
+            "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
+            "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
+            "ShowOnboardingRolePicker", "Workflow",
+        )) {
+            assertTrue(SensitiveGuard.isTrustedCaller(tool), "$tool should be trusted (it's a native CLI tool)")
+            // CREDENTIAL is trust-sensitive: being newly recognised as trusted is exactly the fix — ASK, not DENY.
+            assertEquals(Verdict.ASK, v(tool, read("/home/me/.ssh/id_rsa")), "$tool + credential path should ASK, not DENY")
+            // FOREIGN denies EVERY caller regardless of trust, by design — unaffected by the AGENT_TOOLS fix.
+            assertEquals(Verdict.DENY, v(tool, read("/home/bob/notes.txt")), "$tool + foreign path is still DENY (FOREIGN has no opt-out)")
+        }
+    }
+
+    @Test
+    fun `Skill and an mcp server tool are still untrusted third parties (unaffected by the AGENT_TOOLS expansion)`() {
+        assertFalse(SensitiveGuard.isTrustedCaller("Skill"))
+        assertFalse(SensitiveGuard.isTrustedCaller("mcp__filesystem__read_file"))
+        assertEquals(Verdict.DENY, v("Skill", read("/home/me/.ssh/id_rsa")))
+        assertEquals(Verdict.DENY, v("mcp__filesystem__read_file", read("/home/me/.ssh/id_rsa")))
+    }
+
+    // ── per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security) ─────────────────────────────────────
+    // Defaults reproduce the original hard lock exactly (every toggle true). Disabling a rule NEVER silently
+    // ALLOWs a hit — detection always runs; it only downgrades the outcome to ASK, for every caller, so an
+    // untrusted (MCP/Skill) caller that used to be hard-denied now gets a card instead, never a free pass.
+
+    @Test
+    fun `defaults reproduce the original hard lock exactly`() {
+        val defaults = SensitiveGuard.Policy()
+        assertTrue(defaults.enforceCredentials)
+        assertTrue(defaults.enforceDangerousCommands)
+        assertTrue(defaults.enforceForeignOtherUserHome)
+        assertTrue(defaults.enforceForeignNetworkMounts)
+        assertTrue(defaults.enforceForeignWslMounts)
+    }
+
+    @Test
+    fun `disabling the credential rule downgrades DENY to ASK for an untrusted caller, never to ALLOW`() {
+        assertEquals(Verdict.DENY, v("mcp__x__y", read("/home/me/.ssh/id_rsa")))
+        val relaxed = policy.copy(enforceCredentials = false)
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("/home/me/.ssh/id_rsa"), relaxed))
+        // A trusted tool already asked either way — unaffected by this toggle.
+        assertEquals(Verdict.ASK, v("Read", read("/home/me/.ssh/id_rsa"), relaxed))
+    }
+
+    @Test
+    fun `disabling the dangerous-command rule downgrades DENY to ASK for an untrusted caller`() {
+        assertEquals(Verdict.DENY, v("mcp__x__y", bash("mimikatz")))
+        val relaxed = policy.copy(enforceDangerousCommands = false)
+        assertEquals(Verdict.ASK, v("mcp__x__y", bash("mimikatz"), relaxed))
+    }
+
+    @Test
+    fun `disabling the foreign-other-user-home rule downgrades DENY to ASK for EVERY caller`() {
+        assertEquals(Verdict.DENY, v("Read", read("/home/bob/notes.txt")))
+        val relaxed = policy.copy(enforceForeignOtherUserHome = false)
+        assertEquals(Verdict.ASK, v("Read", read("/home/bob/notes.txt"), relaxed))
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("/home/bob/notes.txt"), relaxed))
+        // The other two FOREIGN sub-rules are untouched by this toggle.
+        assertEquals(Verdict.DENY, v("Read", read("/mnt/share/data.csv"), relaxed))
+    }
+
+    @Test
+    fun `disabling the foreign-network-mounts rule downgrades DENY to ASK for EVERY caller`() {
+        assertEquals(Verdict.DENY, v("Read", read("/mnt/share/data.csv")))
+        assertEquals(Verdict.DENY, v("Read", read("\\\\fileserver\\share\\secret.doc")))
+        val relaxed = policy.copy(enforceForeignNetworkMounts = false)
+        assertEquals(Verdict.ASK, v("Read", read("/mnt/share/data.csv"), relaxed))
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("\\\\fileserver\\share\\secret.doc"), relaxed))
+        // The other two FOREIGN sub-rules are untouched by this toggle.
+        assertEquals(Verdict.DENY, v("Read", read("/home/bob/notes.txt"), relaxed))
+    }
+
+    @Test
+    fun `disabling the foreign-WSL-mounts rule downgrades DENY to ASK for EVERY caller`() {
+        val wsl = policy.copy(blockForeignWslMounts = true, projectRoot = "/mnt/c/dev/proj")
+        assertEquals(Verdict.DENY, v("Read", read("/mnt/d/other/file"), wsl))
+        val relaxed = wsl.copy(enforceForeignWslMounts = false)
+        assertEquals(Verdict.ASK, v("Read", read("/mnt/d/other/file"), relaxed))
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("/mnt/d/other/file"), relaxed))
+    }
+
+    @Test
+    fun `reason() always names where to change the rule, whether enforced or downgraded`() {
+        assertTrue(SensitiveGuard.reason("Read", read("/home/bob/x"), policy)!!.contains("Settings"))
+        val relaxed = policy.copy(enforceForeignOtherUserHome = false)
+        val downgradedReason = SensitiveGuard.reason("Read", read("/home/bob/x"), relaxed)!!
+        assertTrue(downgradedReason.contains("Settings"))
+        assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
+    }
 }
 
 // ── modo paranoia: anti-evasión (deobfuscación + canonicalización) ─────────────────────────────────────
@@ -417,5 +518,4 @@ class SensitiveGuardResolverPerformanceTest {
             SensitiveGuard.verdict("Read", read("/home/me/proj/innocent.txt"), policy),
         )
     }
-
 }

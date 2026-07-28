@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0] — 2026-07-28
+
+### Added
+- **Per-rule security toggles (Settings ▸ Claude Code ▸ Security).** `SensitiveGuard`'s three categories — Credential/key material, Dangerous commands, and Foreign territory (now split into its three sub-rules: another user's home, network/UNC mounts, and foreign WSL drives) — are each independently switchable, all **ON by default** so a fresh install reproduces the original behaviour exactly. Turning a rule off is **never a silent allow**: `classify()` still runs unconditionally, and a hit is only downgraded from an automatic `DENY` to a permission card (`ASK`) — shown every time, to every caller, MCP servers and Skills included. A trusted agent tool that trips Credential/Dangerous-command already got a card either way; the toggle only ever changes what an *untrusted* caller gets. `SensitiveGuard.reason()` now always names where to change the rule ("… — disable this in Settings ▸ Claude Code ▸ Security"), whether the rule is currently enforced or already downgraded, so the lever is discoverable from the block/prompt itself. `Policy` gained five `enforce*` fields (all defaulting `true`); `ClaudeSettings` persists the five toggles and wires them through `sensitivePolicy()`.
+
+### Fixed
+- **Native CLI tools the plugin didn't know about were hard-denied like a blocked MCP server.** `SensitiveGuard.AGENT_TOOLS` — the allowlist of trusted, first-party callers — had gone stale as the CLI grew its own orchestration surface: the background-task family (`TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`/`TaskOutput`/`TaskStop`), cron (`CronCreate`/`CronDelete`/`CronList`/`ScheduleWakeup`), worktrees (`EnterWorktree`/`ExitWorktree`), `EnterPlanMode`, `Agent` (a newer alias for `Task`), `SendMessage`, the MCP-resource-browsing tools (`ListMcpResources`/`ReadMcpResourceDir`/`ReadMcpResource`/`RefreshMcpTools`), and several more were all missing from the list — none of them are third-party (they're modeled in the vendored `@anthropic-ai/claude-agent-sdk` reference alongside `Bash`/`Read`/`Edit`, not user/community-authored like a Skill or an MCP server) — so tripping the Credential or Dangerous-command rule denied them outright instead of asking, indistinguishable from a genuinely blocked MCP call. `AGENT_TOOLS` now includes the full confirmed set; `Skill` and any `mcp__*`-prefixed name remain deliberately excluded (that content is third-party by design, unaffected by this fix). Regression test covers all 31 newly-trusted tool names.
+
 ## [4.3.3] — 2026-07-27
 
 ### Changed
