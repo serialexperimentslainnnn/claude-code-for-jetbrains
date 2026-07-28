@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","model":"claude-opus-4-8","cwd":"/tmp/project","permissionMode":"default"}
+{"_sleep_ms":300}
+{"type":"assistant","message":{"id":"msg_sec1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_sec_1","name":"mcp__test__run","input":{"command":"mimikatz"}}]}}
+{"type":"control_request","request_id":"fake_sec_1","request":{"subtype":"can_use_tool","tool_name":"mcp__test__run","tool_use_id":"toolu_sec_1","input":{"command":"mimikatz"}}}
+{"_sleep_ms":2500}
+{"type":"assistant","message":{"id":"msg_sec2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_sec_2","name":"mcp__test__run","input":{"command":"mimikatz"}}]}}
+{"type":"control_request","request_id":"fake_sec_2","request":{"subtype":"can_use_tool","tool_name":"mcp__test__run","tool_use_id":"toolu_sec_2","input":{"command":"mimikatz"}}}
+{"_sleep_ms":4000}
+{"type":"result","subtype":"success","result":"done","session_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","num_turns":1}
