@@ -50,6 +50,14 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
     private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
 
+    // --- Security (permission/SensitiveGuard.kt) — each ON by default; OFF downgrades an automatic block to a
+    // permission card (never a silent allow) — see securityWarningLabel() below. ---------------------------
+    private val blockCredentialsCheck = JBCheckBox("Block credentials & key material (SSH/GPG keys, cloud/DB secrets, access tokens…)")
+    private val blockDangerousCommandsCheck = JBCheckBox("Block dangerous commands (credential dumps, exfiltration, offensive tooling)")
+    private val blockForeignOtherUserHomeCheck = JBCheckBox("Block access to other users' home directories")
+    private val blockForeignNetworkMountsCheck = JBCheckBox("Block access to network / UNC / removable mounts")
+    private val blockForeignWslMountsCheck = JBCheckBox("Block access to foreign WSL drives (any /mnt/* other than C:)")
+
     private val providerCombo = JComboBox(Provider.entries.toTypedArray()).apply {
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
@@ -151,6 +159,14 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             .addComponent(partialCheck)
             .addComponent(restoreChatsCheck)
             .addSeparator()
+            .addComponent(sectionLabel("Security — deterministic tool-call lock, evaluated before every permission"))
+            .addComponent(blockCredentialsCheck)
+            .addComponent(blockDangerousCommandsCheck)
+            .addComponent(blockForeignOtherUserHomeCheck)
+            .addComponent(blockForeignNetworkMountsCheck)
+            .addComponent(blockForeignWslMountsCheck)
+            .addComponent(securityWarningLabel())
+            .addSeparator()
             .addComponent(sectionLabel("API provider"))
             .addLabeledComponent("Provider:", providerCombo)
             .addLabeledComponent("API key:", apiKeyField)
@@ -224,6 +240,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             thinkingCheck.isSelected != (s.thinkingTokens > 0) ||
             partialCheck.isSelected != s.includePartialMessages ||
             restoreChatsCheck.isSelected != s.restoreOpenChatsOnStartup ||
+            blockCredentialsCheck.isSelected != s.securityBlockCredentials ||
+            blockDangerousCommandsCheck.isSelected != s.securityBlockDangerousCommands ||
+            blockForeignOtherUserHomeCheck.isSelected != s.securityBlockForeignOtherUserHome ||
+            blockForeignNetworkMountsCheck.isSelected != s.securityBlockForeignNetworkMounts ||
+            blockForeignWslMountsCheck.isSelected != s.securityBlockForeignWslMounts ||
             csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources) ||
             csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools) ||
             csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools) ||
@@ -277,6 +298,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.thinkingTokens = if (thinkingCheck.isSelected) ClaudeSession.THINKING_ON else 0
         s.includePartialMessages = partialCheck.isSelected
         s.restoreOpenChatsOnStartup = restoreChatsCheck.isSelected
+        s.securityBlockCredentials = blockCredentialsCheck.isSelected
+        s.securityBlockDangerousCommands = blockDangerousCommandsCheck.isSelected
+        s.securityBlockForeignOtherUserHome = blockForeignOtherUserHomeCheck.isSelected
+        s.securityBlockForeignNetworkMounts = blockForeignNetworkMountsCheck.isSelected
+        s.securityBlockForeignWslMounts = blockForeignWslMountsCheck.isSelected
         s.settingSources = settingSourcesGroup.text()
         s.allowedTools = allowedToolsGroup.text()
         s.disallowedTools = disallowedToolsGroup.text()
@@ -310,6 +336,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         thinkingCheck.isSelected = s.thinkingTokens > 0
         partialCheck.isSelected = s.includePartialMessages
         restoreChatsCheck.isSelected = s.restoreOpenChatsOnStartup
+        blockCredentialsCheck.isSelected = s.securityBlockCredentials
+        blockDangerousCommandsCheck.isSelected = s.securityBlockDangerousCommands
+        blockForeignOtherUserHomeCheck.isSelected = s.securityBlockForeignOtherUserHome
+        blockForeignNetworkMountsCheck.isSelected = s.securityBlockForeignNetworkMounts
+        blockForeignWslMountsCheck.isSelected = s.securityBlockForeignWslMounts
         settingSourcesGroup.setFrom(s.settingSources)
         allowedToolsGroup.setFrom(s.allowedTools)
         disallowedToolsGroup.setFrom(s.disallowedTools)
@@ -401,6 +432,14 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private fun noteLabel(bodyHtml: String) = JBLabel(
         "<html><body style='width:${FORM_WIDTH}px'>$bodyHtml</body></html>"
     ).apply { font = JBFont.small() }
+
+    private fun securityWarningLabel() = noteLabel(
+        "⚠ <b>Security:</b> all five are <b>ON by default</b> and reproduce the plugin's original lock exactly. " +
+        "Turning one OFF never allows a matching call silently — it only downgrades an automatic block to a " +
+        "<b>permission card</b>, shown every time, for every caller (including MCP servers and Skills), so you " +
+        "still decide case by case. Only disable a rule you understand and specifically need — a project on a " +
+        "corporate network share, for example, needs the network-mount rule off, not the whole lock."
+    )
 
     private fun providerWarningLabel() = noteLabel(
         "<b>Anthropic</b> uses the <code>claude</code> binary's own login (subscription/OAuth). A non-Anthropic " +

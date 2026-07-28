@@ -63,13 +63,24 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         /** Remembered fallback choice when native rewind is unavailable: "" = ask, "ide" = revert via IDE, "never" = do nothing. */
         @JvmField var rewindFallback: String = ""
 
-        // --- Sensitive-data guard (see permission/SensitiveGuard.kt) — a HARD LOCK, no on/off toggle ------
+        // --- Sensitive-data guard (see permission/SensitiveGuard.kt) ----------------------------------------
         /**
-         * EXTRA sensitive-path globs, one per line — **added** to the built-in blacklist, never replacing it. The
-         * guard itself has no off switch and MCP/Skills have no opt-in: deterministic code the model cannot argue
-         * with. The only knob is making the net wider.
+         * EXTRA sensitive-path globs, one per line — **added** to the built-in blacklist, never replacing it.
+         * There is no way to shrink the built-in list itself; the only knob here is making the net wider.
          */
         @JvmField var sensitiveExtraGlobs: String = ""
+
+        /**
+         * Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security), one per [SensitiveGuard.Policy]
+         * `enforce*` field — all default **on**, reproducing the original hard-lock behaviour exactly. Turning one
+         * off never silently allows a matching call: [SensitiveGuard.verdict] always downgrades a disabled rule's
+         * hit to ASK (a card, every time, for every caller) rather than either a silent allow or an unchanged DENY.
+         */
+        @JvmField var securityBlockCredentials: Boolean = true
+        @JvmField var securityBlockDangerousCommands: Boolean = true
+        @JvmField var securityBlockForeignOtherUserHome: Boolean = true
+        @JvmField var securityBlockForeignNetworkMounts: Boolean = true
+        @JvmField var securityBlockForeignWslMounts: Boolean = true
 
         // --- Advanced launch options (neutral defaults = flag omitted) ------------------------------
         /** `--max-turns N`: cap conversation turns. 0 = no cap (flag omitted). */
@@ -239,8 +250,10 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
     }
 
     /**
-     * The guard's deterministic verdict for a tool call (see [SensitiveGuard]) for this [projectRoot]. No off
-     * switch: this is enforcement, not advice. Foreign-territory and remote-mount inputs come from [RemoteMounts].
+     * The guard's deterministic verdict for a tool call (see [SensitiveGuard]) for this [projectRoot]. Enforcement
+     * is per-rule configurable (Settings ▸ Claude Code ▸ Security) but never off entirely: a disabled rule still
+     * downgrades to a permission card rather than a silent allow. Foreign-territory and remote-mount inputs come
+     * from [RemoteMounts].
      */
     fun sensitiveVerdict(toolName: String, input: JsonObject, projectRoot: String?): SensitiveGuard.Verdict =
         SensitiveGuard.verdict(toolName, input, sensitivePolicy(projectRoot))
@@ -258,6 +271,11 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
             // Canonicalise on disk so a symlink or `..` cannot launder a path past the rules by hiding its target.
             // Off the EDT already (broker callback runs on the reader thread); a failure just leaves the literal.
             pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
+            enforceCredentials = state.securityBlockCredentials,
+            enforceDangerousCommands = state.securityBlockDangerousCommands,
+            enforceForeignOtherUserHome = state.securityBlockForeignOtherUserHome,
+            enforceForeignNetworkMounts = state.securityBlockForeignNetworkMounts,
+            enforceForeignWslMounts = state.securityBlockForeignWslMounts,
         )
     }
 

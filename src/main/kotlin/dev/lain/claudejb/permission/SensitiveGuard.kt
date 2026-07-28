@@ -37,15 +37,21 @@ import java.util.concurrent.TimeoutException
  * ### Verdict, by trust of the CALLER — an allowlist, not a blacklist
  * The caller is trusted **only if it is one of the agent's own tools** ([AGENT_TOOLS]). Everything else — every MCP
  * server, every Skill, anything unrecognised — is third-party, because a blacklist of "bad" prefixes is exactly the
- * thing an attacker names their way around. This is a **hard lock, with no opt-out**:
+ * thing an attacker names their way around. By default this is a **hard lock**:
  *  - a **trusted** tool that trips rule 1 or 3 → **ASK** (a card, every time, even under `bypassPermissions`): the
  *    user may authorise their own agent to read their own key, once, explicitly;
- *  - a **third-party** caller that trips rule 1 or 3 → **DENY**, full stop — no setting softens it;
- *  - **anyone** who trips rule 2 (foreign territory) → **DENY**; it is never legitimate.
+ *  - a **third-party** caller that trips rule 1 or 3 → **DENY**;
+ *  - **anyone** who trips rule 2 (foreign territory) → **DENY**.
  *
- * The one thing a user can tune is the sensitive-path list, and only **additively**: the effective globs are the
- * built-in [SENSITIVE_GLOBS] plus their extras. The built-ins cannot be removed — a settings screen that lets you
- * empty the blacklist is just the escape hatch wearing a hat.
+ * ### Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security) — never a silent allow
+ * Each rule — CREDENTIAL, DANGEROUS_COMMAND, and each of FOREIGN's three sub-rules ([ForeignReason]) — has its own
+ * `enforce*` field on [Policy], defaulting to `true` (reproducing the original hard lock exactly). Detection
+ * ([classify]) runs **unconditionally**, regardless of these toggles — turning one off never skips recognising a
+ * match. What it changes is [verdict]'s OUTCOME: a disabled rule's hit is **downgraded from DENY to ASK**, for every
+ * caller, including third-party ones — never to ALLOW. So "disabling a rule" means "I want to decide this one
+ * myself, every time", not "stop watching for this". The one thing tunable *without* a toggle is the sensitive-path
+ * list itself, and only **additively**: the effective globs are the built-in [SENSITIVE_GLOBS] plus the user's
+ * extras — the built-ins cannot be individually removed from that list.
  *
  * ### Why this is enforceable even in `bypassPermissions`
  * The plugin launches the binary in `default` mode **always** — `acceptEdits`/`bypassPermissions` are implemented
@@ -81,13 +87,33 @@ object SensitiveGuard {
     /** Which surface a call tripped — decides severity ([verdict]) and the card's wording ([reason]). */
     enum class Category { CREDENTIAL, FOREIGN, DANGEROUS_COMMAND }
 
+    /** Which FOREIGN sub-rule tripped — lets [Policy]'s per-rule toggles govern FOREIGN at finer grain than the
+     *  category as a whole (see the three `enforceForeign*` fields below). */
+    enum class ForeignReason { OTHER_USER_HOME, NETWORK_MOUNT, WSL_MOUNT }
+
     /**
      * The agent's OWN tools — the allowlist of trusted callers. Anything not in here (MCP, Skills, unknown) is
-     * third-party and denied by default when it trips the guard. Kept in sync with the binary's built-in tool set.
+     * third-party and denied by default when it trips the guard.
+     *
+     * Kept in sync with the binary's built-in tool set — cross-referenced against the vendored SDK's own schema
+     * (`node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`, `ToolInputSchemas`), which is the project's
+     * declared protocol source of truth. A REAL incident: this list had gone stale as the CLI grew its own
+     * orchestration surface (background tasks, cron, worktrees…), so those native, first-party tool calls were
+     * silently falling into the "third-party" branch and getting hard-DENIED instead of asking — indistinguishable,
+     * from the user's chair, from an MCP server being blocked. `Skill` and any `mcp__*`-prefixed name are
+     * DELIBERATELY excluded: a Skill's *content* is third-party (community/user-authored), same tier as MCP, by
+     * design — see the class doc's caller-trust matrix.
      */
     val AGENT_TOOLS: Set<String> = setOf(
         "Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead",
-        "Glob", "Grep", "LS", "Task", "TodoWrite", "WebFetch", "WebSearch", "ExitPlanMode",
+        "Glob", "Grep", "LS", "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch", "ExitPlanMode",
+        "EnterPlanMode", "EnterWorktree", "ExitWorktree",
+        "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop",
+        "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "SendMessage",
+        "ListMcpResources", "ReadMcpResourceDir", "ReadMcpResource", "RefreshMcpTools",
+        "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
+        "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
+        "ShowOnboardingRolePicker", "Workflow",
     )
 
     /** Everything the guard needs to judge a call. Assembled by the IDE side; pure input here. */
@@ -118,6 +144,22 @@ object SensitiveGuard {
          * blocking work inside this lambda beyond a single stat-like call, since the bound assumes that shape.
          */
         val pathResolver: ((String) -> String?)? = null,
+        /**
+         * Enforcement toggles — Settings ▸ Claude Code ▸ Security, one per rule. Defaults (`true`) reproduce the
+         * original hard-lock behaviour exactly. Turning one **off never silently ALLOWs** a call that trips it —
+         * detection ([classify]) always runs regardless; the toggle only downgrades the OUTCOME from the hard
+         * block (DENY) to a permission card (ASK), for every caller, so disabling a rule is never quiet. A trusted
+         * agent tool that trips CREDENTIAL/DANGEROUS_COMMAND already gets a card either way — these toggles only
+         * ever change what an untrusted (MCP/Skill) caller gets: DENY when enforced, ASK when not.
+         */
+        val enforceCredentials: Boolean = true,
+        val enforceDangerousCommands: Boolean = true,
+        /** Sub-rule of FOREIGN: another user's home directory, or `/root` when we aren't root. */
+        val enforceForeignOtherUserHome: Boolean = true,
+        /** Sub-rule of FOREIGN: a UNC path or a discovered network/removable mount ([guardedRoots]). */
+        val enforceForeignNetworkMounts: Boolean = true,
+        /** Sub-rule of FOREIGN: a non-`/mnt/c` WSL drive (only meaningful when [blockForeignWslMounts] is true). */
+        val enforceForeignWslMounts: Boolean = true,
     )
 
     // ─── Blacklist 1 — the files worth stealing. Structural (match anywhere), cross-OS. ───────────────────
@@ -251,41 +293,75 @@ object SensitiveGuard {
 
     // ── the decision ─────────────────────────────────────────────────────────────────────────────────────
 
+    /** Path to the toggles in Settings — appended to every card/transcript reason, enforced or not, so the lever is
+     *  always discoverable from the block/prompt itself, not just from documentation. */
+    private const val SETTINGS_PATH = "Settings ▸ Claude Code ▸ Security"
+
     /** The verdict for a tool call. [Verdict.ALLOW] means "not our business" — the normal permission flow runs. */
     fun verdict(toolName: String, input: JsonObject, policy: Policy): Verdict {
-        val category = classify(toolName, input, policy)?.first ?: return Verdict.ALLOW
-        if (category == Category.FOREIGN) return Verdict.DENY // never legitimate, for anyone — no opt-out
-        // Credentials / dangerous commands: the agent's own tools may be authorised (a card); anyone else is denied
-        // outright, with no setting to soften it. The allowlist is the whole trust decision.
+        val result = classify(toolName, input, policy) ?: return Verdict.ALLOW
+        val enforced = isEnforced(result, policy)
+        if (result.category == Category.FOREIGN) {
+            // Enforced (default): DENY for every caller, no exception. Disabled in Settings: downgraded to ASK for
+            // every caller instead — still a card every single time, never a silent allow.
+            return if (enforced) Verdict.DENY else Verdict.ASK
+        }
+        // Credentials / dangerous commands: a trusted agent tool always gets a card regardless of this toggle —
+        // the toggle only ever changes an UNTRUSTED (MCP/Skill) caller's outcome: DENY when enforced, ASK when not.
+        if (!enforced) return Verdict.ASK
         return if (isTrustedCaller(toolName)) Verdict.ASK else Verdict.DENY
     }
 
-    /** The one-line reason a call tripped the guard (for the card / transcript), or null. */
-    fun reason(toolName: String, input: JsonObject, policy: Policy): String? =
-        classify(toolName, input, policy)?.second
+    /** Whether [result]'s specific rule is currently enforced (vs. downgraded to ASK) per [policy]'s toggles. */
+    private fun isEnforced(result: Classification, policy: Policy): Boolean = when (result.category) {
+        Category.CREDENTIAL -> policy.enforceCredentials
+        Category.DANGEROUS_COMMAND -> policy.enforceDangerousCommands
+        Category.FOREIGN -> when (result.foreignReason) {
+            ForeignReason.OTHER_USER_HOME -> policy.enforceForeignOtherUserHome
+            ForeignReason.NETWORK_MOUNT -> policy.enforceForeignNetworkMounts
+            ForeignReason.WSL_MOUNT -> policy.enforceForeignWslMounts
+            null -> true // unreachable in practice — classify() always tags a FOREIGN hit with its sub-rule
+        }
+    }
+
+    /** The one-line reason a call tripped the guard (for the card / transcript), or null. Always names where to
+     *  change this — see [SETTINGS_PATH] — whether the rule is enforced right now or already downgraded. */
+    fun reason(toolName: String, input: JsonObject, policy: Policy): String? {
+        val result = classify(toolName, input, policy) ?: return null
+        return if (isEnforced(result, policy)) "${result.text} — disable this in $SETTINGS_PATH"
+        else "${result.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
+    }
+
+    /** [Category] + [ForeignReason] (FOREIGN only) + human-readable text. */
+    private data class Classification(val category: Category, val foreignReason: ForeignReason? = null, val text: String)
 
     /**
-     * Category + human reason, or null. Order = severity: FOREIGN wins the wording.
+     * Classification + human reason, or null. Order = severity: FOREIGN wins the wording.
      *
      * The **project root is the sanctioned zone**: a file the user brought into their own repo is theirs, under
      * their responsibility, so a credential file *inside the project* is not blocked. Outside it, a credential is
      * caught. FOREIGN territory is exempt inside the project too (you opened it on purpose). A dangerous **command**
      * is location-independent — running `mimikatz` is dangerous whatever the working directory — so it is judged
      * regardless of the project boundary.
+     *
+     * Pure detection: runs identically regardless of [Policy]'s enforcement toggles — those only affect [verdict]'s
+     * OUTCOME (see [isEnforced]), never whether a match is found at all.
      */
-    private fun classify(toolName: String, input: JsonObject, policy: Policy): Pair<Category, String>? {
+    private fun classify(toolName: String, input: JsonObject, policy: Policy): Classification? {
         // Every candidate is judged on its literal form AND its resolved real path (symlink/`..` laundering).
         val paths = expandWithResolved(pathCandidates(input, policy.home), policy)
 
-        foreignHit(paths, policy)?.let { return Category.FOREIGN to "reaches outside your own space: $it" }
+        foreignHit(paths, policy)?.let {
+            return Classification(Category.FOREIGN, it.reason, "reaches outside your own space: ${it.path}")
+        }
 
         val projRoot = policy.projectRoot?.let { normalize(it, policy.home) }
         val outsideProject = paths.filter { projRoot == null || !under(it, projRoot) }
         val matchers = policy.globs.map { compile(it, policy.home) }
         outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
-            ?.let { return Category.CREDENTIAL to "reads credentials or key material outside the project: $it" }
+            ?.let { return Classification(Category.CREDENTIAL, text = "reads credentials or key material outside the project: $it") }
 
-        dangerousCommand(input)?.let { return Category.DANGEROUS_COMMAND to "runs a command that can expose secrets: $it" }
+        dangerousCommand(input)?.let { return Classification(Category.DANGEROUS_COMMAND, text = "runs a command that can expose secrets: $it") }
 
         return null
     }
@@ -364,18 +440,23 @@ object SensitiveGuard {
 
     // ── rule: foreign territory ──────────────────────────────────────────────────────────────────────────
 
-    private fun foreignHit(paths: List<String>, policy: Policy): String? {
+    /** A FOREIGN-territory match, tagged with WHICH sub-rule tripped (see [ForeignReason]) — [isEnforced] uses the
+     *  tag to look up the right toggle, so each sub-rule can be softened to ASK independently of the others. */
+    private data class ForeignHit(val path: String, val reason: ForeignReason)
+
+    private fun foreignHit(paths: List<String>, policy: Policy): ForeignHit? {
         val projRoot = policy.projectRoot?.let { normalize(it, policy.home) }
         val myHome = policy.home?.let { normalize(it, null) }
         val guarded = policy.guardedRoots.map { normalize(it, policy.home) }.filter { it.isNotBlank() }
-        return paths.firstOrNull { p ->
-            if (projRoot != null && under(p, projRoot)) return@firstOrNull false
-            if (myHome != null && under(p, myHome)) return@firstOrNull false
-            isUnc(p) ||
-                foreignHome(p, policy.currentUser) ||
-                (policy.blockForeignWslMounts && underForeignMnt(p)) ||
-                guarded.any { under(p, it) }
+        for (p in paths) {
+            if (projRoot != null && under(p, projRoot)) continue
+            if (myHome != null && under(p, myHome)) continue
+            if (isUnc(p)) return ForeignHit(p, ForeignReason.NETWORK_MOUNT)
+            if (foreignHome(p, policy.currentUser)) return ForeignHit(p, ForeignReason.OTHER_USER_HOME)
+            if (policy.blockForeignWslMounts && underForeignMnt(p)) return ForeignHit(p, ForeignReason.WSL_MOUNT)
+            if (guarded.any { under(p, it) }) return ForeignHit(p, ForeignReason.NETWORK_MOUNT)
         }
+        return null
     }
 
     /** Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). */
