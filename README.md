@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-4.4.1-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.1%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-666%20JVM%20%2B%2044%20frontend-success)](#testing)
+[![Tests](https://img.shields.io/badge/tests-672%20JVM%20%2B%2044%20frontend-success)](#testing)
 
 A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not a terminal wrapper, but a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, a deterministic security layer, and full protocol-level access to the `claude` binary.
 
@@ -174,7 +174,7 @@ npm test                 # frontend suite (vitest + jsdom)
 
 ### Testing
 
-The suite is a real pyramid — **666 JVM tests + 44 frontend**, 0 failures:
+The suite is a real pyramid — **672 JVM tests + 44 frontend**, 0 failures:
 
 - **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker` and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
 - **headless component** — `BasePlatformTestCase` in-process, for the project services and the settings UI;

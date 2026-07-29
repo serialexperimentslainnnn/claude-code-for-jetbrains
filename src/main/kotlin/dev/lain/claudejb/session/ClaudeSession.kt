@@ -19,6 +19,7 @@ import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
+import dev.lain.claudejb.ui.ReviewPrompt
 import dev.lain.claudejb.process.ClaudeLoginFlow
 import dev.lain.claudejb.process.ClaudeProcess
 import dev.lain.claudejb.process.TerminalLauncher
@@ -1290,6 +1291,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 } else {
                     // A clean turn means we're authenticated; allow a future auth failure to prompt again.
                     loginPrompted = false
+                    // Count it toward the one-and-only Marketplace review ask. Only successful turns count, so
+                    // nobody is ever asked to rate a session that was failing on them. See [ReviewPrompt].
+                    ReviewPrompt.onSuccessfulTurn(project)
                 }
                 diffs.refreshTouched()
                 fireState()
