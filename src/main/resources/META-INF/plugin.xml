@@ -10,8 +10,8 @@
         its stream-json protocol: no Node.js at runtime, no terminal window, no API key required if you
         already have a Claude subscription.</p>
 
-        <p>Works in IntelliJ IDEA, Android Studio, PyCharm, WebStorm, PhpStorm, Rider, GoLand, RubyMine,
-        CLion, DataGrip, DataSpell, Aqua and RustRover — Android development included.</p>
+        <p>Works in IntelliJ IDEA, PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip,
+        DataSpell, Aqua, RustRover and Android Studio.</p>
 
         <p><em>Unofficial, community-built, open-source plugin. Not affiliated with, sponsored by, or
         endorsed by Anthropic or JetBrains. It requires the user's own separately-installed
