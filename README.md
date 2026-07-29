@@ -96,7 +96,7 @@ Separately: jump-to-code links can only ever open inside the project or your own
 
 ## Requirements
 
-- **JetBrains IDE** 2025.1 or newer (build 251+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with **JCEF enabled** (bundled with the IDE's JBR by default; the chat UI is an embedded web view)
+- **JetBrains IDE** 2025.1 or newer (build 251+) — IntelliJ IDEA, Android Studio, PyCharm, WebStorm, Rider, … — with **JCEF enabled** (bundled with the IDE's JBR by default; the chat UI is an embedded web view)
 - **`claude` CLI** installed and on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code`, or follow [claude.ai/code](https://claude.ai/code)
   - Custom location? Set the executable path (and any environment variables) in **Settings → Tools → Claude Code**
