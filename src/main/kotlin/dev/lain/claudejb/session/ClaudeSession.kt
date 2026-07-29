@@ -758,6 +758,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     toolUseId = dto.toolUseId,
                     parentToolUseId = dto.parentToolUseId,
                     filePath = dto.filePath,
+                    // Without this a restored command card fell back to the pre-4.3.2 plain-text rendering:
+                    // no code block, nothing to copy. Restore must produce the SAME row a live turn does.
+                    commandText = dto.commandText,
                 )
             }
         }
