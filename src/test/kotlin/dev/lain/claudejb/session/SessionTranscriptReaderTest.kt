@@ -272,4 +272,59 @@ class SessionTranscriptReaderTest {
     fun `DEFAULT_RESTORE_CAP is a positive conservative cap`() {
         assertTrue(SessionTranscriptReader.DEFAULT_RESTORE_CAP > 0)
     }
+
+    // ── restore must render like LIVE, not like an older build ──────────────────────────────────────────────
+    // A reloaded transcript is reconstructed here, on a code path entirely separate from a live turn, so every
+    // rendering input a live TOOL row carries has to be reproduced — otherwise a restored card silently falls
+    // back to an older look. This bit the plugin once already (4.3.1: restored file cards lost their
+    // jump-to-code path) and again here (4.4.1: restored command cards lost the copyable code block).
+
+    private fun bashLines(cmd: String, output: String = "ok", isError: Boolean = false) = listOf(
+        """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"$cmd"}}]}}""",
+        """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"$output","is_error":$isError}]}}""",
+    )
+
+    @Test
+    fun `a restored command call carries its command text, so the card renders a copyable code block`() {
+        val tool = SessionTranscriptReader.parseEntries(bashLines("git status")).first { it.speaker == "TOOL" }
+        assertEquals("git status", tool.commandText)
+    }
+
+    @Test
+    fun `a restored command's output is tagged so it renders as a code block, not plain text`() {
+        val out = SessionTranscriptReader.parseEntries(bashLines("ls -la")).first { it.speaker == "TOOL_OUTPUT" }
+        assertEquals("command", out.meta)
+    }
+
+    @Test
+    fun `a restored FAILED command output keeps both tags, in the same shape the live path emits`() {
+        val out = SessionTranscriptReader
+            .parseEntries(bashLines("false", output = "boom", isError = true))
+            .first { it.speaker == "TOOL_OUTPUT" }
+        assertEquals("command error", out.meta)
+    }
+
+    @Test
+    fun `a non-command tool is untouched — no command text, no tag on its output`() {
+        val lines = listOf(
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Read","input":{"file_path":"/tmp/x/Foo.kt"}}]}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"contents"}]}}""",
+        )
+        val entries = SessionTranscriptReader.parseEntries(lines)
+        assertNull(entries.first { it.speaker == "TOOL" }.commandText)
+        assertNull(entries.first { it.speaker == "TOOL_OUTPUT" }.meta)
+    }
+
+    @Test
+    fun `an output is only tagged from its OWN call — ids are not crossed`() {
+        val lines = listOf(
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"cmd","name":"Bash","input":{"command":"echo hi"}}]}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"/tmp/a.kt"}}]}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"read","content":"file body"}]}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"cmd","content":"hi"}]}}""",
+        )
+        val outputs = SessionTranscriptReader.parseEntries(lines).filter { it.speaker == "TOOL_OUTPUT" }
+        assertNull(outputs.first { it.toolUseId == "read" }.meta)
+        assertEquals("command", outputs.first { it.toolUseId == "cmd" }.meta)
+    }
 }

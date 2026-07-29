@@ -1,10 +1,12 @@
 package dev.lain.claudejb.session
 
 import com.intellij.openapi.project.Project
+import dev.lain.claudejb.permission.SensitiveGuard
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -25,6 +27,9 @@ data class EntryDTO(
     /** For a file tool: the file it acts on, project-relative — the transcript's jump-to-code link (see
      *  [ClaudeSession.toolFilePath]). Null on every other row, and on any row parsed without a project root. */
     val filePath: String? = null,
+    /** For a command-executing tool: the raw command, so a restored card renders the same copyable code block a
+     *  live one does (see [dev.lain.claudejb.permission.SensitiveGuard.commandText]). Null on every other row. */
+    val commandText: String? = null,
 )
 
 /**
@@ -89,7 +94,30 @@ object SessionTranscriptReader {
                 }
             }
         }
-        return capTail(out, maxEntries)
+        return capTail(tagCommandOutputs(out), maxEntries)
+    }
+
+    /**
+     * Adds the `command` tag to every TOOL_OUTPUT whose originating TOOL call executed a command, mirroring the
+     * tag set the live path builds in `ClaudeSession`'s ToolResult handler — so a **reloaded** transcript renders
+     * a command's output as the same copyable code block a live one does, instead of the old plain-text block.
+     *
+     * Done as a pass over the finished list rather than inline, because the JSONL emits the `tool_result` in a
+     * later message than its `tool_use`: at parse time the output's own line carries nothing that says "this came
+     * from a command". Runs before [capTail] so a call trimmed out of the tail window can still have tagged its
+     * output — the orphan-output rule then drops that output anyway, so the tag never outlives its call.
+     */
+    private fun tagCommandOutputs(entries: List<EntryDTO>): List<EntryDTO> {
+        val commandCalls = entries.asSequence()
+            .filter { it.speaker == "TOOL" && it.commandText != null }
+            .mapNotNull { it.toolUseId }
+            .toHashSet()
+        if (commandCalls.isEmpty()) return entries
+        return entries.map { e ->
+            if (e.speaker != "TOOL_OUTPUT" || e.toolUseId !in commandCalls) return@map e
+            // Space-separated tag set, same shape and order as the live path: "command", or "command error".
+            e.copy(meta = if (e.meta == "error") "command error" else "command")
+        }
     }
 
     /**
@@ -121,7 +149,13 @@ object SessionTranscriptReader {
                     "tool_result" -> {
                         val text = toolResultText(block["content"])
                         val id = block["tool_use_id"]?.jsonPrimitive?.contentOrNull
-                        if (text.isNotBlank()) out += EntryDTO("TOOL_OUTPUT", text, toolUseId = id)
+                        // `error` here, `command` added later by tagCommandOutputs (the originating tool_use may
+                        // not have been parsed yet) — together they form the same space-separated tag set the
+                        // live path builds in ClaudeSession's ToolResult handler.
+                        val isError = block["is_error"]?.jsonPrimitive?.booleanOrNull == true
+                        if (text.isNotBlank()) {
+                            out += EntryDTO("TOOL_OUTPUT", text, meta = if (isError) "error" else null, toolUseId = id)
+                        }
                     }
                 }
             }
@@ -151,6 +185,9 @@ object SessionTranscriptReader {
                         meta = name,
                         toolUseId = id,
                         filePath = ClaudeSession.toolFilePath(name, input, projectRoot),
+                        // Same command extraction as a LIVE call, so a reloaded transcript renders the current
+                        // copyable code block instead of falling back to the old plain-text card.
+                        commandText = SensitiveGuard.commandText(input),
                     )
                 }
             }
