@@ -4,6 +4,12 @@
 
 If the terminal can't be opened at all — say you've disabled the bundled Terminal plugin — the plugin now falls back to signing you in **natively**, with no terminal involved, instead of giving up. The manual command is only ever shown as a genuine last resort.
 
+**⭐ Asked once, and only once.** After 25 successful turns, a single IDE notification asks whether you'd leave a review on the Marketplace — and then never asks again, whatever you click. No dialogs, no "remind me later", nothing that interrupts your work. Failed or interrupted turns don't count, so you'll only ever see it if the plugin has actually been working for you.
+
+**📝 Listing rewritten**, with a few stale claims corrected along the way — it advertised a 2025.2 minimum when the plugin actually supports 2025.1+, and documented a couple of shortcuts that had since changed.
+
+Verified **Compatible** on IC-251, IC-252 and IU-262 — including the exact build the `/login` regression was reported on.
+
 ---
 
 ## v4.4.0 — 2026-07-28
