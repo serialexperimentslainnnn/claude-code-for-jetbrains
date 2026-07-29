@@ -1619,12 +1619,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
-     * Runs the OAuth login **natively**: spawns `claude auth login` under a PTY ([ClaudeLoginFlow]) so the binary
-     * can drive its interactive flow (the `--print` chat session can't host it). The binary opens the browser and
-     * prints the authorize URL; the plugin opens the URL too (reliable inside the IDE), then collects the code the
-     * callback page shows via a native input dialog and hands it back to the binary's stdin. On success the
-     * session is restarted so it picks up the new credentials. Falls back to the IDE terminal if the PTY can't
-     * start. Public so the composer can route a typed `/login` here.
+     * Runs the OAuth login. The `--print` stream-json chat session has no TTY and cannot host the interactive
+     * flow, so it runs outside it, through three paths tried in order — each a real fallback, never a dead end:
+     *
+     *  1. an **IDE terminal tab** running `claude auth login` ([openLoginTerminal]) — preferred: the binary drives
+     *     its whole TUI visibly and captures the OAuth callback automatically, usually with nothing to paste;
+     *  2. the **native PTY flow** ([startNativeLoginFlow]) when the terminal can't open (Terminal plugin disabled,
+     *     or its API moved again) — same binary, same flow, just headless with a code dialog if it asks for one;
+     *  3. only if both fail, a notice carrying the exact command to run by hand.
+     *
+     * Before 4.4.1 this method called the terminal path unconditionally and, on a current IDE, that path silently
+     * failed (see [TerminalLauncher.openAndRunCommand]) — so `/login` *always* landed on step 3 and the PTY flow
+     * was unreachable code. Public so the composer can route a typed `/login` here.
      */
     fun startLogin() {
         val settings = ClaudeSettings.getInstance(project)
@@ -1634,11 +1640,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             notifyInfo("Sign-in is only for the Anthropic provider. You're on ${settings.provider.label} — set its API key in Settings instead.")
             return
         }
-        // Run `claude auth login` in the IDE terminal (instead of a modal code popup): the binary opens
-        // the browser and captures the auth AUTOMATICALLY via its localhost callback when the browser can
-        // reach it (no code to paste); if not, it prompts for the code in the terminal itself. Nicer and
-        // more capable than scraping a PTY + asking for the code in a dialog.
-        openLoginTerminal()
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
+        edt {
+            if (openLoginTerminal(binary)) return@edt
+            log.info("IDE terminal unavailable for /login — falling back to the native PTY flow")
+            if (startNativeLoginFlow(binary)) {
+                notifyInfo("Signing in… your browser should open. Approve access there to finish.")
+                return@edt
+            }
+            notifyError(
+                "Couldn't start the sign-in flow. Run this in a terminal, then restart the chat:\n" +
+                    TerminalLauncher.loginCommand(binary.absolutePath)
+            )
+        }
     }
 
     /** EDT-only. Asks for the authorization code and feeds it to the running [ClaudeLoginFlow] (or cancels it). */
@@ -1660,32 +1674,64 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
-     * Opens an IDE terminal running `claude login` — kept only as the fallback for [startLogin] when a PTY can't
-     * be allocated. Always uses the binary's absolute path so a GUI IDE that didn't inherit the user's login
-     * `$PATH` still launches the right binary; falls back to a notice carrying the exact command if the IDE
-     * Terminal plugin is unavailable.
+     * Opens an IDE terminal running `claude auth login`. Preferred over the PTY flow because the binary drives its
+     * whole interactive TUI visibly and captures the OAuth callback automatically (usually nothing to paste).
+     * Always uses the binary's absolute path so a GUI IDE that didn't inherit the user's login `$PATH` still
+     * launches the right binary. Returns whether the terminal actually opened, so [startLogin] can fall through to
+     * the native PTY flow instead of dead-ending on a "do it yourself" notice.
      */
-    private fun openLoginTerminal() {
-        val settings = ClaudeSettings.getInstance(project)
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
-        val command = TerminalLauncher.loginCommand(binary.absolutePath)
-        edt {
-            if (TerminalLauncher.openAndRun(project, command, "claude login")) {
-                // We can't observe the terminal's completion, so offer a one-click restart to pick up the
-                // new auth once the user finishes signing in there.
-                NotificationGroupManager.getInstance()
-                    .getNotificationGroup(NOTIFICATION_GROUP)
-                    .createNotification(
-                        "Claude Code",
-                        "Finish signing in in the terminal — the browser opens automatically. When it confirms you're logged in, restart the chat to use it.",
-                        NotificationType.INFORMATION,
-                    )
-                    .addAction(NotificationAction.createSimple("Restart chat") { restart() })
-                    .notify(project)
-            } else {
-                notifyError("Couldn't open the IDE terminal. Run this in a terminal, then restart the chat:\n$command")
-            }
+    private fun openLoginTerminal(binary: java.io.File): Boolean {
+        val opened = TerminalLauncher.openAndRunCommand(
+            project, TerminalLauncher.loginArgv(binary.absolutePath), "claude login",
+        )
+        if (opened) {
+            // We can't observe the terminal's completion, so offer a one-click restart to pick up the
+            // new auth once the user finishes signing in there.
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup(NOTIFICATION_GROUP)
+                .createNotification(
+                    "Claude Code",
+                    "Finish signing in in the terminal — the browser opens automatically. When it confirms you're logged in, restart the chat to use it.",
+                    NotificationType.INFORMATION,
+                )
+                .addAction(NotificationAction.createSimple("Restart chat") { restart() })
+                .notify(project)
         }
+        return opened
+    }
+
+    /**
+     * Native PTY fallback for [startLogin]: runs `claude auth login` under a pseudo-terminal ([ClaudeLoginFlow])
+     * with no IDE terminal involved, so signing in still works when the bundled Terminal plugin is disabled or its
+     * API has moved again. The binary opens the browser itself; if it asks for a code we scrape the prompt and
+     * collect it in a dialog. Returns whether the PTY spawned.
+     */
+    private fun startNativeLoginFlow(binary: java.io.File): Boolean {
+        // pty4j REPLACES the child env wholesale (unlike ClaudeProcess, which inherits the parent's and layers
+        // extras on top), so the base environment has to be merged in here or the binary loses PATH/HOME entirely.
+        val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
+        val flow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
+        val started = flow.start(object : ClaudeLoginFlow.Listener {
+            override fun onAuthUrl(url: String) {
+                loginAuthUrl = url
+                edt { BrowserUtil.browse(url) }
+            }
+
+            override fun onCodeRequested() = edt { promptForLoginCode(flow) }
+
+            override fun onResult(success: Boolean, message: String) = edt {
+                loginFlow = null
+                loginAuthUrl = null
+                if (success) {
+                    notifyInfo(message)
+                    restart() // pick up the new credentials
+                } else {
+                    notifyError(message)
+                }
+            }
+        })
+        if (started) loginFlow = flow
+        return started
     }
 
     /**

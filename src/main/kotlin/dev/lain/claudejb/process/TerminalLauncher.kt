@@ -14,11 +14,12 @@ import org.jetbrains.plugins.terminal.TerminalToolWindowManager
  * environment". To log in we drop the user into an actual interactive terminal that owns a TTY.
  *
  * The IDE Terminal plugin (`org.jetbrains.plugins.terminal`) is bundled in every JetBrains IDE, but we still
- * gate on [isAvailable] and confine the API touch to [openAndRun] so a stripped/disabled install degrades to
- * a caller-handled fallback (a notification with the exact command) instead of a `ClassNotFoundException`.
+ * gate on [isAvailable] and confine the API touch to [openAndRunCommand] so a stripped/disabled install degrades
+ * to a caller-handled fallback (the native PTY flow, then a notice) instead of a `ClassNotFoundException`.
  *
- * Since 2025.2 the **Reworked terminal** is the default engine, so [openAndRun] drives the Reworked Terminal
- * API (2025.3+) first and only falls back to the deprecated Classic widget on older IDEs — see its KDoc.
+ * Every platform call is **reflective**: these are internal/experimental terminal APIs that have already broken
+ * once across the plugin's declared range (see [openAndRunCommand] for the regression), so a rename must degrade
+ * to a fallback rather than throw `NoSuchMethodError` at a user.
  */
 object TerminalLauncher {
 
@@ -48,33 +49,63 @@ object TerminalLauncher {
     }
 
     /**
-     * Opens a terminal tab in the project root and runs [command]. Must be called on the EDT. Returns false
-     * (so the caller can fall back) when the Terminal plugin is unavailable or every API call fails, rather than
-     * throwing. The terminal owns a TTY and inherits the IDE's shell environment, which is what the OAuth flow
-     * needs to write `~/.claude.json`.
-     *
-     * Two paths, both **reflective** so the plugin verifier sees no deprecated/experimental API and one build
-     * spans 243..263 (and beyond):
-     *
-     * 1. [openReworked] — the **Reworked Terminal API** (`TerminalToolWindowTabsManager` +
-     *    `TerminalView.createSendTextBuilder().shouldExecute().send(…)`), available since **2025.3 (253)**. This
-     *    is the path that actually works on a modern IDE: since **2025.2 (252)** the Reworked terminal is the
-     *    default engine, and the legacy `createShellWidget(…)` factory explicitly creates a *Classic* tab "regardless
-     *    of the engine" — that classic widget is `@Deprecated` and its `sendCommandToExecute` races the shell
-     *    startup, so the command (`claude auth login`) is dropped and the tab never logs in. The Reworked
-     *    `send()` instead **buffers the text until the shell process is available**, which is what fixes it.
-     *
-     * 2. [openClassic] — the legacy `createShellWidget` / `createLocalShellWidget` + `sendCommandToExecute`
-     *    fallback, kept only for IDEs **< 253** where the Reworked API classes don't exist yet.
-     *
-     * [isAvailable] + this [runCatching] still gate everything, so a missing/renamed method on any build degrades
-     * to the caller's fallback notice instead of a `ClassNotFoundException`.
+     * The login flow as an **argv list** — the form [openAndRunCommand] hands straight to the terminal as the tab's
+     * process. Passing argv instead of a shell string removes the entire quoting problem class ([loginCommand]'s
+     * PowerShell `&` prefix, paths with spaces) and the shell-startup race, because no shell parses it. Pure.
      */
-    fun openAndRun(project: Project, command: String, tabName: String): Boolean {
+    fun loginArgv(binaryPath: String): List<String> = listOf(binaryPath, "auth", "login")
+
+    /**
+     * Opens a terminal tab in the project root that **runs [argv] as the tab's own process**. Must be called on
+     * the EDT. Returns false (so the caller can fall back) when the Terminal plugin is unavailable or every API
+     * call fails, rather than throwing. The tab owns a TTY and inherits the IDE's environment, which is what the
+     * OAuth flow needs to write `~/.claude.json`.
+     *
+     * **This is the fix for a real regression.** The previous implementation tried two reflective paths and, on a
+     * current IDE, BOTH silently failed — so `/login` always degraded to "run this yourself in a terminal":
+     *  - the Reworked path looked up `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager`,
+     *    a class that **does not exist** in the shipped IDE (verified by scanning every jar of IU-262.8665.337);
+     *  - the Classic path called `createShellWidget(…)` / `createLocalShellWidget(…)`, both of which existed on
+     *    251/252 but were **removed by 262**, so the reflective lookup returned null.
+     * The failure was invisible: each step returns false rather than throwing, so nothing reached the log.
+     *
+     * `createNewSession(workingDirectory, tabName, shellCommand, requestFocus, deferSessionStartUntilUiShown)` is
+     * verified present on **251, 252 and 262 alike** — one call that spans the whole declared range. It is reached
+     * reflectively anyway (its `TerminalWidget` return type is stable, but reflection keeps the verifier clear of
+     * any deprecation churn and means a future rename degrades to the fallback instead of a `NoSuchMethodError`).
+     *
+     * Passing [argv] as the tab's `shellCommand` also removes two bug classes the old string-command path had:
+     * no shell parses it (so no quoting hazard — see [loginArgv] vs [loginCommand]), and there is no
+     * send-text-into-a-shell race to lose the command to.
+     */
+    fun openAndRunCommand(project: Project, argv: List<String>, tabName: String): Boolean {
         if (!isAvailable()) return false
+        if (argv.isEmpty()) return false
         return runCatching {
-            openReworked(project, command, tabName) || openClassic(project, command, tabName)
+            openWithShellCommand(project, argv, tabName) ||
+                openReworked(project, argv.joinToString(" "), tabName) ||
+                openClassic(project, argv.joinToString(" "), tabName)
         }.onFailure { log.warn("Failed to open IDE terminal for: $tabName", it) }.getOrDefault(false)
+    }
+
+    /**
+     * The path that actually works across 251→262+: `TerminalToolWindowManager.createNewSession(…)` with [argv] as
+     * the tab's `shellCommand`, so the terminal runs the command directly instead of typing it into a shell.
+     * `requestFocus = true` (the user must interact with the login), `deferSessionStartUntilUiShown = false` (start
+     * immediately — there is nothing to defer for). EDT-only; returns false if the method isn't there.
+     */
+    private fun openWithShellCommand(project: Project, argv: List<String>, tabName: String): Boolean {
+        val mgr = TerminalToolWindowManager.getInstance(project)
+        val method = runCatching {
+            mgr.javaClass.getMethod(
+                "createNewSession",
+                String::class.java, String::class.java, List::class.java,
+                java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+            )
+        }.getOrNull() ?: return false
+        return runCatching {
+            method.invoke(mgr, project.basePath, tabName, argv, true, false) != null
+        }.getOrDefault(false)
     }
 
     /**
