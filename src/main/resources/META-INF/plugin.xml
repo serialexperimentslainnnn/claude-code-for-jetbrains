@@ -4,13 +4,30 @@
     <vendor email="lain.agent604@passmail.com" url="https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains">lain</vendor>
 
     <description><![CDATA[
-        <p>Native graphical Claude Code client for JetBrains IDEs. Drives the local <code>claude</code>
-        binary over its stream-json protocol — no terminal required, no Node.js at runtime.</p>
+        <p>Claude Code in your IDE, with a real GUI — an AI coding agent for JetBrains, not a terminal
+        wrapper. Chat, review every edit as a native IDE diff, and let the agent read and change your
+        project under permissions you control. Runs your locally installed <code>claude</code> CLI over
+        its stream-json protocol: no Node.js at runtime, no terminal window, no API key required if you
+        already have a Claude subscription.</p>
+
+        <p>Works in IntelliJ IDEA, PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip,
+        DataSpell, Aqua, RustRover and Android Studio.</p>
 
         <p><em>Unofficial, community-built, open-source plugin. Not affiliated with, sponsored by, or
         endorsed by Anthropic or JetBrains. It requires the user's own separately-installed
         <code>claude</code> CLI and their own Claude subscription or API key — no credentials are
         bundled or provided.</em></p>
+
+        <h2>Why this plugin</h2>
+        <ul>
+            <li><b>A real GUI, not a terminal.</b> Streaming chat, collapsible tool calls, an inline
+                permission card for every action — rendered natively, never mirrored CLI text</li>
+            <li><b>Diffs are real IDE diffs.</b> Every file edit opens in the editor's own diff viewer and
+                is <b>editable before you approve it</b> — tweak the agent's proposal, then accept</li>
+            <li><b>A deterministic security layer.</b> Out-of-band code — not a prompt the model can talk
+                its way past — checks every tool call before it runs</li>
+            <li><b>No Node.js, no SDK at runtime.</b> Speaks the binary's protocol directly from Kotlin</li>
+        </ul>
 
         <h2>Features</h2>
 
@@ -25,16 +42,50 @@
 
         <h3>Full slash-command palette</h3>
         <ul>
-            <li>All commands from the <code>claude</code> binary surfaced natively (Ctrl+K)</li>
+            <li>All commands from the <code>claude</code> binary surfaced natively — type <code>/</code>
+                in the composer or use the Commands toolbar button</li>
             <li>Built-in <code>/btw</code> command added by the plugin</li>
+            <li><code>/login</code> runs the OAuth sign-in for you — no copy-pasting a command into a shell</li>
         </ul>
 
         <h3>Model &amp; runtime controls</h3>
         <ul>
-            <li>Model selector chip (all models available in your account)</li>
-            <li>Permission mode chip (default / acceptEdits / bypassPermissions)</li>
-            <li>Effort chip (low / medium / high) for extended thinking</li>
-            <li>Thinking token budget (Ctrl+O to toggle)</li>
+            <li>Model picker read straight from the binary, each entry showing its real version
+                (Opus, Sonnet, Haiku) — nothing hardcoded, new models appear on their own</li>
+            <li>Permission mode chip (default / acceptEdits / plan / bypassPermissions)</li>
+            <li>Effort chip (low / medium / high / xhigh / max) and adaptive extended thinking</li>
+            <li>Anthropic or DeepSeek as the provider, each with its own key in the IDE password safe</li>
+            <li>Advanced launch options: max turns, USD budget cap, fallback model, extra directories</li>
+        </ul>
+
+        <h3>Security — a deterministic tool-call lock</h3>
+        <ul>
+            <li>Every tool call is checked <b>before</b> any auto-approval, so it applies even in
+                <code>acceptEdits</code> / <code>bypassPermissions</code></li>
+            <li>Blocks reads of credentials and key material (SSH/GPG keys, cloud and database secrets,
+                browser and password-manager stores, access tokens), credential-dumping and exfiltration
+                commands, and access to other users' homes or network mounts</li>
+            <li>Deterministic code, not an LLM guardrail — there is no prompt that argues it into a Yes</li>
+            <li>Each rule is individually switchable in Settings; disabling one downgrades an automatic
+                block to a permission card, never to a silent allow</li>
+        </ul>
+
+        <h3>Jump to code, and read it comfortably</h3>
+        <ul>
+            <li>File paths, directories and symbols in Claude's replies become clickable links — but only
+                after the IDE confirms them, so a link is never dead</li>
+            <li>Syntax highlighting for diffs and file output, in your IDE's own colours</li>
+            <li>Executed shell commands render as their own copyable code block</li>
+        </ul>
+
+        <h3>Sessions, usage and MCP</h3>
+        <ul>
+            <li>Session history read from the binary's own files — reopen past chats, rename, fork, delete;
+                your open tabs are restored on IDE startup</li>
+            <li>Session dashboard: context breakdown, token usage and cost, account, background tasks and
+                running subagents</li>
+            <li>Optional MCP support — let Claude query the IDE through JetBrains' MCP server, or register
+                your own MCP servers</li>
         </ul>
 
         <h3>Native diff review for file edits</h3>
@@ -54,15 +105,19 @@
         <h3>IDE integration</h3>
         <ul>
             <li>Tool window anchored to the right panel (same area as AI Assistant)</li>
-            <li>Light and dark theme support with custom icons</li>
-            <li>Works in any IntelliJ Platform IDE (IDEA, PyCharm, WebStorm, GoLand, etc.)</li>
+            <li>Right-click to <b>Explain with Claude</b>, or add the current selection or file as context</li>
+            <li>Attach files, directories, the current selection, or paste and drag-drop images</li>
+            <li>The IDE sees the agent's writes immediately — no stale editors, no manual refresh</li>
+            <li>Follows your IDE theme, light and dark, with custom icons on every tool call</li>
+            <li>Works in any IntelliJ Platform IDE (IDEA, PyCharm, WebStorm, GoLand, Rider, and the rest)</li>
         </ul>
 
         <h2>Requirements</h2>
         <ul>
-            <li>JetBrains IDE 2025.2 or newer (build 252+); the native chat UI requires JCEF, bundled with the IDE's JBR</li>
-            <li><a href="https://claude.ai/code"><code>claude</code> binary</a> installed and on PATH or <code>~/.local/bin/</code></li>
-            <li>Claude subscription (claude.ai) or <code>ANTHROPIC_API_KEY</code> environment variable</li>
+            <li>JetBrains IDE 2025.1 or newer (build 251+); the chat UI requires JCEF, bundled with the IDE's JBR</li>
+            <li><a href="https://claude.ai/code"><code>claude</code> CLI</a> installed and on PATH or
+                <code>~/.local/bin/</code> (<code>npm install -g @anthropic-ai/claude-code</code>)</li>
+            <li>A Claude subscription (Pro / Max / Team / Enterprise) or an <code>ANTHROPIC_API_KEY</code></li>
         </ul>
 
         <h2>License &amp; trademarks</h2>

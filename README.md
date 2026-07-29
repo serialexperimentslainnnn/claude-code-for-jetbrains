@@ -1,9 +1,9 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-4.4.0-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-4.4.1-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.1%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-663%20JVM%20%2B%2044%20frontend-success)](#testing)
+[![Tests](https://img.shields.io/badge/tests-666%20JVM%20%2B%2044%20frontend-success)](#testing)
 
 A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not a terminal wrapper, but a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, a deterministic security layer, and full protocol-level access to the `claude` binary.
 
@@ -61,7 +61,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Account & diagnostics** — Account info, Binary Version, Effective Settings and an interactive MCP-runtime dialog in the gear menu.
 
 ### Login & look
-- **Native `/login`** — PTY-based OAuth: the plugin opens your browser, collects the code in the IDE and signs you in. No terminal tab needed.
+- **`/login` from the chat** — runs the OAuth sign-in in an IDE terminal tab (the browser opens and the callback is captured automatically), falling back to a headless PTY-based flow if the Terminal plugin is unavailable. No copy-pasting a command into an external shell.
 - **`AskUserQuestion`** — multi-select option cards rendered natively with wrapped labels, descriptions and previews.
 - **IDE-themed** — surfaces, text, borders and syntax colours follow the active theme (light/dark), with the Claude coral as the accent and custom icons on every tool call.
 - **🌈 Vibe Coder Mode** — opt-in toggle that animates the accent through the rainbow and swaps the avatar for a Nyan Cat. Off by default.
@@ -174,7 +174,7 @@ npm test                 # frontend suite (vitest + jsdom)
 
 ### Testing
 
-The suite is a real pyramid — **663 JVM tests + 44 frontend**, 0 failures:
+The suite is a real pyramid — **666 JVM tests + 44 frontend**, 0 failures:
 
 - **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker` and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
 - **headless component** — `BasePlatformTestCase` in-process, for the project services and the settings UI;
@@ -191,6 +191,8 @@ The TS SDK package (`node_modules/@anthropic-ai/claude-agent-sdk/`) is kept as a
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and verified empirical facts about the binary's behaviour.
 
 ## Status
+
+**v4.4.1** — fixes `/login` always dead-ending on "run this yourself in a terminal": every IDE terminal API the plugin reflected on had been removed after 2025.2, and each lookup failed silently. It now opens a real terminal tab on every supported IDE, with a headless native sign-in as a genuine fallback rather than a dead end.
 
 **v4.4.0** — each rule in the [security lock](#security) is now independently switchable (Settings ▸ Claude Code ▸ Security), all ON by default; disabling one only ever downgrades an automatic block to a permission card, never to a silent allow. Also fixed: several of the CLI's own native tools (background tasks, cron, worktrees, and more) had fallen off the plugin's trusted-tool allowlist as the CLI grew, so they were hard-denied exactly like a blocked third-party MCP call — the allowlist is now current.
 

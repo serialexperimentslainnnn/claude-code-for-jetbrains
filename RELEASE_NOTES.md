@@ -1,3 +1,11 @@
+## v4.4.1 — 2026-07-29
+
+**🔑 Fixed: `/login` never actually opened the terminal.** Signing in from the chat always ended on "run this command yourself in a terminal" — the plugin was calling IDE terminal APIs that no longer exist in current IDEs (they were removed after 2025.2), and because each lookup failed quietly, nothing showed up in the log to explain it. `/login` now opens a real terminal tab and runs the sign-in there, on every supported IDE version.
+
+If the terminal can't be opened at all — say you've disabled the bundled Terminal plugin — the plugin now falls back to signing you in **natively**, with no terminal involved, instead of giving up. The manual command is only ever shown as a genuine last resort.
+
+---
+
 ## v4.4.0 — 2026-07-28
 
 **🔓 Security toggles — Settings ▸ Claude Code ▸ Security.** The five rules behind the plugin's deterministic sensitive-data lock (credentials, dangerous commands, and the three foreign-territory checks — another user's home, network/UNC mounts, foreign WSL drives) can now be switched off individually, if you specifically need to. They're all **ON by default**, so nothing changes unless you go looking. Turning one off is never a silent allow: the lock still watches for it, it just shows you a permission card instead of blocking automatically — every time, for every caller, MCP servers and Skills included. Every block or prompt from the lock now also tells you exactly where to change it.

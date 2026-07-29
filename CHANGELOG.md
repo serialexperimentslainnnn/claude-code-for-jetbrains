@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.1] — 2026-07-29
+
+### Fixed
+- **`/login` always dead-ended on "run this yourself in a terminal".** Every platform API `TerminalLauncher` reflected on to open the terminal tab was missing at runtime on a current IDE: the Reworked path looked up `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager`, which is **not present in the shipped IDE at all** (verified by scanning every jar of IU-262.8665.337), and the Classic path called `TerminalToolWindowManager.createShellWidget(…)` / `.createLocalShellWidget(…)`, both of which existed on 251/252 but were **removed by 262**. Each lookup returns `false` rather than throwing, so the failure was completely silent — nothing reached the log, the user just always got the manual-command notice. Replaced with `TerminalToolWindowManager.createNewSession(workingDirectory, tabName, shellCommand, requestFocus, deferSessionStartUntilUiShown)`, verified by hand to exist on **251, 252 and 262 alike**. The login is now passed as an **argv list** rather than a shell string, which also removes the shell-quoting hazard (the Windows PowerShell `&` prefix, paths with spaces) and the send-text-into-a-shell startup race that could swallow the command.
+- **The native PTY sign-in was unreachable code.** `startLogin()` called the terminal path unconditionally, so `ClaudeLoginFlow` — the pty4j-based flow the KDoc and docs described as the primary path — was never invoked, and there was no fallback when the terminal failed. `/login` now tries the IDE terminal, then the native PTY flow (which needs no Terminal plugin at all), and only then the manual notice; each step is a real fallback rather than a dead end. Fixed a latent bug in that path while wiring it up: pty4j **replaces** the child environment wholesale (unlike `ClaudeProcess`, which inherits the parent's), so the base environment is now merged in — without it the spawned binary would have lost `PATH`/`HOME` entirely.
+
+### Internal
+- Added `TerminalApiContractTest`, which pins the `createNewSession` overload against the real platform on the build classpath so a future rename fails at build time instead of silently degrading. Documents why CI missed the original break: the plugin compiles/tests against IC-2025.2 (252), where the removed factories still exist, while the regression only manifests on 262+ — an asymmetry `verifyPlugin`'s range run is the complementary guard for.
+
 ## [4.4.0] — 2026-07-28
 
 ### Added
