@@ -67,6 +67,30 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private val attachments = LinkedHashMap<String, Attachment>()
     private var nextAttachmentId = 0L
 
+    /**
+     * Actions deferred by [whenReady]. EDT-confined: both the add and the drain happen on the EDT.
+     *
+     * MUST be declared BEFORE the `init` block: Kotlin runs property initializers and `init` blocks in
+     * declaration order, so a list declared below `init` is still null while `init` runs — and `init` calls
+     * [whenReady] three times. Declaring it after threw NPE inside the constructor, which took the whole tab
+     * with it: no chat could be opened or restored at all.
+     */
+    private val pendingUntilReady = mutableListOf<() -> Unit>()
+
+    /**
+     * The last `get_usage` reply, and when it was asked for. Cached because [pushSession] runs on every state
+     * change (many per turn) while the usage figures move on the order of minutes — re-asking the binary each
+     * time would be a round-trip per keystroke-ish event for a number that has not changed.
+     *
+     * Declared above `init` for the same reason as [pendingUntilReady]: `init` reads `lastUsage` (via
+     * [pushMetaState]/[pushSession]) and can write `lastUsageAt` (via [requestUsage], when the session is
+     * already running). A property initializer below `init` runs AFTER it and would silently reset the throttle
+     * it had just set. Nullable and primitive types hide this — they read as null/0 rather than throwing — which
+     * is precisely why it is worth stating instead of relying on someone noticing.
+     */
+    private var lastUsage: dev.lain.claudejb.protocol.UsageReport? = null
+    private var lastUsageAt = 0L
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -180,8 +204,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         queued.forEach { it() }
     }
 
-    /** Actions deferred by [whenReady]. EDT-confined: both the add and the drain happen on the EDT. */
-    private val pendingUntilReady = mutableListOf<() -> Unit>()
     override fun onMetadataChanged() {
         pushMetaState()
         pushSession()
@@ -317,6 +339,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushSession()
         requestMcp()
         requestVersion()
+        // Opening the dashboard is one of the two documented refresh triggers for the plan limits (the other is
+        // a rate_limit_event). It was stated in requestUsage's contract and not actually wired, so the bars
+        // showed whatever the last unrelated refresh had left. Throttled, so re-opening is free.
+        requestUsage()
         host.exec("window.cc.openDashboard && window.cc.openDashboard()")
     }
 
@@ -324,13 +350,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private fun pushSession() {
         host.exec("window.cc.session && window.cc.session(" + JcefSessionData.sessionJson(session, lastUsage) + ")")
     }
-
-    /**
-     * The last `get_usage` reply. Cached because [pushSession] runs on every state change (many per turn) while
-     * the usage figures move on the order of minutes — re-asking the binary each time would be a round-trip per
-     * keystroke-ish event for a number that has not changed.
-     */
-    private var lastUsage: dev.lain.claudejb.protocol.UsageReport? = null
 
     /**
      * Refreshes the plan-limit windows, then re-pushes the dashboard.
@@ -349,12 +368,15 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         session.requestUsage { report ->
             if (report != null) {
                 lastUsage = report
+                // BOTH surfaces, or they disagree. `lastUsage` feeds the dashboard bars (pushSession) AND the
+                // composer's usage dots (pushMetaState → stateJson). Pushing only the dashboard left the dots
+                // blank until some unrelated state change happened to re-push — so the same number appeared in
+                // one place immediately and in the other "a while later", which reads as a broken readout.
                 pushSession()
+                pushMetaState()
             }
         }
     }
-
-    private var lastUsageAt = 0L
 
     /** Fetch MCP server status asynchronously and hand the raw payload to the dashboard's MCP health card. */
     private fun requestMcp() {
@@ -626,7 +648,17 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         val u = url.trim()
         when {
             u.lowercase().startsWith("https://") -> BrowserUtil.browse(u)
+
             u.startsWith("jb://open") -> openJbLink(u)
+
+            // A markdown link whose href is a PATH rather than a URL — `[BACKLOG](docs/BACKLOG.md)`. It carries
+            // no scheme, so it matched neither branch above and the click did NOTHING: no navigation, no error,
+            // nothing in any log. Bare paths written in prose already resolve (LinkResolver confirms them before
+            // linking), which made this the odd one out — the more deliberate the link, the less it worked.
+            //
+            // The scheme test is what keeps this from swallowing the other schemes DOMPurify allows (`mailto:`,
+            // `tel:`, `sms:`…): anything with a scheme is not a path, and is still ignored here as before.
+            LinkResolver.isFilePathHref(u) -> openPath(u.substringBefore('#').trim())
         }
     }
 
@@ -673,9 +705,19 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             if (k.isEmpty()) null else k to runCatching { java.net.URLDecoder.decode(v, Charsets.UTF_8) }.getOrDefault(v)
         }.toMap()
         val raw = params["file"] ?: return
-        // A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
-        // one. Either way this only builds the path — the gate below is what authorises it, and it is the single
-        // place that decides, so a hand-crafted `jb://` URL cannot reach a file we would not have linked.
+        openPath(raw, (params["line"]?.toIntOrNull() ?: 1))
+    }
+
+    /**
+     * Opens [raw] — project-relative or absolute — in the editor, or reveals it in the tree when it is a
+     * directory or an archive. The single authorising gate for every link the transcript can produce.
+     *
+     * A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
+     * one. Either way this only *builds* the path — [LinkResolver.isOpenable] is what authorises it, and it is
+     * the one place that decides, so neither a hand-crafted `jb://` URL nor a markdown href can reach a file we
+     * would not have linked ourselves.
+     */
+    private fun openPath(raw: String, line: Int = 1) {
         val path = resolveAgainstRoot(raw) ?: return
         if (!LinkResolver.isOpenable(path, project.basePath)) return // project or the user's own home, nothing else
         // refreshAndFind, not find: a file Claude has just written may not be in the VFS yet, and a plain lookup
@@ -689,8 +731,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             revealDirectory(vf)
             return
         }
-        val line = (params["line"]?.toIntOrNull() ?: 1).coerceAtLeast(1) - 1
-        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line, 0).navigate(true)
+        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line.coerceAtLeast(1) - 1, 0).navigate(true)
         selectInProjectView(vf)
     }
 

@@ -135,6 +135,34 @@ class ProtocolParserTest {
         assertTrue(event.isError)
     }
 
+    /**
+     * The CLI wraps a failed tool call's `content` in `<tool_use_error>…</tool_use_error>`. Verified against
+     * `claude` 2.1.222, which emits exactly:
+     *   `content: "<tool_use_error>Error: …</tool_use_error>", is_error: true`
+     * and carries the same message UNWRAPPED in the sibling `toolUseResult` field — i.e. the tag is framing for
+     * the model, not text for a human. Rendered verbatim it put raw markup in a native GUI's transcript, which
+     * is the "never mirror raw CLI output" antipattern. `is_error` already conveys the failure structurally.
+     */
+    @Test
+    fun `tool_use_error wrapper is stripped from the rendered text`() {
+        val inner = "Error: No such tool available: Glob. Glob is not available in this session."
+        val line = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result",""" +
+            """"tool_use_id":"t9","content":"<tool_use_error>$inner</tool_use_error>","is_error":true}]}}"""
+        val event = parseOne<ClaudeEvent.ToolResult>(line)
+        assertEquals(inner, event.content)
+        assertTrue(event.isError) // the failure survives structurally, which is what reddens the card
+    }
+
+    @Test
+    fun `a tool result that merely mentions the tag is left intact`() {
+        // Only a wrapper enclosing the WHOLE payload is stripped — otherwise output that legitimately discusses
+        // the tag (this project's own source and tests do) would be silently mangled.
+        val body = "see <tool_use_error> in the CLI bundle"
+        val line = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result",""" +
+            """"tool_use_id":"t10","content":"$body","is_error":false}]}}"""
+        assertEquals(body, parseOne<ClaudeEvent.ToolResult>(line).content)
+    }
+
     // --- stream events (partial messages) ---
 
     @Test

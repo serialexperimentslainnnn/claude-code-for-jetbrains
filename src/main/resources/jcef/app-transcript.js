@@ -159,6 +159,9 @@
           e.preventDefault();
           e.stopPropagation();
           safeSend({ type: 'copy', text: getText() });
+          // Same "Copied" confirmation the code-block buttons give. Without it this button did its job and
+          // said nothing, which is indistinguishable from a broken one — and was reported as exactly that.
+          if (CC.flashCopied) CC.flashCopied(e.currentTarget || this);
         },
       },
     });
@@ -419,6 +422,14 @@
     node.classList.remove('loading', 'running', 'done', 'failed');
     if (state === 'ERROR' || meta === 'error') {
       node.classList.add('failed'); // red — wins over done/loading
+      // Reveal the failure. A tool card is collapsed by default, and its output — which for a failed call is
+      // the ERROR — lives behind that collapse, so a red header was the entire message: you had to know to
+      // expand a card to find out what went wrong. Opened ONCE, tracked on the node, so this never fights a
+      // user who deliberately collapsed it (applyToolState runs again on every state push).
+      if (!node.__autoOpenedOnError) {
+        node.__autoOpenedOnError = true;
+        node.classList.add('open');
+      }
     } else if (state === 'LOADING') {
       node.classList.add('loading'); // fade sky-blue ↔ amber (active)
     } else if (state === 'RUNNING') {

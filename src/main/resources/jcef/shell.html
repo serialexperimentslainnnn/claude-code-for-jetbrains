@@ -34,6 +34,21 @@
         <div id="composer"></div>
       </div>
       <div id="palette" hidden></div>
+
+      <!-- Boot screen, shown while the `claude` binary is launching.
+         Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
+         binary is launched FIRST and this page loads while it boots, so at load time the process is normally
+         not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
+         flashes a live-looking composer it cannot yet send anything with.
+
+         role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
+      <div id="boot" role="status" aria-live="polite">
+        <div class="boot-inner">
+          <div class="boot-mark" aria-hidden="true">✶</div>
+          <div class="boot-title">Loading Claude Code<span class="boot-dots" aria-hidden="true"></span></div>
+          <div class="boot-sub" id="boot-sub">Starting the agent</div>
+        </div>
+      </div>
     </div>
     <!--LIBS-->
     <!--APP-->

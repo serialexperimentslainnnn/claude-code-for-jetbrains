@@ -61,6 +61,18 @@ object JcefState {
             put("turnActive", session.turnActive)
             put("interrupting", session.interrupting)
             put("running", session.isRunning())
+            // "Booting" is a THIRD state, not the absence of `running`: the web app blocks input behind a loading
+            // screen while this is true, and a session that failed to launch must fall out of it (both flags
+            // false) rather than wait forever.
+            put("starting", session.isStarting())
+            // Resuming reads an existing transcript back and is the slower of the two waits, so the boot screen
+            // labels it differently rather than calling both "Starting" and making the long one look hung.
+            put("resuming", session.isStarting() && session.sessionId != null)
+
+            // The live reasoning estimate as a NUMBER, always present (0 when nothing is being reasoned about),
+            // so the readout can render a settled "0" instead of omitting the item. An item that only exists
+            // once it is non-zero is indistinguishable from one that failed to load.
+            put("reasoningTokens", session.liveThinkingTokens)
 
             // Live reasoning suffix while a thinking block is accumulating; null when there's nothing to show.
             val suffix = StatusLineFormatter.thinkingSuffix(session.liveThinkingTokens)

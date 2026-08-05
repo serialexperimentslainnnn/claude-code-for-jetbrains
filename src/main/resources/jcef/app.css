@@ -90,6 +90,9 @@ body {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  /* Containing block for #boot's `position: absolute; inset: 0` — without it the overlay anchors to the
+     viewport, which happens to look the same here and stops doing so the moment anything wraps #app. */
+  position: relative;
 }
 
 #conversation {
@@ -263,6 +266,18 @@ body {
 .copy:hover {
   color: var(--text);
   background: var(--surface);
+}
+
+/* Confirmation state, shared by every Copy affordance (message heads and code-block heads alike). The class
+   was already being applied by the JS and had NO rule at all, so the only feedback was the word changing —
+   easy to miss on a control you are not looking straight at. Green because it reports an outcome, and it
+   holds through :hover so moving the pointer does not wipe the confirmation you just triggered. */
+.act.copied,
+.copy.copied,
+.act.copied:hover,
+.copy.copied:hover {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
 /* USER — a soft full-width card, not a bubble */
@@ -706,6 +721,17 @@ details.fold .fold-body p:first-child {
 }
 .tool-out pre code {
   font-size: 12px;
+}
+/* A FAILED tool's output wraps instead of scrolling sideways.
+   Normal output keeps `overflow: auto` on purpose — it is code, a log or a file dump, and wrapping those
+   corrupts their alignment. An error is prose: "Error: No such tool available: Glob. Glob is not available in
+   this session — find files with `find` via the Bash tool instead" is one long line, so it ran off the right
+   edge and the actionable half (what to use instead) was invisible unless you thought to scroll a card you had
+   no reason to think was scrollable. An error nobody can read without discovering a horizontal scrollbar is an
+   error nobody reads. `anywhere` rather than `break-word` so a long unbroken path or URL also gives way. */
+.tool.failed .tool-out pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* coloured unified diff inside a tool card */
 .tool-out pre.diff code {
@@ -2352,6 +2378,102 @@ mark.cc-hit.active {
   .dash-grid {
     grid-template-columns: 1fr !important;
   }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   BOOT SCREEN — shown while the `claude` binary launches
+   ════════════════════════════════════════════════════════════════════════════
+   Covers the whole tab rather than sitting inside the transcript: while the agent is booting there is nothing
+   to interact with, and a composer that looks live but silently drops what you type is worse than one that is
+   plainly not ready yet. Input is blocked by `#app.booting` below, so this is not merely a visual cover.
+
+   Opaque, not translucent: a half-visible transcript underneath reads as "something is broken", not "wait". */
+#boot {
+  position: absolute;
+  inset: 0;
+  z-index: 60; /* above the dock and permission cards, below nothing else this app draws */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+#boot[hidden] {
+  display: none;
+}
+.boot-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 0 24px;
+}
+/* The Claude starburst, same glyph as the empty state — a character, not an asset, because the CSP forbids
+   url() and every external resource. Breathes gently so the screen is alive without a spinner competing with
+   the dots for attention. */
+.boot-mark {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--accent);
+  animation: bootBreathe 2.2s ease-in-out infinite;
+}
+@keyframes bootBreathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+.boot-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* Dots cycle . → .. → ... and repeat.
+
+   `steps(1, end)` with content swapped at each third holds each state for a full beat instead of easing
+   between them — the point is a discrete count, not a fade. Rendered in a ::after so the dots are not part of
+   the text node: the element is aria-hidden, so a screen reader announces "Loading Claude Code" once rather
+   than re-reading the phrase three times a second as the content mutates. */
+.boot-dots::after {
+  content: '.';
+  animation: bootDots 1.2s steps(1, end) infinite;
+}
+@keyframes bootDots {
+  0% {
+    content: '.';
+  }
+  33% {
+    content: '..';
+  }
+  66% {
+    content: '...';
+  }
+}
+/* Reduced motion: the universal reset would freeze both at their first frame, leaving a single dot and a
+   half-faded mark that read as "stuck". Show the settled state instead — all three dots, mark at full
+   opacity — which is the honest still image of this screen. */
+body.reduced-motion .boot-mark {
+  animation: none !important;
+  opacity: 1;
+}
+body.reduced-motion .boot-dots::after {
+  animation: none !important;
+  content: '...';
+}
+.boot-sub {
+  font-size: 12px;
+  color: var(--dim);
+}
+/* The wait is real: block interaction rather than letting keystrokes fall on the floor. */
+#app.booting #dock,
+#app.booting #conversation {
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Reduced motion — driven by the HOST (body.reduced-motion), deliberately NOT by

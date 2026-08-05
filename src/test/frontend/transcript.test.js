@@ -50,6 +50,33 @@ describe('transcript — assistant Markdown + code blocks', () => {
     copy.click(); // delegated document handler resolves the sibling <code> text
     expect(sent.some((m) => m.type === 'copy' && /hello world/.test(m.text))).toBe(true);
   });
+
+  // A Copy button that copies and says nothing is reported as a broken Copy button — it happened. The
+  // message-level buttons carry their own click handler, so they never reach the delegated code-head path
+  // that flashes; both must confirm, and via the SAME helper so the wording cannot drift apart.
+  it('every Copy affordance confirms with "Copied", message-level ones included', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.CC.send = () => {};
+    win.cc.batch([row(4, 0, 'ASSISTANT', 'plain answer with no code')]);
+
+    const msgCopy = win.document.querySelector('.msg-head .copy');
+    expect(msgCopy).not.toBeNull();
+    expect(msgCopy.textContent).toBe('Copy');
+    msgCopy.click();
+    expect(msgCopy.textContent).toBe('Copied');
+    expect(msgCopy.classList.contains('copied')).toBe(true);
+  });
+
+  it('the user message Copy confirms too', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.CC.send = () => {};
+    win.cc.batch([row(5, 0, 'USER', 'a prompt I typed')]);
+
+    const userCopy = win.document.querySelector('.msg.user .copy');
+    expect(userCopy).not.toBeNull();
+    userCopy.click();
+    expect(userCopy.textContent).toBe('Copied');
+  });
 });
 
 describe('transcript — inline diff colouring', () => {

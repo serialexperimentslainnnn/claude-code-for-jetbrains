@@ -51,6 +51,7 @@
   var built = false;
   var els = null; // { card, input, send, pills:{provider,model,mode,effort,thinking}, queue, ghost, readout, sendIcon }
   var lastState = null; // last cc.state payload
+  var announcedBoot = false; // guards the boot screen's one-per-boot screen-reader announcement
   var commands = []; // from cc.meta
   var hostClipboard = false; // from cc.meta: native-Wayland toolkit → route paste through the host (wl-paste)
   var ghostText = ''; // current ghost suggestion (empty field only)
@@ -999,12 +1000,22 @@
     );
     ro.appendChild(status);
 
-    if (s.context && typeof s.context.pct === 'number') {
-      ro.appendChild(h('span', { class: 'ro-item', text: 'Context ' + Math.round(s.context.pct) + '%' }));
-    }
-    if (typeof s.tokensOut === 'number' && s.tokensOut > 0) {
-      ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(s.tokensOut) + ' out' }));
-    }
+    // These three are ALWAYS rendered, settling at 0 rather than being omitted until they are non-zero.
+    // Hiding an item until it has a value makes "nothing has happened yet" look identical to "this failed to
+    // load", which is exactly how the readout read on a fresh tab: a lone "Idle" and no numbers. A zero is a
+    // measurement; an absence is not.
+    var ctxPct = s.context && typeof s.context.pct === 'number' ? Math.round(s.context.pct) : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: 'Context ' + ctxPct + '%' }));
+
+    var out = typeof s.tokensOut === 'number' ? s.tokensOut : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(out) + ' out' }));
+
+    var reasoning = typeof s.reasoningTokens === 'number' ? s.reasoningTokens : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(reasoning) + ' reasoning' }));
+
+    // Cost stays gated: unlike the counters above it is a currency amount, and "$0.0000" on every idle tab is
+    // noise rather than information — there is no ambiguity to resolve, since a session that has spent nothing
+    // has nothing to report.
     if (typeof s.costUsd === 'number' && s.costUsd > 0) {
       ro.appendChild(h('span', { class: 'ro-item', text: '$' + s.costUsd.toFixed(s.costUsd < 1 ? 4 : 2) }));
     }
@@ -1127,6 +1138,37 @@
     else if (phase === 'interrupting') CC.announce('Stopping…');
     // Only report completion if a turn was actually running — otherwise every idle state push would announce.
     else if (wasWorking) CC.announce('Claude finished responding.');
+  }
+
+  /**
+   * The boot screen: up until the binary is running, then gone for good.
+   *
+   * Three states, not two. `running` means go; `starting` means wait; NEITHER means the launch finished without
+   * a process — a missing binary, a declined trust prompt, a refused remote-mount project. That last case must
+   * clear the screen, or a failed launch leaves the tab covered forever with no way to see the notification
+   * explaining why. The host fires a state push on that path precisely so this can happen.
+   */
+  function renderBoot(s) {
+    var boot = document.getElementById('boot');
+    var app = document.getElementById('app');
+    if (!boot) return;
+    var booting = !s.running && !!s.starting;
+    boot.hidden = !booting;
+    // Announce the FIRST booting render, not just a transition into it. The screen is already on-screen when
+    // the page loads, so the common case never transitions — and the element's own aria-live never fires
+    // either, because static markup present at load is not a mutation. Once per boot: `announcedBoot` resets
+    // when the screen comes down, so a later relaunch announces again.
+    if (booting && !announcedBoot) {
+      announcedBoot = true;
+      CC.announce && CC.announce('Loading Claude Code');
+    }
+    if (!booting) announcedBoot = false;
+    if (app) app.classList.toggle('booting', booting);
+    if (!booting) return;
+    var sub = document.getElementById('boot-sub');
+    // Distinguish the two waits: a fresh launch versus resuming an existing session, which reads a transcript
+    // back and is the slower of the two. Guessing "Starting" for both made the longer wait look like a hang.
+    if (sub) sub.textContent = s.resuming ? 'Resuming your session' : 'Starting the agent';
   }
 
   function renderState(s) {
@@ -1341,6 +1383,11 @@
   // ---- Kotlin-facing API ----------------------------------------------------
   cc.state = function (s) {
     lastState = s || null;
+    // The boot screen is updated FIRST and OUTSIDE the ensureBuilt gate below. It covers the whole tab and
+    // blocks input, so it must never be hostage to the composer having mounted: if `ensureBuilt()` returns
+    // false we bail out early, and an overlay left up with no path to clear it is a worse failure than the
+    // empty composer this screen exists to hide.
+    if (lastState) renderBoot(lastState);
     if (!ensureBuilt()) return; // will render on build via lastState
     renderState(lastState);
   };

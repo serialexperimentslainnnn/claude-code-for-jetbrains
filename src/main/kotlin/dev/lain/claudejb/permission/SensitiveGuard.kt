@@ -114,6 +114,19 @@ object SensitiveGuard {
         "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
         "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
         "ShowOnboardingRolePicker", "Workflow",
+        // Re-audited against `claude` 2.1.222 / SDK 0.3.222. Entries are only ever ADDED here, never removed:
+        // this is a TRUST allowlist, not an inventory. A name that no longer exists costs nothing, while a
+        // first-party name that is missing falls into the third-party branch and is hard-DENIED — the 4.4.0
+        // incident described above. NB the CLI can also retire a tool per-session (it ships distinct
+        // "is disabled for this session" / "is not available in this context" messages, and Glob/Grep do get
+        // withdrawn in some sessions), which is another reason absence here must never be inferred from one run.
+        "AskUserQuestion", "Mcp", "FileRead", "FileEdit", "FileWrite",
+        // ToolSearch was absent, and it is the one that mattered most: it is how the agent loads the schema of
+        // every DEFERRED tool (web, tasks, cron, worktrees), so on a session that defers them, the call that
+        // unlocks all the others was the one landing in the untrusted branch. Found by diffing this list
+        // against a live session's actual tool inventory rather than against the SDK's type names — those are
+        // not the runtime registry (the SDK calls them FileRead/FileEdit/FileWrite; the tools are Read/Edit/Write).
+        "ToolSearch",
     )
 
     /** Everything the guard needs to judge a call. Assembled by the IDE side; pure input here. */

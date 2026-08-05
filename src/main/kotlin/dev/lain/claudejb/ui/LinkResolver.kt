@@ -71,6 +71,24 @@ object LinkResolver {
     fun userHome(): String? = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
 
     /** `~/notes/x.md` → an absolute path under the user's home. Anything else is returned unchanged. */
+    // A URI scheme prefix (`https:`, `mailto:`, `jb:`…), used to tell a link's href apart from a file path.
+    // Two-or-more characters before the colon on purpose: a single letter is a WINDOWS DRIVE (`C:\src`), which
+    // is a path, not a scheme. This plugin ships on Windows, so getting that backwards would break every
+    // absolute-path link there.
+    private val HAS_SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.\\-]+:")
+
+    /**
+     * True when a link's href is a FILE PATH rather than a URL — that is, it carries no URI scheme.
+     *
+     * Markdown links written by the model use plain relative paths (`[BACKLOG](docs/BACKLOG.md)`). Those matched
+     * no scheme branch in the host's link handler and were silently dropped, so the most deliberate kind of link
+     * was the only one that did nothing. Bare paths in prose already worked, which is what made it confusing.
+     */
+    fun isFilePathHref(href: String): Boolean {
+        val h = href.trim()
+        return h.isNotEmpty() && !HAS_SCHEME.containsMatchIn(h)
+    }
+
     fun expandHome(raw: String): String {
         if (raw != "~" && !raw.startsWith("~/")) return raw
         val home = userHome() ?: return raw

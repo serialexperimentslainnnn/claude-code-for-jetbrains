@@ -147,4 +147,34 @@ class LinkGateTest {
         assertTrue(LinkResolver.scanForNames(null, listOf("x.kt" to null)).isEmpty())
         assertTrue(LinkResolver.scanForNames(tmp.toFile().path, emptyList()).isEmpty())
     }
+
+    /**
+     * A markdown link whose href is a path — `[BACKLOG](docs/BACKLOG.md)` — used to do NOTHING when clicked: the
+     * host handled `https://` and `jb://open` and dropped everything else without a sound. Bare paths in prose
+     * already worked, so the more deliberate the link, the less it did.
+     */
+    @Test
+    fun `a path href is recognised, a URL href is not`() {
+        assertTrue(LinkResolver.isFilePathHref("docs/BACKLOG.md"))
+        assertTrue(LinkResolver.isFilePathHref("/etc/hosts")) // recognised here; isOpenable is what refuses it
+        assertTrue(LinkResolver.isFilePathHref("~/notes.md"))
+        assertTrue(LinkResolver.isFilePathHref("src/main/kotlin/A.kt"))
+
+        assertFalse(LinkResolver.isFilePathHref("https://example.com"))
+        assertFalse(LinkResolver.isFilePathHref("jb://open?file=x"))
+        // The other schemes DOMPurify allows must keep falling through untouched rather than being opened as files.
+        assertFalse(LinkResolver.isFilePathHref("mailto:someone@example.invalid"))
+        assertFalse(LinkResolver.isFilePathHref("tel:+34000000000"))
+        assertFalse(LinkResolver.isFilePathHref("sms:+34000000000"))
+        assertFalse(LinkResolver.isFilePathHref("data:image/png;base64,AAAA"))
+    }
+
+    @Test
+    fun `a Windows drive letter is a path, not a scheme`() {
+        // The plugin ships on Windows. A single letter before the colon is a drive, so requiring two-or-more
+        // characters is what keeps `C:\src\main.kt` from being mistaken for a URI scheme and silently ignored.
+        assertTrue(LinkResolver.isFilePathHref("""C:\src\main.kt"""))
+        assertTrue(LinkResolver.isFilePathHref("D:/work/notes.md"))
+        assertFalse(LinkResolver.isFilePathHref("")) // nothing to open
+    }
 }

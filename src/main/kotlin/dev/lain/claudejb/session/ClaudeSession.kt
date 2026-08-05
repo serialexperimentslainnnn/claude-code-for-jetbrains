@@ -389,6 +389,17 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 fireState()
             }
         }
+        // The timer exists to track a turn AS IT RUNS, nothing else. Context and cost cannot move while the
+        // session sits idle, so a poll-per-minute forever was a round-trip through the binary — per tab — for
+        // two numbers that provably had not changed. It now switches itself off at the end of a turn; the
+        // turn-start, turn-end and process-ready paths each poll directly, so nothing waits on a clock.
+        if (!turnActive) edt { quotaPollTimer.stop() }
+    }
+
+    /** Begin tracking a running turn: poll now, then keep the meters live until it ends. */
+    private fun startQuotaPolling() = edt {
+        pollQuota()
+        if (!quotaPollTimer.isRunning) quotaPollTimer.start()
     }
 
     private val broker by lazy {
@@ -423,10 +434,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     fun addListener(listener: SessionListener) {
         listeners.add(listener)
-        // Start the shared quota poll on the first observer (a ChatPanel). javax.swing.Timer must be started on
-        // the EDT; addListener is called from the GUI (ChatPanel.init, on the EDT) but guard with edt{} so a
-        // non-EDT caller can't break the timer's thread affinity. Idempotent: Timer.start() is a no-op if running.
-        edt { if (!quotaPollTimer.isRunning) quotaPollTimer.start() }
+        // Fill this observer's meters NOW rather than starting a timer it would then have to wait out. A panel
+        // attaching to an ALREADY-RUNNING session (a second tab, a reopened tool window) used to show empty
+        // context and cost for up to a full poll interval for no reason: the data was one control request away
+        // the whole time. `pollQuota` no-ops when the process is not up, and the ready path polls again then.
+        edt { pollQuota() }
     }
 
     fun removeListener(listener: SessionListener) {
@@ -436,6 +448,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     fun isRunning(): Boolean = process?.isRunning() == true
+
+    /**
+     * True between [start] dispatching a launch and the process being up (or the launch failing).
+     *
+     * Exposed because "not running" alone is ambiguous to the UI: a session that is booting and one that never
+     * started look identical through [isRunning], and the composer rendered both as "Idle" — which is a claim,
+     * and a false one, during the seconds the launch takes (env resolution sources a login shell).
+     */
+    fun isStarting(): Boolean = starting
+
     fun queuedPrompts(): List<String> = queue.map { it.displayText }
     fun pendingPermissions(): List<PendingPermission> = cards.all()
 
@@ -468,6 +490,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         ready = false
         starting = true
         reconciler.onMessageBoundary()
+        // Tell the GUI we are booting BEFORE handing off to the pooled thread, so the loading screen is up for
+        // the whole launch rather than appearing after the slow part (env resolution) has already finished.
+        fireState()
         val launchGen = ++generation // this launch's generation; the process's onTerminated is gated on it
 
         // Off the EDT: env resolution sources a shell (seconds) and process spawn can block. Hand back to the EDT
@@ -478,7 +503,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             } finally {
                 // Release the launch guard, but only if we still own the current generation — a newer start()
                 // bumped it and is now the owner, so it must keep `starting` set.
-                if (launchGen == generation) starting = false
+                if (launchGen == generation) {
+                    starting = false
+                    // And tell the GUI, or a launch that FAILED leaves the loading screen up forever: `launch`
+                    // only fires state on the paths that succeed. This runs on the pooled thread, hence edt {}.
+                    edt { fireState() }
+                }
             }
         }
         return true
@@ -565,6 +595,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             ready = true
             transcript.add(Speaker.SYSTEM, "Claude Code ready.")
             fireState()
+            // Fill the context and cost meters NOW rather than on the poll timer's first tick.
+            //
+            // The timer's initial delay equals its interval (a javax.swing.Timer default), so the first poll is
+            // a full QUOTA_POLL_MS — one minute — after the panel registered. Worse, that registration happens
+            // while the binary is still launching, so `pollQuota` returns early on the not-running guard and the
+            // meters stay empty for a SECOND interval. The data is available the moment the process is up; there
+            // is no reason to make the user look at an empty readout while we wait for a clock.
+            pollQuota()
             pump()
         }
     }
@@ -765,6 +803,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             write(ControlProtocol.userMessage(trimmed))
             if (!turnActive) {
                 turnActive = true
+                startQuotaPolling()
                 fireState()
             }
             // Flush anything still queued from startup; the binary accumulates messages mid-turn.
@@ -800,6 +839,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             currentUserMessageId = msgUuid
             write(ControlProtocol.userMessageWithImages(next.text, next.images, uuid = msgUuid))
             turnActive = true
+            startQuotaPolling()
         }
         promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
@@ -850,6 +890,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         interrupting = false
         turnActive = false
         liveThinkingTokens = 0
+        // An interrupted turn still consumed context and cost, and it is also a turn END — so this both
+        // refreshes the meters and lets the poll retire, exactly as a normal result does.
+        pollQuota()
         fireState()
     }
 
@@ -1579,6 +1622,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         tokens.foldIntoSession()
         reconciler.onMessageBoundary()
         turnActive = false
+        // The turn just moved both numbers; read them once now. Setting turnActive false first means the poll
+        // also retires the timer, so an idle session goes quiet instead of ticking forever.
+        pollQuota()
         interrupting = false // the turn ended (possibly via our interrupt) — clear the transient label
         liveThinkingTokens = 0
         if (event.result.isError) {

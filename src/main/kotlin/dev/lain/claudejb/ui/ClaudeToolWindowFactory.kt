@@ -90,8 +90,19 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         toolWindow.setAdditionalGearActions(buildGearGroup(project, cm))
     }
 
-    /** Adds a tab for [session], wires it, and starts its process. */
+    /** Starts [session]'s process, then adds a tab for it and wires it. */
     private fun openChat(project: Project, cm: ContentManager, session: ClaudeSession) {
+        // Launch the binary FIRST, before building the tab. `start()` only dispatches — it hands the blocking
+        // work (env resolution sources a login shell, then the spawn) to a pooled thread and returns — so doing
+        // it here means `claude` boots WHILE JCEF creates its browser, instead of waiting for it to finish.
+        // Constructing the panel is not free, and it used to be entirely in front of the launch.
+        //
+        // Nothing is lost by having no listener attached yet: the panel's constructor pushes the full state and
+        // marks the transcript structural, so anything that landed in the gap is sent on its first frame, and
+        // `whenReady` runs its deferred requests immediately if the session is already up by then.
+        ClaudeSettings.getInstance(project).applyTo(session)
+        session.start()
+
         val panel = JcefChatPanel(project, session)
         val content = ContentFactory.getInstance().createContent(panel, tabTitle(session.title), false)
         // Tell the platform WHERE the keyboard focus of this tab lives. Without it the ContentManager has nowhere
@@ -121,8 +132,6 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         // finishes, stepping on our request. (The caret itself is settled later, when the page is up — see
         // JcefHost.markWebReady.) The trailing `true` IS requestFocus — a Java API, so it cannot be named here.
         cm.setSelectedContent(content, true)
-        ClaudeSettings.getInstance(project).applyTo(session)
-        session.start()
     }
 
     /**

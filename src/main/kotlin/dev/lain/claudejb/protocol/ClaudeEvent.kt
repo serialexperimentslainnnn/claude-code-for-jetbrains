@@ -445,6 +445,29 @@ object ProtocolParser {
         outputTokens = u.intField("output_tokens") ?: 0,
     )
 
+    /**
+     * Strips the CLI's `<tool_use_error>…</tool_use_error>` wrapper from a tool result's text.
+     *
+     * The binary wraps every failed tool call's `content` in that tag pair — verified against `claude` 2.1.222,
+     * where it appears ten times and is emitted as
+     * `content: "<tool_use_error>Error: …</tool_use_error>", is_error: true`. The tag is framing for the MODEL,
+     * not text for a human: the same message is carried unwrapped in the sibling `toolUseResult` field. Rendered
+     * verbatim it put raw markup in the transcript of a native GUI, which is exactly the "never mirror raw CLI
+     * output" antipattern this plugin exists to avoid — the failure is already conveyed structurally by
+     * `is_error`, which is what paints the card red.
+     *
+     * Only strips a wrapper that encloses the WHOLE payload, so an error whose body legitimately mentions the
+     * tag is left alone. Absent the wrapper this is the identity function, so it costs nothing on the happy path.
+     */
+    internal fun unwrapToolError(text: String): String {
+        val trimmed = text.trim()
+        if (!trimmed.startsWith(TOOL_ERROR_OPEN) || !trimmed.endsWith(TOOL_ERROR_CLOSE)) return text
+        return trimmed.removeSurrounding(TOOL_ERROR_OPEN, TOOL_ERROR_CLOSE).trim()
+    }
+
+    private const val TOOL_ERROR_OPEN = "<tool_use_error>"
+    private const val TOOL_ERROR_CLOSE = "</tool_use_error>"
+
     private fun parseUser(root: JsonObject): List<ClaudeEvent> {
         val message = root["message"] as? JsonObject ?: return emptyList()
         val content = message["content"] as? JsonArray ?: return emptyList()
@@ -458,7 +481,7 @@ object ProtocolParser {
                 is JsonArray -> c.filterIsInstance<JsonObject>().mapNotNull { it.str("text") }.joinToString("\n")
                 else -> ""
             }
-            ClaudeEvent.ToolResult(toolUseId, text, isError, parentToolUseId)
+            ClaudeEvent.ToolResult(toolUseId, unwrapToolError(text), isError, parentToolUseId)
         }
     }
 

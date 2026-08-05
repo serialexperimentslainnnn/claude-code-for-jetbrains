@@ -655,6 +655,11 @@
       copyEl.classList.remove('copied');
     }, 1200);
   }
+  // Shared so every Copy affordance confirms the same way. The message-level buttons in app-transcript.js
+  // carry their OWN click handler (they copy a rendered message, not a `pre > code`), so the delegated
+  // code-head path below never reaches them — they copied silently, which reads as a dead button. Exported
+  // rather than reimplemented so the two can never drift in wording or duration.
+  CC.flashCopied = flashCopied;
   function handleCopyFromCodeHead(ev, copyEl) {
     var text = copyTargetText(copyEl);
     if (!text) return;
