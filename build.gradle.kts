@@ -5,7 +5,7 @@ import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 
 plugins {
     kotlin("jvm") version "2.1.20"
-    kotlin("plugin.serialization") version "2.1.20"
+    kotlin("plugin.serialization") version "2.4.10"
     // PINNED AT 2.16.0 DELIBERATELY. 2.18.1 exists and the build warns about it on every run, but bumping it
     // hangs the headless suite: `ChatSessionManagerHeadlessTest` never starts, because
     // BasePlatformTestCase.setUp → LightPlatformTestCase.doSetup → IndexingTestUtil.waitUntilIndexesAreReady
