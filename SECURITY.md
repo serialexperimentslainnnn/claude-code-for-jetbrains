@@ -151,6 +151,12 @@ Yes. This matters because the security of an AI agent is not, in the end, an AI
 problem; it is an *old-fashioned software* problem, and it is solved with
 old-fashioned software.
 
+**What it defends against is written down**, so a report can be judged against a
+stated adversary instead of against intuition:
+[ADR 0002 — Threat model](docs/adr/0002-threat-model.md). Read it before
+reporting; it says in advance which findings are real (a match that gets
+auto-approved anyway) and which are known, accepted positions.
+
 It enforces three blacklists, and one whitelist:
 
 - **Credentials & key material** — SSH/GPG keys, cloud & cluster credentials,
