@@ -18,7 +18,7 @@ plugins {
     // differ by package. (Until 5.0.0 this comment claimed a "≥90% target documented in
     // docs/RELEASE_CHECKLIST.md". That document says nothing about coverage, and the real figure was 53%. A
     // number nobody measured, pointing at a requirement that did not exist.)
-    id("org.jetbrains.kotlinx.kover") version "0.9.2"
+    id("org.jetbrains.kotlinx.kover") version "0.9.9"
     // Static analysis (detekt) and formatting (ktlint via Spotless). Added in 5.0.0: until then the whole
     // quality bar rested on review, which is exactly the thing the standards say to mechanise — "if format
     // is being discussed in a review, a formatter is missing".
