@@ -57,7 +57,7 @@ Frontend (`resources/jcef/`, all inlined): `shell.html` (the CSP'd document) + E
 
 ## Stack & build
 IntelliJ Platform Gradle Plugin **2.16.0** (requires Gradle ≥9 → wrapper at **9.5.1**). Kotlin **2.1.20** + serialization, toolchain **JDK 21** (ceiling: the IDE runs on JBR 21). Target `IC 2025.1`, since=243 until=262.*. Runtime: `kotlinx-serialization-json:1.7.3` (stdlib/annotations excluded from the bundle, provided by the platform).
-Build: `JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin` → zip in `build/distributions/`. Also `verifyPlugin`, `runIde`. Install: Settings → Plugins → ⚙ → Install Plugin from Disk.
+Build: `JAVA_HOME=~/.jdks/jbr-21.0.11 ./gradlew buildPlugin` → zip in `build/distributions/`. Also `verifyPlugin`, `runIde`. Install: Settings → Plugins → ⚙ → Install Plugin from Disk.
 `verifyPlugin` validates against the EAP **and RC** channels (`pluginVerification.ides.select`, build 262) before promising compatibility via `untilBuild`.
 
 **Guideline — always latest, zero deprecations:** keep platform/Gradle/Kotlin/deps on the newest stable, widen `untilBuild` to the current EAP/RC, and **never ship a deprecated or scheduled-for-removal API**. If `verifyPlugin` flags one, migrate it before release — treat it as a blocker, not a warning. Everything up to date, always.

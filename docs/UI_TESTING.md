@@ -50,7 +50,7 @@ and for these UI tests.
 Two steps, in order — the IDE must be **up** before the client suite connects:
 
 ```bash
-export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
+export JAVA_HOME=~/.jdks/jbr-21.0.11
 
 # Terminal 1: boot the IDE-under-test (keep it running). robot-server listens on :8082.
 ./gradlew runIdeForUiTests
@@ -64,7 +64,7 @@ export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
 Wrap the IDE launch in `xvfb-run` (or start an `Xvfb` on a `$DISPLAY` and export it). Example:
 
 ```bash
-export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
+export JAVA_HOME=~/.jdks/jbr-21.0.11
 
 # Boot the IDE under a virtual framebuffer, in the background.
 xvfb-run -a -s "-screen 0 1920x1080x24" ./gradlew runIdeForUiTests &

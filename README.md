@@ -151,7 +151,7 @@ You can also register **custom MCP servers** as a JSON object of `name → serve
 Requires **JDK 21** (the IDE runs on JBR 21). The Gradle wrapper is included.
 
 ```bash
-JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew buildPlugin
+JAVA_HOME=~/.jdks/jbr-21.0.11 ./gradlew buildPlugin
 # → build/distributions/claude-code-native-4.3.3.zip
 ```
 

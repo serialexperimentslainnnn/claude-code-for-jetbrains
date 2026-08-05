@@ -62,7 +62,7 @@ git pull --ff-only
 ### 2. Run the full local verification
 
 ```bash
-JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 \
+JAVA_HOME=~/.jdks/jbr-21.0.11 \
   ./gradlew test verifyPlugin buildPlugin
 ```
 

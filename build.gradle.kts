@@ -94,6 +94,22 @@ configurations.named("runtimeClasspath") {
 }
 
 tasks {
+    // Attribution travels INSIDE the artifact (opensource-licensing-standards §5.4).
+    //
+    // The published zip redistributes third-party code: marked, DOMPurify and highlight.js are vendored into
+    // the plugin jar under `jcef/`, and kotlinx.serialization ships as its own jars. MIT, BSD-3-Clause and
+    // Apache-2.0 all require the copyright notice and licence text to be preserved *on redistribution* — and a
+    // file sitting in the Git repository does not accompany the binary a user installs from the Marketplace.
+    // Copying them into the jar's resources is what actually discharges the obligation.
+    //
+    // Kept as a build step rather than a checked-in copy under `src/main/resources/`, so the notices cannot
+    // drift out of sync with the files they describe: one source of truth at the repository root, packaged at
+    // build time. `THIRD-PARTY-NOTICES.md` is surfaced to the user by the About dialog (see InfoDialogs).
+    processResources {
+        from(rootProject.file("THIRD-PARTY-NOTICES.md")) { into("META-INF") }
+        from(rootProject.file("LICENSE")) { into("META-INF") }
+        from(rootProject.file("LICENSES")) { into("META-INF/licenses") }
+    }
     runIde {
         jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
     }

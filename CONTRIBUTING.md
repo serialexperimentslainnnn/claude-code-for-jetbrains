@@ -73,7 +73,7 @@ The project uses the IntelliJ Platform Gradle Plugin 2.x with a JDK 21
 toolchain (the IDE itself runs on JBR 21).
 
 ```bash
-JAVA_HOME=~/.local/jdks/jdk-21.0.11+10 ./gradlew test verifyPlugin buildPlugin
+JAVA_HOME=~/.jdks/jbr-21.0.11 ./gradlew test verifyPlugin buildPlugin
 ```
 
 This runs the JUnit 5 suite, validates the plugin against the configured
