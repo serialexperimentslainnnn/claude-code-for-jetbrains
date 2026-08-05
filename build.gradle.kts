@@ -97,7 +97,7 @@ dependencies {
     "uiTestRuntimeOnly"("org.junit.platform:junit-platform-launcher")
     "uiTestImplementation"("com.intellij.remoterobot:remote-robot:0.11.23")
     "uiTestImplementation"("com.intellij.remoterobot:remote-fixtures:0.11.23")
-    "uiTestImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
+    "uiTestImplementation"("com.squareup.okhttp3:okhttp:5.4.0")
 }
 
 // The Kotlin stdlib and JetBrains annotations are provided by the IntelliJ Platform at runtime; keep
