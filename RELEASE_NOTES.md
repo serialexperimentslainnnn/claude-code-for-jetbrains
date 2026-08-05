@@ -1,3 +1,44 @@
+## v5.0.0 — 2026-08-05
+
+**Nothing you use changes.** This is a major because the *project* changed, not the product: the whole
+repository was taken through a compliance pass — security, licensing, accessibility, release process — and the
+code had to change to pass it. Your chats, settings and sessions carry over untouched.
+
+**♿ The plugin now talks to screen readers.** The chat streams without ever moving focus, which meant that if
+you use a screen reader, a turn just went quiet — no signal that Claude had started, finished, or was waiting
+on you to approve a tool. There's now a live region that announces exactly that, including when a permission
+card appears. And every control that had lost its focus outline has a visible focus ring again, including in
+Windows high-contrast mode. If you drive the IDE from the keyboard, this is the release where the plugin stops
+losing you.
+
+**🔒 A written threat model.** The sensitive-data lock has always been deterministic Kotlin the model can't
+argue with — but until now nothing said what it defends *against*. That's written down now, including the
+uncomfortable part: we don't try to detect prompt injection, because nobody can do that reliably. We assume it
+succeeds and put the control where it stops mattering — the lock judges the *tool call*, never the reasoning
+behind it. A perfectly manipulated model still has to ask to read your SSH key, and still gets the same
+answer.
+
+**🧹 Seven security warnings that were never about you.** The plugin's build kept a copy of Anthropic's SDK as
+a protocol reference — it's never executed and has never been part of what you install. It was declared
+wrongly, so every audit flagged its dependencies as if they shipped. Declared correctly now: zero findings in
+what actually reaches you, and the claim is verifiable in one command rather than asked for on trust.
+
+**📄 Licences ship with the plugin.** The attribution for the libraries bundled inside it now travels inside
+the artifact, where it belongs, instead of only living in the repository.
+
+**🔖 One more thing, said out loud:** a released version number is now final. Three earlier releases were
+re-cut under the same tag, which meant two people could have different files and both believe they had the
+same version. From here, a mistake found after release gets a new version number.
+
+**🤖 And this is the first release published by the project's own pipeline** rather than from a laptop —
+built once, signed, and released through a gate that checks the tag really came from `main` before any
+credential is even in scope.
+
+Verified **Compatible** across the whole supported range (2025.1 → 2026.2) by the plugin verifier in CI.
+677 backend tests and 54 frontend tests, all green.
+
+---
+
 ## v4.4.1 — 2026-07-29
 
 **🔑 Fixed: `/login` never actually opened the terminal.** Signing in from the chat always ended on "run this command yourself in a terminal" — the plugin was calling IDE terminal APIs that no longer exist in current IDEs (they were removed after 2025.2), and because each lookup failed quietly, nothing showed up in the log to explain it. `/login` now opens a real terminal tab and runs the sign-in there, on every supported IDE version.

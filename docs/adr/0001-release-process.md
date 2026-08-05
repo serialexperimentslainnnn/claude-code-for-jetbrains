@@ -7,9 +7,16 @@
 ## Context
 
 The plugin is installable software distributed through the JetBrains Marketplace, with real users on
-previously published versions. Releases are cut manually from a workstation; there is no CI gate yet (a local
-lab is planned). This ADR records the three places where the repository deliberately departs from the default
-standards, and the one place where it was simply **wrong**.
+previously published versions. This ADR records the places where the repository deliberately departs from the
+default standards, and the places where it was simply **wrong**.
+
+**Superseded within 5.0.0:** an earlier draft of this ADR said "there is no CI gate yet", on the belief that
+GitHub Actions was capped for billing. That belief was false. The repository is **public**, and GitHub
+Actions on standard hosted runners is free and unmetered for public repositories; the account's Actions
+permissions were verified enabled. The workflows had simply been deleted at some point, and a comment in
+`.gitlab-ci.yml` had been asserting the billing story ever since. 5.0.0 therefore lands a real GitHub
+Actions pipeline (§5), and the deleted-and-forgotten history is the reason §5 exists as a written decision
+rather than as four YAML files nobody can date.
 
 ## Decisions
 
@@ -62,13 +69,80 @@ GitHub release is marked accordingly and a superseding version is published — 
 **Not retroactively rewritten:** the already-moved tags are left alone. Re-cutting them again to "fix" the
 history would repeat the exact mistake this decision exists to stop.
 
+### 4. The CHANGELOG stays hand-written for now — deferral with an exit condition
+
+The standard requires the changelog to be **generated** from the commit history, never maintained by hand in
+parallel. This repository writes it by hand, and will keep doing so through 5.0.0.
+
+**Measured, not assumed.** Of the last 100 commits, 67 are non-merge and **36** of those parse as Conventional
+Commits. The shortfall is almost entirely `Release vX.Y.Z` commits — which ADR §1 already excludes from the
+gate deliberately — but a generator does not know that: it would silently drop every commit it cannot parse
+and produce a changelog that looks complete and is not. **A silently incomplete changelog is worse than an
+honest hand-written one**, because it is trusted.
+
+**`release-please` now *has* somewhere to run** (§5), so the remaining objection is only about the input.
+It opens a release PR from the commit history; fed a history it can only half-parse, it produces a changelog
+that looks complete and is not.
+
+**Exit condition, so this does not quietly become permanent.** Generation is adopted when the history since
+`v5.0.0` is clean, which the commit-msg hook plus the PR-only merge policy make the default outcome. It is
+checkable in one command:
+
+```sh
+git log v5.0.0..HEAD --no-merges --format=%s \
+  | grep -vcE '^(feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: '   # → 0
+```
+
+At `0`, wire `release-please` as a workflow on `main` and delete this section. Until then the hand-written
+changelog is the accurate one, and saying so here is the point: a recorded deviation with a test for when it
+ends, not an oversight.
+
+### 5. CI/CD on GitHub Actions, with publication gated three ways
+
+The pipeline lives in `.github/workflows/` and the branch protections in `.github/rulesets/` (applied with
+`scripts/apply-rulesets.sh`, so the gate is reviewable in a diff rather than editable in a settings page).
+
+**The quality gate runs everywhere work happens** — `develop`, `main`, and every `feature/**`, `bugfix/**`
+and `hotfix/**` branch — not only on the PR. A bar you only meet at PR time is a bar you discover late,
+when the change is already large.
+
+**Publication requires three independent things to hold**, and the middle one is the load-bearing part:
+
+1. a `vX.Y.Z` **tag** — the artifact's identity, per §3;
+2. the tagged commit is **reachable from `main`**, asserted in a job that runs before any secret is in
+   scope. Since `main` accepts nothing but reviewed PRs, "reachable from main" *is* "was reviewed";
+3. a **human approval** on the `marketplace` GitHub Environment, where the four credentials live scoped —
+   so they do not exist for any other job in this repository.
+
+Without (2), anyone able to push a tag could publish from any code, and the review that (3) assumes has
+happened becomes optional. It is the cheapest of the three checks and the one that makes the other two mean
+something.
+
+**Every action is pinned by full commit SHA.** A tag is mutable and the action runs with this repository's
+token. The counterweight to pin rot is Dependabot proposing the bumps weekly, so the pinning is free.
+Provenance attestation is emitted and deliberately **not** overtrusted: a compromised runner can sign a
+build that genuinely happened on it. The controls that actually cut that class are the SHA pins, the
+read-only default token, and no secrets outside the approval-gated job.
+
+**Build once.** The whole distributable is produced by a single `buildPlugin signPlugin publishPlugin`
+invocation inside the approved job, and those exact bytes are what gets attested, checksummed,
+GPG-signed, uploaded to the Marketplace and attached to the GitHub Release. An earlier draft split build
+and publish across two jobs, which built the zip twice — and a Gradle zip is not byte-reproducible, so
+users would have been offered two different artifacts under one version number, with a published checksum
+matching only one of them. The order inside that single invocation is also load-bearing: verified against
+`PublishPluginTask.kt`, `publishPlugin` uploads the signed archive **only if `signPlugin.didWork`**, and
+silently falls back to the *unsigned* one otherwise — so splitting the tasks across invocations, or
+touching the signed file before publishing, is how a plugin ships unsigned without anyone noticing.
+
+**Not automated, on purpose:** the manual in-IDE test before release. Twice now a release passed every
+automated check and was broken in the IDE — most recently `/login`, where every reflected platform API was
+absent at runtime and every lookup failed silently. A pipeline cannot close that, and pretending otherwise
+is how it shipped.
+
 ## Consequences
 
 - `commitlint` runs as a versioned local hook (`.githooks/commit-msg`), enabled with
   `git config core.hooksPath .githooks`. It is advisory-on-toolchain-failure by design (see the hook's header)
   so it cannot become a reason to reach for `--no-verify`.
-- The `CHANGELOG.md` is still written by hand. The standard requires it to be generated from the commit
-  history, and that remains **open**: generation is only meaningful once enough history is Conventional for the
-  tooling not to silently drop most of it. The commit gate landing now is the prerequisite, not the fix.
-- No release automation (`release-please`) is wired, because it is a GitHub Action and this project's GitHub
-  Actions are disabled for billing. Revisit when the local lab exists.
+- Release notes are written by hand from the commits, and the PR template asks for the changelog entry at the
+  point the change is made rather than reconstructing it at release time.

@@ -12,7 +12,10 @@ file is the verifiable per-release gate.
 
 ## Build & verification
 
-- [ ] `./gradlew test` — all unit tests pass (currently 132+).
+- [ ] `./gradlew test` — all unit tests pass (currently 682, 2 Windows-only skips).
+- [ ] `./gradlew detekt spotlessCheck` — static analysis and formatting clean.
+- [ ] `npm run lint && npm test` — the shipped JCEF frontend lints clean, 54 tests pass.
+- [ ] `./gradlew koverVerify` — coverage gates hold (see **Coverage policy** below).
 - [ ] `./gradlew verifyPlugin` — **Compatible** with IU-261 **and**
       IU-262/RC.
 - [ ] Verifier report has **no new internal-API usage**
@@ -21,6 +24,45 @@ file is the verifiable per-release gate.
       the diff since the last tag.
 - [ ] `./gradlew buildPlugin` produces a zip under
       `build/distributions/claude-code-for-jetbrains-X.Y.Z.zip`.
+
+## Coverage policy
+
+Coverage is gated **per package**, not globally, because the risk in this codebase is not evenly spread:
+`permission/` decides whether the agent may read your SSH key, and `ui/` paints a browser. One global number
+would either set the bar low enough that the guard could rot unnoticed, or high enough that the only way to
+meet it is writing tests against Swing and JCEF that assert nothing anyone cares about.
+
+Thresholds are set slightly **below** what each package measures today — a gate that catches regression, not a
+target that invites test-padding. Line coverage measured 2026-08-05:
+
+| package | line % | gated |
+|---|---|---|
+| `permission/` | 98.1 | ✅ |
+| `protocol/` | 87.3 | ✅ |
+| `settings/` | 86.1 | ✅ |
+| `diff/` | 72.8 | ✅ |
+| `session/` | 67.3 | ✅ |
+| `context/`, `process/` | 42.1 / 37.9 | ❌ excluded — known gap |
+| `ui/`, `ui/jcef/` | 24.6 / 31.2 | ❌ excluded — covered elsewhere |
+| `actions/` | 0.0 | ❌ excluded — one delegate call each |
+
+**Excluded, and why it is stated rather than gated at a token value.** `ui/` needs a live IDE and a live
+Chromium; it is covered by a different layer — 54 vitest tests that drive the *real shipped JS*, plus the
+mandatory manual pass in §Smoke test below. `context/` and `process/` wrap the OS (system clipboard, process
+spawn, shell environment) and most of what is uncovered there cannot execute on a CI box. That is a **known
+gap**, listed so nobody mistakes it for coverage; the pure parts of both (`AttachmentEncoder`,
+`EnvScriptLoader.parse`) *are* tested. Gating any of these at 20% would dress the same fact up as a passing
+check.
+
+**Known limitation.** Kover 0.9.2's `KoverVerifyRule` has no per-rule filter, so the exact per-package numbers
+above are not individually expressible in the build. What `koverVerify` enforces is a **floor applied to every
+gated package** plus an **aggregate** — both real gates (the floor catches one package collapsing, the
+aggregate catches death by a thousand cuts), but looser than the table. If a future Kover adds per-rule
+filters, tighten `build.gradle.kts` to match this table.
+
+> Historical note: until 5.0.0 a comment in `build.gradle.kts` claimed a "≥90% target … documented in
+> `docs/RELEASE_CHECKLIST.md`". This file had never said that, and the real figure was 53%. The number was
+> never measured and the requirement it cited did not exist.
 
 ## Documentation
 
@@ -78,13 +120,12 @@ Steps:
 ## Git hygiene
 
 - [ ] Commit message: `Release vX.Y.Z`.
-- [ ] GitLab pipeline (test/verify/build) green on `develop` before
-      promoting to `main`.
-- [ ] PR `release/X.Y.Z` → `main` opened and the GitLab pipeline is green.
-- [ ] Signed tag `vX.Y.Z` pushed to `main` (the GitHub ruleset enforces
-      this via GPG / YubiKey).
-- [ ] GitLab tag pipeline ran green; the manual `publish` job (stage
-      `release`) was triggered and published to Marketplace.
+- [ ] CI green on `develop` before promoting to `main`.
+- [ ] PR `release/X.Y.Z` → `main` opened, CI green, approved.
+- [ ] Signed tag `vX.Y.Z` pushed to `main` (the ruleset enforces this via
+      GPG / YubiKey).
+- [ ] `release.yml` reached the `publish` job and the `marketplace`
+      environment approval was granted; the version is live on Marketplace.
 
 ## Post-release
 

@@ -23,17 +23,48 @@ and surfaces in `plugin.xml` and the Marketplace listing.
 
 ## Continuous integration
 
-The real CI lives in **GitLab** on a self-hosted runner; the GitHub Actions
-workflows are inert reference (Actions is capped by billing).
+CI/CD runs on **GitHub Actions** (since 5.0.0). The repository is public, so
+standard hosted runners are free and unmetered — the earlier belief that
+Actions was capped for billing was simply wrong, and `.gitlab-ci.yml` has been
+removed rather than kept as a second pipeline that could also publish.
 
-| Where | File | Status |
-|-------|------|--------|
-| GitLab self-hosted | `.gitlab-ci.yml` | **Real pipeline.** Stages: `test` (`./gradlew test` — unit + headless + integration; installs `python3` for the fake-claude harness), `verify` (`./gradlew verifyPlugin`), `build` (`./gradlew buildPlugin`), and `publish` (stage `release`, tag-only `vX.Y.Z`, `when: manual`, runs `./gradlew signPlugin publishPlugin`). |
-| GitHub Actions | `.github/workflows/*` | **Inert reference.** Automatic `push`/`pull_request`/`schedule` triggers are commented out; only `workflow_dispatch` remains. Nothing runs in CI here. |
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | push to `develop`, `main`, `feature/**`, `bugfix/**`, `hotfix/**`; PRs | JVM tests, frontend tests, dependency audit, plugin verifier, build (asserting no npm code and that attribution is packaged) |
+| `codeql.yml` | push/PR to `develop`/`main`; weekly | SAST over `java-kotlin` and `javascript-typescript`, `security-extended` queries |
+| `release.yml` | `vX.Y.Z` tag | Guard → verify → build+attest → **publish** (approval-gated) → GitHub Release |
+| `drift.yml` | weekly; manual | `checkDrift` against the current CLI and SDK; files an issue on real drift |
 
-Publish credentials live in **GitLab → Settings → CI/CD → Variables**
-(`PUBLISH_TOKEN`, `CERTIFICATE_CHAIN`, `PRIVATE_KEY`,
-`PRIVATE_KEY_PASSWORD`), masked + protected — not in GitHub Secrets.
+### Secrets
+
+All six live in the **`marketplace` GitHub Environment**, never in repository
+secrets. Environment scoping means they do not exist for any other job, and the
+environment's required reviewer is the human gate on publication.
+
+| Secret | What it is |
+|---|---|
+| `PUBLISH_TOKEN` | Marketplace API token (plugins.jetbrains.com → profile → **Tokens**) |
+| `PRIVATE_KEY` | RSA private key (`private.pem`) for the **JetBrains plugin signature** — this is X.509/RSA, *not* GPG |
+| `PRIVATE_KEY_PASSWORD` | passphrase for that key |
+| `CERTIFICATE_CHAIN` | the matching `chain.crt` |
+| `GPG_SIGNING_KEY` | armoured private key that signs the **release artifacts** (`.asc`) |
+| `GPG_SIGNING_PASSPHRASE` | its passphrase |
+
+`PRIVATE_KEY` / `CERTIFICATE_CHAIN` are an **upload key**, not a user-facing
+signature: the Marketplace re-signs every plugin with JetBrains' own key before
+serving it, so what an IDE verifies is JetBrains' signature. Rotating yours is
+invisible to users; the only caution is that a Marketplace profile can pin a
+public key, so a rotation may need the profile updated.
+
+`GPG_SIGNING_KEY` is a different thing entirely — it signs the `.asc` files on
+the GitHub Release and is certified by the maintainer's hardware key. See
+[`../SECURITY.md`](../SECURITY.md) for what each signature claims.
+
+All six are set by `./scripts/bootstrap-ci.sh`; see
+[`CI_SETUP.md`](CI_SETUP.md) for doing any of it by hand.
+
+Branch protection is versioned in `.github/rulesets/*.json` and applied with
+`./scripts/apply-rulesets.sh` — see [ADR 0001 §5](adr/0001-release-process.md).
 
 ### UI test suite
 
@@ -46,9 +77,11 @@ xvfb-run -a ./gradlew test -PuiTest.enabled=true
 
 ### Drift detection
 
-The sdk/binary drift-detection job is currently inert in GitHub (it was a
-`schedule`-triggered workflow). It should be **ported to a GitLab scheduled
-pipeline** so the check runs for real.
+`drift.yml` runs `checkDrift` weekly against the current published SDK and a
+freshly installed `claude` CLI, and **files an issue** when the protocol surface
+moves. It deliberately never commits: deciding whether a new message kind should
+be modelled or ignored is a judgement call, and a bot that bumps the baseline on
+its own would silently bless a gap. See `docs/DRIFT_DETECTION.md`.
 
 ## Standard release
 
@@ -108,7 +141,7 @@ gh pr create --base main --head release/X.Y.Z \
   --title "Release vX.Y.Z" --body "See CHANGELOG.md for details."
 ```
 
-Merge once the GitLab pipeline (test/verify/build) is green. **Do not**
+Merge once the GitHub Actions CI workflow is green. **Do not**
 rebase onto `main` — use a merge commit so the tag points to a commit that
 exists on both branches.
 
@@ -126,23 +159,28 @@ git push origin vX.Y.Z
 The tag must be **signed** (the repo enforces signed tags via the GitHub
 ruleset on `main`).
 
-### 8. GitLab pipeline publishes
+### 8. The release workflow publishes
 
-The maintainer pushes the `vX.Y.Z` tag. On GitLab this triggers the tag
-pipeline, which runs `test` → `verify` → `build` automatically. The
-`publish` job (stage `release`) is **manual**: once the previous stages are
-green, the maintainer presses **play** on `publish`, which runs
-`./gradlew signPlugin publishPlugin` to sign the zip with the Marketplace
-certificate and publish to JetBrains Marketplace.
+Pushing the `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which runs
+five jobs in order:
 
-The publish credentials (`PUBLISH_TOKEN`, `CERTIFICATE_CHAIN`,
-`PRIVATE_KEY`, `PRIVATE_KEY_PASSWORD`) are configured in
-**GitLab → Settings → CI/CD → Variables** as *masked + protected* — **not**
-in GitHub Secrets.
+1. **`guard`** — asserts the tagged commit is reachable from `main` and that the
+   tag matches `version` in `build.gradle.kts`. Runs before any secret is in
+   scope, so a tag pushed from the wrong branch fails in seconds and reaches
+   nothing.
+2. **`verify`** — the full suite plus `verifyPlugin`, against the exact tagged
+   tree rather than against whatever passed on `develop` last week.
+3. **`build`** — `buildPlugin` once, records the SHA-256, and emits SLSA build
+   provenance.
+4. **`publish`** — `signPlugin publishPlugin`. Gated on the **`marketplace`
+   environment**, so it waits for a human approval; the four credentials are
+   scoped to that environment and exist nowhere else.
+5. **`github-release`** — creates the GitHub Release with the zip and its
+   checksum attached.
 
-> **Note:** GitHub Actions is capped (billing); `.github/workflows/release.yml`
-> is only inert reference. The real publication runs through
-> `.gitlab-ci.yml` on the self-hosted GitLab runner.
+Nothing publishes without all three gates lining up: the tag, its lineage from
+`main`, and the approval. See [ADR 0001 §5](adr/0001-release-process.md) for why
+the middle one is not decoration.
 
 ### 9. Verify on Marketplace
 
@@ -182,10 +220,12 @@ critical regressions.
 3. Bump the **PATCH** segment in `build.gradle.kts`.
 4. Add a `Security` entry to `CHANGELOG.md` and a one-paragraph note to
    `RELEASE_NOTES.md`.
-5. Open a PR `hotfix/X.Y.Z` → `main`. Merge once the GitLab pipeline
-   (test/verify/build) is green.
-6. Tag `vX.Y.Z` and push — the GitLab tag pipeline runs, then press **play**
-   on the manual `publish` job to release.
+5. Open a PR `hotfix/X.Y.Z` → `main`. Merge once CI is green. Even under
+   pressure this goes through `main` — the release workflow refuses a tag whose
+   commit is not reachable from it, and a hotfix is exactly when you least want
+   to discover you skipped the review.
+6. Tag `vX.Y.Z` and push — `release.yml` runs, then approve the `marketplace`
+   environment to publish.
 7. **Back-merge** into `develop`:
    ```bash
    git checkout develop

@@ -192,6 +192,8 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and ver
 
 ## Status
 
+**v5.0.0** — the standards-compliance major. Nothing you use changes; the *project* did. The chat UI now speaks to screen readers (a live region announcing when a turn starts, ends, or is waiting on your approval) and every control has a visible focus ring again, including in high-contrast mode. The sensitive-data lock gained a **written** threat model ([ADR 0002](docs/adr/0002-threat-model.md)) that states what it defends against — and admits what it does not: prompt injection is assumed to succeed, not detected, which is why the lock judges the *tool call* and never the model's reasoning. Third-party licence attribution now ships inside the artifact, seven npm-audit findings against never-distributed build tooling are gone (the SDK reference was mis-declared as a runtime dependency), and a released version number is now final.
+
 **v4.4.1** — fixes `/login` always dead-ending on "run this yourself in a terminal": every IDE terminal API the plugin reflected on had been removed after 2025.2, and each lookup failed silently. It now opens a real terminal tab on every supported IDE, with a headless native sign-in as a genuine fallback rather than a dead end.
 
 **v4.4.0** — each rule in the [security lock](#security) is now independently switchable (Settings ▸ Claude Code ▸ Security), all ON by default; disabling one only ever downgrades an automatic block to a permission card, never to a silent allow. Also fixed: several of the CLI's own native tools (background tasks, cron, worktrees, and more) had fallen off the plugin's trusted-tool allowlist as the CLI grew, so they were hard-denied exactly like a blocked third-party MCP call — the allowlist is now current.
@@ -207,11 +209,14 @@ Full history in [`CHANGELOG.md`](CHANGELOG.md) and [`RELEASE_NOTES.md`](RELEASE_
 | Document | What it covers |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Architecture, protocol, empirical binary behaviour |
-| [`SECURITY.md`](SECURITY.md) | Threat model, the sensitive-data lock, reporting policy |
+| [`AGENTS.md`](AGENTS.md) | Runbook for working on this repo with a coding agent — commands, gates, boundaries |
+| [`SECURITY.md`](SECURITY.md) | The sensitive-data lock, triage scope, reporting policy |
+| [`docs/adr/`](docs/adr/README.md) | Architecture Decision Records — release process, threat model, i18n deferral |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute |
 | [`docs/FAQ.md`](docs/FAQ.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common questions and fixes |
 | [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md) · [`docs/DRIFT_DETECTION.md`](docs/DRIFT_DETECTION.md) | Binary compatibility policy and drift detection |
 | [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
+| [`docs/CI_SETUP.md`](docs/CI_SETUP.md) | One-time CI/CD configuration: the deployment environment, its secrets, branch protections |
 | [`docs/TELEMETRY.md`](docs/TELEMETRY.md) | What is (and isn't) collected — spoiler: nothing |
 
 ## Disclaimer

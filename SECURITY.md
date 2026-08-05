@@ -21,8 +21,16 @@ for every user. Users on an older patch release must upgrade before reporting.
 Please **do not** open a public GitHub issue, discussion, or Marketplace review
 for security problems.
 
-Email: **lain.agent604@passmail.com**
-Subject line: `[SECURITY] Claude Code Native <short summary>`
+**Use GitHub's private vulnerability reporting:**
+[Report a vulnerability](https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/security/advisories/new)
+(repository → **Security** → **Report a vulnerability**).
+
+This replaces the email address that used to be published here, and it is the
+better channel on its own merits, not just a privacy measure: the report lands
+in a private thread attached to this repository, the discussion and the fix
+stay linked to it, and a CVE can be requested from the same advisory. An
+address in a public file is scraped far more often than it is used by a
+reporter.
 
 Include:
 
@@ -210,6 +218,99 @@ by widening the patterns, **not** a way to argue with a match once made: at its
 layer, enforcement is absolute. Report a bypass of the *decision* (a match that
 is auto-approved anyway, a foreign/remote path that is reached) — that is a real
 finding. A path we failed to *recognise* is a pattern PR.
+
+## Release signing: two keys, two different claims
+
+A release carries **two** signatures, and conflating them is the mistake this
+section exists to prevent. They answer different questions and have very
+different security properties.
+
+| | Maintainer key | CI signing key |
+|---|---|---|
+| Signs | commits and the `vX.Y.Z` tag | the release `.zip` and its `.sha256` |
+| Claim | *a person chose to release this commit* | *this workflow produced these bytes* |
+| Custody | **hardware (YubiKey)** — non-exportable, touch required | software key in a GitHub **environment** secret |
+| Public key | `6CD3 0675 6132 C6FD DEE8 8A74 CD0C 12D8 3C04 435A` | `docs/ci-signing-key.asc` |
+| Expiry | — | **1 year**, then rotated |
+
+**Why there is a second key at all, stated plainly.** The maintainer key cannot
+sign inside a CI runner: it is hardware-backed and non-exportable, which is
+exactly what makes it worth trusting. Automating artifact signatures therefore
+requires a software key whose private half sits in a secret. That is a real
+weakening and it is an accepted, bounded one:
+
+- The secret is scoped to the **`marketplace` environment**, which requires a
+  human approval. No job reachable by merely pushing a tag can see it.
+- The key **expires after a year**, so a leak nobody noticed stops mattering on
+  its own schedule rather than never.
+- Its user ID says out loud that it is a CI key and not the maintainer. If the
+  two were indistinguishable, a leaked CI key would impersonate a person; being
+  able to tell them apart is the whole mitigation.
+
+**The CI key is certified by the maintainer key.** `docs/ci-signing-key.asc`
+carries a certification signature made on the YubiKey, so the two keys are not
+independent claims: the hardware key vouches for the CI key.
+
+This matters for a reason that is easy to miss. Without it, a reader is asked to
+trust a fingerprint printed in a file **inside the same repository** an attacker
+who could swap the key would also control — which is not a trust anchor, it is a
+tautology. With it, the chain terminates at a key whose private half is in
+hardware and has never been on a computer.
+
+It also buys the one thing a bare key cannot: **a revocation lever.** If the CI
+key is ever exposed, the maintainer revokes the certification from hardware,
+withdrawing the endorsement immediately — without depending on anyone noticing
+that a file changed.
+
+```sh
+gpg --check-sigs "$(gpg --show-keys --with-colons docs/ci-signing-key.asc | awk -F: '/^fpr:/{print $10; exit}')"
+# expect a certification from 6CD3 0675 6132 C6FD DEE8  8A74 CD0C 12D8 3C04 435A
+```
+
+**Verify both signatures.** They are complementary, not redundant — the artifact
+signature alone cannot tell you a human intended the release, and the tag
+signature alone says nothing about the bytes you downloaded:
+
+```sh
+gpg --import docs/ci-signing-key.asc
+gpg --verify claude-code-native-X.Y.Z.zip.asc   # bytes came from the workflow
+git verify-tag vX.Y.Z                           # a person authorised the release
+gh attestation verify claude-code-native-X.Y.Z.zip \
+   --repo serialexperimentslainnnn/claude-code-for-jetbrains   # build provenance
+```
+
+The attestation is worth having and worth not overtrusting: it proves *where* a
+build ran, not that the result is benign. A compromised runner can produce a
+valid attestation for a malicious artifact. What actually reduces that risk is
+everything around it — every action pinned by commit SHA, a read-only default
+token, and no secrets outside the approval-gated job.
+
+**Rotation** (scheduled, before expiry): regenerate with
+`./scripts/gen-ci-signing-key.sh`, certify the new key with the YubiKey, replace
+both environment secrets, and commit the new `docs/ci-signing-key.asc`.
+Previously published releases stay verifiable against the old public key, which
+is why old public keys are **never deleted** from the repository.
+
+**Compromise** (the CI key is exposed, or a runner is suspected compromised) —
+in this order, because the first step is the only one that is immediate:
+
+```sh
+# 1. Withdraw the endorsement. Takes effect for anyone who refreshes the key.
+gpg --local-user 6CD306756132C6FDDEE88A74CD0C12D83C04435A --quick-revoke-sig <CI_FPR> <CI_FPR>
+gpg --armor --export <CI_FPR> > docs/ci-signing-key.asc   # now carries the revocation
+
+# 2. Delete the secrets so nothing can sign with it again.
+gh secret delete GPG_SIGNING_KEY        --env marketplace
+gh secret delete GPG_SIGNING_PASSPHRASE --env marketplace
+
+# 3. Issue a new key, and publish an advisory naming the exposed fingerprint and
+#    the releases signed with it.
+```
+
+Note the ordering: revoking the certification is a **hardware** action that no
+attacker holding the CI key can undo, and it does not require the compromise to
+have been noticed by users. Deleting the secret stops future signatures but says
+nothing about the ones already made.
 
 ## Disclosure
 
