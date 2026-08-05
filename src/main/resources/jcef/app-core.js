@@ -289,7 +289,32 @@
     dock: byId("dock"),
     permissions: byId("permissions"),
     composer: byId("composer"),
-    palette: byId("palette")
+    palette: byId("palette"),
+    a11yStatus: byId("a11y-status")
+  };
+
+  /**
+   * Announce a short status phrase to assistive technology (WCAG 2.2 AA — 4.1.3 Status Messages).
+   *
+   * The transcript streams without ever moving focus, so without this a screen-reader user has no way to know
+   * that Claude began answering, finished, or is now blocked on a permission card. Focus is deliberately NOT
+   * moved: 4.1.3 exists precisely for changes that must be perceivable *without* stealing focus.
+   *
+   * Deliberately terse and low-frequency: this is called on turn transitions, never per streamed token. A live
+   * region updated on every delta is unusable — the screen reader would talk over itself continuously and the
+   * user would turn it off, which is worse than silence.
+   *
+   * Re-announcing identical text is a no-op in most screen readers (the node did not change), so repeated
+   * states are skipped explicitly rather than relying on that behaviour being uniform.
+   */
+  var lastAnnouncement = "";
+  CC.announce = function (message) {
+    var el = CC.els && CC.els.a11yStatus;
+    if (!el) return;
+    var text = message == null ? "" : String(message);
+    if (text === lastAnnouncement) return;
+    lastAnnouncement = text;
+    el.textContent = text;
   };
 
   // ---------------------------------------------------------------------------

@@ -402,10 +402,42 @@
 
   // ---- public API ------------------------------------------------------------
 
+  /**
+   * Announce that Claude is blocked on the user (WCAG 2.2 AA — 4.1.3 Status Messages).
+   *
+   * This is the single most important announcement in the whole UI: a permission card appears in the dock
+   * WITHOUT taking focus, so to a screen-reader user the turn simply stops with no explanation and no
+   * indication that anything is waiting for them. Sighted users see a card slide in; everyone else got silence.
+   *
+   * Announces only the 0 -> n transition, and names the tool when there is exactly one card, since "Claude
+   * needs your permission to run Bash" is actionable in a way that "Claude needs your response" is not.
+   * Resolution is left silent on purpose — the user just acted, so they know.
+   */
+  var lastPendingCount = 0;
+  function announcePending(list) {
+    var C = core();
+    if (!C || typeof C.announce !== 'function') return;
+    var count = list.length;
+    var previous = lastPendingCount;
+    lastPendingCount = count;
+    if (count === 0 || count <= previous) return;
+    if (count === 1) {
+      var only = list[0] || {};
+      var tool = only.tool ? String(only.tool) : '';
+      if (only.questions) C.announce('Claude is asking you a question.');
+      else if (only.isPlan) C.announce('Claude is proposing a plan for your approval.');
+      else if (only.elicitation) C.announce('An MCP server is requesting input.');
+      else C.announce(tool ? ('Claude needs your permission to use ' + tool + '.') : 'Claude needs your response.');
+      return;
+    }
+    C.announce(count + ' requests are waiting for your response.');
+  }
+
   function permissions(list) {
     var region = mount();
     if (!region) return;
     if (!list || !Array.isArray(list)) list = [];
+    announcePending(list);
 
     // Reconcile by card id rather than wiping + rebuilding the whole region. A blunt innerHTML='' on every push
     // (the host re-pushes on ANY permission change — a second card arriving, one resolving) destroyed the

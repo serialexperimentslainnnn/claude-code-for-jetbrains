@@ -827,8 +827,33 @@
     }
   }
 
+  /**
+   * Announce turn transitions to assistive technology (WCAG 2.2 AA — 4.1.3 Status Messages).
+   *
+   * Only the EDGES are announced, never the streaming itself: a screen reader that re-reads on every token is
+   * unusable, and a user would silence it — which is worse than saying nothing.
+   *
+   * Scope note: permission cards are NOT announced from here. The composer's state payload carries no
+   * permission field (they arrive separately through cc.permissions), so a check for one here would be a
+   * branch that silently never fires. That announcement lives in app-permissions.js, where the cards are
+   * actually rendered.
+   */
+  var lastTurnPhase = null;
+  function announceTurnState(s) {
+    if (!window.CC || typeof CC.announce !== 'function') return;
+    var phase = s.interrupting ? 'interrupting' : (s.turnActive ? 'working' : 'idle');
+    if (phase === lastTurnPhase) return;
+    var wasWorking = lastTurnPhase === 'working' || lastTurnPhase === 'interrupting';
+    lastTurnPhase = phase;
+    if (phase === 'working') CC.announce('Claude is working…');
+    else if (phase === 'interrupting') CC.announce('Stopping…');
+    // Only report completion if a turn was actually running — otherwise every idle state push would announce.
+    else if (wasWorking) CC.announce('Claude finished responding.');
+  }
+
   function renderState(s) {
     if (!s) return;
+    announceTurnState(s);
     renderSendMode(s);
     renderPills(s);
     renderQueue(s.queue);
