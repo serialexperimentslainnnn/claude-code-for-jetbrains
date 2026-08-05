@@ -6,7 +6,14 @@ import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 plugins {
     kotlin("jvm") version "2.1.20"
     kotlin("plugin.serialization") version "2.1.20"
-    id("org.jetbrains.intellij.platform") version "2.18.1"
+    // PINNED AT 2.16.0 DELIBERATELY. 2.18.1 exists and the build warns about it on every run, but bumping it
+    // hangs the headless suite: `ChatSessionManagerHeadlessTest` never starts, because
+    // BasePlatformTestCase.setUp → LightPlatformTestCase.doSetup → IndexingTestUtil.waitUntilIndexesAreReady
+    // waits forever (confirmed by thread dump — the EDT sits in that frame; our code is never reached). The
+    // bump changes which platform test-framework is resolved, so this is a fixture-level regression, not ours
+    // to fix from here. Re-attempt as its own change, with the headless suite as the acceptance test — NOT as
+    // a drive-by inside a release branch, which is exactly how it got in and straight back out.
+    id("org.jetbrains.intellij.platform") version "2.16.0"
     // Coverage, gated per package — see the `kover { }` block near the bottom for the thresholds and why they
     // differ by package. (Until 5.0.0 this comment claimed a "≥90% target documented in
     // docs/RELEASE_CHECKLIST.md". That document says nothing about coverage, and the real figure was 53%. A
