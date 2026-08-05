@@ -52,7 +52,10 @@ class ClaudeBinaryLocatorTest {
     @Test
     fun `override pointing to a non-executable file is rejected`(@TempDir tmp: Path) {
         assumeFalse(SystemInfo.isWindows, "POSIX exec bit semantics; Windows has no exec bit")
-        val notExe = File(tmp.toFile(), "claude").apply { writeText("plain"); setExecutable(false, false) }
+        val notExe = File(tmp.toFile(), "claude").apply {
+            writeText("plain")
+            setExecutable(false, false)
+        }
         val located = ClaudeBinaryLocator.locate(notExe.absolutePath)
         // Falls through (host claude or null) — never returns the non-executable override.
         if (located != null) {
@@ -63,7 +66,7 @@ class ClaudeBinaryLocatorTest {
     }
 
     @Test
-    fun `blank override is treated as no override`(@TempDir tmp: Path) {
+    fun `blank override is treated as no override`() {
         // Should not throw; behaviour matches `locate(null)`.
         val a = ClaudeBinaryLocator.locate("")
         val b = ClaudeBinaryLocator.locate(null)
@@ -100,7 +103,8 @@ class ClaudeBinaryLocatorTest {
         // npm global layout: <prefix>\claude.cmd  +  <prefix>\node_modules\@anthropic-ai\claude-code\cli.js
         val prefix = tmp.toFile()
         val cli = File(prefix, "node_modules\\@anthropic-ai\\claude-code\\cli.js").apply {
-            parentFile.mkdirs(); writeText("// fake cli\n")
+            parentFile.mkdirs()
+            writeText("// fake cli\n")
         }
         val cmd = File(prefix, "claude.cmd").apply {
             writeText("@\"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\n")
@@ -115,7 +119,10 @@ class ClaudeBinaryLocatorTest {
         assumeTrue(SystemInfo.isWindows, "Windows-only npm shim layout")
         val prefix = tmp.toFile()
         // Non-standard install: cli.js lives in `tools\\` instead of node_modules\\…
-        val cli = File(prefix, "tools\\custom-cli.js").apply { parentFile.mkdirs(); writeText("// fake\n") }
+        val cli = File(prefix, "tools\\custom-cli.js").apply {
+            parentFile.mkdirs()
+            writeText("// fake\n")
+        }
         val cmd = File(prefix, "claude.cmd").apply {
             writeText("@node \"%~dp0\\tools\\custom-cli.js\" %*\n")
         }

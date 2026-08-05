@@ -31,7 +31,7 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
         val session = ClaudeSession(project, "t")
         try {
             session.handleEventForTest(
-                ClaudeEvent.LiveUsage(inputTokens = 12, cacheCreationTokens = 1024, cacheReadTokens = 7, outputTokens = 3)
+                ClaudeEvent.LiveUsage(inputTokens = 12, cacheCreationTokens = 1024, cacheReadTokens = 7, outputTokens = 3),
             )
             flush()
             assertEquals(12, session.liveInputTokens)
@@ -50,7 +50,7 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
         try {
             // First message's usage.
             session.handleEventForTest(
-                ClaudeEvent.LiveUsage(inputTokens = 10, cacheCreationTokens = 100, cacheReadTokens = 0, outputTokens = 5)
+                ClaudeEvent.LiveUsage(inputTokens = 10, cacheCreationTokens = 100, cacheReadTokens = 0, outputTokens = 5),
             )
             flush()
             assertEquals(115, session.totalTokens())
@@ -64,7 +64,7 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
 
             // Second message's usage adds on top — total must reflect BOTH messages, not just the latest.
             session.handleEventForTest(
-                ClaudeEvent.LiveUsage(inputTokens = 20, cacheCreationTokens = 0, cacheReadTokens = 50, outputTokens = 8)
+                ClaudeEvent.LiveUsage(inputTokens = 20, cacheCreationTokens = 0, cacheReadTokens = 50, outputTokens = 8),
             )
             flush()
             assertEquals(115 + 78, session.totalTokens())

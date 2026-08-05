@@ -1,6 +1,9 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.protocol.ExtraUsage
+import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SessionCostUsage
+import dev.lain.claudejb.protocol.UsageReport
 import dev.lain.claudejb.session.ClaudeSession
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -46,8 +49,13 @@ import kotlinx.serialization.json.put
  */
 object JcefSessionData {
 
-    fun sessionJson(session: ClaudeSession): String {
+    /**
+     * The dashboard payload. [usage] is passed in rather than read off the session because it comes from an
+     * on-demand `get_usage` round-trip, not from session state — the caller polls, then re-serializes.
+     */
+    fun sessionJson(session: ClaudeSession, usage: UsageReport? = null): String {
         val obj = buildJsonObject {
+            put("usage", usageJson(session, usage) ?: JsonNull)
             put("context", contextJson(session) ?: JsonNull)
             put("cost", costJson(session) ?: JsonNull)
             put("account", accountJson(session) ?: JsonNull)
@@ -63,18 +71,88 @@ object JcefSessionData {
         return obj.toString()
     }
 
+    /**
+     * `{ plan, windows:[{ key, label, pct, resetsAt, exhausted }], extra:{…} }`, or null when nothing is known.
+     *
+     * Two sources, deliberately: the `get_usage` [report] is authoritative because one round-trip returns
+     * EVERY window, while [ClaudeSession.rateLimits] only knows about a window once an event has moved it. The
+     * events are the fallback so the panel still shows something before the first poll lands, and the nudge
+     * that it is worth polling again.
+     *
+     * `pct` may be null — a window can be known without a percentage (the binary only sends `utilization` when
+     * the API returns it). The frontend renders that as "—" and an empty bar rather than as 0%, because
+     * "unknown" and "none used" are different claims and a bar cannot show both.
+     */
+    private fun usageJson(session: ClaudeSession, report: UsageReport?): JsonObject? {
+        val fromReport = report?.windows?.map { (key, w) ->
+            Window(key, w.utilization?.let { pctOf(it) }, w.resetsAt, exhausted = false)
+        }.orEmpty()
+        val fromEvents = session.rateLimits
+            .filterKeys { key -> fromReport.none { it.key == key } }
+            .map { (key, info) ->
+                Window(key, info.utilizationPercent(), info.resetsAt?.let(::isoOf), info.isExhausted)
+            }
+        val windows = fromReport + fromEvents
+        if (windows.isEmpty() && report?.extra == null) return null
+        return buildJsonObject {
+            put("plan", report?.subscriptionType ?: session.account?.subscriptionType?.ifBlank { null })
+            put(
+                "windows",
+                buildJsonArray {
+                    windows.forEach { w ->
+                        addJsonObject {
+                            put("key", w.key)
+                            put("label", RateLimitInfo.windowTitleFor(w.key))
+                            put("pct", w.pct)
+                            put("resetsAt", w.resetsAt)
+                            put("exhausted", w.exhausted)
+                        }
+                    }
+                },
+            )
+            put("extra", report?.extra?.let { extraUsageJson(it) } ?: JsonNull)
+        }
+    }
+
+    private data class Window(val key: String, val pct: Int?, val resetsAt: String?, val exhausted: Boolean)
+
+    /** The pay-as-you-go balance. Credits are minor units (`decimal_places`), not whole currency. */
+    private fun extraUsageJson(extra: ExtraUsage): JsonObject = buildJsonObject {
+        put("enabled", extra.isEnabled)
+        put("spent", extra.usedCredits?.let { it / TEN.pow(extra.decimalPlaces) })
+        put("limit", extra.monthlyLimit)
+        put("currency", extra.currency)
+        put("pct", extra.utilization?.let { pctOf(it) })
+        put("limitReached", extra.spendLimitReached)
+    }
+
+    /** The wire reports 0..100 here, but has historically also sent 0..1; accept both, clamp, never crash. */
+    private fun pctOf(raw: Double): Int =
+        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
+
+    /** Epoch seconds → ISO-8601, so event-sourced windows match the shape `get_usage` already returns. */
+    private fun isoOf(epochSeconds: Long): String =
+        java.time.Instant.ofEpochSecond(epochSeconds).toString()
+
+    private const val TEN = 10.0
+
+    private fun Double.pow(exp: Int): Double = Math.pow(this, exp.toDouble())
+
     /** `{ categories:[{name, tokens}], used, max, pct }` or null when no context usage has been polled yet. */
     private fun contextJson(session: ClaudeSession): JsonObject? {
         val ctx = session.lastContextUsage ?: return null
         return buildJsonObject {
-            put("categories", buildJsonArray {
-                ctx.categories.forEach { cat ->
-                    addJsonObject {
-                        put("name", cat.name)
-                        put("tokens", cat.tokens)
+            put(
+                "categories",
+                buildJsonArray {
+                    ctx.categories.forEach { cat ->
+                        addJsonObject {
+                            put("name", cat.name)
+                            put("tokens", cat.tokens)
+                        }
                     }
-                }
-            })
+                },
+            )
             put("used", ctx.totalTokens)
             put("max", ctx.maxTokens)
             put("pct", ctx.percentage)
@@ -96,7 +174,9 @@ object JcefSessionData {
         val cacheWrite = (usage?.cacheCreationInputTokens?.takeIf { it > 0 }) ?: session.sessionCacheCreationTokens.toLong()
         val cacheRead = (usage?.cacheReadInputTokens?.takeIf { it > 0 }) ?: session.sessionCacheReadTokens.toLong()
         val usd = raw?.let { usdOf(it) }
-        if (input == 0L && output == 0L && cacheWrite == 0L && cacheRead == 0L && usd == null) return null
+        // Nothing measured yet → omit the card entirely rather than render a row of zeros.
+        val noTokens = listOf(input, output, cacheWrite, cacheRead).all { it == 0L }
+        if (noTokens && usd == null) return null
         return buildJsonObject {
             put("usd", usd)
             put("input", input)

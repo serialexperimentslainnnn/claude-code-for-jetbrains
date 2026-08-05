@@ -28,7 +28,7 @@ class HookActivityNarratorTest {
         assertTrue(entry.text.contains("running"))
 
         n.onProgress(HookProgressInfo(hookId = "h1", stdout = "line1\nline2"))
-        assertEquals(1, t.entries.size)          // SAME entry, no new row
+        assertEquals(1, t.entries.size) // SAME entry, no new row
         assertTrue(t.entries.single().text.contains("line2"))
 
         n.onResponse(HookResponseInfo(hookId = "h1", outcome = "success"))

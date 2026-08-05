@@ -38,7 +38,9 @@ class ViewDiffUiTest : UiTestBase() {
         // `DiffSplitter`, `OnesideDiffViewer`); the OR-set below tolerates the common ones.
         waitFor(longTimeout, Duration.ofMillis(500), "expected a diff viewer to open in the editor area") {
             remoteRobot.findAll<ComponentFixture>(
-                byXpath("//div[contains(@class,'DiffSplitter') or contains(@class,'SimpleDiffPanel') or contains(@class,'DiffViewer') or @accessiblename='Editor for diff']"),
+                byXpath(
+                    "//div[contains(@class,'DiffSplitter') or contains(@class,'SimpleDiffPanel') or contains(@class,'DiffViewer') or @accessiblename='Editor for diff']",
+                ),
             ).isNotEmpty()
         }
     }

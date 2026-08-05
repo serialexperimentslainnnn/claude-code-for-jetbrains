@@ -1,4 +1,3 @@
-
 /* app-permissions.js — A4 (permissions)
  * Renders cc.permissions(list) into CC.els.permissions per §PERMISSIONS.
  * Consumes app-core.js globals (window.CC: h, escape, markdown, send).
@@ -8,8 +7,13 @@
   'use strict';
 
   // Safe accessors — every method must be callable before core fully initializes.
-  function core() { return window.CC || null; }
-  function mount() { var c = core(); return (c && c.els && c.els.permissions) || null; }
+  function core() {
+    return window.CC || null;
+  }
+  function mount() {
+    var c = core();
+    return (c && c.els && c.els.permissions) || null;
+  }
   function h() {
     var c = core();
     if (c && typeof c.h === 'function') return c.h.apply(c, arguments);
@@ -44,60 +48,70 @@
     // selections[questionText] = [labels...]
     var selections = {};
 
-    var qBlocks = questions.map(function (q) {
-      var qText = q && q.question != null ? String(q.question) : '';
-      var multi = !!(q && q.multiSelect);
-      var options = (q && Array.isArray(q.options)) ? q.options : [];
-      if (!(qText in selections)) selections[qText] = [];
+    var qBlocks = questions
+      .map(function (q) {
+        var qText = q && q.question != null ? String(q.question) : '';
+        var multi = !!(q && q.multiSelect);
+        var options = q && Array.isArray(q.options) ? q.options : [];
+        if (!(qText in selections)) selections[qText] = [];
 
-      var optionEls = options.map(function (opt) {
-        var label = opt && opt.label != null ? String(opt.label) : '';
-        var desc = opt && opt.description != null ? String(opt.description) : '';
-        var preview = opt && opt.preview != null ? String(opt.preview) : '';
+        var optionEls = options
+          .map(function (opt) {
+            var label = opt && opt.label != null ? String(opt.label) : '';
+            var desc = opt && opt.description != null ? String(opt.description) : '';
+            var preview = opt && opt.preview != null ? String(opt.preview) : '';
 
-        var children = [h('span', { class: 'q-option-label', text: label })];
-        if (desc) children.push(h('div', { class: 'q-desc', text: desc }));
+            var children = [h('span', { class: 'q-option-label', text: label })];
+            if (desc) children.push(h('div', { class: 'q-desc', text: desc }));
 
-        var props = {
-          class: 'q-option',
-          on: {
-            click: function () {
-              var arr = selections[qText];
-              if (multi) {
-                var i = arr.indexOf(label);
-                if (i >= 0) arr.splice(i, 1);
-                else arr.push(label);
-              } else {
-                selections[qText] = [label];
-              }
-              // re-paint selected state within this question block
-              syncSelected();
+            var props = {
+              class: 'q-option',
+              on: {
+                click: function () {
+                  var arr = selections[qText];
+                  if (multi) {
+                    var i = arr.indexOf(label);
+                    if (i >= 0) arr.splice(i, 1);
+                    else arr.push(label);
+                  } else {
+                    selections[qText] = [label];
+                  }
+                  // re-paint selected state within this question block
+                  syncSelected();
+                },
+              },
+            };
+            if (preview) props.title = preview;
+
+            var el = h('button', props, children[0], children[1] || null);
+            // tag for sync
+            if (el) {
+              el.__qText = qText;
+              el.__label = label;
             }
-          }
-        };
-        if (preview) props.title = preview;
+            return el;
+          })
+          .filter(Boolean);
 
-        var el = h('button', props, children[0], children[1] || null);
-        // tag for sync
-        if (el) {
-          el.__qText = qText;
-          el.__label = label;
-        }
-        return el;
-      }).filter(Boolean);
+        var block = h(
+          'div',
+          { class: 'q-block' },
+          q && q.header ? h('div', { class: 'q-header', text: String(q.header) }) : null,
+          h('div', { class: 'q-question', text: qText }),
+          h('div', { class: 'q-options' }, optionEls)
+        );
+        return block;
+      })
+      .filter(Boolean);
 
-      var block = h('div', { class: 'q-block' },
-        q && q.header ? h('div', { class: 'q-header', text: String(q.header) }) : null,
-        h('div', { class: 'q-question', text: qText }),
-        h('div', { class: 'q-options' }, optionEls)
-      );
-      return block;
-    }).filter(Boolean);
-
-    var root = h('div', { class: 'perm-card q-card' },
+    var root = h(
+      'div',
+      { class: 'perm-card q-card' },
       h('div', { class: 'perm-head', text: card.title || card.headline || 'Question' }),
       h('div', { class: 'perm-body' }, qBlocks),
-      h('div', { class: 'perm-actions' },
+      h(
+        'div',
+        { class: 'perm-actions' },
         h('button', {
           class: 'btn primary',
           text: 'Submit',
@@ -108,14 +122,18 @@
                 answers[qText] = selections[qText].join(', ');
               });
               send({ type: 'resolveQuestion', id: id, answers: answers });
-            }
-          }
+            },
+          },
         }),
         // Cancel = deny the AskUserQuestion tool (the model continues without an answer).
         h('button', {
           class: 'btn ghost',
           text: 'Cancel',
-          on: { click: function () { send({ type: 'resolvePermission', id: id, allow: false }); } }
+          on: {
+            click: function () {
+              send({ type: 'resolvePermission', id: id, allow: false });
+            },
+          },
         })
       )
     );
@@ -137,7 +155,7 @@
 
   // Normalize a field's declared type to one of: string | number | integer | boolean.
   function fieldKind(f) {
-    var t = (f && f.type != null) ? String(f.type).toLowerCase() : 'string';
+    var t = f && f.type != null ? String(f.type).toLowerCase() : 'string';
     if (t === 'number') return 'number';
     if (t === 'integer' || t === 'int') return 'integer';
     if (t === 'boolean' || t === 'bool') return 'boolean';
@@ -150,9 +168,11 @@
 
     // A field is { name, title?, type?, required? }.  Render form when the
     // elicitation explicitly asks for a form OR when fields are supplied.
-    var fields = Array.isArray(e.fields) ? e.fields.filter(function (f) {
-      return f && f.name != null && String(f.name) !== '';
-    }) : [];
+    var fields = Array.isArray(e.fields)
+      ? e.fields.filter(function (f) {
+          return f && f.name != null && String(f.name) !== '';
+        })
+      : [];
     var isForm = e.mode === 'form' || fields.length > 0;
     var isUrl = e.mode === 'url' && isHttpUrl(e.url);
 
@@ -162,16 +182,18 @@
     // Safe URL link (http/https only), routed through Kotlin (never navigated).
     if (isUrl) {
       var url = String(e.url).trim();
-      bodyChildren.push(h('a', {
-        text: url,
-        attrs: { href: '#' },
-        on: {
-          click: function (ev) {
-            if (ev && ev.preventDefault) ev.preventDefault();
-            send({ type: 'open', url: url });
-          }
-        }
-      }));
+      bodyChildren.push(
+        h('a', {
+          text: url,
+          attrs: { href: '#' },
+          on: {
+            click: function (ev) {
+              if (ev && ev.preventDefault) ev.preventDefault();
+              send({ type: 'open', url: url });
+            },
+          },
+        })
+      );
     }
 
     // name -> { input, kind, required } for value collection + validation.
@@ -179,29 +201,28 @@
     var acceptBtn = null;
 
     if (isForm && fields.length) {
-      var fieldEls = fields.map(function (f) {
-        var name = String(f.name);
-        var kind = fieldKind(f);
-        var required = !!(f && f.required);
-        var titleText = (f && f.title != null && f.title !== '') ? String(f.title) : name;
-        if (required) titleText += ' *';
+      var fieldEls = fields
+        .map(function (f) {
+          var name = String(f.name);
+          var kind = fieldKind(f);
+          var required = !!(f && f.required);
+          var titleText = f && f.title != null && f.title !== '' ? String(f.title) : name;
+          if (required) titleText += ' *';
 
-        var inputType = 'text';
-        if (kind === 'number' || kind === 'integer') inputType = 'number';
-        else if (kind === 'boolean') inputType = 'checkbox';
+          var inputType = 'text';
+          if (kind === 'number' || kind === 'integer') inputType = 'number';
+          else if (kind === 'boolean') inputType = 'checkbox';
 
-        var input = h('input', { attrs: { type: inputType, name: name } });
-        if (input) {
-          input.addEventListener('input', refreshAcceptState);
-          input.addEventListener('change', refreshAcceptState);
-          fieldMeta[name] = { input: input, kind: kind, required: required };
-        }
+          var input = h('input', { attrs: { type: inputType, name: name } });
+          if (input) {
+            input.addEventListener('input', refreshAcceptState);
+            input.addEventListener('change', refreshAcceptState);
+            fieldMeta[name] = { input: input, kind: kind, required: required };
+          }
 
-        return h('label', null,
-          h('span', { class: 'elicit-field-label', text: titleText }),
-          input
-        );
-      }).filter(Boolean);
+          return h('label', null, h('span', { class: 'elicit-field-label', text: titleText }), input);
+        })
+        .filter(Boolean);
       bodyChildren.push(h('div', { class: 'elicit-fields' }, fieldEls));
     }
 
@@ -240,7 +261,7 @@
           content[name] = !!input.checked;
         } else if (meta.kind === 'number' || meta.kind === 'integer') {
           var raw = input.value;
-          content[name] = (raw == null || String(raw).trim() === '') ? null : Number(raw);
+          content[name] = raw == null || String(raw).trim() === '' ? null : Number(raw);
         } else {
           content[name] = input.value != null ? String(input.value) : '';
         }
@@ -254,26 +275,52 @@
       send(msg);
     }
 
-    var serverName = e.serverName != null ? String(e.serverName) : (card.title || 'Server');
-    var message = e.message != null ? String(e.message) : (card.summary || '');
+    var serverName = e.serverName != null ? String(e.serverName) : card.title || 'Server';
+    var message = e.message != null ? String(e.message) : card.summary || '';
 
     acceptBtn = h('button', {
       class: 'btn primary',
       text: 'Accept',
-      on: { click: function () { if (!acceptBtn.disabled) resolve('accept'); } }
+      on: {
+        click: function () {
+          if (!acceptBtn.disabled) resolve('accept');
+        },
+      },
     });
 
-    var root = h('div', { class: 'perm-card elicit-card' },
+    var root = h(
+      'div',
+      { class: 'perm-card elicit-card' },
       h('div', { class: 'perm-head', text: 'MCP request' }),
       serverName ? h('div', { class: 'elicit-server', text: serverName }) : null,
-      h('div', { class: 'perm-body' },
+      h(
+        'div',
+        { class: 'perm-body' },
         message ? h('div', { class: 'elicit-msg', text: message }) : null,
         bodyChildren.length ? h('div', { class: 'elicit-extra' }, bodyChildren) : null
       ),
-      h('div', { class: 'perm-actions' },
+      h(
+        'div',
+        { class: 'perm-actions' },
         acceptBtn,
-        h('button', { class: 'btn ghost', text: 'Decline', on: { click: function () { resolve('decline'); } } }),
-        h('button', { class: 'btn ghost', text: 'Cancel', on: { click: function () { resolve('cancel'); } } })
+        h('button', {
+          class: 'btn ghost',
+          text: 'Decline',
+          on: {
+            click: function () {
+              resolve('decline');
+            },
+          },
+        }),
+        h('button', {
+          class: 'btn ghost',
+          text: 'Cancel',
+          on: {
+            click: function () {
+              resolve('cancel');
+            },
+          },
+        })
       )
     );
 
@@ -288,19 +335,31 @@
       var planHtml = md(card.planText || '');
       body.innerHTML = planHtml;
     }
-    return h('div', { class: 'perm-card plan-card' },
+    return h(
+      'div',
+      { class: 'perm-card plan-card' },
       h('div', { class: 'perm-head', text: card.title || card.headline || 'Plan' }),
       body,
-      h('div', { class: 'perm-actions' },
+      h(
+        'div',
+        { class: 'perm-actions' },
         h('button', {
           class: 'btn primary',
           text: 'Approve plan',
-          on: { click: function () { send({ type: 'resolvePermission', id: id, allow: true }); } }
+          on: {
+            click: function () {
+              send({ type: 'resolvePermission', id: id, allow: true });
+            },
+          },
         }),
         h('button', {
           class: 'btn ghost',
           text: 'Keep planning',
-          on: { click: function () { send({ type: 'resolvePermission', id: id, allow: false }); } }
+          on: {
+            click: function () {
+              send({ type: 'resolvePermission', id: id, allow: false });
+            },
+          },
         })
       )
     );
@@ -324,7 +383,12 @@
       code.appendChild(h('span', { class: 'diff-line ' + cls, text: line + '\n' }));
     }
     if (lines.length > MAX) {
-      code.appendChild(h('span', { class: 'diff-line dl-ctx', text: '… (' + (lines.length - MAX) + ' more lines — use View diff)\n' }));
+      code.appendChild(
+        h('span', {
+          class: 'diff-line dl-ctx',
+          text: '… (' + (lines.length - MAX) + ' more lines — use View diff)\n',
+        })
+      );
     }
     pre.appendChild(code);
     return pre;
@@ -343,8 +407,12 @@
       if (descEl) descEl.innerHTML = md(description);
       bodyChildren.push(descEl);
     }
-    if (card.blockedPath) bodyChildren.push(h('div', { class: 'perm-blocked', text: 'Blocked path: ' + String(card.blockedPath) }));
-    if (card.decisionReason) bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
+    if (card.blockedPath)
+      bodyChildren.push(
+        h('div', { class: 'perm-blocked', text: 'Blocked path: ' + String(card.blockedPath) })
+      );
+    if (card.decisionReason)
+      bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
 
     // Read-only unified diff for reviewable edits: shows exactly what changes (red removed / green added). No
     // per-line selection — the whole edit is accepted or rejected.
@@ -358,7 +426,11 @@
     var acceptBtn = h('button', {
       class: 'btn primary',
       text: 'Accept',
-      on: { click: function () { send({ type: 'resolvePermission', id: id, allow: true }); } }
+      on: {
+        click: function () {
+          send({ type: 'resolvePermission', id: id, allow: true });
+        },
+      },
     });
 
     var actions = [
@@ -366,26 +438,44 @@
       h('button', {
         class: 'btn danger',
         text: 'Reject',
-        on: { click: function () { send({ type: 'resolvePermission', id: id, allow: false }); } }
-      })
+        on: {
+          click: function () {
+            send({ type: 'resolvePermission', id: id, allow: false });
+          },
+        },
+      }),
     ];
     if (card.reviewable) {
-      actions.push(h('button', {
-        class: 'btn ghost',
-        text: 'View diff',
-        on: { click: function () { send({ type: 'viewDiff', id: id }); } }
-      }));
+      actions.push(
+        h('button', {
+          class: 'btn ghost',
+          text: 'View diff',
+          on: {
+            click: function () {
+              send({ type: 'viewDiff', id: id });
+            },
+          },
+        })
+      );
     }
     if (tool) {
-      actions.push(h('button', {
-        class: 'btn ghost perm-always',
-        text: 'Always allow',
-        on: { click: function () { send({ type: 'alwaysAllow', tool: tool, id: id }); } }
-      }));
+      actions.push(
+        h('button', {
+          class: 'btn ghost perm-always',
+          text: 'Always allow',
+          on: {
+            click: function () {
+              send({ type: 'alwaysAllow', tool: tool, id: id });
+            },
+          },
+        })
+      );
     }
 
-    return h('div', { class: 'perm-card' },
-      h('div', { class: 'perm-head', text: card.headline || card.title || (tool || 'Permission') }),
+    return h(
+      'div',
+      { class: 'perm-card' },
+      h('div', { class: 'perm-head', text: card.headline || card.title || tool || 'Permission' }),
       h('div', { class: 'perm-body' }, bodyChildren),
       h('div', { class: 'perm-actions' }, actions)
     );
@@ -427,7 +517,10 @@
       if (only.questions) C.announce('Claude is asking you a question.');
       else if (only.isPlan) C.announce('Claude is proposing a plan for your approval.');
       else if (only.elicitation) C.announce('An MCP server is requesting input.');
-      else C.announce(tool ? ('Claude needs your permission to use ' + tool + '.') : 'Claude needs your response.');
+      else
+        C.announce(
+          tool ? 'Claude needs your permission to use ' + tool + '.' : 'Claude needs your response.'
+        );
       return;
     }
     C.announce(count + ' requests are waiting for your response.');

@@ -1,5 +1,6 @@
 package dev.lain.claudejb.context
 
+import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import java.awt.Toolkit
@@ -17,6 +18,11 @@ import javax.imageio.ImageIO
  * helpers are pure (no project/editor) and confine all failures with [runCatching] — they never throw.
  */
 object EditorContextProvider {
+
+    private val log = thisLogger()
+
+    /** Floor for a clipboard payload to be a plausible image: the longest signature we sniff is 8 bytes (PNG). */
+    private const val MIN_IMAGE_BYTES = 8
 
     /** Absolute path of the file open in the active editor, or null. */
     fun currentFilePath(project: Project): String? {
@@ -50,7 +56,8 @@ object EditorContextProvider {
         val path = currentFilePath(project) ?: return null
         val text = currentSelection(project) ?: return null
         val line = currentSelectionStartLine(project) ?: return null
-        return Attachment.Selection(path = path, startLine = line, text = text, lang = langForExtension(path.substringAfterLast('.', "").lowercase()))
+        val lang = langForExtension(path.substringAfterLast('.', "").lowercase())
+        return Attachment.Selection(path = path, startLine = line, text = text, lang = lang)
     }
 
     /** The active file as an [Attachment.FileRef] (`@path` mention), or null when no editor is focused. */
@@ -108,8 +115,8 @@ object EditorContextProvider {
     /** Wayland/X11 clipboard image via external CLIs (no-op off Linux, or when none are installed). */
     private fun linuxClipboardImage(): Attachment.Image? {
         if (!isLinux()) return null
-        val wlPaste = findExecutable("wl-paste")   // Wayland
-        val xclip = findExecutable("xclip")        // X11
+        val wlPaste = findExecutable("wl-paste") // Wayland
+        val xclip = findExecutable("xclip") // X11
         // Wayland: ask wl-paste which types it has, pick an image/* one, then fetch it.
         if (wlPaste != null) {
             val wlType = pickImageType(listOf(wlPaste, "--list-types"))
@@ -195,7 +202,6 @@ object EditorContextProvider {
     }
 
     private fun isLinux() = System.getProperty("os.name").orEmpty().lowercase().contains("linux")
-    private fun isMac() = System.getProperty("os.name").orEmpty().lowercase().let { it.contains("mac") || it.contains("darwin") }
 
     /**
      * Locate an executable by name, searching PATH plus common bin dirs (the IDE, launched from
@@ -207,9 +213,11 @@ object EditorContextProvider {
         System.getenv("PATH")?.split(File.pathSeparatorChar)?.forEach { if (it.isNotBlank()) candidates.add(it) }
         candidates.addAll(COMMON_BIN_DIRS)
         val names = if (isWindows()) listOf("$name.exe", name) else listOf(name)
-        for (dir in candidates) for (n in names) {
-            val f = File(dir, n)
-            if (f.isFile && f.canExecute()) return f.absolutePath
+        for (dir in candidates) {
+            for (n in names) {
+                val f = File(dir, n)
+                if (f.isFile && f.canExecute()) return f.absolutePath
+            }
         }
         return null
     }
@@ -221,7 +229,7 @@ object EditorContextProvider {
         val home = System.getProperty("user.home").orEmpty()
         listOf(
             "/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin", "/sbin",
-            "/run/current-system/sw/bin",        // NixOS
+            "/run/current-system/sw/bin", // NixOS
             "/var/lib/flatpak/exports/bin",
             "/snap/bin",
             "/opt/homebrew/bin", "/usr/local/sbin", // macOS Homebrew
@@ -282,7 +290,8 @@ object EditorContextProvider {
     }
 
     private fun imageOf(bytes: ByteArray, type: String): Attachment.Image? {
-        if (bytes.size < 8) return null
+        // Shorter than the longest magic-byte signature we could match, so it cannot be an image we accept.
+        if (bytes.size < MIN_IMAGE_BYTES) return null
         val mt = if (type == "image/jpg") "image/jpeg" else type
         val ext = mt.substringAfter('/').substringBefore('+').ifBlank { "png" }
         return Attachment.Image("clipboard.$ext", mt, Base64.getEncoder().encodeToString(bytes))
@@ -302,9 +311,18 @@ object EditorContextProvider {
         val bytes = try {
             reader.get(3, java.util.concurrent.TimeUnit.SECONDS)
         } catch (e: java.util.concurrent.TimeoutException) {
-            proc.destroyForcibly(); reader.cancel(true); return@runCatching null
+            // A timeout here is an expected outcome, not an error: a clipboard owner that never closes the pipe
+            // is exactly what the deadline exists for. Logged at debug all the same — when someone reports
+            // "paste does nothing on Wayland", this line is the difference between a diagnosis and a guess.
+            log.debug("Clipboard helper ${cmd.firstOrNull()} timed out after 3s; killing it", e)
+            proc.destroyForcibly()
+            reader.cancel(true)
+            return@runCatching null
         }
-        if (!proc.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) { proc.destroyForcibly(); return@runCatching null }
+        if (!proc.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
+            proc.destroyForcibly()
+            return@runCatching null
+        }
         if (proc.exitValue() != 0) return@runCatching null
         bytes?.takeIf { it.isNotEmpty() }
     }.getOrNull()
@@ -322,36 +340,45 @@ object EditorContextProvider {
         )
     }.getOrNull()
 
-    /** Maps a file extension to a Markdown-fence language hint, or null when unknown. */
-    fun langForExtension(ext: String): String? = when (ext) {
-        "kt", "kts" -> "kotlin"
-        "java" -> "java"
-        "py" -> "python"
-        "js", "mjs", "cjs" -> "javascript"
-        "ts" -> "typescript"
-        "tsx" -> "tsx"
-        "jsx" -> "jsx"
-        "go" -> "go"
-        "rs" -> "rust"
-        "rb" -> "ruby"
-        "php" -> "php"
-        "c", "h" -> "c"
-        "cpp", "cc", "cxx", "hpp" -> "cpp"
-        "cs" -> "csharp"
-        "swift" -> "swift"
-        "sh", "bash", "zsh" -> "bash"
-        "sql" -> "sql"
-        "html", "htm" -> "html"
-        "css" -> "css"
-        "scss" -> "scss"
-        "xml" -> "xml"
-        "json" -> "json"
-        "yaml", "yml" -> "yaml"
-        "toml" -> "toml"
-        "md", "markdown" -> "markdown"
-        "gradle" -> "groovy"
-        else -> null
+    /**
+     * File extension → Markdown-fence language hint.
+     *
+     * A table, not a branch: this never was control flow, it was a dictionary written as 26 `when` arms. As
+     * data it reads as what it is, costs one hash lookup instead of a linear scan, and adding a language is a
+     * one-line entry rather than another branch in a function.
+     */
+    private val LANG_BY_EXTENSION: Map<String, String> = buildMap {
+        fun map(lang: String, vararg extensions: String) = extensions.forEach { put(it, lang) }
+        map("kotlin", "kt", "kts")
+        map("java", "java")
+        map("python", "py")
+        map("javascript", "js", "mjs", "cjs")
+        map("typescript", "ts")
+        map("tsx", "tsx")
+        map("jsx", "jsx")
+        map("go", "go")
+        map("rust", "rs")
+        map("ruby", "rb")
+        map("php", "php")
+        map("c", "c", "h")
+        map("cpp", "cpp", "cc", "cxx", "hpp")
+        map("csharp", "cs")
+        map("swift", "swift")
+        map("bash", "sh", "bash", "zsh")
+        map("sql", "sql")
+        map("html", "html", "htm")
+        map("css", "css")
+        map("scss", "scss")
+        map("xml", "xml")
+        map("json", "json")
+        map("yaml", "yaml", "yml")
+        map("toml", "toml")
+        map("markdown", "md", "markdown")
+        map("groovy", "gradle")
     }
+
+    /** Maps a file extension to a Markdown-fence language hint, or null when unknown. */
+    fun langForExtension(ext: String): String? = LANG_BY_EXTENSION[ext]
 
     /** Maps an image file extension to its IANA media type, or null when not a supported image. */
     fun mediaTypeForExtension(ext: String): String? = when (ext) {

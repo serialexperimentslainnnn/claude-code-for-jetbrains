@@ -25,7 +25,8 @@ class ProtocolEventsTest {
     @Test
     fun `task_started decodes id description and subagent type`() {
         val line = """{"type":"system","subtype":"task_started","task_id":"t1","tool_use_id":"tu1",
-            "description":"Investigate","subagent_type":"explore","skip_transcript":false}""".trimIndent()
+            "description":"Investigate","subagent_type":"explore","skip_transcript":false}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.TaskStarted>(line)
         assertEquals("t1", e.info.taskId)
         assertEquals("tu1", e.info.toolUseId)
@@ -38,7 +39,8 @@ class ProtocolEventsTest {
     fun `task_progress decodes usage last tool and summary`() {
         val line = """{"type":"system","subtype":"task_progress","task_id":"t1","description":"working",
             "subagent_type":"explore","usage":{"total_tokens":1234,"tool_uses":5,"duration_ms":900},
-            "last_tool_name":"Grep","summary":"halfway"}""".trimIndent()
+            "last_tool_name":"Grep","summary":"halfway"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.TaskProgress>(line)
         assertEquals("t1", e.info.taskId)
         assertEquals(1234L, e.info.usage.totalTokens)
@@ -51,7 +53,8 @@ class ProtocolEventsTest {
     @Test
     fun `task_updated decodes the patch`() {
         val line = """{"type":"system","subtype":"task_updated","task_id":"t1",
-            "patch":{"status":"running","description":"d2","is_backgrounded":true,"end_time":42}}""".trimIndent()
+            "patch":{"status":"running","description":"d2","is_backgrounded":true,"end_time":42}}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.TaskUpdated>(line)
         assertEquals("t1", e.info.taskId)
         assertEquals("running", e.info.patch.status)
@@ -63,7 +66,8 @@ class ProtocolEventsTest {
     @Test
     fun `task_notification decodes status summary and usage`() {
         val line = """{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed",
-            "output_file":"/tmp/out.md","summary":"done","usage":{"total_tokens":10,"tool_uses":2,"duration_ms":5}}""".trimIndent()
+            "output_file":"/tmp/out.md","summary":"done","usage":{"total_tokens":10,"tool_uses":2,"duration_ms":5}}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.TaskNotification>(line)
         assertEquals("completed", e.info.status)
         assertEquals("/tmp/out.md", e.info.outputFile)
@@ -76,7 +80,8 @@ class ProtocolEventsTest {
     @Test
     fun `tool_progress decodes elapsed time and parent id`() {
         val line = """{"type":"tool_progress","tool_use_id":"tu1","tool_name":"Bash",
-            "parent_tool_use_id":null,"elapsed_time_seconds":12.5,"task_id":"t1"}""".trimIndent()
+            "parent_tool_use_id":null,"elapsed_time_seconds":12.5,"task_id":"t1"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.ToolProgress>(line)
         assertEquals("tu1", e.info.toolUseId)
         assertEquals("Bash", e.info.toolName)
@@ -106,7 +111,8 @@ class ProtocolEventsTest {
     @Test
     fun `notification decodes text priority color and timeout`() {
         val line = """{"type":"system","subtype":"notification","key":"k","text":"Heads up","priority":"high",
-            "color":"yellow","timeout_ms":3000}""".trimIndent()
+            "color":"yellow","timeout_ms":3000}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.Notification>(line)
         assertEquals("Heads up", e.info.text)
         assertEquals("high", e.info.priority)
@@ -117,7 +123,8 @@ class ProtocolEventsTest {
     @Test
     fun `permission_denied decodes tool reason and decision`() {
         val line = """{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":"tu1",
-            "decision_reason_type":"rule","decision_reason":"blocked by deny rule","message":"Not allowed"}""".trimIndent()
+            "decision_reason_type":"rule","decision_reason":"blocked by deny rule","message":"Not allowed"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.PermissionDenied>(line)
         assertEquals("Bash", e.info.toolName)
         assertEquals("tu1", e.info.toolUseId)
@@ -129,7 +136,7 @@ class ProtocolEventsTest {
     @Test
     fun `session_state_changed decodes state`() {
         val e = parseOne<ClaudeEvent.SessionStateChanged>(
-            """{"type":"system","subtype":"session_state_changed","state":"idle"}"""
+            """{"type":"system","subtype":"session_state_changed","state":"idle"}""",
         )
         assertEquals("idle", e.info.state)
     }
@@ -146,7 +153,8 @@ class ProtocolEventsTest {
     @Test
     fun `api_retry decodes attempt limits and error status`() {
         val line = """{"type":"system","subtype":"api_retry","attempt":2,"max_retries":5,
-            "retry_delay_ms":2000,"error_status":529}""".trimIndent()
+            "retry_delay_ms":2000,"error_status":529}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.ApiRetry>(line)
         assertEquals(2, e.info.attempt)
         assertEquals(5, e.info.maxRetries)
@@ -157,7 +165,7 @@ class ProtocolEventsTest {
     @Test
     fun `api_retry tolerates null error_status`() {
         val e = parseOne<ClaudeEvent.ApiRetry>(
-            """{"type":"system","subtype":"api_retry","attempt":1,"max_retries":3,"retry_delay_ms":500,"error_status":null}"""
+            """{"type":"system","subtype":"api_retry","attempt":1,"max_retries":3,"retry_delay_ms":500,"error_status":null}""",
         )
         assertNull(e.info.errorStatus)
     }
@@ -167,7 +175,8 @@ class ProtocolEventsTest {
     @Test
     fun `commands_changed decodes the replacement command list`() {
         val line = """{"type":"system","subtype":"commands_changed","commands":[
-            {"name":"foo","description":"do foo"},{"name":"bar"}]}""".trimIndent()
+            {"name":"foo","description":"do foo"},{"name":"bar"}]}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.CommandsChanged>(line)
         assertEquals(2, e.info.commands.size)
         assertEquals("foo", e.info.commands[0].name)
@@ -178,7 +187,8 @@ class ProtocolEventsTest {
     @Test
     fun `memory_recall decodes mode and memories`() {
         val line = """{"type":"system","subtype":"memory_recall","mode":"select","memories":[
-            {"path":"/m/a.md","scope":"personal"},{"path":"<synthesis:/x>","scope":"team","content":"note"}]}""".trimIndent()
+            {"path":"/m/a.md","scope":"personal"},{"path":"<synthesis:/x>","scope":"team","content":"note"}]}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.MemoryRecall>(line)
         assertEquals("select", e.info.mode)
         assertEquals(2, e.info.memories.size)
@@ -191,7 +201,8 @@ class ProtocolEventsTest {
     fun `files_persisted decodes persisted and failed lists`() {
         val line = """{"type":"system","subtype":"files_persisted",
             "files":[{"filename":"a.png","file_id":"f1"}],
-            "failed":[{"filename":"b.png","error":"too big"}],"processed_at":"2026-06-03T00:00:00Z"}""".trimIndent()
+            "failed":[{"filename":"b.png","error":"too big"}],"processed_at":"2026-06-03T00:00:00Z"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.FilesPersisted>(line)
         assertEquals(1, e.info.files.size)
         assertEquals("f1", e.info.files[0].fileId)
@@ -203,7 +214,7 @@ class ProtocolEventsTest {
     @Test
     fun `prompt_suggestion is a top-level type`() {
         val e = parseOne<ClaudeEvent.PromptSuggestion>(
-            """{"type":"prompt_suggestion","suggestion":"Try running the tests"}"""
+            """{"type":"prompt_suggestion","suggestion":"Try running the tests"}""",
         )
         assertEquals("Try running the tests", e.info.suggestion)
     }
@@ -211,7 +222,7 @@ class ProtocolEventsTest {
     @Test
     fun `plugin_install decodes status name and error`() {
         val e = parseOne<ClaudeEvent.PluginInstall>(
-            """{"type":"system","subtype":"plugin_install","status":"failed","name":"acme","error":"404"}"""
+            """{"type":"system","subtype":"plugin_install","status":"failed","name":"acme","error":"404"}""",
         )
         assertEquals("failed", e.info.status)
         assertEquals("acme", e.info.name)
@@ -223,7 +234,7 @@ class ProtocolEventsTest {
     @Test
     fun `hook_started decodes ids and event`() {
         val e = parseOne<ClaudeEvent.HookStarted>(
-            """{"type":"system","subtype":"hook_started","hook_id":"h1","hook_name":"fmt","hook_event":"PreToolUse"}"""
+            """{"type":"system","subtype":"hook_started","hook_id":"h1","hook_name":"fmt","hook_event":"PreToolUse"}""",
         )
         assertEquals("h1", e.info.hookId)
         assertEquals("fmt", e.info.hookName)
@@ -233,7 +244,8 @@ class ProtocolEventsTest {
     @Test
     fun `hook_progress decodes stdout and stderr`() {
         val line = """{"type":"system","subtype":"hook_progress","hook_id":"h1","hook_name":"fmt",
-            "hook_event":"PreToolUse","stdout":"working","stderr":"warn","output":"o"}""".trimIndent()
+            "hook_event":"PreToolUse","stdout":"working","stderr":"warn","output":"o"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.HookProgress>(line)
         assertEquals("working", e.info.stdout)
         assertEquals("warn", e.info.stderr)
@@ -243,7 +255,8 @@ class ProtocolEventsTest {
     @Test
     fun `hook_response decodes outcome and exit code`() {
         val line = """{"type":"system","subtype":"hook_response","hook_id":"h1","hook_name":"fmt",
-            "hook_event":"PreToolUse","output":"done","stdout":"o","stderr":"","exit_code":0,"outcome":"success"}""".trimIndent()
+            "hook_event":"PreToolUse","output":"done","stdout":"o","stderr":"","exit_code":0,"outcome":"success"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.HookResponse>(line)
         assertEquals("success", e.info.outcome)
         assertEquals(0, e.info.exitCode)
@@ -255,7 +268,8 @@ class ProtocolEventsTest {
     @Test
     fun `mirror_error decodes error and key`() {
         val line = """{"type":"system","subtype":"mirror_error","error":"append failed",
-            "key":{"projectKey":"pk","sessionId":"s1","subpath":"sub"}}""".trimIndent()
+            "key":{"projectKey":"pk","sessionId":"s1","subpath":"sub"}}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.MirrorError>(line)
         assertEquals("append failed", e.info.error)
         assertEquals("pk", e.info.key.projectKey)
@@ -270,7 +284,8 @@ class ProtocolEventsTest {
         val line = """{"type":"system","subtype":"model_refusal_fallback","trigger":"refusal",
             "direction":"retry","original_model":"claude-opus-4-8","fallback_model":"claude-sonnet-4-6",
             "request_id":"req_1","api_refusal_category":"cyber","api_refusal_explanation":"nope",
-            "retracted_message_uuids":["u1","u2"],"content":"declined","uuid":"x","session_id":"s"}""".trimIndent()
+            "retracted_message_uuids":["u1","u2"],"content":"declined","uuid":"x","session_id":"s"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.ModelRefusalFallback>(line)
         assertEquals("retry", e.info.direction)
         assertEquals("claude-opus-4-8", e.info.originalModel)
@@ -282,7 +297,8 @@ class ProtocolEventsTest {
     @Test
     fun `model_refusal_fallback tolerates an older CLI without the optional fields`() {
         val line = """{"type":"system","subtype":"model_refusal_fallback","trigger":"refusal",
-            "direction":"retry","original_model":"a","fallback_model":"b","content":"x"}""".trimIndent()
+            "direction":"retry","original_model":"a","fallback_model":"b","content":"x"}
+        """.trimIndent()
         val e = parseOne<ClaudeEvent.ModelRefusalFallback>(line)
         assertNull(e.info.apiRefusalCategory)
         assertTrue(e.info.retractedMessageUuids.isEmpty())

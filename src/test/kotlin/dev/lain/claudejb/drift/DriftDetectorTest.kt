@@ -62,7 +62,7 @@ class DriftDetectorTest {
         val s = ProtocolSurface.fromCapture(ndjson)
         assertEquals(setOf("system", "assistant", "control_request", "keep_alive", "result"), s.eventTypes)
         assertTrue("init" in s.subtypes)
-        assertTrue("can_use_tool" in s.subtypes)   // pulled from the nested request object
+        assertTrue("can_use_tool" in s.subtypes) // pulled from the nested request object
         assertTrue("success" in s.subtypes)
     }
 
@@ -142,8 +142,10 @@ class DriftDetectorTest {
         // Latest declares only modeled subtypes → not actionable; versions advanced → "bump baseline".
         val coveredDts = ProtocolSurface.KNOWN_SUBTYPES.joinToString("\n") { "x: { subtype: '$it'; };" }
         val report = DriftReport(
-            sdkBaselineVersion = "0.3.161", sdkLatestVersion = "0.3.162",
-            binaryBaselineVersion = "2.1.161", binaryInstalledVersion = "2.1.162",
+            sdkBaselineVersion = "0.3.161",
+            sdkLatestVersion = "0.3.162",
+            binaryBaselineVersion = "2.1.161",
+            binaryInstalledVersion = "2.1.162",
             sdk = DriftDetector.sdkDrift(coveredDts),
             binary = DriftDetector.binaryDrift("""{"type":"system","subtype":"init"}"""),
         )
@@ -156,8 +158,10 @@ class DriftDetectorTest {
     fun `report is fully clean when nothing changed`() {
         val coveredDts = ProtocolSurface.KNOWN_SUBTYPES.joinToString("\n") { "x: { subtype: '$it'; };" }
         val report = DriftReport(
-            sdkBaselineVersion = "0.3.162", sdkLatestVersion = "0.3.162",
-            binaryBaselineVersion = "2.1.162", binaryInstalledVersion = "2.1.162",
+            sdkBaselineVersion = "0.3.162",
+            sdkLatestVersion = "0.3.162",
+            binaryBaselineVersion = "2.1.162",
+            binaryInstalledVersion = "2.1.162",
             sdk = DriftDetector.sdkDrift(coveredDts),
             binary = DriftDetector.binaryDrift("""{"type":"system","subtype":"init"}"""),
         )
@@ -168,8 +172,10 @@ class DriftDetectorTest {
     @Test
     fun `report is actionable and names the file when an unmodeled subtype appears`() {
         val report = DriftReport(
-            sdkBaselineVersion = "0.3.161", sdkLatestVersion = "0.3.162",
-            binaryBaselineVersion = "2.1.162", binaryInstalledVersion = "2.1.162",
+            sdkBaselineVersion = "0.3.161",
+            sdkLatestVersion = "0.3.162",
+            binaryBaselineVersion = "2.1.162",
+            binaryInstalledVersion = "2.1.162",
             sdk = DriftDetector.sdkDrift("type B = { subtype: 'totally_new_subtype'; };"),
             binary = DriftDetector.binaryDrift(""),
         )

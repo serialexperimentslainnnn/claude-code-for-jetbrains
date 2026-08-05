@@ -145,7 +145,8 @@ class ProtocolParserAskUserQuestionTest {
     fun `title field on the request is exposed (nullable, may be absent)`() {
         // Some binary versions attach a title on the control_request. When absent, it decodes to null.
         val line = askLine(
-            question = "?", header = "h",
+            question = "?",
+            header = "h",
             options = listOf(Triple("A", "", null)),
             multiSelect = false,
         )
@@ -156,7 +157,8 @@ class ProtocolParserAskUserQuestionTest {
     @Test
     fun `event PermissionRequest carries the unmodified questions input for later AskUserQuestion rendering`() {
         val line = askLine(
-            question = "Pick one", header = "h",
+            question = "Pick one",
+            header = "h",
             options = listOf(Triple("A", "da", "pa"), Triple("B", "db", "pb")),
             multiSelect = false,
         )

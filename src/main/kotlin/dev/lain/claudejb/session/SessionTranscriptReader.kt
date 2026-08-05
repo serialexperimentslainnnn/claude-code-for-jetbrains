@@ -54,7 +54,10 @@ data class SessionRef(
  */
 object SessionTranscriptReader {
 
-    private val JSON = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val JSON = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     /**
      * Conservative default cap for the restore path: reconstruct only the last this-many transcript entries
@@ -142,24 +145,26 @@ object SessionTranscriptReader {
         val content = (obj["message"] as? JsonObject)?.get("content") ?: return
         when (content) {
             is JsonPrimitive -> content.contentOrNull?.takeIf { it.isNotBlank() }?.let { out += EntryDTO("USER", it) }
-            is JsonArray -> for (el in content) {
-                val block = el as? JsonObject ?: continue
-                when (block["type"]?.jsonPrimitive?.contentOrNull) {
-                    "text" -> block.text()?.takeIf { it.isNotBlank() }?.let { out += EntryDTO("USER", it) }
-                    "tool_result" -> {
-                        val text = toolResultText(block["content"])
-                        val id = block["tool_use_id"]?.jsonPrimitive?.contentOrNull
-                        // `error` here, `command` added later by tagCommandOutputs (the originating tool_use may
-                        // not have been parsed yet) — together they form the same space-separated tag set the
-                        // live path builds in ClaudeSession's ToolResult handler.
-                        val isError = block["is_error"]?.jsonPrimitive?.booleanOrNull == true
-                        if (text.isNotBlank()) {
-                            out += EntryDTO("TOOL_OUTPUT", text, meta = if (isError) "error" else null, toolUseId = id)
-                        }
-                    }
-                }
-            }
+            is JsonArray -> content.mapNotNull { it as? JsonObject }.forEach { parseUserBlock(it, out) }
             else -> Unit
+        }
+    }
+
+    /** One content block of a `user` line: the user's own text, or a tool_result the binary attributed to them. */
+    private fun parseUserBlock(block: JsonObject, out: MutableList<EntryDTO>) {
+        when (block["type"]?.jsonPrimitive?.contentOrNull) {
+            "text" -> block.text()?.takeIf { it.isNotBlank() }?.let { out += EntryDTO("USER", it) }
+
+            "tool_result" -> {
+                val text = toolResultText(block["content"])
+                if (text.isBlank()) return
+                val id = block["tool_use_id"]?.jsonPrimitive?.contentOrNull
+                // `error` here, `command` added later by tagCommandOutputs (the originating tool_use may
+                // not have been parsed yet) — together they form the same space-separated tag set the
+                // live path builds in ClaudeSession's ToolResult handler.
+                val isError = block["is_error"]?.jsonPrimitive?.booleanOrNull == true
+                out += EntryDTO("TOOL_OUTPUT", text, meta = if (isError) "error" else null, toolUseId = id)
+            }
         }
     }
 
@@ -169,10 +174,12 @@ object SessionTranscriptReader {
             val block = el as? JsonObject ?: continue
             when (block["type"]?.jsonPrimitive?.contentOrNull) {
                 "text" -> block.text()?.let { out += EntryDTO("ASSISTANT", it) }
+
                 "thinking" ->
                     block["thinking"]?.jsonPrimitive?.contentOrNull
                         ?.takeIf { it.isNotBlank() }
                         ?.let { out += EntryDTO("THINKING", it) }
+
                 "tool_use" -> {
                     val name = block["name"]?.jsonPrimitive?.contentOrNull ?: continue
                     val input = block["input"] as? JsonObject ?: JsonObject(emptyMap())
@@ -194,10 +201,16 @@ object SessionTranscriptReader {
         }
     }
 
-    /** Past sessions for [project], newest-first, capped at 30 (avoids reading the whole archive). */
+    /**
+     * How many past sessions "Open Previous Session…" offers. Each one costs a full JSONL read to recover its
+     * title, so the cap is what keeps opening the list from scanning an archive that grows without bound.
+     */
+    private const val MAX_LISTED_SESSIONS = 30
+
+    /** Past sessions for [project], newest-first, capped at [MAX_LISTED_SESSIONS]. */
     fun listSessions(project: Project): List<SessionRef> {
         val base = project.basePath ?: return emptyList()
-        return SessionStore.listFiles(base).take(30).mapNotNull { path ->
+        return SessionStore.listFiles(base).take(MAX_LISTED_SESSIONS).mapNotNull { path ->
             val id = path.fileName.toString().removeSuffix(".jsonl")
             val lines = runCatching { Files.readAllLines(path) }.getOrNull() ?: return@mapNotNull null
             val title = SessionTitleReader.pickTitle(lines) ?: id
@@ -216,20 +229,39 @@ object SessionTranscriptReader {
      * caveat block) wins. The branch and creation time are taken from the first line that carries them. Never throws.
      */
     fun parseMetadata(lines: List<String>): Metadata {
-        var firstPrompt: String? = null
-        var branch: String? = null
-        var createdAt: String? = null
+        val acc = MetadataAccumulator()
         for (line in lines) {
-            if (line.isBlank()) continue
             val obj = runCatching { JSON.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
-            if (branch == null) obj["gitBranch"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { branch = it }
-            if (createdAt == null) obj["timestamp"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let { createdAt = it }
+            acc.absorb(obj)
+            // Every field found: the rest of the file cannot change the answer, so stop reading it.
+            if (acc.isComplete) break
+        }
+        return acc.build()
+    }
+
+    /**
+     * First-wins accumulator for the three session-list fields. Each is taken from the earliest line that
+     * carries it, so the loop above only has to feed lines in and ask whether it can stop.
+     */
+    private class MetadataAccumulator {
+        private var firstPrompt: String? = null
+        private var branch: String? = null
+        private var createdAt: String? = null
+
+        val isComplete: Boolean get() = firstPrompt != null && branch != null && createdAt != null
+
+        fun absorb(obj: JsonObject) {
+            if (branch == null) branch = obj.nonBlank("gitBranch")
+            if (createdAt == null) createdAt = obj.nonBlank("timestamp")
             if (firstPrompt == null && obj["type"]?.jsonPrimitive?.contentOrNull == "user") {
                 firstPrompt = firstUserText(obj)
             }
-            if (firstPrompt != null && branch != null && createdAt != null) break
         }
-        return Metadata(firstPrompt, branch, createdAt)
+
+        fun build() = Metadata(firstPrompt, branch, createdAt)
+
+        private fun JsonObject.nonBlank(key: String): String? =
+            this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
     }
 
     /** The first plain-text prompt of a `user` line (string content, or the first `text` block of an array). */
@@ -237,10 +269,12 @@ object SessionTranscriptReader {
         val content = (obj["message"] as? JsonObject)?.get("content") ?: return null
         return when (content) {
             is JsonPrimitive -> content.contentOrNull?.takeIf { it.isNotBlank() }
+
             is JsonArray -> content.asSequence()
                 .mapNotNull { it as? JsonObject }
                 .firstOrNull { it["type"]?.jsonPrimitive?.contentOrNull == "text" }
                 ?.text()?.takeIf { it.isNotBlank() }
+
             else -> null
         }
     }

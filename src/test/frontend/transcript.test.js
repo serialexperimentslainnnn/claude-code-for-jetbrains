@@ -33,7 +33,8 @@ describe('transcript — assistant Markdown + code blocks', () => {
     const pre = body.querySelector('pre');
     expect(pre).not.toBeNull();
     // Decoration: a code-head with a Copy affordance.
-    const copy = pre.parentElement.querySelector('.code-head .copy') || body.querySelector('.code-head .copy');
+    const copy =
+      pre.parentElement.querySelector('.code-head .copy') || body.querySelector('.code-head .copy');
     expect(copy).not.toBeNull();
     expect(pre.querySelector('code').textContent).toContain('const x = 1;');
   });
@@ -56,7 +57,10 @@ describe('transcript — inline diff colouring', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
       row(4, 0, 'TOOL', 'Edit', { meta: 'Edit', toolUseId: 'tu1' }),
-      row(5, 1, 'TOOL_OUTPUT', '@@ -1 +1 @@\n-old line\n+new line\n context', { meta: 'diff', toolUseId: 'tu1' }),
+      row(5, 1, 'TOOL_OUTPUT', '@@ -1 +1 @@\n-old line\n+new line\n context', {
+        meta: 'diff',
+        toolUseId: 'tu1',
+      }),
     ]);
     const card = win.document.querySelector('[data-out-id], .tool-out, .msg.tool') || win.document.body;
     const added = card.querySelector('.diff-line.dl-add');
@@ -70,8 +74,15 @@ describe('transcript — inline diff colouring', () => {
   it('a diff on a known-extension file gets hljs syntax highlighting layered under the add/remove colour', () => {
     const win = loadFrontend(['app-transcript.js']); // vendored hljs loaded → real highlighting
     win.cc.batch([
-      row(20, 0, 'TOOL', 'Edit(src/Foo.kt)', { meta: 'Edit', toolUseId: 'tu-diff-kt', filePath: 'src/Foo.kt' }),
-      row(21, 1, 'TOOL_OUTPUT', '@@ -1 +1 @@\n-val x = 1\n+val x = 2', { meta: 'diff', toolUseId: 'tu-diff-kt' }),
+      row(20, 0, 'TOOL', 'Edit(src/Foo.kt)', {
+        meta: 'Edit',
+        toolUseId: 'tu-diff-kt',
+        filePath: 'src/Foo.kt',
+      }),
+      row(21, 1, 'TOOL_OUTPUT', '@@ -1 +1 @@\n-val x = 1\n+val x = 2', {
+        meta: 'diff',
+        toolUseId: 'tu-diff-kt',
+      }),
     ]);
     const added = win.document.querySelector('.diff-line.dl-add');
     expect(added).not.toBeNull();
@@ -91,11 +102,15 @@ describe('transcript — inline diff colouring', () => {
 });
 
 // ── syntax highlighting on a file tool's plain output (Read/Write/Edit) ─────────────────────────────────────
-describe('transcript — a file tool\'s plain output is a highlighted, copyable code block', () => {
+describe("transcript — a file tool's plain output is a highlighted, copyable code block", () => {
   it("a Read on a .kt file gets code-head chrome and hljs highlighting from the file's extension", () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
-      row(24, 0, 'TOOL', 'Read(src/Foo.kt)', { meta: 'Read', toolUseId: 'tu-read-kt', filePath: 'src/Foo.kt' }),
+      row(24, 0, 'TOOL', 'Read(src/Foo.kt)', {
+        meta: 'Read',
+        toolUseId: 'tu-read-kt',
+        filePath: 'src/Foo.kt',
+      }),
       row(25, 1, 'TOOL_OUTPUT', 'fun main() {}', { toolUseId: 'tu-read-kt' }),
     ]);
     const block = win.document.querySelector('[data-out-id="to-25"]');
@@ -123,11 +138,14 @@ describe('transcript — a file tool\'s plain output is a highlighted, copyable 
 // PowerShell, and any MCP tool that executes something (the backend decides via SensitiveGuard.isCommandCall,
 // which looks at the INPUT shape, not the tool name — the frontend only ever sees the resulting meta tag).
 describe('transcript — command output renders as a copyable code block', () => {
-  it('a Bash tool\'s output gets the code-head + Copy chrome, like a markdown fence', () => {
+  it("a Bash tool's output gets the code-head + Copy chrome, like a markdown fence", () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
       row(6, 0, 'TOOL', 'Bash(ls -la)', { meta: 'Bash', toolUseId: 'tu-cmd' }),
-      row(7, 1, 'TOOL_OUTPUT', 'total 8\ndrwxr-xr-x  2 me me 4096 file.txt', { meta: 'command', toolUseId: 'tu-cmd' }),
+      row(7, 1, 'TOOL_OUTPUT', 'total 8\ndrwxr-xr-x  2 me me 4096 file.txt', {
+        meta: 'command',
+        toolUseId: 'tu-cmd',
+      }),
     ]);
     const block = win.document.querySelector('[data-out-id="to-7"]');
     expect(block).not.toBeNull();
@@ -138,7 +156,7 @@ describe('transcript — command output renders as a copyable code block', () =>
     expect(block.querySelector('code').textContent).toContain('file.txt');
   });
 
-  it('the Copy button copies the command\'s literal output (delegated handler, no per-node wiring)', () => {
+  it("the Copy button copies the command's literal output (delegated handler, no per-node wiring)", () => {
     const win = loadFrontend(['app-transcript.js']);
     const sent = [];
     win.CC.send = (m) => sent.push(m);
@@ -195,7 +213,11 @@ describe('transcript — the executed command renders as its own always-visible 
   it('a Bash tool with entry.command gets a command-src block in .tool-cmd, visible while collapsed', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
-      row(16, 0, 'TOOL', 'Bash(grep -R foo src)', { meta: 'Bash', toolUseId: 'tu-src1', command: 'grep -R foo src' }),
+      row(16, 0, 'TOOL', 'Bash(grep -R foo src)', {
+        meta: 'Bash',
+        toolUseId: 'tu-src1',
+        command: 'grep -R foo src',
+      }),
       row(17, 1, 'TOOL_OUTPUT', 'src/Foo.kt:1:foo', { meta: 'command', toolUseId: 'tu-src1' }),
     ]);
     const card = win.document.querySelector('.tool');
@@ -216,14 +238,18 @@ describe('transcript — the executed command renders as its own always-visible 
     const win = loadFrontend(['app-transcript.js']);
     const sent = [];
     win.CC.send = (m) => sent.push(m);
-    win.cc.batch([row(18, 0, 'TOOL', 'Bash(echo hi)', { meta: 'Bash', toolUseId: 'tu-src2', command: 'echo hi' })]);
+    win.cc.batch([
+      row(18, 0, 'TOOL', 'Bash(echo hi)', { meta: 'Bash', toolUseId: 'tu-src2', command: 'echo hi' }),
+    ]);
     win.document.querySelector('pre.command-src .copy').click();
     expect(sent.some((m) => m.type === 'copy' && m.text === 'echo hi')).toBe(true);
   });
 
   it('a tool without entry.command (e.g. Read) gets no command-src block, no cmd-tool class, full label', () => {
     const win = loadFrontend(['app-transcript.js']);
-    win.cc.batch([row(19, 0, 'TOOL', 'Read(src/Foo.kt)', { meta: 'Read', toolUseId: 'tu-src3', filePath: 'src/Foo.kt' })]);
+    win.cc.batch([
+      row(19, 0, 'TOOL', 'Read(src/Foo.kt)', { meta: 'Read', toolUseId: 'tu-src3', filePath: 'src/Foo.kt' }),
+    ]);
     expect(win.document.querySelector('pre.command-src')).toBeNull();
     expect(win.document.querySelector('.tool').classList.contains('cmd-tool')).toBe(false);
   });
@@ -238,7 +264,11 @@ describe('transcript — jump-to-code on tool cards', () => {
   it('a file tool renders its project-relative path as a jb://open link inside the label', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
-      row(10, 0, 'TOOL', 'Read(src/main/Foo.kt)', { meta: 'Read', toolUseId: 't1', filePath: 'src/main/Foo.kt' }),
+      row(10, 0, 'TOOL', 'Read(src/main/Foo.kt)', {
+        meta: 'Read',
+        toolUseId: 't1',
+        filePath: 'src/main/Foo.kt',
+      }),
     ]);
 
     const a = win.document.querySelector('a.jb-link');
@@ -282,7 +312,7 @@ describe('transcript — jump-to-code in model text', () => {
     expect(links.length).toBe(1);
     expect(links[0].textContent).toBe('src/main/Foo.kt');
     expect(links[0].getAttribute('href')).toBe(
-      'jb://open?file=' + encodeURIComponent('src/main/Foo.kt') + '&line=12',
+      'jb://open?file=' + encodeURIComponent('src/main/Foo.kt') + '&line=12'
     );
     expect(win.document.body.textContent).toContain('ghost/Nope.kt'); // still there, just not a link
   });
@@ -293,7 +323,12 @@ describe('transcript — jump-to-code in model text', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
     win.cc.batch([
-      row(18, 0, 'ASSISTANT', 'The dir `src/main/ui`, the ghost `src/main/ui/Fantasma.kt`, and `ClaudeSession`.'),
+      row(
+        18,
+        0,
+        'ASSISTANT',
+        'The dir `src/main/ui`, the ghost `src/main/ui/Fantasma.kt`, and `ClaudeSession`.'
+      ),
     ]);
     win.cc.links({
       rowId: 18,
@@ -379,5 +414,40 @@ describe('transcript — jump-to-code for directories', () => {
     const a = win.document.querySelector('a.jb-link');
     expect(a).not.toBeNull();
     expect(a.getAttribute('href')).toBe('jb://open?file=' + encodeURIComponent('build/distributions'));
+  });
+});
+
+// A tool card must carry a STATE CLASS the moment it appears, not only once something updates it.
+//
+// This is the regression these tests exist for: the binary emits NO `tool_progress` for an ordinary Bash call
+// (verified live — zero progress frames across a 12-second `sleep`), so a running tool row is inserted once
+// with state LOADING and then nothing touches it again until its result lands. If the insert path does not
+// apply the class, the card sits grey for the whole call and the fade/spin never runs — which is exactly what
+// a user sees, with no error anywhere to explain it.
+describe('transcript — tool state class on FIRST render', () => {
+  it('a TOOL row inserted as LOADING gets the .loading class (no second update needed)', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(90, 0, 'TOOL', 'sleep 30', { meta: 'Bash', toolUseId: 't90', state: 'LOADING' })]);
+
+    const card = win.document.querySelector('.tool');
+    expect(card).not.toBeNull();
+    expect(card.classList.contains('loading')).toBe(true);
+  });
+
+  it('a TOOL row inserted as RUNNING gets the .running class', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(91, 0, 'TOOL', 'build', { meta: 'Bash', toolUseId: 't91', state: 'RUNNING' })]);
+
+    expect(win.document.querySelector('.tool').classList.contains('running')).toBe(true);
+  });
+
+  it('the state class is replaced, not accumulated, when the result lands', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(92, 0, 'TOOL', 'sleep 1', { meta: 'Bash', toolUseId: 't92', state: 'LOADING' })]);
+    win.cc.batch([row(92, 0, 'TOOL', 'sleep 1', { meta: 'Bash', toolUseId: 't92', state: 'FINISHED' })]);
+
+    const card = win.document.querySelector('.tool');
+    expect(card.classList.contains('done')).toBe(true);
+    expect(card.classList.contains('loading')).toBe(false);
   });
 });

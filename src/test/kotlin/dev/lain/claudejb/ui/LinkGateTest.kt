@@ -29,7 +29,10 @@ class LinkGateTest {
     @Test
     fun `a file inside the project is openable`() {
         val root = tmp.toFile()
-        val f = File(root, "src/Foo.kt").apply { parentFile.mkdirs(); writeText("x") }
+        val f = File(root, "src/Foo.kt").apply {
+            parentFile.mkdirs()
+            writeText("x")
+        }
         assertTrue(LinkResolver.isOpenable(f.path, root.path))
     }
 
@@ -101,7 +104,10 @@ class LinkGateTest {
     // ── scanForNames (the on-disk fallback for names no index knows: excluded dirs like build/) ───────────
 
     private fun touch(rel: String): File =
-        File(tmp.toFile(), rel).apply { parentFile.mkdirs(); writeText("x") }
+        File(tmp.toFile(), rel).apply {
+            parentFile.mkdirs()
+            writeText("x")
+        }
 
     @Test
     fun `scanForNames finds a bare name inside an excluded build directory`() {

@@ -84,66 +84,66 @@ object AccountInfoPanel {
         font = if (row.tone == Tone.NORMAL) ChatTheme.body else ChatTheme.small
     }
 
-        /**
-         * Pure, Swing-free description of the panel: an ordered list of [Row]s. The auth-status banner
-         * (if any) comes first, then the account fields, each shown only when it carries a value; an
-         * empty account with no status yields a single "Not signed in" notice.
-         *
-         * Kept pure so the readable rendering (labels, which fields appear, error/warning surfacing) is
-         * unit-testable without instantiating any UI.
-         */
-        fun describe(account: AccountInfo, authStatus: AuthStatusInfo?): List<Row> {
-            val rows = mutableListOf<Row>()
+    /**
+     * Pure, Swing-free description of the panel: an ordered list of [Row]s. The auth-status banner
+     * (if any) comes first, then the account fields, each shown only when it carries a value; an
+     * empty account with no status yields a single "Not signed in" notice.
+     *
+     * Kept pure so the readable rendering (labels, which fields appear, error/warning surfacing) is
+     * unit-testable without instantiating any UI.
+     */
+    fun describe(account: AccountInfo, authStatus: AuthStatusInfo?): List<Row> {
+        val rows = mutableListOf<Row>()
 
-            authStatusRow(authStatus)?.let { rows += it }
+        authStatusRow(authStatus)?.let { rows += it }
 
-            field("Email", account.email)?.let { rows += it }
-            field("Organization", account.organization)?.let { rows += it }
-            field("Plan", prettyPlan(account.subscriptionType))?.let { rows += it }
-            field("Provider", prettyProvider(account.apiProvider))?.let { rows += it }
-            field("API key source", account.apiKeySource)?.let { rows += it }
+        field("Email", account.email)?.let { rows += it }
+        field("Organization", account.organization)?.let { rows += it }
+        field("Plan", prettyPlan(account.subscriptionType))?.let { rows += it }
+        field("Provider", prettyProvider(account.apiProvider))?.let { rows += it }
+        field("API key source", account.apiKeySource)?.let { rows += it }
 
-            // Nothing at all to show (no account and no status) → an honest empty state.
-            if (rows.isEmpty()) {
-                rows += Row("", "Not signed in (connect the session first).", Tone.NORMAL)
-            }
-            return rows
+        // Nothing at all to show (no account and no status) → an honest empty state.
+        if (rows.isEmpty()) {
+            rows += Row("", "Not signed in (connect the session first).", Tone.NORMAL)
         }
+        return rows
+    }
 
-        /** A banner row for the current auth status, or null when the binary is settled and error-free. */
-        fun authStatusRow(status: AuthStatusInfo?): Row? {
-            if (status == null) return null
-            val err = status.error?.takeIf { it.isNotBlank() }
-            return when {
-                err != null -> Row("", "Authentication error: $err", Tone.ERROR)
-                status.isAuthenticating -> Row("", "Re-authenticating…", Tone.WARNING)
-                else -> null
-            }
+    /** A banner row for the current auth status, or null when the binary is settled and error-free. */
+    fun authStatusRow(status: AuthStatusInfo?): Row? {
+        if (status == null) return null
+        val err = status.error?.takeIf { it.isNotBlank() }
+        return when {
+            err != null -> Row("", "Authentication error: $err", Tone.ERROR)
+            status.isAuthenticating -> Row("", "Re-authenticating…", Tone.WARNING)
+            else -> null
         }
+    }
 
-        private fun field(label: String, value: String): Row? =
-            value.trim().takeIf { it.isNotEmpty() }?.let { Row(label, it) }
+    private fun field(label: String, value: String): Row? =
+        value.trim().takeIf { it.isNotEmpty() }?.let { Row(label, it) }
 
-        /** Human-friendly plan label; passes through unknown values verbatim. */
-        fun prettyPlan(subscriptionType: String): String = when (subscriptionType.trim().lowercase()) {
-            "" -> ""
-            "pro" -> "Pro"
-            "max" -> "Max"
-            "team" -> "Team"
-            "enterprise" -> "Enterprise"
-            "free" -> "Free"
-            else -> subscriptionType.trim()
-        }
+    /** Human-friendly plan label; passes through unknown values verbatim. */
+    fun prettyPlan(subscriptionType: String): String = when (subscriptionType.trim().lowercase()) {
+        "" -> ""
+        "pro" -> "Pro"
+        "max" -> "Max"
+        "team" -> "Team"
+        "enterprise" -> "Enterprise"
+        "free" -> "Free"
+        else -> subscriptionType.trim()
+    }
 
-        /** Human-friendly auth-backend label; passes through unknown values verbatim. */
-        fun prettyProvider(apiProvider: String): String = when (apiProvider.trim().lowercase()) {
-            "" -> ""
-            "firstparty" -> "Anthropic"
-            "bedrock", "anthropicaws" -> "Amazon Bedrock"
-            "vertex" -> "Google Vertex AI"
-            "foundry" -> "Azure AI Foundry"
-            "mantle" -> "Mantle"
-            "gateway" -> "Gateway"
-            else -> apiProvider.trim()
-        }
+    /** Human-friendly auth-backend label; passes through unknown values verbatim. */
+    fun prettyProvider(apiProvider: String): String = when (apiProvider.trim().lowercase()) {
+        "" -> ""
+        "firstparty" -> "Anthropic"
+        "bedrock", "anthropicaws" -> "Amazon Bedrock"
+        "vertex" -> "Google Vertex AI"
+        "foundry" -> "Azure AI Foundry"
+        "mantle" -> "Mantle"
+        "gateway" -> "Gateway"
+        else -> apiProvider.trim()
+    }
 }

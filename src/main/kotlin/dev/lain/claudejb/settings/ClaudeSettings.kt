@@ -1,16 +1,16 @@
 package dev.lain.claudejb.settings
 
+import com.intellij.credentialStore.CredentialAttributes
+import com.intellij.credentialStore.Credentials
+import com.intellij.credentialStore.generateServiceName
+import com.intellij.ide.passwordSafe.PasswordSafe
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.credentialStore.CredentialAttributes
-import com.intellij.credentialStore.Credentials
-import com.intellij.credentialStore.generateServiceName
-import com.intellij.ide.passwordSafe.PasswordSafe
-import com.intellij.ide.util.PropertiesComponent
 import com.intellij.util.xmlb.XmlSerializerUtil
 import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.process.EnvScriptLoader
@@ -18,9 +18,9 @@ import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.RemoteMounts
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 /**
  * Persisted launch defaults for the session. Applied on (re)start; the GUI menus mutate the live
@@ -35,35 +35,69 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
 
     class State {
         @JvmField var model: String = ClaudeSession.DEFAULT_MODEL
+
         @JvmField var effort: String = "medium"
+
         @JvmField var permissionMode: String = "default"
+
         // Adaptive thinking ON by default (any positive value = on; see ClaudeSession.THINKING_ON). The model
         // decides depth; this just enables the `--thinking adaptive --thinking-display summarized` launch flags.
         @JvmField var thinkingTokens: Int = ClaudeSession.THINKING_ON
+
         @JvmField var includePartialMessages: Boolean = true
+
         @JvmField var settingSources: String = "user,project,local"
+
         @JvmField var allowedTools: String = ""
+
         @JvmField var disallowedTools: String = ""
+
         @JvmField var ideMcpEnabled: Boolean = false
+
         @JvmField var ideMcpTransport: String = "sse"
+
         @JvmField var ideMcpPort: Int = ClaudeSession.DEFAULT_IDE_MCP_PORT
+
         @JvmField var customMcpServers: String = ""
+
         @JvmField var claudePath: String = ""
+
         @JvmField var nodePath: String = ""
+
         /** API provider id (see [Provider]): "anthropic" (default, native auth) or a compatible endpoint. */
         @JvmField var provider: String = Provider.DEFAULT.id
+
         @JvmField var envVars: String = ""
+
         @JvmField var sourceScript: String = ""
+
         /** Comma-separated tool names the user chose to "Always allow" (auto-approve without a card). */
         @JvmField var alwaysAllowTools: String = ""
+
         /** Reopen the chats that were open last time when the tool window starts. */
         @JvmField var restoreOpenChatsOnStartup: Boolean = true
+
+        /**
+         * Flatten the chat's animations (tool-card state fade, row entrance, permission cards).
+         *
+         * Off by default, and an explicit setting rather than an inherited one — both learned the hard way.
+         * The web layer first asked the BROWSER via `@media (prefers-reduced-motion: reduce)`, which reports
+         * `true` inside JCEF regardless of the desktop (measured: the query matched while GNOME had animations
+         * enabled), so every animation died for everyone. The fix then asked `UISettings.animateWindows`, which
+         * is the IDE's TOOL-WINDOW animation toggle, not an accessibility preference — and reproduced the same
+         * outcome for anyone who had it off. Neither source was answering the question being asked, so the
+         * question is now asked directly, of the only party who knows.
+         */
+        @JvmField var reduceMotion: Boolean = false
+
         /** Enable the binary's file checkpointing so the native rewind (rollback to a turn) works. Default on. */
         @JvmField var enableFileCheckpointing: Boolean = true
+
         /** Remembered fallback choice when native rewind is unavailable: "" = ask, "ide" = revert via IDE, "never" = do nothing. */
         @JvmField var rewindFallback: String = ""
 
         // --- Sensitive-data guard (see permission/SensitiveGuard.kt) ----------------------------------------
+
         /**
          * EXTRA sensitive-path globs, one per line — **added** to the built-in blacklist, never replacing it.
          * There is no way to shrink the built-in list itself; the only knob here is making the net wider.
@@ -77,31 +111,45 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
          * hit to ASK (a card, every time, for every caller) rather than either a silent allow or an unchanged DENY.
          */
         @JvmField var securityBlockCredentials: Boolean = true
+
         @JvmField var securityBlockDangerousCommands: Boolean = true
+
         @JvmField var securityBlockForeignOtherUserHome: Boolean = true
+
         @JvmField var securityBlockForeignNetworkMounts: Boolean = true
+
         @JvmField var securityBlockForeignWslMounts: Boolean = true
 
         // --- Advanced launch options (neutral defaults = flag omitted) ------------------------------
+
         /** `--max-turns N`: cap conversation turns. 0 = no cap (flag omitted). */
         @JvmField var maxTurns: Int = 0
+
         /** `--max-budget-usd N`: stop the query past this USD budget. 0 = no cap (flag omitted). */
         @JvmField var maxBudgetUsd: Double = 0.0
+
         /** `--fallback-model M`: model to retry with on overload. Blank = omitted. */
         @JvmField var fallbackModel: String = ""
+
         /** `--add-dir PATH` (repeatable): extra accessible roots, one path per line. Blank = none. */
         @JvmField var addDirs: String = ""
+
         /** `--betas a,b`: comma-separated beta feature flags. Blank = omitted. */
         @JvmField var betas: String = ""
+
         /** `--strict-mcp-config`: only use MCP servers from --mcp-config, ignore other sources. */
         @JvmField var strictMcpConfig: Boolean = false
     }
 
     val restoreOpenChatsOnStartup: Boolean get() = state.restoreOpenChatsOnStartup
+
+    val reduceMotion: Boolean get() = state.reduceMotion
     val enableFileCheckpointing: Boolean get() = state.enableFileCheckpointing
     var rewindFallback: String
         get() = state.rewindFallback
-        set(value) { state.rewindFallback = value }
+        set(value) {
+            state.rewindFallback = value
+        }
 
     /**
      * Resolved `claude` binary path. In production this is exactly the persisted [State.claudePath]
@@ -147,19 +195,25 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
     private fun providerEnv(): Map<String, String> = Provider.launchEnv(provider, getProviderApiKey(provider))
 
     // --- Advanced launch accessors (for ClaudeSession.launchOptions mapping) ---------------------
+
     /** `--max-turns` value, or null when no cap is set (0). */
     val maxTurns: Int? get() = state.maxTurns.takeIf { it > 0 }
+
     /** `--max-budget-usd` value, or null when no cap is set (≤ 0). */
     val maxBudgetUsd: Double? get() = state.maxBudgetUsd.takeIf { it > 0.0 }
+
     /** `--fallback-model` value, or null when blank. */
     val fallbackModel: String? get() = state.fallbackModel.trim().ifBlank { null }
+
     /** `--add-dir` paths (one per line; trimmed, non-empty). Empty list = no flag. */
     val addDirs: List<String>
         get() = state.addDirs.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+
     /** `--betas` value (trimmed, normalized CSV), or null when blank. */
     val betas: String?
         get() = state.betas.split(',').map { it.trim() }.filter { it.isNotEmpty() }
             .joinToString(",").ifBlank { null }
+
     /** `--strict-mcp-config` toggle. */
     val strictMcpConfig: Boolean get() = state.strictMcpConfig
 
@@ -255,8 +309,8 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
      * downgrades to a permission card rather than a silent allow. Foreign-territory and remote-mount inputs come
      * from [RemoteMounts].
      */
-    fun sensitiveVerdict(toolName: String, input: JsonObject, projectRoot: String?): SensitiveGuard.Verdict =
-        SensitiveGuard.verdict(toolName, input, sensitivePolicy(projectRoot))
+    fun sensitiveDecision(toolName: String, input: JsonObject, projectRoot: String?): SensitiveGuard.Decision =
+        SensitiveGuard.evaluate(toolName, input, sensitivePolicy(projectRoot))
 
     /** Assembles the pure [SensitiveGuard.Policy] from settings + this host's mounts + the open project. */
     fun sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
@@ -346,10 +400,14 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
 
     companion object {
         private const val TRUST_KEY = "claudejb.trustedExecOnOpen"
+
         /** UI-test harness hooks (set only by `runIdeForUiTests`; unset in shipped IDEs). */
         private const val FAKE_CLAUDE_PROP = "claudejb.fakeClaude"
         private const val FAKE_FIXTURE_PROP = "claudejb.fakeFixture"
-        private val LENIENT_JSON = Json { ignoreUnknownKeys = true; isLenient = true }
+        private val LENIENT_JSON = Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
 
         fun getInstance(project: Project): ClaudeSettings = project.service()
     }

@@ -51,8 +51,13 @@ class JcefBridgeTest {
     @Test
     fun `entryJson includes meta toolUseId and parent when present`() {
         val e = TranscriptEntry(
-            1L, Speaker.TOOL, "Read(App.kt)",
-            meta = "error", toolUseId = "tu1", parentToolUseId = "agent1", toolState = ToolState.RUNNING,
+            1L,
+            Speaker.TOOL,
+            "Read(App.kt)",
+            meta = "error",
+            toolUseId = "tu1",
+            parentToolUseId = "agent1",
+            toolState = ToolState.RUNNING,
         )
         val o = JcefBridge.entryJson(e, order = 0)
         assertEquals("error", o["meta"]!!.jsonPrimitive.content)
@@ -99,7 +104,8 @@ class JcefBridgeTest {
     @Test
     fun `permissionJson AskUserQuestion card carries questions and options`() {
         val q = AskQuestion(
-            question = "Pick one", header = "Choice",
+            question = "Pick one",
+            header = "Choice",
             options = listOf(AskOption("A", "first", preview = "pa"), AskOption("B", "second")),
             multiSelect = true,
         )
@@ -125,8 +131,12 @@ class JcefBridgeTest {
     @Test
     fun `permissionJson elicitation card carries fields`() {
         val card = ElicitationCard(
-            serverName = "srv", message = "Enter a key", description = null, mode = "form",
-            url = null, fields = listOf(ElicitField("token", "string", "Token", required = true)),
+            serverName = "srv",
+            message = "Enter a key",
+            description = null,
+            mode = "form",
+            url = null,
+            fields = listOf(ElicitField("token", "string", "Token", required = true)),
         )
         val o = JcefBridge.permissionJson(perm(elicitation = card))
         val e = o["elicitation"]!!.jsonObject
@@ -161,7 +171,10 @@ class JcefBridgeTest {
 
     @Test
     fun `parse change messages`() {
-        assertEquals("claude-opus-4-8", (JcefBridge.parse("""{"type":"changeModel","value":"claude-opus-4-8"}""") as JcefBridge.Msg.ChangeModel).value)
+        assertEquals(
+            "claude-opus-4-8",
+            (JcefBridge.parse("""{"type":"changeModel","value":"claude-opus-4-8"}""") as JcefBridge.Msg.ChangeModel).value,
+        )
         assertNull((JcefBridge.parse("""{"type":"changeModel"}""") as JcefBridge.Msg.ChangeModel).value)
         assertEquals("plan", (JcefBridge.parse("""{"type":"changeMode","wire":"plan"}""") as JcefBridge.Msg.ChangeMode).wire)
         assertNull((JcefBridge.parse("""{"type":"changeEffort","value":null}""") as JcefBridge.Msg.ChangeEffort).value)
@@ -176,7 +189,9 @@ class JcefBridgeTest {
         val rp = JcefBridge.parse("""{"type":"resolvePermission","id":"r9","allow":true}""") as JcefBridge.Msg.ResolvePermission
         assertEquals("r9", rp.id)
         assertTrue(rp.allow)
-        val rq = JcefBridge.parse("""{"type":"resolveQuestion","id":"r9","answers":{"Q1":"A","Q2":"B"}}""") as JcefBridge.Msg.ResolveQuestion
+        val rq = JcefBridge.parse(
+            """{"type":"resolveQuestion","id":"r9","answers":{"Q1":"A","Q2":"B"}}""",
+        ) as JcefBridge.Msg.ResolveQuestion
         assertEquals(mapOf("Q1" to "A", "Q2" to "B"), rq.answers)
         assertEquals("Edit", (JcefBridge.parse("""{"type":"alwaysAllow","tool":"Edit"}""") as JcefBridge.Msg.AlwaysAllow).tool)
         assertEquals("r9", (JcefBridge.parse("""{"type":"viewDiff","id":"r9"}""") as JcefBridge.Msg.ViewDiff).id)
@@ -191,7 +206,7 @@ class JcefBridgeTest {
     @Test
     fun `parse resolveElicitation with content carries action and JsonObject content`() {
         val m = JcefBridge.parse(
-            """{"type":"resolveElicitation","id":"e1","action":"accept","content":{"token":"abc","count":3}}"""
+            """{"type":"resolveElicitation","id":"e1","action":"accept","content":{"token":"abc","count":3}}""",
         ) as JcefBridge.Msg.ResolveElicitation
         assertEquals("e1", m.id)
         assertEquals("accept", m.action)
@@ -204,7 +219,7 @@ class JcefBridgeTest {
     @Test
     fun `parse resolveElicitation without content has null content`() {
         val m = JcefBridge.parse(
-            """{"type":"resolveElicitation","id":"e2","action":"decline"}"""
+            """{"type":"resolveElicitation","id":"e2","action":"decline"}""",
         ) as JcefBridge.Msg.ResolveElicitation
         assertEquals("e2", m.id)
         assertEquals("decline", m.action)
@@ -225,7 +240,7 @@ class JcefBridgeTest {
     @Test
     fun `parse attach carries name mediaType and base64`() {
         val m = JcefBridge.parse(
-            """{"type":"attach","name":"shot.png","mediaType":"image/png","base64":"AAAA"}"""
+            """{"type":"attach","name":"shot.png","mediaType":"image/png","base64":"AAAA"}""",
         ) as JcefBridge.Msg.Attach
         assertEquals("shot.png", m.name)
         assertEquals("image/png", m.mediaType)
@@ -259,7 +274,12 @@ class JcefBridgeTest {
     @Test
     fun `entryJson carries the project-relative filePath of a file tool and omits it elsewhere`() {
         val tool = TranscriptEntry(
-            1L, Speaker.TOOL, "Read(src/Foo.kt)", meta = "Read", toolUseId = "t1", filePath = "src/Foo.kt",
+            1L,
+            Speaker.TOOL,
+            "Read(src/Foo.kt)",
+            meta = "Read",
+            toolUseId = "t1",
+            filePath = "src/Foo.kt",
         )
         assertEquals("src/Foo.kt", JcefBridge.entryJson(tool, 0)["filePath"]!!.jsonPrimitive.content)
         assertNull(JcefBridge.entryJson(TranscriptEntry(2L, Speaker.ASSISTANT, "hi"), 1)["filePath"])
@@ -268,7 +288,7 @@ class JcefBridgeTest {
     @Test
     fun `parse resolveLinks carries the row id and both candidate lists`() {
         val m = JcefBridge.parse(
-            """{"type":"resolveLinks","rowId":42,"paths":["src/Foo.kt","a.py:7"],"symbols":["PermissionBroker"]}"""
+            """{"type":"resolveLinks","rowId":42,"paths":["src/Foo.kt","a.py:7"],"symbols":["PermissionBroker"]}""",
         ) as JcefBridge.Msg.ResolveLinks
         assertEquals(42L, m.rowId)
         assertEquals(listOf("src/Foo.kt", "a.py:7"), m.paths)
@@ -283,7 +303,7 @@ class JcefBridgeTest {
         assertTrue(m.symbols.isEmpty())
         // Malformed candidates must not throw: non-strings and blanks are dropped, the rest survives.
         val junk = JcefBridge.parse(
-            """{"type":"resolveLinks","rowId":1,"paths":["ok.kt","",{"a":1}],"symbols":"nope"}"""
+            """{"type":"resolveLinks","rowId":1,"paths":["ok.kt","",{"a":1}],"symbols":"nope"}""",
         ) as JcefBridge.Msg.ResolveLinks
         assertEquals(listOf("ok.kt"), junk.paths)
         assertTrue(junk.symbols.isEmpty())

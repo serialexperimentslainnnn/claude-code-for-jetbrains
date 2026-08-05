@@ -45,10 +45,12 @@ object FileRollback {
                         if (vf != null && vf.exists()) vf.delete(this)
                         wrote = true
                     }
+
                     vf != null -> {
                         VfsUtil.saveText(vf, snapshot.beforeText)
                         wrote = true
                     }
+
                     // No file on disk + empty before-text → nothing to restore.
                     snapshot.beforeText.isEmpty() -> wrote = true
                 }

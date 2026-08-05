@@ -85,18 +85,64 @@ describe('a11y — visible focus (WCAG 2.4.7 / 1.4.11, Level AA)', () => {
 });
 
 describe('a11y — motion and language', () => {
-  it('respects prefers-reduced-motion for every animation', () => {
-    // The stylesheet defines several keyframe animations; the reduce query must neutralise them all rather
+  it('neutralises every animation when motion is reduced', () => {
+    // The stylesheet defines several keyframe animations; reducing motion must neutralise them all rather
     // than a hand-picked subset that goes stale as animations are added.
+    //
+    // The GATE changed in 5.0.0 and this test changed with it. It used to require the rule to sit behind
+    // `@media (prefers-reduced-motion: reduce)` — which is correct on the open web and wrong inside JCEF,
+    // where off-screen rendering leaves the browser with no desktop preference to read, so the query matched
+    // unconditionally and killed every animation for everyone. The universal-selector requirement below is
+    // unchanged; only who decides has moved to the host.
     const sheet = css();
-    expect(sheet).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
-    const block = sheet.slice(sheet.indexOf('prefers-reduced-motion'));
-    expect(block).toMatch(/\*,\s*\*::before,\s*\*::after/); // universal, not per-animation
+    expect(sheet).toMatch(/body\.reduced-motion \*,\s*body\.reduced-motion \*::before/);
   });
 
   it('declares a document language (WCAG 3.1.1, Level A)', () => {
     // Missing document language is in the top six most common failures on the web; without it a screen
     // reader pronounces the interface with the wrong phonetics.
     expect(shell()).toMatch(/<html[^>]+lang=/);
+  });
+});
+
+// Reduced motion is the HOST's call, not the browser's.
+//
+// Regression guard for 5.0.0: this rule set used to live behind `@media (prefers-reduced-motion: reduce)`, and
+// inside JCEF that disabled every animation in the chat for everyone — off-screen rendering has no GTK window
+// (and on Wayland no XSETTINGS bridge), so the browser has no desktop preference to report. The tell was that
+// Vibe Mode's rainbow kept running: it is a `setInterval` in JS, so no CSS rule could touch it.
+describe('accessibility — reduced motion is host-driven', () => {
+  it('animations are NOT suppressed by default', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(false);
+  });
+
+  it('cc.theme({reducedMotion:true}) adds the class, false removes it', () => {
+    const win = loadFrontend(['app-transcript.js']);
+
+    win.cc.theme({ reducedMotion: true });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(true);
+
+    win.cc.theme({ reducedMotion: false });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(false);
+  });
+
+  it('reducedMotion is a flag, never written out as a CSS custom property', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.theme({ reducedMotion: true, accent: '#ff0000' });
+
+    const root = win.document.documentElement;
+    expect(root.style.getPropertyValue('--reduced-motion')).toBe('');
+    expect(root.style.getPropertyValue('--accent')).toBe('#ff0000');
+  });
+
+  it('the motion kill is gated on body.reduced-motion, never on a media query', () => {
+    // Comments are stripped first: the block above EXPLAINS the media query at length, and matching raw text
+    // would fail on the explanation rather than on the rule — a test that reads prose instead of code.
+    const rules = require('fs')
+      .readFileSync('src/main/resources/jcef/app.css', 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(rules).toContain('body.reduced-motion *');
+    expect(rules).not.toContain('@media (prefers-reduced-motion');
   });
 });

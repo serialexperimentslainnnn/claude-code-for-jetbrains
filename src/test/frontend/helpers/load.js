@@ -46,7 +46,6 @@ function loadFrontend(files = [], { vendor = true } = {}) {
   document.documentElement.innerHTML = `<head></head><body>${shellBody()}</body>`;
   const seq = [...(vendor ? VENDOR : []), 'app-core.js', ...files];
   for (const f of seq) {
-    // eslint-disable-next-line no-eval
     window.eval(readApp(f));
   }
   return window;

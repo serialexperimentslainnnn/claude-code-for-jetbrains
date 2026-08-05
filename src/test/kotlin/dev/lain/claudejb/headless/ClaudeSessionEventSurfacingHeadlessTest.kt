@@ -55,7 +55,7 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
             session.handleEventForTest(
                 ClaudeEvent.MemoryRecall(
                     MemoryRecallInfo(mode = "select", memories = listOf(RecalledMemory(path = "a.md", scope = "team"))),
-                )
+                ),
             )
             flush()
             assertTrue(session.transcript.entries.any { it.speaker == Speaker.MEMORY })
@@ -68,7 +68,7 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
         val session = ClaudeSession(project, "t")
         try {
             session.handleEventForTest(
-                ClaudeEvent.FilesPersisted(FilesPersistedInfo(files = listOf(PersistedFile(filename = "out.txt"))))
+                ClaudeEvent.FilesPersisted(FilesPersistedInfo(files = listOf(PersistedFile(filename = "out.txt")))),
             )
             flush()
             assertTrue(session.transcript.entries.any { it.text.contains("Uploaded") })
@@ -81,7 +81,7 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
         val session = ClaudeSession(project, "t")
         try {
             session.handleEventForTest(
-                ClaudeEvent.Elicitation("r1", ElicitationRequest(mcpServerName = "github", message = "Authorize?"))
+                ClaudeEvent.Elicitation("r1", ElicitationRequest(mcpServerName = "github", message = "Authorize?")),
             )
             flush()
             val pending = session.pendingPermissions().single()

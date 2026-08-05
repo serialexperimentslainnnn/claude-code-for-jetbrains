@@ -9,7 +9,9 @@
   'use strict';
 
   // ---- Safe accessors --------------------------------------------------------
-  function core() { return window.CC || null; }
+  function core() {
+    return window.CC || null;
+  }
   function conversation() {
     var c = core();
     return (c && c.els && c.els.conversation) || document.getElementById('conversation') || null;
@@ -22,11 +24,6 @@
     var c = core();
     if (c && typeof c.h === 'function') return c.h.apply(c, arguments);
     return null;
-  }
-  function esc(s) {
-    var c = core();
-    if (c && typeof c.escape === 'function') return c.escape(s == null ? '' : String(s));
-    return s == null ? '' : String(s);
   }
   function send(obj) {
     var c = core();
@@ -47,13 +44,17 @@
   // Helpers
   // ---------------------------------------------------------------------------
   function num(v) {
-    return (typeof v === 'number' && isFinite(v)) ? v : null;
+    return typeof v === 'number' && isFinite(v) ? v : null;
   }
 
   function fmtInt(v) {
     var n = num(v);
     if (n == null) return null;
-    try { return Math.round(n).toLocaleString(); } catch (e) { return String(Math.round(n)); }
+    try {
+      return Math.round(n).toLocaleString();
+    } catch (e) {
+      return String(Math.round(n));
+    }
   }
 
   function fmtUsd(v) {
@@ -66,7 +67,9 @@
   // hardcode colors here — the CSS owns them via .seg:nth-of-type / data attrs.
   function statRow(label, value) {
     if (value == null || value === '') return null;
-    return h('div', { class: 'stat-row' },
+    return h(
+      'div',
+      { class: 'stat-row' },
       h('span', { class: 'stat-label', text: label }),
       h('span', { class: 'stat-value', text: String(value) })
     );
@@ -79,7 +82,9 @@
     // body may be a node, an array of nodes, or empty. Hide when nothing renders.
     var children = [];
     if (Array.isArray(body)) {
-      for (var i = 0; i < body.length; i++) { if (body[i]) children.push(body[i]); }
+      for (var i = 0; i < body.length; i++) {
+        if (body[i]) children.push(body[i]);
+      }
     } else if (body) {
       children.push(body);
     }
@@ -91,6 +96,96 @@
   // ---------------------------------------------------------------------------
   // Card builders
   // ---------------------------------------------------------------------------
+  /**
+   * Plan limits: one labelled bar per window (current session, all models, per model), plus the extra-credit
+   * balance. Sourced from the binary's `get_usage`, which returns every window at once.
+   *
+   * A window whose percentage is unknown renders its bar EMPTY and its value as "—", never as 0%. The binary
+   * reports `utilization` only when the API returned it, and "we do not know" is a different statement from
+   * "you have used none" — a bar cannot say both, so it says neither and the text carries the distinction.
+   */
+  function buildUsageCard(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    var windows = Array.isArray(usage.windows) ? usage.windows : [];
+    if (!windows.length && !usage.extra) return null;
+
+    var rows = [];
+    for (var i = 0; i < windows.length; i++) {
+      var w = windows[i] || {};
+      rows.push(usageBar(w.label, num(w.pct), w.resetsAt, w.exhausted));
+    }
+    if (usage.extra && usage.extra.enabled) {
+      rows.push(extraCreditRow(usage.extra));
+    }
+    var title = usage.plan ? 'Plan limits · ' + String(usage.plan) : 'Plan limits';
+    return card(title, rows, true);
+  }
+
+  /** One window: label, a proportional bar, the percentage, and when it resets. */
+  function usageBar(label, pct, resetsAt, exhausted) {
+    var known = pct != null;
+    // Same blue/amber/red scale as the composer's dot — see usageLevel there. `exhausted` (the binary told us
+    // the window is spent) always wins over the percentage, which may be stale or absent.
+    var level = exhausted ? 'lvl-high' : known ? usageLevel(pct) : 'lvl-low';
+    var fill = h('div', {
+      class: 'usage-fill ' + level,
+      style: { width: (known ? pct : 0) + '%' },
+    });
+    var reset = resetIn(resetsAt);
+    return h(
+      'div',
+      { class: 'usage-row' },
+      h(
+        'div',
+        { class: 'usage-head' },
+        h('span', { class: 'usage-label', text: label == null ? '' : String(label) }),
+        h('span', { class: 'usage-pct', text: known ? pct + '% used' : '—' })
+      ),
+      h('div', { class: 'usage-track' }, fill),
+      reset ? h('div', { class: 'usage-reset', text: reset }) : null
+    );
+  }
+
+  /** Pay-as-you-go balance, shown only once the user has actually enabled extra credits. */
+  function extraCreditRow(extra) {
+    var spent = num(extra.spent);
+    var text =
+      spent == null
+        ? 'enabled'
+        : spent.toFixed(2) + (extra.currency ? ' ' + String(extra.currency) : '') + ' used';
+    return h(
+      'div',
+      { class: 'usage-row' },
+      h(
+        'div',
+        { class: 'usage-head' },
+        h('span', { class: 'usage-label', text: 'Extra credits' }),
+        h('span', {
+          class: 'usage-pct' + (extra.limitReached ? ' exhausted' : ''),
+          text: extra.limitReached ? 'limit reached' : text,
+        })
+      )
+    );
+  }
+
+  /** Quota severity. Kept identical to app-composer.js's usageLevel; the class names are the shared contract. */
+  function usageLevel(pct) {
+    if (pct >= 85) return 'lvl-high';
+    if (pct >= 65) return 'lvl-mid';
+    return 'lvl-low';
+  }
+
+  /** "Resets in 4h 50m" — relative, because an absolute timestamp makes you do the arithmetic yourself. */
+  function resetIn(iso) {
+    if (!iso) return null;
+    var when = Date.parse(iso);
+    if (isNaN(when)) return null;
+    var mins = Math.round((when - Date.now()) / 60000);
+    if (mins <= 0) return 'Resets shortly';
+    var hours = Math.floor(mins / 60);
+    return 'Resets in ' + (hours > 0 ? hours + 'h ' + (mins % 60) + 'm' : mins + 'm');
+  }
+
   function buildContextCard(ctx) {
     if (!ctx || typeof ctx !== 'object') return null;
     var cats = Array.isArray(ctx.categories) ? ctx.categories : [];
@@ -119,10 +214,14 @@
     }
     if (pct != null) headlineBits.push(Math.round(pct) + '%');
     if (headlineBits.length) {
-      children.push(h('div', { class: 'stat-row' },
-        h('span', { class: 'stat-label', text: 'Context' }),
-        h('span', { class: 'stat-value', text: headlineBits.join(' · ') })
-      ));
+      children.push(
+        h(
+          'div',
+          { class: 'stat-row' },
+          h('span', { class: 'stat-label', text: 'Context' }),
+          h('span', { class: 'stat-value', text: headlineBits.join(' · ') })
+        )
+      );
     }
 
     // Segmented bar.
@@ -136,17 +235,23 @@
         if (tok == null || tok <= 0) continue;
         var widthPct = (tok / total) * 100;
         var idx = String((i % 8) + 1); // CSS may key swatch color off data-seg
-        segs.push(h('div', {
-          class: 'seg',
-          dataset: { seg: idx },
-          style: { width: widthPct.toFixed(3) + '%' },
-          title: name + ' · ' + (fmtInt(tok) || tok)
-        }));
-        legendItems.push(h('span', { class: 'legend-item' },
-          h('span', { class: 'legend-swatch', dataset: { seg: idx } }),
-          h('span', { class: 'legend-name', text: name }),
-          h('span', { class: 'legend-tokens', text: fmtInt(tok) || String(tok) })
-        ));
+        segs.push(
+          h('div', {
+            class: 'seg',
+            dataset: { seg: idx },
+            style: { width: widthPct.toFixed(3) + '%' },
+            title: name + ' · ' + (fmtInt(tok) || tok),
+          })
+        );
+        legendItems.push(
+          h(
+            'span',
+            { class: 'legend-item' },
+            h('span', { class: 'legend-swatch', dataset: { seg: idx } }),
+            h('span', { class: 'legend-name', text: name }),
+            h('span', { class: 'legend-tokens', text: fmtInt(tok) || String(tok) })
+          )
+        );
       }
       if (segs.length) {
         children.push(h('div', { class: 'seg-bar' }, segs));
@@ -164,7 +269,7 @@
       statRow('Output', fmtInt(cost.output)),
       statRow('Cache write', fmtInt(cost.cacheWrite)),
       statRow('Cache read', fmtInt(cost.cacheRead)),
-      statRow('Cost', fmtUsd(cost.usd))
+      statRow('Cost', fmtUsd(cost.usd)),
     ];
     return card('Usage & cost', rows);
   }
@@ -175,7 +280,7 @@
       statRow('Email', acct.email),
       statRow('Organization', acct.org),
       statRow('Plan', acct.plan),
-      statRow('Provider', acct.provider)
+      statRow('Provider', acct.provider),
     ];
     return card('Account', rows);
   }
@@ -184,7 +289,7 @@
     var rows = [
       statRow('Model', payload.model),
       statRow('Working dir', payload.cwd),
-      statRow('Version', payload.version)
+      statRow('Version', payload.version),
     ];
     return card('Session', rows);
   }
@@ -212,20 +317,27 @@
         on: {
           click: (function (taskId) {
             return function (ev) {
-              ev.preventDefault(); ev.stopPropagation();
+              ev.preventDefault();
+              ev.stopPropagation();
               if (taskId != null) send({ type: 'stopTask', taskId: taskId });
             };
-          })(id)
-        }
+          })(id),
+        },
       });
 
-      rows.push(h('div', { class: 'subagent-row' },
-        h('div', { class: 'subagent-main' },
-          h('span', { class: 'subagent-desc', text: desc || (type || 'Subagent') }),
-          metaBits.length ? h('span', { class: 'subagent-meta', text: metaBits.join(' · ') }) : null
-        ),
-        stopBtn
-      ));
+      rows.push(
+        h(
+          'div',
+          { class: 'subagent-row' },
+          h(
+            'div',
+            { class: 'subagent-main' },
+            h('span', { class: 'subagent-desc', text: desc || type || 'Subagent' }),
+            metaBits.length ? h('span', { class: 'subagent-meta', text: metaBits.join(' · ') }) : null
+          ),
+          stopBtn
+        )
+      );
     }
     return card('Subagents', rows, true);
   }
@@ -249,35 +361,42 @@
         on: {
           click: (function (taskId) {
             return function (ev) {
-              ev.preventDefault(); ev.stopPropagation();
+              ev.preventDefault();
+              ev.stopPropagation();
               if (taskId != null) send({ type: 'stopTask', taskId: taskId });
             };
-          })(id)
-        }
+          })(id),
+        },
       });
 
-      rows.push(h('div', { class: 'subagent-row' },
-        h('div', { class: 'subagent-main' },
-          h('span', { class: 'subagent-desc', text: desc || (type || 'Background task') }),
-          type ? h('span', { class: 'subagent-meta', text: type }) : null
-        ),
-        stopBtn
-      ));
+      rows.push(
+        h(
+          'div',
+          { class: 'subagent-row' },
+          h(
+            'div',
+            { class: 'subagent-main' },
+            h('span', { class: 'subagent-desc', text: desc || type || 'Background task' }),
+            type ? h('span', { class: 'subagent-meta', text: type }) : null
+          ),
+          stopBtn
+        )
+      );
     }
     return card('Background tasks', rows, true);
   }
 
   // status → mcp-dot class. Defensive: unknown maps to nothing extra.
   var MCP_STATUS_CLASS = {
-    'connected': 'connected',
-    'pending': 'pending',
-    'connecting': 'pending',
-    'failed': 'failed',
-    'error': 'failed',
+    connected: 'connected',
+    pending: 'pending',
+    connecting: 'pending',
+    failed: 'failed',
+    error: 'failed',
     'needs-auth': 'needs-auth',
-    'needs_auth': 'needs-auth',
-    'authentication': 'needs-auth',
-    'disabled': 'disabled'
+    needs_auth: 'needs-auth',
+    authentication: 'needs-auth',
+    disabled: 'disabled',
   };
 
   function mcpServersFrom(payload) {
@@ -329,11 +448,12 @@
         on: {
           click: (function (name) {
             return function (ev) {
-              ev.preventDefault(); ev.stopPropagation();
+              ev.preventDefault();
+              ev.stopPropagation();
               send({ type: 'mcpReconnect', name: name });
             };
-          })(srv.name)
-        }
+          })(srv.name),
+        },
       });
 
       // `.toggle` is a 32x18 switch whose knob is an absolutely-positioned ::after — it must NOT carry text, or the
@@ -341,25 +461,34 @@
       // itself; the accessible name lives in title/aria-label.
       var toggleEl = h('span', {
         class: disabled ? 'toggle' : 'toggle on',
-        attrs: { role: 'switch', tabindex: '0', 'aria-checked': disabled ? 'false' : 'true',
-                 'aria-label': disabled ? 'Enable server' : 'Disable server' },
+        attrs: {
+          role: 'switch',
+          tabindex: '0',
+          'aria-checked': disabled ? 'false' : 'true',
+          'aria-label': disabled ? 'Enable server' : 'Disable server',
+        },
         title: disabled ? 'Enable' : 'Disable',
         on: {
           click: (function (name, enabled) {
             return function (ev) {
-              ev.preventDefault(); ev.stopPropagation();
+              ev.preventDefault();
+              ev.stopPropagation();
               send({ type: 'mcpToggle', name: name, enabled: enabled });
             };
-          })(srv.name, enabledNext)
-        }
+          })(srv.name, enabledNext),
+        },
       });
 
-      rows.push(h('div', { class: 'mcp-row' },
-        h('span', { class: dotClass }),
-        h('span', { class: 'mcp-name', text: srv.name }),
-        h('span', { class: 'mcp-status', text: srv.status || 'unknown' }),
-        h('span', { class: 'mcp-actions' }, reconnectBtn, toggleEl)
-      ));
+      rows.push(
+        h(
+          'div',
+          { class: 'mcp-row' },
+          h('span', { class: dotClass }),
+          h('span', { class: 'mcp-name', text: srv.name }),
+          h('span', { class: 'mcp-status', text: srv.status || 'unknown' }),
+          h('span', { class: 'mcp-actions' }, reconnectBtn, toggleEl)
+        )
+      );
     }
     return card('MCP servers', rows, true);
   }
@@ -378,26 +507,33 @@
 
     var s = lastSession || {};
     var cards = [
+      buildUsageCard(s.usage),
       buildContextCard(s.context),
       buildCostCard(s.cost),
       buildAccountCard(s.account),
       buildEnvCard(s),
       buildSubagentsCard(s.subagents),
       buildBackgroundTasksCard(s.backgroundTasks),
-      buildMcpCard(lastMcp)
+      buildMcpCard(lastMcp),
     ];
 
     var any = false;
     for (var i = 0; i < cards.length; i++) {
-      if (cards[i]) { inner.appendChild(cards[i]); any = true; }
+      if (cards[i]) {
+        inner.appendChild(cards[i]);
+        any = true;
+      }
     }
 
     if (!any) {
-      inner.appendChild(h('div', { class: 'dash-card dash-empty' },
-        h('div', { class: 'dash-title', text: 'Session' }),
-        h('div', { class: 'stat-row' },
-          h('span', { class: 'stat-label', text: 'No session data yet.' }))
-      ));
+      inner.appendChild(
+        h(
+          'div',
+          { class: 'dash-card dash-empty' },
+          h('div', { class: 'dash-title', text: 'Session' }),
+          h('div', { class: 'stat-row' }, h('span', { class: 'stat-label', text: 'No session data yet.' }))
+        )
+      );
     }
     panel.appendChild(inner);
   }
@@ -426,7 +562,12 @@
       class: 'dash-toggle',
       attrs: { type: 'button' },
       text: 'Session',
-      on: { click: function (ev) { ev.preventDefault(); toggle(); } }
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          toggle();
+        },
+      },
     });
     root.appendChild(toggleBtn);
 
@@ -469,13 +610,13 @@
   var cc = window.cc || (window.cc = {});
 
   cc.session = function (payload) {
-    lastSession = (payload && typeof payload === 'object') ? payload : null;
+    lastSession = payload && typeof payload === 'object' ? payload : null;
     ensureBuilt();
     if (built) render(); // keep DOM fresh even while hidden
   };
 
   cc.mcp = function (payload) {
-    lastMcp = (payload && typeof payload === 'object') ? payload : null;
+    lastMcp = payload && typeof payload === 'object' ? payload : null;
     ensureBuilt();
     if (built) render();
   };

@@ -1,8 +1,6 @@
 package dev.lain.claudejb.ui
 
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -10,6 +8,8 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
@@ -50,6 +50,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     // it in a field would make a second project's window overwrite the first's and misdirect attention checks.
     /** Maps each live session to its tab, so a background session can target its own badge/notification. */
     private val contents = HashMap<ClaudeSession, Content>()
+
     /** Per-session throttle for attention notifications (badge is never throttled). */
     private val lastNotified = HashMap<ClaudeSession, Long>()
 
@@ -84,7 +85,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 CommandsAction(cm),
                 DiffHistoryAction { openDiffHistory(project, cm) },
                 CloseAllDiffsAction(project),
-            )
+            ),
         )
         toolWindow.setAdditionalGearActions(buildGearGroup(project, cm))
     }
@@ -107,7 +108,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         session.addListener(object : SessionListener {
             override fun onAttention(reason: AttentionReason) = onSessionAttention(project, cm, session, reason)
             override fun onTitleChanged() {
-                contents[session]?.let { it.displayName = tabTitle(session.title); it.description = session.title }
+                contents[session]?.let {
+                    it.displayName = tabTitle(session.title)
+                    it.description = session.title
+                }
             }
         })
         cm.addContent(content)
@@ -115,8 +119,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         // path a manual tab switch takes. Selecting without it and then asking for the focus ourselves loses the
         // race: "New chat" is a toolbar action, and the platform restores focus to wherever it was when an action
         // finishes, stepping on our request. (The caret itself is settled later, when the page is up — see
-        // JcefHost.markWebReady.)
-        cm.setSelectedContent(content, /* requestFocus = */ true)
+        // JcefHost.markWebReady.) The trailing `true` IS requestFocus — a Java API, so it cannot be named here.
+        cm.setSelectedContent(content, true)
         ClaudeSettings.getInstance(project).applyTo(session)
         session.start()
     }
@@ -150,10 +154,15 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 text,
                 if (reason == AttentionReason.ERROR) NotificationType.ERROR else NotificationType.INFORMATION,
             )
-            .addAction(NotificationAction.createSimpleExpiring("Open") {
-                contents[session]?.let { cm.setSelectedContent(it); it.setIcon(null) }
-                resolveToolWindow(project)?.activate(null)
-            })
+            .addAction(
+                NotificationAction.createSimpleExpiring("Open") {
+                    contents[session]?.let {
+                        cm.setSelectedContent(it)
+                        it.setIcon(null)
+                    }
+                    resolveToolWindow(project)?.activate(null)
+                },
+            )
             .notify(project)
     }
 
@@ -200,11 +209,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             add(simple("Rename Session…") { renameActiveSession(project, cm) })
             add(simple("Fork Session") { forkActiveSession(project, cm) })
             add(simple("Open Previous Session…") { openPreviousSession(project, cm) })
-            add(simple("Delete Previous Session…") { deletePreviousSession(project, cm) })
+            add(simple("Delete Previous Session…") { deletePreviousSession(project) })
             add(simple("Add Current File as @-context") { activePanel(cm)?.mentionCurrentFile() })
-            add(simple("Settings…") {
-                ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
-            })
+            add(
+                simple("Settings…") {
+                    ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+                },
+            )
         }
 
     /** A restorable tab: the binary session id, its resolved title and the transcript read back from the session file. */
@@ -233,7 +244,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                         it,
                         SessionTitleReader.readTitle(it),
                         SessionTranscriptReader.readEntries(
-                            it, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+                            it,
+                            SessionTranscriptReader.DEFAULT_RESTORE_CAP,
+                            project.basePath,
                         ),
                     )
                 }
@@ -260,7 +273,12 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun renameActiveSession(project: Project, cm: ContentManager) {
         val session = activePanel(cm)?.session ?: return
         val input = Messages.showInputDialog(
-            project, "New session name:", "Rename Session", null, session.title, null,
+            project,
+            "New session name:",
+            "Rename Session",
+            null,
+            session.title,
+            null,
         )?.trim().orEmpty()
         if (input.isEmpty() || input == session.title) return
         session.renameSession(input)
@@ -281,7 +299,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val sourceTitle = source.title
         ApplicationManager.getApplication().executeOnPooledThread {
             val entries = SessionTranscriptReader.readEntries(
-                sourceId, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+                sourceId,
+                SessionTranscriptReader.DEFAULT_RESTORE_CAP,
+                project.basePath,
             )
             ApplicationManager.getApplication().invokeLater({
                 val manager = ChatSessionManager.getInstance(project)
@@ -316,7 +336,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                         // Re-read the transcript off-EDT, then build/open the tab on the EDT.
                         ApplicationManager.getApplication().executeOnPooledThread {
                             val entries = SessionTranscriptReader.readEntries(
-                                ref.sessionId, SessionTranscriptReader.DEFAULT_RESTORE_CAP, project.basePath,
+                                ref.sessionId,
+                                SessionTranscriptReader.DEFAULT_RESTORE_CAP,
+                                project.basePath,
                             )
                             ApplicationManager.getApplication().invokeLater({
                                 val manager = ChatSessionManager.getInstance(project)
@@ -340,7 +362,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * delete IO runs off the EDT. This removes the binary's source-of-truth file, so the session disappears from
      * every "previous session" list and can no longer be resumed.
      */
-    private fun deletePreviousSession(project: Project, cm: ContentManager) {
+    private fun deletePreviousSession(project: Project) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val refs = SessionTranscriptReader.listSessions(project)
             ApplicationManager.getApplication().invokeLater({
@@ -355,16 +377,24 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                     .setItemChosenCallback { ref ->
                         val ok = Messages.showYesNoDialog(
                             project,
-                            "Permanently delete the session \"${ref.title}\"?\nThis removes its transcript and it can no longer be resumed.",
-                            "Delete Session", "Delete", "Cancel", Messages.getWarningIcon(),
+                            "Permanently delete the session \"${ref.title}\"?\n" +
+                                "This removes its transcript and it can no longer be resumed.",
+                            "Delete Session",
+                            "Delete",
+                            "Cancel",
+                            Messages.getWarningIcon(),
                         )
                         if (ok != Messages.YES) return@setItemChosenCallback
                         ApplicationManager.getApplication().executeOnPooledThread {
                             val deleted = SessionStore.delete(ref.sessionId)
                             ApplicationManager.getApplication().invokeLater({
-                                if (!deleted) Messages.showErrorDialog(
-                                    project, "Could not delete the session file.", "Delete Session",
-                                )
+                                if (!deleted) {
+                                    Messages.showErrorDialog(
+                                        project,
+                                        "Could not delete the session file.",
+                                        "Delete Session",
+                                    )
+                                }
                             }, ModalityState.any())
                         }
                     }
@@ -382,16 +412,23 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      */
     private inner class SessionRefRenderer : SimpleListCellRenderer<SessionRef>() {
         override fun customize(
-            list: JList<out SessionRef>, value: SessionRef?, index: Int, selected: Boolean, hasFocus: Boolean,
+            list: JList<out SessionRef>,
+            value: SessionRef?,
+            index: Int,
+            selected: Boolean,
+            hasFocus: Boolean,
         ) {
             value ?: return
             val parts = buildList {
                 value.gitBranch?.let { add(escapeHtml(it)) }
                 value.createdAt?.let { add(escapeHtml(formatCreatedAt(it))) }
-                value.firstPrompt?.let { add(escapeHtml(truncate(it.replace('\n', ' '), 60))) }
+                value.firstPrompt?.let { add(escapeHtml(truncate(it.replace('\n', ' '), PROMPT_PREVIEW_MAX))) }
             }
-            val sub = if (parts.isEmpty()) "" else
+            val sub = if (parts.isEmpty()) {
+                ""
+            } else {
                 "<br><font color='#888888'>${parts.joinToString("  ·  ")}</font>"
+            }
             text = "<html>${escapeHtml(value.title)}  —  ${relativeTime(value.lastModified)}$sub</html>"
         }
     }
@@ -412,12 +449,12 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     /** Coarse, human-friendly elapsed-time label for an epoch-millis timestamp. */
     private fun relativeTime(timestamp: Long): String {
-        val secs = (System.currentTimeMillis() - timestamp).coerceAtLeast(0) / 1000
+        val secs = (System.currentTimeMillis() - timestamp).coerceAtLeast(0) / MILLIS_PER_SECOND
         return when {
-            secs < 60 -> "just now"
-            secs < 3600 -> "${secs / 60}m ago"
-            secs < 86400 -> "${secs / 3600}h ago"
-            else -> "${secs / 86400}d ago"
+            secs < SECONDS_PER_MINUTE -> "just now"
+            secs < SECONDS_PER_HOUR -> "${secs / SECONDS_PER_MINUTE}m ago"
+            secs < SECONDS_PER_DAY -> "${secs / SECONDS_PER_HOUR}h ago"
+            else -> "${secs / SECONDS_PER_DAY}d ago"
         }
     }
 
@@ -439,6 +476,15 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         override fun update(e: AnActionEvent) {
             e.presentation.isEnabled = session()?.turnActive == true
         }
+
+        /**
+         * EDT **deliberately**, not an oversight. [session] reads `ContentManager.getSelectedContent()`, which is
+         * `ContentManagerImpl.mySelection` — a plain `ArrayList` mutated on the EDT, with no internal
+         * synchronization and no threading assertion to warn you. Reading it from a background thread is a data
+         * race whose worst case is not a stale label but an `IndexOutOfBoundsException`: `isEmpty()` says no,
+         * the EDT clears the selection, `get(0)` throws. Moving this to BGT to silence an
+         * "N ms to grab EDT" warning would trade a cosmetic log line for a real (if rare) crash.
+         */
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
     }
 
@@ -464,7 +510,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         override fun update(e: AnActionEvent) {
             e.presentation.isEnabled = dev.lain.claudejb.diff.OpenedDiffsService.getInstance(project).openCount() > 0
         }
-        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        /**
+         * BGT: the only thing read here is the size of a `CopyOnWriteArraySet` in a project service — no Swing,
+         * no PSI, no editor. Keeping it on the EDT put this action in the queue behind everything else the IDE
+         * does at startup, which is how it ended up in the log as "N ms to grab EDT".
+         */
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
     }
 
     companion object {
@@ -473,6 +525,15 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
         /** Max characters in a chat tab label before it's ellipsized (full title stays in the tooltip). */
         const val TAB_TITLE_MAX = 22
+
+        /** Max characters of the session's first prompt shown as the subtitle in the "Open Previous Session" list. */
+        private const val PROMPT_PREVIEW_MAX = 60
+
+        // Units for [relativeTime]'s "5m ago" / "2h ago" / "3d ago" bucketing.
+        private const val MILLIS_PER_SECOND = 1000
+        private const val SECONDS_PER_MINUTE = 60
+        private const val SECONDS_PER_HOUR = 3600
+        private const val SECONDS_PER_DAY = 86_400
 
         /**
          * Opens (or focuses) the Diff History / rollback tab for [session] in the Claude Code tool window.

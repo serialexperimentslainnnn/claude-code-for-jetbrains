@@ -23,10 +23,14 @@ class OpenedDiffsService(private val project: Project) {
     private val files = CopyOnWriteArraySet<VirtualFile>()
 
     /** Records that we opened [file] as a diff tab. Idempotent; safe to call from any thread. */
-    fun register(file: VirtualFile) { files.add(file) }
+    fun register(file: VirtualFile) {
+        files.add(file)
+    }
 
     /** Forgets [file] (called from [DiffPresenter.closeDiff] so unregister stays in lockstep with closing). */
-    fun unregister(file: VirtualFile) { files.remove(file) }
+    fun unregister(file: VirtualFile) {
+        files.remove(file)
+    }
 
     /** How many of our diff tabs are currently tracked as open. Drives action presentation (greyed when 0). */
     fun openCount(): Int = files.size

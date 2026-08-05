@@ -207,20 +207,20 @@ object SensitiveGuard {
         "/run/secrets/**", "/var/run/secrets/**", "**/serviceaccount/token", "/proc/*/environ",
         // AI-agent access tokens — the crown jewels of this era, ours included (the plugin must not read its own)
         "**/.claude/.credentials.json", "**/.claude/**/*credential*", "**/.config/anthropic/**",
-        "**/.codex/**", "**/.config/openai/**", "**/.openai/**",                          // OpenAI / Codex
+        "**/.codex/**", "**/.config/openai/**", "**/.openai/**", // OpenAI / Codex
         "**/.config/github-copilot/**", "**/github-copilot/hosts.json", "**/github-copilot/apps.json", // Copilot
-        "**/.cursor/**/*token*", "**/.cursor/**/*credential*", "**/.config/Cursor/**/*token*",          // Cursor
-        "**/.codeium/**", "**/.codeium/windsurf/**",                                       // Codeium / Windsurf
+        "**/.cursor/**/*token*", "**/.cursor/**/*credential*", "**/.config/Cursor/**/*token*", // Cursor
+        "**/.codeium/**", "**/.codeium/windsurf/**", // Codeium / Windsurf
         "**/.continue/**/*token*", "**/.continue/config.json", "**/.aider*", "**/.aider.conf.yml",
-        "**/.config/TabNine/**", "**/.gemini/**", "**/.config/zed/**/*token*",             // TabNine / Gemini / Zed
-        "**/.config/gh-copilot/**", "**/.sourcegraph/**", "**/.src-config.json",           // Copilot CLI / Cody
+        "**/.config/TabNine/**", "**/.gemini/**", "**/.config/zed/**/*token*", // TabNine / Gemini / Zed
+        "**/.config/gh-copilot/**", "**/.sourcegraph/**", "**/.src-config.json", // Copilot CLI / Cody
         "**/.config/JetBrains/**/*token*", "**/.local/share/JetBrains/**/*token*",
         // Source-repo & package/registry API keys — access to your code and your supply chain
         "**/.config/gh/hosts.yml", "**/.config/glab-cli/**", "**/.config/hub", "**/.config/git/credentials",
-        "**/.config/tea/**", "**/.config/bb/**", "**/.gitconfig.local",                    // gitea / bitbucket
-        "**/.huggingface/token", "**/.cache/huggingface/token", "**/.kaggle/kaggle.json",  // model registries
+        "**/.config/tea/**", "**/.config/bb/**", "**/.gitconfig.local", // gitea / bitbucket
+        "**/.huggingface/token", "**/.cache/huggingface/token", "**/.kaggle/kaggle.json", // model registries
         "**/.config/heroku/**", "**/.fly/**", "**/.config/fly/**", "**/.railway/**", "**/.config/railway/**",
-        "**/.wrangler/**", "**/.cloudflared/**", "**/.config/stripe/**", "**/.sentryclirc",// PaaS / CDN / SaaS
+        "**/.wrangler/**", "**/.cloudflared/**", "**/.config/stripe/**", "**/.sentryclirc", // PaaS / CDN / SaaS
         "**/.config/configstore/*.json", "**/.jfrog/**", "**/.config/doctl/**", "**/.vault-token",
         "**/.supabase/**", "**/.config/supabase/**", "**/.planetscale/**", "**/.config/ngrok*/**",
         // Unix system secrets
@@ -275,7 +275,10 @@ object SensitiveGuard {
     private fun re(p: String) = Regex(p, RegexOption.IGNORE_CASE)
 
     /** Keys whose value is (or contains) a command line, however the tool spells it. */
-    private val COMMAND_KEY = re("""^(cmd|command|commands|script|shell|shell_?command|exec|execute|run|args|argv|arguments|code|program|pty_?input)$""")
+    private val COMMAND_KEY = re(
+        """^(cmd|command|commands|script|shell|shell_?command|exec|execute|run|args|argv|arguments""" +
+            """|code|program|pty_?input)$""",
+    )
 
     /** Segment introducing a user home: `/home/<u>`, `/Users/<u>`, `C:/Users/<u>`, `/mnt/c/Users/<u>`. */
     private val HOME_SEGMENT = re("""(?:^|/)(?:home|users)/([^/]+)""")
@@ -285,6 +288,13 @@ object SensitiveGuard {
 
     /** Longer than a filename → it is a file's *contents*, not its name. */
     private const val MAX_PATH_LEN = 512
+
+    /**
+     * How much of a matched dangerous command is quoted back in the denial reason. The excerpt is shown to the
+     * user AND sent to the model, so it stays short: enough to recognise which rule fired, not enough to echo a
+     * whole script back into the transcript.
+     */
+    private const val MATCH_EXCERPT_CHARS = 120
 
     // ── origin: trusted only if it is one of the agent's own tools ───────────────────────────────────────
 
@@ -297,9 +307,29 @@ object SensitiveGuard {
      *  always discoverable from the block/prompt itself, not just from documentation. */
     private const val SETTINGS_PATH = "Settings ▸ Claude Code ▸ Security"
 
+    /**
+     * A verdict together with the reason behind it — the form callers should use.
+     *
+     * Both are produced from ONE [classify] pass on purpose. Calling [verdict] and [reason] separately runs the
+     * classification twice, and classification is not cheap: [expandWithResolved] canonicalises every path
+     * candidate on disk, under a timeout, precisely because a `stat()` on a dead network mount can block.
+     * Paying that twice to answer one question is waste the user experiences as latency on a permission card.
+     */
+    data class Decision(val verdict: Verdict, val reason: String?)
+
+    /** [Verdict] plus its explanation, in a single classification pass. */
+    fun evaluate(toolName: String, input: JsonObject, policy: Policy): Decision {
+        val result = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
+        return Decision(verdictFor(toolName, result, policy), reasonFor(result, policy))
+    }
+
     /** The verdict for a tool call. [Verdict.ALLOW] means "not our business" — the normal permission flow runs. */
     fun verdict(toolName: String, input: JsonObject, policy: Policy): Verdict {
-        val result = classify(toolName, input, policy) ?: return Verdict.ALLOW
+        val result = classify(input, policy) ?: return Verdict.ALLOW
+        return verdictFor(toolName, result, policy)
+    }
+
+    private fun verdictFor(toolName: String, result: Classification, policy: Policy): Verdict {
         val enforced = isEnforced(result, policy)
         if (result.category == Category.FOREIGN) {
             // Enforced (default): DENY for every caller, no exception. Disabled in Settings: downgraded to ASK for
@@ -315,7 +345,9 @@ object SensitiveGuard {
     /** Whether [result]'s specific rule is currently enforced (vs. downgraded to ASK) per [policy]'s toggles. */
     private fun isEnforced(result: Classification, policy: Policy): Boolean = when (result.category) {
         Category.CREDENTIAL -> policy.enforceCredentials
+
         Category.DANGEROUS_COMMAND -> policy.enforceDangerousCommands
+
         Category.FOREIGN -> when (result.foreignReason) {
             ForeignReason.OTHER_USER_HOME -> policy.enforceForeignOtherUserHome
             ForeignReason.NETWORK_MOUNT -> policy.enforceForeignNetworkMounts
@@ -325,12 +357,17 @@ object SensitiveGuard {
     }
 
     /** The one-line reason a call tripped the guard (for the card / transcript), or null. Always names where to
-     *  change this — see [SETTINGS_PATH] — whether the rule is enforced right now or already downgraded. */
-    fun reason(toolName: String, input: JsonObject, policy: Policy): String? {
-        val result = classify(toolName, input, policy) ?: return null
-        return if (isEnforced(result, policy)) "${result.text} — disable this in $SETTINGS_PATH"
-        else "${result.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
-    }
+     *  change this — see [SETTINGS_PATH] — whether the rule is enforced right now or already downgraded.
+     *  Prefer [evaluate] when the verdict is wanted too: this classifies again. */
+    fun reason(input: JsonObject, policy: Policy): String? =
+        classify(input, policy)?.let { reasonFor(it, policy) }
+
+    private fun reasonFor(result: Classification, policy: Policy): String =
+        if (isEnforced(result, policy)) {
+            "${result.text} — disable this in $SETTINGS_PATH"
+        } else {
+            "${result.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
+        }
 
     /** [Category] + [ForeignReason] (FOREIGN only) + human-readable text. */
     private data class Classification(val category: Category, val foreignReason: ForeignReason? = null, val text: String)
@@ -346,8 +383,15 @@ object SensitiveGuard {
      *
      * Pure detection: runs identically regardless of [Policy]'s enforcement toggles — those only affect [verdict]'s
      * OUTCOME (see [isEnforced]), never whether a match is found at all.
+     *
+     * **Takes no tool name, on purpose.** Classification is by the SHAPE of the input — the paths it names, the
+     * command it carries — never by what the caller is called. A name is attacker-supplied: an MCP server picks
+     * its own tool names, so a rule keyed on one could be walked around by choosing a different name. The tool
+     * name governs only *caller trust* ([isTrustedAgentTool], applied in [verdict] after this returns), which is
+     * an allowlist and fails closed. This signature used to accept a `toolName` it never read, which suggested
+     * the opposite of the actual design.
      */
-    private fun classify(toolName: String, input: JsonObject, policy: Policy): Classification? {
+    private fun classify(input: JsonObject, policy: Policy): Classification? {
         // Every candidate is judged on its literal form AND its resolved real path (symlink/`..` laundering).
         val paths = expandWithResolved(pathCandidates(input, policy.home), policy)
 
@@ -361,7 +405,9 @@ object SensitiveGuard {
         outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
             ?.let { return Classification(Category.CREDENTIAL, text = "reads credentials or key material outside the project: $it") }
 
-        dangerousCommand(input)?.let { return Classification(Category.DANGEROUS_COMMAND, text = "runs a command that can expose secrets: $it") }
+        dangerousCommand(input)?.let {
+            return Classification(Category.DANGEROUS_COMMAND, text = "runs a command that can expose secrets: $it")
+        }
 
         return null
     }
@@ -445,18 +491,24 @@ object SensitiveGuard {
     private data class ForeignHit(val path: String, val reason: ForeignReason)
 
     private fun foreignHit(paths: List<String>, policy: Policy): ForeignHit? {
-        val projRoot = policy.projectRoot?.let { normalize(it, policy.home) }
-        val myHome = policy.home?.let { normalize(it, null) }
+        val ownRoots = listOfNotNull(
+            policy.projectRoot?.let { normalize(it, policy.home) },
+            policy.home?.let { normalize(it, null) },
+        )
         val guarded = policy.guardedRoots.map { normalize(it, policy.home) }.filter { it.isNotBlank() }
-        for (p in paths) {
-            if (projRoot != null && under(p, projRoot)) continue
-            if (myHome != null && under(p, myHome)) continue
-            if (isUnc(p)) return ForeignHit(p, ForeignReason.NETWORK_MOUNT)
-            if (foreignHome(p, policy.currentUser)) return ForeignHit(p, ForeignReason.OTHER_USER_HOME)
-            if (policy.blockForeignWslMounts && underForeignMnt(p)) return ForeignHit(p, ForeignReason.WSL_MOUNT)
-            if (guarded.any { under(p, it) }) return ForeignHit(p, ForeignReason.NETWORK_MOUNT)
-        }
-        return null
+        return paths.asSequence()
+            .filterNot { p -> ownRoots.any { under(p, it) } } // our own territory is never foreign
+            .mapNotNull { p -> foreignReasonFor(p, policy, guarded)?.let { ForeignHit(p, it) } }
+            .firstOrNull()
+    }
+
+    /** Why [path] counts as foreign territory, or null when it does not. First rule that matches wins. */
+    private fun foreignReasonFor(path: String, policy: Policy, guarded: List<String>): ForeignReason? = when {
+        isUnc(path) -> ForeignReason.NETWORK_MOUNT
+        foreignHome(path, policy.currentUser) -> ForeignReason.OTHER_USER_HOME
+        policy.blockForeignWslMounts && underForeignMnt(path) -> ForeignReason.WSL_MOUNT
+        guarded.any { under(path, it) } -> ForeignReason.NETWORK_MOUNT
+        else -> null
     }
 
     /** Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). */
@@ -524,7 +576,7 @@ object SensitiveGuard {
             // sieve; matching the peeled string closes the cheap evasions (never all of them — see the class doc).
             for (candidate in setOf(expandEnv(command, null), deobfuscate(command))) {
                 DANGEROUS_COMMANDS.firstOrNull { it.containsMatchIn(candidate) }
-                    ?.let { return it.find(candidate)?.value?.take(120) }
+                    ?.let { return it.find(candidate)?.value?.take(MATCH_EXCERPT_CHARS) }
             }
         }
         return null
@@ -565,9 +617,8 @@ object SensitiveGuard {
         return s
     }
 
-    /** `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`. Only literal, single-token assignments; good enough for the net. */
     /**
-     * `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`.
+     * `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`. Only literal, single-token assignments; enough for the net.
      *
      * **Real incident**: `String.replace(Regex, String)` treats the replacement argument as a *replacement
      * template* — `$1`/`${name}` are group references, not literal text. `v` is arbitrary shell-assigned text an
@@ -596,11 +647,14 @@ object SensitiveGuard {
         Regex("""[A-Za-z0-9+/]{16,}={0,2}""").findAll(command).forEach { m ->
             runCatching {
                 val decoded = String(java.util.Base64.getDecoder().decode(m.value), Charsets.UTF_8)
-                if (decoded.isNotBlank() && decoded.all { it == '\t' || it == '\n' || it in ' '..'~' }) out += decoded
+                if (decoded.isNotBlank() && decoded.all(::isPrintableAscii)) out += decoded
             }
         }
         return out
     }
+
+    /** Printable ASCII plus tab/newline — i.e. something that could plausibly BE a command, not binary noise. */
+    private fun isPrintableAscii(c: Char): Boolean = c == '\t' || c == '\n' || c in ' '..'~'
 
     // ── input surface: every string leaf, not a key list ─────────────────────────────────────────────────
 
@@ -624,21 +678,36 @@ object SensitiveGuard {
         val out = ArrayList<String>()
         fun visit(element: JsonElement) {
             when (element) {
-                is JsonObject -> for ((k, v) in element) when {
-                    COMMAND_KEY.matches(k) && v is JsonPrimitive && v.isString -> out.add(v.content)
-                    COMMAND_KEY.matches(k) && v is JsonArray -> {
-                        val joined = v.filterIsInstance<JsonPrimitive>().filter { it.isString }
-                            .joinToString(" ") { it.content }
-                        if (joined.isNotBlank()) out.add(joined)
-                    }
-                    else -> visit(v)
-                }
+                is JsonObject -> element.forEach { (k, v) -> visitEntry(k, v, out, ::visit) }
                 is JsonArray -> element.forEach(::visit)
                 else -> Unit
             }
         }
         visit(input)
         return out
+    }
+
+    /**
+     * One object entry: if the KEY names a command argument, take its value as a command (a string, or an argv
+     * array joined back into one); otherwise keep descending. Split out of [commandCandidates] so the recursion
+     * and the per-key decision are not nested in one another.
+     */
+    private fun visitEntry(key: String, value: JsonElement, out: MutableList<String>, descend: (JsonElement) -> Unit) {
+        if (!COMMAND_KEY.matches(key)) {
+            descend(value)
+            return
+        }
+        when (value) {
+            is JsonPrimitive -> if (value.isString) out.add(value.content)
+
+            is JsonArray -> {
+                val joined = value.filterIsInstance<JsonPrimitive>().filter { it.isString }
+                    .joinToString(" ") { it.content }
+                if (joined.isNotBlank()) out.add(joined)
+            }
+
+            else -> descend(value)
+        }
     }
 
     private fun walkStrings(element: JsonElement, key: String = "", visit: (String, String) -> Unit) {
@@ -680,7 +749,11 @@ object SensitiveGuard {
                 .replace("%HOMEPATH%", h, ignoreCase = true)
                 .replace("%APPDATA%", "$h/AppData/Roaming", ignoreCase = true)
                 .replace("%LOCALAPPDATA%", "$h/AppData/Local", ignoreCase = true)
-            if (v == "~") v = h else if (v.startsWith("~/") || v.startsWith("~\\")) v = h + "/" + v.substring(2)
+            if (v == "~") {
+                v = h
+            } else if (v.startsWith("~/") || v.startsWith("~\\")) {
+                v = h + "/" + v.substring(2)
+            }
         }
         return v
     }
@@ -695,12 +768,25 @@ object SensitiveGuard {
             val c = expanded[i]
             when {
                 c == '*' && i + 1 < expanded.length && expanded[i + 1] == '*' -> {
-                    sb.append(".*"); i += 2
+                    sb.append(".*")
+                    i += 2
                     if (i < expanded.length && expanded[i] == '/') i++
                 }
-                c == '*' -> { sb.append("[^/]*"); i++ }
-                c == '?' -> { sb.append("[^/]"); i++ }
-                else -> { sb.append(Regex.escape(c.toString())); i++ }
+
+                c == '*' -> {
+                    sb.append("[^/]*")
+                    i++
+                }
+
+                c == '?' -> {
+                    sb.append("[^/]")
+                    i++
+                }
+
+                else -> {
+                    sb.append(Regex.escape(c.toString()))
+                    i++
+                }
             }
         }
         return Matcher(Regex(sb.toString(), RegexOption.IGNORE_CASE))

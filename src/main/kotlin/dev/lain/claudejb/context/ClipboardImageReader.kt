@@ -7,10 +7,10 @@ import java.io.InputStream
 
 /**
  * Pure, AWT-only (no IDE/Application services) extraction of **raw image bytes** from a [Transferable], so the
- * composer's paste/drop path can attach a clipboard image. Centralizes the Linux clipboard quirk (Wayland over XWayland behaves like X11): there an image
- * arrives as a flavor with `primaryType == "image"` carrying an [InputStream] or `byte[]` representation — **not**
- * [DataFlavor.imageFlavor] (a rendered [java.awt.Image]). Only the raw-bytes paths live here; the rendered-image
- * fallback stays in the UI layer.
+ * composer's paste/drop path can attach a clipboard image. Centralizes the Linux clipboard quirk (Wayland over
+ * XWayland behaves like X11): there an image arrives as a flavor with `primaryType == "image"` carrying an
+ * [InputStream] or `byte[]` representation — **not** [DataFlavor.imageFlavor] (a rendered [java.awt.Image]).
+ * Only the raw-bytes paths live here; the rendered-image fallback stays in the UI layer.
  *
  * Media-type sniffing and the size cap are delegated to [AttachmentEncoder]; this object only locates and reads
  * the payload, leaving validation to the caller (which feeds the bytes to [AttachmentEncoder.fromBytes]).

@@ -7,7 +7,7 @@
  * only. See JCEF_CONTRACT.md §JS MODULE PATTERN / §CODE BLOCKS / §THEME.
  */
 (function () {
-  "use strict";
+  'use strict';
 
   // ---- The two globals --------------------------------------------------------
   var cc = window.cc || (window.cc = {});
@@ -20,7 +20,7 @@
   CC.send = function (obj) {
     try {
       var payload = JSON.stringify(obj);
-      if (typeof window.__ccSend === "function") {
+      if (typeof window.__ccSend === 'function') {
         window.__ccSend(payload);
       }
     } catch (e) {
@@ -32,13 +32,13 @@
   // escape(s): HTML-escape a string for safe text interpolation.
   // ---------------------------------------------------------------------------
   CC.escape = function (s) {
-    if (s === null || s === undefined) return "";
+    if (s === null || s === undefined) return '';
     return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   };
 
   // ---------------------------------------------------------------------------
@@ -53,37 +53,41 @@
         if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
         var val = props[key];
         if (val === null || val === undefined) continue;
-        if (key === "class" || key === "className") {
+        if (key === 'class' || key === 'className') {
           el.className = val;
-        } else if (key === "text") {
+        } else if (key === 'text') {
           el.textContent = val;
-        } else if (key === "html") {
+        } else if (key === 'html') {
           el.innerHTML = val;
-        } else if (key === "title") {
-          el.setAttribute("title", val);
-        } else if (key === "style") {
+        } else if (key === 'title') {
+          el.setAttribute('title', val);
+        } else if (key === 'style') {
           // Apply dynamic styles via the CSSOM (el.style.prop = v), NOT a `style="..."` attribute.
           // CSSOM mutations are not governed by CSP style-src, so we need no 'unsafe-inline'.
-          if (val && typeof val === "object") {
+          if (val && typeof val === 'object') {
             for (var sp in val) {
               if (Object.prototype.hasOwnProperty.call(val, sp) && val[sp] != null) {
-                try { el.style[sp] = val[sp]; } catch (e) { /* ignore an invalid property */ }
+                try {
+                  el.style[sp] = val[sp];
+                } catch (e) {
+                  /* ignore an invalid property */
+                }
               }
             }
           }
-        } else if (key === "attrs") {
+        } else if (key === 'attrs') {
           for (var a in val) {
             if (Object.prototype.hasOwnProperty.call(val, a) && val[a] != null) {
               el.setAttribute(a, val[a]);
             }
           }
-        } else if (key === "on") {
+        } else if (key === 'on') {
           for (var ev in val) {
-            if (Object.prototype.hasOwnProperty.call(val, ev) && typeof val[ev] === "function") {
+            if (Object.prototype.hasOwnProperty.call(val, ev) && typeof val[ev] === 'function') {
               el.addEventListener(ev, val[ev]);
             }
           }
-        } else if (key === "dataset") {
+        } else if (key === 'dataset') {
           for (var d in val) {
             if (Object.prototype.hasOwnProperty.call(val, d) && val[d] != null) {
               el.dataset[d] = val[d];
@@ -92,7 +96,7 @@
         } else {
           // Generic attribute (e.g. id, type, placeholder, hidden, role…).
           if (val === true) {
-            el.setAttribute(key, "");
+            el.setAttribute(key, '');
           } else if (val !== false) {
             el.setAttribute(key, val);
           }
@@ -110,7 +114,7 @@
       if (child === null || child === undefined || child === false) continue;
       if (Array.isArray(child)) {
         appendChildren(el, child);
-      } else if (typeof child === "string" || typeof child === "number") {
+      } else if (typeof child === 'string' || typeof child === 'number') {
         el.appendChild(document.createTextNode(String(child)));
       } else if (child.nodeType) {
         el.appendChild(child);
@@ -124,39 +128,43 @@
   // hljs) is applied to a detached fragment, then serialized back out.
   // ---------------------------------------------------------------------------
   CC.markdown = function (text) {
-    if (text === null || text === undefined) return "";
+    if (text === null || text === undefined) return '';
     var src = String(text);
     var raw;
     try {
       // breaks:true → single newlines render as <br>, so multi-line prompts/replies keep their
       // line breaks instead of being collapsed into one run by standard Markdown.
       var mdOpts = { breaks: true, gfm: true };
-      raw = (typeof window.marked !== "undefined" && window.marked)
-        ? (typeof window.marked.parse === "function"
+      raw =
+        typeof window.marked !== 'undefined' && window.marked
+          ? typeof window.marked.parse === 'function'
             ? window.marked.parse(src, mdOpts)
-            : window.marked(src, mdOpts))
-        : CC.escape(src);
+            : window.marked(src, mdOpts)
+          : CC.escape(src);
     } catch (e) {
       raw = CC.escape(src);
     }
 
     var clean;
     try {
-      clean = (typeof window.DOMPurify !== "undefined" && window.DOMPurify)
-        ? window.DOMPurify.sanitize(raw, {
-            ADD_ATTR: ["target"], FORBID_ATTR: ["style"],
-            // Default safe schemes + our internal jb: jump-to-code links + data:image/ (inline images;
-            // data:text/html stays blocked). Anything else (file:/javascript:/data:text…) is stripped.
-            ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-          })
-        : raw;
+      clean =
+        typeof window.DOMPurify !== 'undefined' && window.DOMPurify
+          ? window.DOMPurify.sanitize(raw, {
+              ADD_ATTR: ['target'],
+              FORBID_ATTR: ['style'],
+              // Default safe schemes + our internal jb: jump-to-code links + data:image/ (inline images;
+              // data:text/html stays blocked). Anything else (file:/javascript:/data:text…) is stripped.
+              ALLOWED_URI_REGEXP:
+                /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i,
+            })
+          : raw;
     } catch (e2) {
       clean = raw;
     }
 
     // Decorate code blocks in a detached container.
     try {
-      var holder = document.createElement("div");
+      var holder = document.createElement('div');
       holder.innerHTML = clean;
       decorateCodeBlocks(holder);
       return holder.innerHTML;
@@ -168,8 +176,10 @@
   // Shared code-block decoration so callers can re-run it on live DOM if needed.
   function decorateCodeBlocks(root) {
     if (!root) return;
-    var blocks = root.querySelectorAll("pre > code");
-    for (var i = 0; i < blocks.length; i++) { decorateOneCodeBlock(blocks[i]); }
+    var blocks = root.querySelectorAll('pre > code');
+    for (var i = 0; i < blocks.length; i++) {
+      decorateOneCodeBlock(blocks[i]);
+    }
   }
 
   // Decorates a SINGLE `pre > code` pair with the code-head bar (language label + Copy button) and
@@ -180,39 +190,43 @@
   // Idempotent: a `pre` already decorated (data-cc-decorated="1") is left untouched on a later call.
   function decorateOneCodeBlock(code) {
     var pre = code && code.parentNode;
-    if (!pre || pre.getAttribute("data-cc-decorated") === "1") return;
-    pre.setAttribute("data-cc-decorated", "1");
+    if (!pre || pre.getAttribute('data-cc-decorated') === '1') return;
+    pre.setAttribute('data-cc-decorated', '1');
 
     // Derive language from the `language-xxx` class hljs/marked emit; absent one, label stays generic.
-    var lang = "";
-    var cls = (code.className || "").split(/\s+/);
+    var lang = '';
+    var cls = (code.className || '').split(/\s+/);
     for (var c = 0; c < cls.length; c++) {
-      if (cls[c].indexOf("language-") === 0) {
-        lang = cls[c].slice("language-".length);
+      if (cls[c].indexOf('language-') === 0) {
+        lang = cls[c].slice('language-'.length);
         break;
       }
     }
 
-    var head = document.createElement("div");
-    head.className = "code-head";
+    var head = document.createElement('div');
+    head.className = 'code-head';
 
-    var label = document.createElement("span");
-    label.className = "code-lang";
-    label.textContent = lang || "text";
+    var label = document.createElement('span');
+    label.className = 'code-lang';
+    label.textContent = lang || 'text';
     head.appendChild(label);
 
-    var copy = document.createElement("span");
-    copy.className = "copy";
-    copy.setAttribute("role", "button");
-    copy.setAttribute("tabindex", "0");
-    copy.textContent = "Copy";
+    var copy = document.createElement('span');
+    copy.className = 'copy';
+    copy.setAttribute('role', 'button');
+    copy.setAttribute('tabindex', '0');
+    copy.textContent = 'Copy';
     head.appendChild(copy);
 
     pre.insertBefore(head, code);
 
     // Syntax-highlight the code element.
     try {
-      if (typeof window.hljs !== "undefined" && window.hljs && typeof window.hljs.highlightElement === "function") {
+      if (
+        typeof window.hljs !== 'undefined' &&
+        window.hljs &&
+        typeof window.hljs.highlightElement === 'function'
+      ) {
         window.hljs.highlightElement(code);
       }
     } catch (e) {
@@ -227,25 +241,75 @@
   // returns null — decorateOneCodeBlock then leaves the `language-xxx` class unset, and hljs.highlightElement
   // still runs its own autodetection, so the block is never left unhighlighted, just less precisely labelled.
   var EXT_LANG = {
-    kt: "kotlin", kts: "kotlin", java: "java",
-    js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
-    ts: "typescript", tsx: "typescript",
-    json: "json", xml: "xml", html: "xml", htm: "xml", svg: "xml", xsd: "xml", xsl: "xml", plist: "xml",
-    yml: "yaml", yaml: "yaml", sh: "bash", bash: "bash", zsh: "bash",
-    py: "python", rb: "ruby", go: "go", rs: "rust",
-    c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
-    cs: "csharp", php: "php", pl: "perl", pm: "perl", lua: "lua", sql: "sql",
-    css: "css", scss: "scss", less: "less", md: "markdown", markdown: "markdown",
-    ini: "ini", cfg: "ini", conf: "ini", properties: "ini",
-    swift: "swift", r: "r", graphql: "graphql", gql: "graphql", vb: "vbnet",
-    wasm: "wasm", wat: "wasm", m: "objectivec", mm: "objectivec", txt: "plaintext",
+    kt: 'kotlin',
+    kts: 'kotlin',
+    java: 'java',
+    js: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    json: 'json',
+    xml: 'xml',
+    html: 'xml',
+    htm: 'xml',
+    svg: 'xml',
+    xsd: 'xml',
+    xsl: 'xml',
+    plist: 'xml',
+    yml: 'yaml',
+    yaml: 'yaml',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    py: 'python',
+    rb: 'ruby',
+    go: 'go',
+    rs: 'rust',
+    c: 'c',
+    h: 'c',
+    cpp: 'cpp',
+    cc: 'cpp',
+    cxx: 'cpp',
+    hpp: 'cpp',
+    hh: 'cpp',
+    cs: 'csharp',
+    php: 'php',
+    pl: 'perl',
+    pm: 'perl',
+    lua: 'lua',
+    sql: 'sql',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    md: 'markdown',
+    markdown: 'markdown',
+    ini: 'ini',
+    cfg: 'ini',
+    conf: 'ini',
+    properties: 'ini',
+    swift: 'swift',
+    r: 'r',
+    graphql: 'graphql',
+    gql: 'graphql',
+    vb: 'vbnet',
+    wasm: 'wasm',
+    wat: 'wasm',
+    m: 'objectivec',
+    mm: 'objectivec',
+    txt: 'plaintext',
   };
   CC.languageForPath = function (path) {
-    var p = String(path || "");
-    var base = p.split(/[\\/]/).pop() || "";
-    if (/^makefile$/i.test(base)) { return "makefile"; }
-    var dot = base.lastIndexOf(".");
-    if (dot < 0 || dot === base.length - 1) { return null; }
+    var p = String(path || '');
+    var base = p.split(/[\\/]/).pop() || '';
+    if (/^makefile$/i.test(base)) {
+      return 'makefile';
+    }
+    var dot = base.lastIndexOf('.');
+    if (dot < 0 || dot === base.length - 1) {
+      return null;
+    }
     var ext = base.slice(dot + 1).toLowerCase();
     return EXT_LANG[ext] || null;
   };
@@ -255,7 +319,7 @@
   // ---------------------------------------------------------------------------
   var listeners = {};
   CC.on = function (event, fn) {
-    if (typeof fn !== "function") return function () {};
+    if (typeof fn !== 'function') return function () {};
     (listeners[event] || (listeners[event] = [])).push(fn);
     return function off() {
       var arr = listeners[event];
@@ -282,15 +346,17 @@
   // ---------------------------------------------------------------------------
   // els: resolve the DOM mount points by id (§DOM).
   // ---------------------------------------------------------------------------
-  function byId(id) { return document.getElementById(id); }
+  function byId(id) {
+    return document.getElementById(id);
+  }
   CC.els = {
-    app: byId("app"),
-    conversation: byId("conversation"),
-    dock: byId("dock"),
-    permissions: byId("permissions"),
-    composer: byId("composer"),
-    palette: byId("palette"),
-    a11yStatus: byId("a11y-status")
+    app: byId('app'),
+    conversation: byId('conversation'),
+    dock: byId('dock'),
+    permissions: byId('permissions'),
+    composer: byId('composer'),
+    palette: byId('palette'),
+    a11yStatus: byId('a11y-status'),
   };
 
   /**
@@ -307,11 +373,11 @@
    * Re-announcing identical text is a no-op in most screen readers (the node did not change), so repeated
    * states are skipped explicitly rather than relying on that behaviour being uniform.
    */
-  var lastAnnouncement = "";
+  var lastAnnouncement = '';
   CC.announce = function (message) {
     var el = CC.els && CC.els.a11yStatus;
     if (!el) return;
-    var text = message == null ? "" : String(message);
+    var text = message == null ? '' : String(message);
     if (text === lastAnnouncement) return;
     lastAnnouncement = text;
     el.textContent = text;
@@ -322,36 +388,92 @@
   // Special mappings per §THEME; everything else → --<lowercased-kebab-key>.
   // ---------------------------------------------------------------------------
   var THEME_MAP = {
-    accentSoft: "--accent-soft",
-    codeBg: "--code-bg",
-    fontFamily: "--font",
-    monoFamily: "--mono",
-    fontSize: "--fs"
+    accentSoft: '--accent-soft',
+    codeBg: '--code-bg',
+    fontFamily: '--font',
+    monoFamily: '--mono',
+    fontSize: '--fs',
   };
 
   function camelToKebab(key) {
-    return key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+    return key.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
   }
 
   CC.applyTheme = function (vars) {
-    if (!vars || typeof vars !== "object") return;
+    if (!vars || typeof vars !== 'object') return;
     var root = document.documentElement;
     if (!root || !root.style) return;
     CC.__themeVars = CC.__themeVars || {};
     for (var key in vars) {
       if (!Object.prototype.hasOwnProperty.call(vars, key)) continue;
-      if (key === "vibe") continue; // a flag, not a CSS var — handled below
+      if (key === 'vibe' || key === 'reducedMotion') continue; // flags, not CSS vars — handled below
       var val = vars[key];
       if (val === null || val === undefined) continue;
-      var prop = THEME_MAP[key] || ("--" + camelToKebab(key));
-      CC.__themeVars[prop] = String(val);   // remembered so Vibe Mode can restore on toggle-off
+      var prop = THEME_MAP[key] || '--' + camelToKebab(key);
+      CC.__themeVars[prop] = String(val); // remembered so Vibe Mode can restore on toggle-off
       try {
         root.style.setProperty(prop, String(val));
       } catch (e) {
         // Ignore an invalid property/value; theming is best-effort.
       }
     }
-    if (Object.prototype.hasOwnProperty.call(vars, "vibe")) setVibe(!!vars.vibe);
+    if (Object.prototype.hasOwnProperty.call(vars, 'vibe')) setVibe(!!vars.vibe);
+    if (Object.prototype.hasOwnProperty.call(vars, 'reducedMotion')) {
+      setReducedMotion(!!vars.reducedMotion);
+    }
+  };
+
+  // Motion is reduced ONLY when the host says so. We deliberately do not consult
+  // matchMedia('(prefers-reduced-motion: reduce)') here: JCEF renders off-screen, with no GTK window and (on
+  // Wayland) no XSETTINGS bridge, so the browser has no desktop preference to report and answering from it
+  // disabled every animation for everyone. See the body.reduced-motion block in app.css for the full story.
+  function setReducedMotion(on) {
+    var body = document.body;
+    if (!body) return;
+    body.classList.toggle('reduced-motion', !!on);
+    // Also readable from JS: the smooth autoscroll is imperative (element.scrollTo), so no stylesheet rule can
+    // reach it — the same blind spot that let Vibe Mode's rainbow keep spinning when every CSS animation was
+    // flattened. Anything driven by script has to consult this flag itself.
+    CC.reducedMotion = !!on;
+  }
+
+  // What the embedded browser ACTUALLY resolves — reported once, on demand, to the IDE log.
+  //
+  // The plugin's UI is a browser we cannot open devtools on, which makes a whole class of bug undiagnosable
+  // from the outside: a CSS rule that silently does not apply is indistinguishable from a backend that never
+  // sent the state. Everything below is read from the live document, not assumed.
+  CC.diagnostics = function () {
+    var probe = document.createElement('div');
+    probe.className = 'tool loading';
+    document.body.appendChild(probe);
+    var computed = window.getComputedStyle(probe);
+    var report = {
+      reducedMotionMedia: !!(
+        window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ),
+      bodyHasReducedClass: document.body.classList.contains('reduced-motion'),
+      // Does a `.tool.loading` element actually receive the animation, and for how long?
+      toolAnimationName: computed.animationName,
+      toolAnimationDuration: computed.animationDuration,
+      toolAnimationIterations: computed.animationIterationCount,
+      toolBorderColor: computed.borderTopColor,
+      // color-mix drives every state border; if it is unsupported the rule is dropped and the card stays grey.
+      supportsColorMix: !!(
+        window.CSS &&
+        CSS.supports &&
+        CSS.supports('color', 'color-mix(in srgb, red 50%, blue)')
+      ),
+      infoVar: getComputedStyle(document.documentElement).getPropertyValue('--info').trim(),
+      warningVar: getComputedStyle(document.documentElement).getPropertyValue('--warning').trim(),
+      styleSheets: document.styleSheets.length,
+      userAgent: navigator.userAgent,
+    };
+    probe.remove();
+    CC.send({ type: 'diag', report: JSON.stringify(report) });
+    return report;
+  };
+  cc.diagnostics = function () {
+    return CC.diagnostics();
   };
 
   // ---------------------------------------------------------------------------
@@ -364,8 +486,12 @@
   var vibeTimer = 0;
   var vibeHue = 0;
 
-  function hsl(h, s, l) { return "hsl(" + Math.round(((h % 360) + 360) % 360) + "," + s + "%," + l + "%)"; }
-  function hsla(h, s, l, a) { return "hsla(" + Math.round(((h % 360) + 360) % 360) + "," + s + "%," + l + "%," + a + ")"; }
+  function hsl(h, s, l) {
+    return 'hsl(' + Math.round(((h % 360) + 360) % 360) + ',' + s + '%,' + l + '%)';
+  }
+  function hsla(h, s, l, a) {
+    return 'hsla(' + Math.round(((h % 360) + 360) % 360) + ',' + s + '%,' + l + '%,' + a + ')';
+  }
 
   // One step of the rainbow. Driven by setInterval (NOT requestAnimationFrame): under JCEF's
   // offscreen rendering, rAF stalls when the browser thinks nothing is painting, which froze the
@@ -375,13 +501,13 @@
     vibeHue = (vibeHue + 6) % 360; // faster rainbow — ~1.8s per full cycle (was ~5.4s); see also the timer below
     var s = document.documentElement.style;
     var h = vibeHue;
-    s.setProperty("--accent", hsl(h, 90, 60));
-    s.setProperty("--accent-soft", hsla(h, 90, 60, 0.20));
-    s.setProperty("--text", hsl(h + 40, 85, 72));      // hue cycles; S/L held legible on dark bg
-    s.setProperty("--dim", hsl(h + 90, 60, 66));
-    s.setProperty("--border", hsla(h + 140, 75, 58, 0.6));
-    s.setProperty("--success", hsl(h + 200, 75, 62));
-    s.setProperty("--warning", hsl(h + 260, 80, 64));
+    s.setProperty('--accent', hsl(h, 90, 60));
+    s.setProperty('--accent-soft', hsla(h, 90, 60, 0.2));
+    s.setProperty('--text', hsl(h + 40, 85, 72)); // hue cycles; S/L held legible on dark bg
+    s.setProperty('--dim', hsl(h + 90, 60, 66));
+    s.setProperty('--border', hsla(h + 140, 75, 58, 0.6));
+    s.setProperty('--success', hsl(h + 200, 75, 62));
+    s.setProperty('--warning', hsl(h + 260, 80, 64));
   }
 
   function setVibe(on) {
@@ -389,24 +515,39 @@
     vibeOn = on;
     var body = document.body;
     if (on) {
-      if (body) body.classList.add("vibe");
+      if (body) body.classList.add('vibe');
       vibeStep();
       if (!vibeTimer) vibeTimer = window.setInterval(vibeStep, 30);
     } else {
-      if (vibeTimer) { window.clearInterval(vibeTimer); vibeTimer = 0; }
-      if (body) body.classList.remove("vibe");
+      if (vibeTimer) {
+        window.clearInterval(vibeTimer);
+        vibeTimer = 0;
+      }
+      if (body) body.classList.remove('vibe');
       // restore the IDE theme vars we overwrote
       var root = document.documentElement;
       var v = CC.__themeVars || {};
-      for (var p in v) { if (Object.prototype.hasOwnProperty.call(v, p)) { try { root.style.setProperty(p, v[p]); } catch (e) {} } }
+      for (var p in v) {
+        if (Object.prototype.hasOwnProperty.call(v, p)) {
+          try {
+            root.style.setProperty(p, v[p]);
+          } catch (e) {
+            // A saved var the browser now rejects: skip it and restore the rest. Losing one colour is
+            // strictly better than aborting the loop and leaving the theme half-reverted.
+          }
+        }
+      }
     }
     CC.vibeOn = on;
   }
-  CC.isVibe = function () { return vibeOn; };
+  CC.isVibe = function () {
+    return vibeOn;
+  };
 
   // Nyan Cat (ported from /icons/claude-vibe.svg) — the Vibe Mode glyph for the toggle and avatar.
   CC.nyanSvg = function () {
-    return '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    return (
+      '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
       '<rect x="1" y="9.2" width="8" height="1.45" fill="#FF5B5B"/>' +
       '<rect x="1" y="10.65" width="8" height="1.45" fill="#FFA63D"/>' +
       '<rect x="1" y="12.1" width="8" height="1.45" fill="#FFF03D"/>' +
@@ -422,40 +563,43 @@
       '<circle cx="15.7" cy="13" r="0.8" fill="#FF8FB6"/><circle cx="19.7" cy="13" r="0.8" fill="#FF8FB6"/>' +
       '<path d="M17 12.9v0.7M16.2 13.6h1.6" stroke="#5A5E66" stroke-width="0.6" stroke-linecap="round"/>' +
       '<rect x="9.7" y="16.6" width="1.6" height="2" rx="0.7" fill="#B9BCC2"/>' +
-      '<rect x="13.4" y="16.6" width="1.6" height="2" rx="0.7" fill="#B9BCC2"/></svg>';
+      '<rect x="13.4" y="16.6" width="1.6" height="2" rx="0.7" fill="#B9BCC2"/></svg>'
+    );
   };
 
   // cc.theme delegates to CC.applyTheme. Null-safe: callable immediately.
-  cc.theme = function (vars) { CC.applyTheme(vars); };
+  cc.theme = function (vars) {
+    CC.applyTheme(vars);
+  };
 
   // Null-safe placeholders so the host may call these before modules load.
   // Each owning module overwrites its own method(s).
-  if (typeof cc.batch !== "function") cc.batch = function () {};
-  if (typeof cc.clear !== "function") cc.clear = function () {};
-  if (typeof cc.state !== "function") cc.state = function () {};
-  if (typeof cc.meta !== "function") cc.meta = function () {};
-  if (typeof cc.permissions !== "function") cc.permissions = function () {};
-  if (typeof cc.openPalette !== "function") cc.openPalette = function () {};
-  if (typeof cc.focusInput !== "function") cc.focusInput = function () {};
-  if (typeof cc.insertText !== "function") cc.insertText = function () {};
-  if (typeof cc.openDashboard !== "function") cc.openDashboard = function () {};
-  if (typeof cc.attachData !== "function") cc.attachData = function () {};
-  if (typeof cc.attachments !== "function") cc.attachments = function () {};
-  if (typeof cc.session !== "function") cc.session = function () {};
-  if (typeof cc.mcp !== "function") cc.mcp = function () {};
+  if (typeof cc.batch !== 'function') cc.batch = function () {};
+  if (typeof cc.clear !== 'function') cc.clear = function () {};
+  if (typeof cc.state !== 'function') cc.state = function () {};
+  if (typeof cc.meta !== 'function') cc.meta = function () {};
+  if (typeof cc.permissions !== 'function') cc.permissions = function () {};
+  if (typeof cc.openPalette !== 'function') cc.openPalette = function () {};
+  if (typeof cc.focusInput !== 'function') cc.focusInput = function () {};
+  if (typeof cc.insertText !== 'function') cc.insertText = function () {};
+  if (typeof cc.openDashboard !== 'function') cc.openDashboard = function () {};
+  if (typeof cc.attachData !== 'function') cc.attachData = function () {};
+  if (typeof cc.attachments !== 'function') cc.attachments = function () {};
+  if (typeof cc.session !== 'function') cc.session = function () {};
+  if (typeof cc.mcp !== 'function') cc.mcp = function () {};
 
   // appendInput(text): drop text (e.g. an @path mention from an editor action) into the composer
   // textarea at its end and focus it. DOM-queried so it works regardless of which module owns the field.
   cc.appendInput = function (text) {
     try {
       if (text == null) return;
-      var ta = document.querySelector(".composer-input");
+      var ta = document.querySelector('.composer-input');
       if (!ta) return;
-      var v = ta.value || "";
-      if (v && !/\s$/.test(v)) v += " ";
+      var v = ta.value || '';
+      if (v && !/\s$/.test(v)) v += ' ';
       ta.value = v + String(text);
       ta.focus();
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
     } catch (e) {
       // best-effort
     }
@@ -465,21 +609,25 @@
   // Global link interception: any <a href> click → route to Kotlin, never
   // navigate. Single delegated handler installed once.
   // ---------------------------------------------------------------------------
-  document.addEventListener("click", function (ev) {
-    var node = ev.target;
-    while (node && node !== document) {
-      if (node.tagName === "A" && node.hasAttribute("href")) {
-        var url = node.getAttribute("href");
-        if (url && url !== "#") {
-          ev.preventDefault();
-          ev.stopPropagation();
-          CC.send({ type: "open", url: url });
+  document.addEventListener(
+    'click',
+    function (ev) {
+      var node = ev.target;
+      while (node && node !== document) {
+        if (node.tagName === 'A' && node.hasAttribute('href')) {
+          var url = node.getAttribute('href');
+          if (url && url !== '#') {
+            ev.preventDefault();
+            ev.stopPropagation();
+            CC.send({ type: 'open', url: url });
+          }
+          return;
         }
-        return;
+        node = node.parentNode;
       }
-      node = node.parentNode;
-    }
-  }, true);
+    },
+    true
+  );
 
   // ---------------------------------------------------------------------------
   // Delegated code-block Copy. The per-block listener can't survive CC.markdown's
@@ -488,23 +636,23 @@
   // other .copy affordance that carries no own handler.
   // ---------------------------------------------------------------------------
   function copyTargetText(copyEl) {
-    var pre = copyEl.closest ? copyEl.closest("pre") : null;
+    var pre = copyEl.closest ? copyEl.closest('pre') : null;
     if (!pre) {
       // Walk up manually for very old engines / detached cases.
       var n = copyEl.parentNode;
-      while (n && n.tagName !== "PRE") n = n.parentNode;
+      while (n && n.tagName !== 'PRE') n = n.parentNode;
       pre = n;
     }
-    var code = pre ? pre.querySelector("code") : null;
-    return code ? code.textContent : "";
+    var code = pre ? pre.querySelector('code') : null;
+    return code ? code.textContent : '';
   }
   function flashCopied(copyEl) {
     var prev = copyEl.textContent;
-    copyEl.textContent = "Copied";
-    copyEl.classList.add("copied");
+    copyEl.textContent = 'Copied';
+    copyEl.classList.add('copied');
     setTimeout(function () {
       copyEl.textContent = prev;
-      copyEl.classList.remove("copied");
+      copyEl.classList.remove('copied');
     }, 1200);
   }
   function handleCopyFromCodeHead(ev, copyEl) {
@@ -512,28 +660,45 @@
     if (!text) return;
     ev.preventDefault();
     ev.stopPropagation();
-    CC.send({ type: "copy", text: text });
+    CC.send({ type: 'copy', text: text });
     flashCopied(copyEl);
   }
-  document.addEventListener("click", function (ev) {
-    var node = ev.target;
-    while (node && node !== document) {
-      if (node.className && ("" + node.className).indexOf("copy") >= 0 &&
-          node.parentNode && ("" + (node.parentNode.className || "")).indexOf("code-head") >= 0) {
-        handleCopyFromCodeHead(ev, node);
-        return;
+  document.addEventListener(
+    'click',
+    function (ev) {
+      var node = ev.target;
+      while (node && node !== document) {
+        if (
+          node.className &&
+          ('' + node.className).indexOf('copy') >= 0 &&
+          node.parentNode &&
+          ('' + (node.parentNode.className || '')).indexOf('code-head') >= 0
+        ) {
+          handleCopyFromCodeHead(ev, node);
+          return;
+        }
+        node = node.parentNode;
       }
-      node = node.parentNode;
-    }
-  }, true);
-  document.addEventListener("keydown", function (ev) {
-    if (ev.key !== "Enter" && ev.key !== " " && ev.key !== "Spacebar") return;
-    var node = ev.target;
-    if (node && node.className && ("" + node.className).indexOf("copy") >= 0 &&
-        node.parentNode && ("" + (node.parentNode.className || "")).indexOf("code-head") >= 0) {
-      handleCopyFromCodeHead(ev, node);
-    }
-  }, true);
+    },
+    true
+  );
+  document.addEventListener(
+    'keydown',
+    function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+      var node = ev.target;
+      if (
+        node &&
+        node.className &&
+        ('' + node.className).indexOf('copy') >= 0 &&
+        node.parentNode &&
+        ('' + (node.parentNode.className || '')).indexOf('code-head') >= 0
+      ) {
+        handleCopyFromCodeHead(ev, node);
+      }
+    },
+    true
+  );
 
   // ---------------------------------------------------------------------------
   // Announce readiness once the page has loaded.
@@ -544,19 +709,28 @@
   function announceReady() {
     var tries = 0;
     (function attempt() {
-      if (typeof window.__ccSend === "function") {
-        CC.send({ type: "ready" });
+      if (typeof window.__ccSend === 'function') {
+        CC.send({ type: 'ready' });
+        // One-shot environment report on first load. Cheap (a detached probe element and a few reads) and it
+        // is the only window into what this browser actually resolves — see CC.diagnostics.
+        try {
+          CC.diagnostics();
+        } catch (e) {
+          // Diagnostics must never be the reason the page fails to come up.
+        }
         return;
       }
-      if (tries++ < 200) { setTimeout(attempt, 50); } // ~10s ceiling, then give up
+      if (tries++ < 200) {
+        setTimeout(attempt, 50);
+      } // ~10s ceiling, then give up
     })();
   }
-  if (document.readyState === "complete" || document.readyState === "interactive") {
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
     // Defer so later modules (transcript/composer/permissions) finish wiring
     // their cc.* methods before the host responds to 'ready'.
     setTimeout(announceReady, 0);
   } else {
-    window.addEventListener("DOMContentLoaded", function () {
+    window.addEventListener('DOMContentLoaded', function () {
       setTimeout(announceReady, 0);
     });
   }
