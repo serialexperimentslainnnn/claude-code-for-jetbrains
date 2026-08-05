@@ -6,6 +6,7 @@
 // app-core.js runs (it captures CC.els from getElementById). We eval each file in the jsdom window global scope.
 const fs = require('node:fs');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 
 const JCEF = path.resolve(__dirname, '../../../main/resources/jcef');
 
@@ -25,12 +26,23 @@ function readApp(name) {
  *
  * `<script>` tags are stripped: the loader below injects the app modules itself, in a controlled order, and
  * jsdom would otherwise try to fetch them off disk.
+ *
+ * Parsed with a real HTML parser rather than regexes. The previous version matched `<body>` and stripped
+ * `<script>` with patterns, and CodeQL flagged both as high severity — correctly: `<script[\s\S]*?<\/script>`
+ * does not match `</script >` with a space, so a regex "sanitiser" that looks right silently is not. The risk
+ * here was low (this reads OUR shell.html off disk, and the goal is load control, not sanitisation), but the
+ * fix for parsing HTML with regexes is not a better regex — it is the parser that is already a dependency of
+ * this harness.
  */
 function shellBody() {
   const html = fs.readFileSync(path.join(JCEF, 'shell.html'), 'utf8');
-  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  // `includeNodeLocations: false` and no `runScripts`: this instance only reads structure, so nothing in the
+  // parsed document can execute — the scripts are removed below and the modules are injected by the caller.
+  const parsed = new JSDOM(html);
+  const body = parsed.window.document.body;
   if (!body) throw new Error('helpers/load: could not find <body> in shell.html');
-  return body[1].replace(/<script[\s\S]*?<\/script>/gi, '');
+  body.querySelectorAll('script').forEach((node) => node.remove());
+  return body.innerHTML;
 }
 
 // The vendored libs shell.html loads BEFORE the app modules. Load them faithfully so CC.markdown is the real
