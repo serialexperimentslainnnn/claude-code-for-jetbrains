@@ -326,12 +326,13 @@ intellijPlatform {
         // only hook that runs BEFORE the workspace state is written — which is the whole point of it. An
         // experimental API is acceptable with a reason; a deprecated one is not acceptable at all, because
         // it has an announced removal date and the plugin has to keep working across the IDE range.
-        failureLevel = listOf(
-            VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
-            VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
-            VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
-            VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
-        )
+        failureLevel =
+            listOf(
+                VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+                VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
+                VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
+                VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
+            )
         ides {
             // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
             // downloads, via -PlocalIdePath=<dir>[,<dir>…] or the LOCAL_IDE_PATH env var (comma-separated). This is
