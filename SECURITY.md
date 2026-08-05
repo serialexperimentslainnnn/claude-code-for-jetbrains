@@ -268,16 +268,26 @@ gpg --check-sigs "$(gpg --show-keys --with-colons docs/ci-signing-key.asc | awk 
 ```
 
 **Verify both signatures.** They are complementary, not redundant — the artifact
-signature alone cannot tell you a human intended the release, and the tag
-signature alone says nothing about the bytes you downloaded:
+signature covers the bytes you downloaded, and the tag ties those bytes to a
+commit on `main`:
 
 ```sh
 gpg --import docs/ci-signing-key.asc
 gpg --verify claude-code-native-X.Y.Z.zip.asc   # bytes came from the workflow
-git verify-tag vX.Y.Z                           # a person authorised the release
+git verify-tag vX.Y.Z                           # cut from main by that workflow
 gh attestation verify claude-code-native-X.Y.Z.zip \
    --repo serialexperimentslainnnn/claude-code-for-jetbrains   # build provenance
 ```
+
+**What no signature here claims.** Releases are cut automatically when `develop`
+is merged into `main`, and both the tag and the artifact are signed by the CI
+key — which is certified by the maintainer's hardware key, so the chain still
+ends in hardware, but which signs without a human present. **Nothing in a
+release attests that a person authorised it.** That rests on the two gates
+around publication: `main` accepts only reviewed pull requests, and publishing
+requires an approval from a named reviewer on a protected environment. Read
+`git verify-tag` as *"this workflow cut this from main"*, and treat the human
+judgement as living in the pull request, not in the signature.
 
 The attestation is worth having and worth not overtrusting: it proves *where* a
 build ran, not that the result is benign. A compromised runner can produce a

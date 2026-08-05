@@ -17,6 +17,12 @@ name: Release
 
 on:
   push:
+    # Primary path: a merge into `main` releases whatever version build.gradle.kts declares. The version in
+    # the code is the single source of truth — the tag is derived from it, so the two can no longer disagree.
+    branches: [main]
+    # Kept as the manual escape hatch: an explicit tag still releases. Useful to re-cut after a failed
+    # publish without pushing an empty commit to main. A tag created BY this workflow does not re-trigger it
+    # (GitHub deliberately does not fire workflows for GITHUB_TOKEN-pushed refs), so there is no loop.
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
@@ -34,16 +40,23 @@ env:
 jobs:
   # Gate 2, on its own so it fails in seconds and before any secret is in scope.
   guard:
-    name: Tag must come from main
+    name: Decide the version and check lineage
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      release: ${{ steps.resolve.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # need the graph, not just the tagged commit
+          fetch-depth: 0 # need the graph and the tags, not just this commit
           persist-credentials: false
 
-      - name: Assert the tagged commit is on main
+      # Lineage. On a tag push this is the load-bearing gate: without it, anyone who can push a tag can
+      # publish from any code. On a main push it is trivially true, and checked anyway rather than assumed —
+      # the cost is one command and the failure mode it guards against is publishing unreviewed code.
+      - name: Assert this commit is on main
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -51,17 +64,36 @@ jobs:
             echo "Releases are cut from main only, and main only accepts reviewed PRs from develop."
             exit 1
           fi
-          echo "$GITHUB_REF_NAME is on main — lineage OK."
+          echo "lineage OK — $GITHUB_SHA is reachable from main."
 
-      # The tag says which version this is; build.gradle.kts says which version gets built. If they
-      # disagree, the artifact would be published under a number nobody chose. Cheap check, real bug.
-      - name: Assert the tag matches the built version
+      # build.gradle.kts is the SINGLE SOURCE OF TRUTH for the version. On a main push the tag is derived
+      # from it; on a tag push the two must agree. Either way a release can never be published under a
+      # number nobody chose.
+      - name: Resolve the version and decide whether to release
+        id: resolve
         run: |
           declared=$(grep -m1 '^version = ' build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
-          expected="${GITHUB_REF_NAME#v}"
-          [ "$declared" = "$expected" ] || {
-            echo "::error::tag $GITHUB_REF_NAME does not match build.gradle.kts version $declared"; exit 1; }
-          echo "version $declared matches the tag."
+          [ -n "$declared" ] || { echo "::error::could not read version from build.gradle.kts"; exit 1; }
+          tag="v${declared}"
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            [ "$GITHUB_REF_NAME" = "$tag" ] || {
+              echo "::error::tag $GITHUB_REF_NAME does not match build.gradle.kts version $declared"; exit 1; }
+          fi
+
+          # An existing tag means this version is already released. Do NOT publish again, and do NOT fail:
+          # main legitimately receives merges that are not releases (a docs fix, a reverted change), and a
+          # red run on every one of those is an alarm people learn to ignore. Published tags stay immutable
+          # — that is the correction ADR 0001 records, after v4.3.2 and v4.4.1 were each force-re-cut.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$tag already exists — nothing to release. Bump the version in build.gradle.kts to cut a new one."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::will release $tag from $GITHUB_SHA"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$declared" >> "$GITHUB_OUTPUT"
 
   # Full gate again on the exact tagged tree. CI already ran on the branch, but a release must be
   # verified against what is actually being shipped, not against what was on develop last week.
@@ -70,6 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [guard]
+    if: needs.guard.outputs.release == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,7 +152,8 @@ jobs:
     name: Build, sign and publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [verify]
+    needs: [guard, verify]
+    if: needs.guard.outputs.release == 'true'
     environment:
       name: marketplace
       url: https://plugins.jetbrains.com/plugin/31965-claude-code-native
@@ -170,7 +204,7 @@ jobs:
             exit 1
           fi
           mkdir -p dist
-          name="claude-code-native-${GITHUB_REF_NAME#v}.zip"
+          name="claude-code-native-${{ needs.guard.outputs.version }}.zip"
           cp "$signed" "dist/$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "published $name  sha256=$(sha256sum "dist/$name" | cut -d' ' -f1)"
@@ -204,6 +238,43 @@ jobs:
           # Check our own output before it leaves the runner: a signature nobody verified is just a file.
           for f in "$NAME" "$NAME.sha256"; do gpg --verify "$f.asc" "$f"; done
           sha256sum -c "$NAME.sha256"
+
+      # --- Cut the tag, signed, AFTER the release was approved and actually published -------------
+      #
+      # Deliberately last, and deliberately not in `guard`. Creating it earlier would mean a tag exists for
+      # a version that was never published (a failed build, a declined approval), and published tags are
+      # immutable here — so the next attempt would be blocked by a tag naming a release that does not exist.
+      # Cutting it here makes the tag mean "this was published", which is the only claim it can honestly make
+      # when the version, not the tag, is the input.
+      #
+      # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
+      # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
+      # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
+      # now attests "this workflow published these bytes", and the human authorisation lives in the two gates
+      # that remain — the reviewed PR into main, and the required approval on the `marketplace` environment.
+      - name: Create and sign the release tag
+        if: github.ref_type != 'tag'
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # git cannot pass gpg the loopback flags it needs in a headless runner, so it gets a wrapper that
+          # supplies them. The passphrase travels in the environment, never in argv, where `ps` would see it.
+          printf '#!/bin/sh\nexec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"\n' \
+            > /tmp/gpg-loopback
+          chmod +x /tmp/gpg-loopback
+
+          # A bot identity, not a person: this tag is not a human's assertion and must not look like one.
+          # The noreply address is required by git and is not anyone's mailbox.
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config gpg.program /tmp/gpg-loopback
+          git config user.signingkey "$GPG_FPR"
+
+          git tag -s "$TAG" -m "Release $TAG — published by the release workflow from $GITHUB_SHA"
+          git verify-tag "$TAG"   # never push a signature we have not checked ourselves
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
           ls -la
 
       # --- GitHub Release -------------------------------------------------------------------------
@@ -221,18 +292,21 @@ jobs:
 
           ---
 
-          **Verifying this release.** The `.asc` files are signed by the project's **CI signing key**
-          (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware key — so the
-          chain terminates in a key that has never been on a computer. The tag is signed by that hardware
-          key directly. Check both; they claim different things:
+          **Verifying this release.** Both the `.asc` files and the tag are signed by the project's **CI
+          signing key** (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware
+          key — so the chain terminates in a key that has never been on a computer.
+
+          What the signatures do NOT assert is that a human pressed a button: the release is cut
+          automatically from `main`. That claim rests on the two gates around it — `main` accepts only
+          reviewed pull requests, and publication requires an approval on a protected environment.
 
           ```sh
           gpg --import docs/ci-signing-key.asc
           gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
-          git verify-tag <tag>                        # a person authorised this release
+          git verify-tag <tag>                        # this workflow cut this release from main
           ```
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "$GITHUB_REF_NAME" \
+          gh release create "${{ needs.guard.outputs.tag }}" dist/* \
+            --title "${{ needs.guard.outputs.tag }}" \
             --notes-file /tmp/notes.md \
             --verify-tag
