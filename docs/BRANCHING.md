@@ -83,14 +83,29 @@ admin. What they enforce:
 |---|---|---|
 | Pull request required | yes | yes |
 | Required approvals | **0** — see below | **0** — see below |
-| Status checks | tests, frontend, audit, verifier, build, **both CodeQL analyses** | tests, frontend, audit, verifier, build |
+| Status checks | tests, **static analysis**, frontend, audit, verifier, build, **both CodeQL analyses** | tests, **static analysis**, frontend, audit, verifier, build |
 | Branch must be up to date | yes | yes |
 | Signed commits | required | required |
-| Merge method | merge commit only (keeps the release commit identifiable) | squash or merge |
+| Merge method | **merge commit — the only one enabled** | **merge commit — the only one enabled** |
 | Force push / deletion | blocked | blocked |
 | Admin bypass | **none** | **none** |
 
-Three deliberate choices worth stating:
+Four deliberate choices worth stating:
+
+- **Merge commit is the ONLY method enabled on this repository**, and squash and rebase are switched off at
+  the repository level rather than merely discouraged here. This is a *signing* decision, not a taste in
+  history shape. Every commit in this project is signed by a hardware-backed key, and both of the other
+  methods **rewrite commits**: GitHub creates new SHAs and new committer information, which invalidates those
+  signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits required" would
+  still pass — the commits are signed, just no longer *by the author*, which is the entire property the rule
+  exists to give. Leaving the buttons enabled meant one wrong click could quietly destroy that provenance, so
+  the buttons are gone.
+
+  The cost, stated plainly: the merge node itself is created and signed by GitHub, because the alternative is
+  merging locally and pushing, which the pull-request requirement blocks — and relaxing *that* to save one
+  commit's provenance would be a far worse trade. `main` therefore ends up with the same *tree* as `develop`
+  but not the same SHA. Release provenance rests on the **tag**, which the maintainer signs with the YubiKey,
+  not on the merge node.
 
 - **Zero required approvals, and this is not a weakened gate — it is the only value that is not a
   deadlock.** GitHub does not let an author approve their own pull request. With one maintainer and no
