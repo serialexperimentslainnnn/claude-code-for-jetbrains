@@ -17,6 +17,14 @@ updates:
       prefix: build       # Conventional Commits — the commit-msg hook and the changelog both depend on it
       include: scope
     labels: [dependencies, ci]
+    groups:
+      # Every action here is pinned by full commit SHA, so a bump is a one-line SHA change per action and
+      # reviewing them one PR at a time buys nothing but pipeline runs.
+      actions:
+        patterns: ['*']
+      security:
+        applies-to: security-updates
+        patterns: ['*']
 
   # Build tooling only: vitest/jsdom for the frontend tests, commitlint for the commit gate, and the
   # Agent SDK as protocol reference. None of it ships (see SECURITY.md), which is exactly why the
@@ -35,6 +43,14 @@ updates:
       dev-tooling:
         patterns: ['*']
         update-types: [minor, patch]
+      # Security updates are a SEPARATE stream: they ignore `open-pull-requests-limit` entirely, and the
+      # group above does not cover them because `applies-to` defaults to version-updates. That is how five
+      # landed at once despite a limit of three — each firing a full pipeline, verifier included, for
+      # transitive devDependencies that are never distributed (`npm audit --omit=dev` reports 0).
+      # One PR for the lot: same review, one CI run.
+      security:
+        applies-to: security-updates
+        patterns: ['*']
     ignore:
       # The SDK baseline is not Dependabot's to move. `checkDrift` bumps it as part of a *reconciled*
       # protocol review — taking the new version without reading the surface diff is how a protocol gap
@@ -51,6 +67,16 @@ updates:
       prefix: build
       include: scope
     labels: [dependencies]
+    groups:
+      # Patch and minor bumps of build tooling reviewed together. A MAJOR stays on its own PR on purpose:
+      # this ecosystem is where a bump can hang the headless suite (the 2.16 -> 2.18 platform-plugin
+      # attempt did exactly that), so a major deserves its own run and its own decision.
+      build-tooling:
+        patterns: ['*']
+        update-types: [minor, patch]
+      security:
+        applies-to: security-updates
+        patterns: ['*']
     ignore:
       # kotlinx-serialization is provided by the IntelliJ Platform at runtime; the declared version has
       # to match what the targeted IDEs ship, not the newest release. Bumping it blindly is a
