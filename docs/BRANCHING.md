@@ -32,13 +32,32 @@ Naming: `feature/<short-kebab-summary>`, e.g. `feature/hunk-selection`, `bugfix/
 1. Land everything for the version on `develop`; bump `version` in `build.gradle.kts` and add the section to
    `RELEASE_NOTES.md` / `CHANGELOG.md`.
 2. Merge `develop` → `main` via PR. `main` is protected: the CI checks must be green and the PR approved.
-3. Tag the merge commit `vX.Y.Z` and push the tag. `release.yml` then verifies the tag came from `main`,
-   re-runs the full gate on the tagged tree, builds and attests, and waits on the `marketplace` environment
-   approval before `signPlugin publishPlugin`.
+3. **That is the whole procedure.** The merge triggers `release.yml`, which reads the version from
+   `build.gradle.kts`, re-runs the full gate on the merged tree, builds and attests, waits on the
+   `marketplace` environment approval, publishes, and only then cuts and signs the `vX.Y.Z` tag.
 
-> A tag pushed from anywhere other than `main` is rejected by the workflow's first job, before any
-> credential is in scope. That is the mechanism that makes "release only via PR into main" true rather
-> than merely intended.
+**`build.gradle.kts` is the single source of truth for the version.** The tag is derived from it rather than
+supplied alongside it, so the two can no longer disagree — the failure mode the old flow guarded against with
+a comparison simply cannot occur now.
+
+**A merge to `main` that does not bump the version publishes nothing.** The workflow finds the tag already
+present, logs a notice and stops. It does not fail: `main` legitimately receives merges that are not releases,
+and a red run on each of those is an alarm people learn to ignore. Published tags remain immutable.
+
+> Pushing a `vX.Y.Z` tag by hand still works and is kept as the escape hatch — re-cutting after a failed
+> publish, without pushing an empty commit to `main`. On that path the tag must match the declared version,
+> and its commit must be reachable from `main`, both checked before any credential is in scope.
+
+### What the signatures claim, now that the tag is automatic
+
+The tag is cut by the workflow and signed with the **CI key**, not the maintainer's YubiKey — which cannot
+sign inside a runner, and whose non-exportability is precisely what makes it worth trusting. The chain still
+terminates in hardware, because the CI key is certified by the YubiKey.
+
+The cost is stated rather than glossed: **no signature on a release asserts that a person authorised it.** That
+claim now rests entirely on the two gates around the publish — `main` accepts only reviewed pull requests, and
+publication requires an approval on the `marketplace` environment by a named reviewer. Anyone verifying a
+release should read `git verify-tag` as *"this workflow cut this from main"*, not as *"a human signed off"*.
 
 ## Cleaning up obsolete branches
 
