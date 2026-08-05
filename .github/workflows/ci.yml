@@ -30,8 +30,14 @@ permissions:
 # One run per ref. Superseded PR runs are cancelled — but pushes to develop/main are NOT, so the history
 # of what passed on the trunk stays complete.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Keyed on the COMMIT, not the ref. A branch with an open PR fires both `push` and `pull_request` for the
+  # same commit, and `github.ref` differs between them (refs/heads/x vs refs/pull/N/merge) — so the old group
+  # let both run to completion, doubling every job on every push for no extra information. Same SHA now means
+  # same group, so the duplicate is cancelled and whichever run survives reports the checks.
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  # Cancel superseded runs on EVERY event, not just PRs. Pushing three times in a row previously left three
+  # full pipelines racing, each spending ten minutes downloading IDEs for a commit already replaced.
+  cancel-in-progress: true
 
 env:
   # No daemon: a fresh JVM per job is the honest measurement on ephemeral runners, and a leaked daemon
@@ -65,8 +71,12 @@ jobs:
           # the next build on develop reads back.
           cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
 
-      - name: Run tests
-        run: ./gradlew --no-daemon --stacktrace test
+      # Coverage is verified HERE, in the same job and the same Gradle invocation as the tests.
+      # `koverVerify` depends on `:test`, so running it in the separate `Static analysis` job re-ran the whole
+      # JVM suite on a second runner with a cold cache — the single most expensive duplicate in this pipeline,
+      # and invisible because both jobs were green. Coverage is a property OF a test run; it belongs with it.
+      - name: Run tests and verify coverage gates
+        run: ./gradlew --no-daemon --stacktrace test koverVerify
 
       - name: Upload test reports
         if: always()
@@ -118,10 +128,9 @@ jobs:
       - name: Formatting (Spotless / ktlint)
         run: ./gradlew --no-daemon --stacktrace spotlessCheck
 
-      # Per-package coverage gates. See docs/RELEASE_CHECKLIST.md §Coverage policy for the thresholds,
-      # what is excluded and why, and the Kover limitation behind the current floor+aggregate shape.
-      - name: Coverage gates
-        run: ./gradlew --no-daemon --stacktrace koverVerify
+      # NB the per-package coverage gates (`koverVerify`) are NOT run here. They live in the `JVM tests` job,
+      # because Kover derives coverage from an actual test run: invoking it here re-executed the entire JVM
+      # suite on this runner. See docs/RELEASE_CHECKLIST.md §Coverage policy for the thresholds themselves.
 
       # The shipped JCEF JavaScript. no-eval / no-implied-eval / no-new-func are errors here because the
       # page runs under a hash-pinned CSP with no 'unsafe-eval': without this gate, code the browser will
@@ -234,6 +243,18 @@ jobs:
       - name: Verify plugin
         run: ./gradlew --no-daemon --stacktrace verifyPlugin
 
+      # `verifyPlugin` depends on `buildPlugin`, so the distributable already exists here. Hand it to the
+      # `Build plugin` job instead of letting it build a second time on a fresh runner: that job asserts
+      # properties OF the artifact, and asserting them on a DIFFERENT build than the one just verified was
+      # both wasteful and subtly wrong — the bytes checked were never the bytes verified.
+      - name: Hand the built distributable to the assertions job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-distribution
+          path: build/distributions/*.zip
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Upload verifier report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -242,29 +263,24 @@ jobs:
           path: build/reports/pluginVerifier/
           retention-days: 30
 
-  # The distributable. Unsigned and unpublished here by design: signing and publishing happen only from
-  # a tag, in release.yml, behind a human approval. This job proves the artifact BUILDS on every change.
+  # Properties of the DISTRIBUTABLE, asserted on the exact artifact the verifier just checked.
+  #
+  # It no longer builds its own: `verifyPlugin` already produced one, and rebuilding meant these assertions
+  # ran against bytes that were never verified — a second build on a fresh runner is not guaranteed to be
+  # the same artifact. Downloading it also drops a full Gradle setup, JDK provision and compile from the
+  # critical path. Unsigned and unpublished by design: signing and publishing happen only in release.yml,
+  # behind a human approval.
   build:
     name: Build plugin
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     needs: [verify]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch the verified distributable
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          persist-credentials: false
-
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
-
-      - name: Build plugin
-        run: ./gradlew --no-daemon --stacktrace buildPlugin
+          name: verified-distribution
+          path: build/distributions
 
       # A claim SECURITY.md makes to users, enforced here rather than trusted: the published artifact
       # contains no npm code. If this ever fails, either the packaging changed or the claim was false.

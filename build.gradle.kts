@@ -2,6 +2,7 @@ import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 import org.jetbrains.intellij.platform.gradle.models.ProductRelease
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 
 plugins {
     kotlin("jvm") version "2.1.20"
@@ -311,6 +312,26 @@ intellijPlatform {
         // 'JetBrains' in the plugin name is a Marketplace naming lint, not an API problem; muting it lets
         // the verifier proceed to the actual binary-compatibility / internal-API checks we care about.
         freeArgs = listOf("-mute", "TemplateWordInPluginName")
+
+        // The "zero deprecations" rule, ENFORCED rather than merely written down.
+        //
+        // The plugin's default failure level is COMPATIBILITY_PROBLEMS + INTERNAL_API_USAGES +
+        // OVERRIDE_ONLY_API_USAGES — deprecated usages are only REPORTED. So this repo's stated policy
+        // ("never ship a deprecated or scheduled-for-removal API — treat it as a blocker, not a warning")
+        // was a promise a human had to keep by reading logs, and a rule that lives only in prose is not a
+        // rule. Adding DEPRECATED_API_USAGES is what makes the sentence true.
+        //
+        // EXPERIMENTAL_API_USAGES is deliberately NOT here, and that is a decision rather than an oversight:
+        // `DiffTabCleanup` uses `ProjectCloseListener.projectClosingBeforeSave` knowingly, because it is the
+        // only hook that runs BEFORE the workspace state is written — which is the whole point of it. An
+        // experimental API is acceptable with a reason; a deprecated one is not acceptable at all, because
+        // it has an announced removal date and the plugin has to keep working across the IDE range.
+        failureLevel = listOf(
+            VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+            VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
+            VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
+            VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
+        )
         ides {
             // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
             // downloads, via -PlocalIdePath=<dir>[,<dir>…] or the LOCAL_IDE_PATH env var (comma-separated). This is

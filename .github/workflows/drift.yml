@@ -20,6 +20,13 @@ on:
 permissions:
   contents: read
 
+# Weekly, so overlap is unlikely — but a manual dispatch during a scheduled run would have two of these
+# racing to file the same issue. Queued rather than cancelled: a drift report half-written is worse than
+# one that starts a few minutes late.
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
 jobs:
   drift:
     name: Check protocol drift
