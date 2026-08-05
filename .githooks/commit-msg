@@ -20,18 +20,23 @@ cli="node_modules/.bin/commitlint"
   exit 0
 }
 
-# Node 24 aborts on some hosts' system OpenSSL config (a documented local quirk, not present on clean images).
-# Try clean first, then retry with OPENSSL_CONF neutralised — only if that was what broke it.
 run_lint() {
-  "$cli" --edit "$1" 2>&1 || OPENSSL_CONF=/dev/null "$cli" --edit "$1" 2>&1
+  "$cli" --edit "$1" 2>&1
 }
 
 # --- self-test: can the tool validate a message we know is well-formed? -------------------------------------
+# This decides TWO things at once: whether commitlint works at all, and — because Node 24 aborts on some
+# hosts' system OpenSSL config (a documented local quirk, absent from clean images) — whether this host needs
+# OPENSSL_CONF neutralised. Settling that here, on a message known to be valid, means the real check below
+# runs exactly ONCE. Retrying the real check instead would print the whole failure report twice.
 probe="$(mktemp)"; trap 'rm -f "$probe"' EXIT
 printf 'chore: commitlint self-test\n' > "$probe"
 if ! run_lint "$probe" >/dev/null 2>&1; then
-  echo "commit-msg: commitlint could not run (toolchain issue, not your message) — check skipped." >&2
-  exit 0
+  export OPENSSL_CONF=/dev/null
+  if ! run_lint "$probe" >/dev/null 2>&1; then
+    echo "commit-msg: commitlint could not run (toolchain issue, not your message) — check skipped." >&2
+    exit 0
+  fi
 fi
 
 # --- the real check ----------------------------------------------------------------------------------------

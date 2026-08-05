@@ -1,0 +1,74 @@
+# CodeQL — static analysis of the two languages that actually ship.
+#
+# Both matter and for different reasons. The Kotlin is the host: it spawns a process, answers a control
+# protocol, and decides what a model is allowed to touch. The JavaScript is the JCEF web app: it renders
+# untrusted model output into a DOM, which is the only place in this plugin where "content becomes code"
+# is even conceivable (the hash-pinned CSP is why it is not — see ADR 0002).
+name: CodeQL
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+  schedule:
+    # Weekly, because a finding can appear without the code changing: the query packs are updated
+    # continuously, so today's clean scan is not a statement about next month's known patterns.
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write # publish findings to the Security tab
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended over the default pack: this is a security-sensitive plugin with real
+          # users, and the extra precision cost is a few minutes on a free runner.
+          queries: security-extended
+
+      # Manual build rather than autobuild: autobuild guesses, and this project's build resolves the
+      # whole IntelliJ Platform. `classes` compiles main + resources without running tests twice.
+      - name: Build (Kotlin)
+        if: matrix.language == 'java-kotlin'
+        run: ./gradlew --no-daemon --stacktrace classes
+        env:
+          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
+        with:
+          category: /language:${{ matrix.language }}

@@ -1,0 +1,58 @@
+# Dependabot.
+#
+# The `github-actions` ecosystem is the load-bearing one here. Every action in .github/workflows is
+# pinned by full commit SHA, which is the right call for supply-chain reasons and would rot instantly
+# without something proposing the bumps — a stale pin is a pin to unpatched code. Dependabot understands
+# SHA pins and rewrites both the SHA and the `# vX.Y.Z` comment, so the pinning costs no manual work.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build       # Conventional Commits — the commit-msg hook and the changelog both depend on it
+      include: scope
+    labels: [dependencies, ci]
+
+  # Build tooling only: vitest/jsdom for the frontend tests, commitlint for the commit gate, and the
+  # Agent SDK as protocol reference. None of it ships (see SECURITY.md), which is exactly why the
+  # updates are grouped — they are maintenance, not security releases, and one PR a week is enough.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build
+      include: scope
+    labels: [dependencies]
+    groups:
+      dev-tooling:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # The SDK baseline is not Dependabot's to move. `checkDrift` bumps it as part of a *reconciled*
+      # protocol review — taking the new version without reading the surface diff is how a protocol gap
+      # gets silently blessed.
+      - dependency-name: '@anthropic-ai/claude-agent-sdk'
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build
+      include: scope
+    labels: [dependencies]
+    ignore:
+      # kotlinx-serialization is provided by the IntelliJ Platform at runtime; the declared version has
+      # to match what the targeted IDEs ship, not the newest release. Bumping it blindly is a
+      # NoSuchMethodError on a user's IDE, not an upgrade.
+      - dependency-name: 'org.jetbrains.kotlinx:kotlinx-serialization-json'
