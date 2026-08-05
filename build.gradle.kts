@@ -6,7 +6,7 @@ import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 plugins {
     kotlin("jvm") version "2.1.20"
     kotlin("plugin.serialization") version "2.1.20"
-    id("org.jetbrains.intellij.platform") version "2.16.0"
+    id("org.jetbrains.intellij.platform") version "2.18.1"
     // Coverage, gated per package — see the `kover { }` block near the bottom for the thresholds and why they
     // differ by package. (Until 5.0.0 this comment claimed a "≥90% target documented in
     // docs/RELEASE_CHECKLIST.md". That document says nothing about coverage, and the real figure was 53%. A
@@ -407,6 +407,21 @@ tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configure
 // what is uncovered there cannot run in CI. That is a known gap, not an endorsement.
 // ---------------------------------------------------------------------------
 kover {
+    // `checkDrift` must NOT be dragged into the coverage graph.
+    //
+    // Kover instruments and aggregates EVERY `Test` task in the project, and `checkDrift` is registered as one.
+    // That silently made it a dependency of `koverVerify`, so the `Static analysis` CI job ran the on-demand
+    // drift check — which downloads the latest SDK and probes a LOCALLY INSTALLED `claude` binary. There is no
+    // such binary on a runner, so it died with an IOException and failed the job.
+    //
+    // It passed locally, which is the whole lesson: the maintainer's machine has the binary, so the difference
+    // between "this task is on-demand" and "this task is wired into check" was invisible until CI ran it. The
+    // task's own KDoc already said "NOT wired into `check`" — it just was not true of the coverage graph.
+    currentProject {
+        instrumentation {
+            disabledForTestTasks.add("checkDrift")
+        }
+    }
     reports {
         filters {
             excludes {
