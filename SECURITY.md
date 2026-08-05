@@ -6,13 +6,15 @@ seriously and follow responsible disclosure.
 
 ## Supported versions
 
-| Version | Supported          |
-|---------|--------------------|
-| 2.x     | Yes (active)       |
-| < 2.0   | No                 |
+| Version | Supported    |
+|---------|--------------|
+| 5.x     | Yes (active) |
+| < 5.0   | No           |
 
-Only the latest minor of the 2.x line receives security fixes. Users on older
-2.x patch releases must upgrade to the latest before a fix is backported.
+Only the latest release of the current major receives security fixes. There is
+no backporting to earlier majors: the plugin ships through the JetBrains
+Marketplace, which auto-updates, so "upgrade to the latest" is a one-click fix
+for every user. Users on an older patch release must upgrade before reporting.
 
 ## Reporting a vulnerability
 
@@ -47,10 +49,35 @@ in the changelog unless they prefer to remain anonymous.
 
 ## In scope
 
-- Kotlin/Swing code in `src/main/kotlin/dev/lain/claudejb/`.
+- Kotlin code in `src/main/kotlin/dev/lain/claudejb/`.
+- The inlined JCEF web app in `src/main/resources/jcef/` and its vendored
+  libraries (`marked`, `DOMPurify`, `highlight.js`) — these **do** ship.
 - Build configuration and Gradle dependencies declared in `build.gradle.kts`.
 - Protocol handling against the `claude` binary's stream-json/control surface.
 - Permission gating, path-traversal guards, env handling, source-script trust.
+
+### Scope of dependency triage: the artifact, not the repository
+
+We triage advisories against **what we distribute**, which is the signed plugin
+zip. Concretely, that means the JVM dependencies resolved into the jar plus the
+JavaScript vendored under `src/main/resources/jcef/`. A finding in either is in
+scope and is treated as a defect.
+
+The repository also carries a `package.json`, and it is **build tooling only**:
+`vitest`/`jsdom` for the frontend tests, `commitlint` for the commit gate, and
+`@anthropic-ai/claude-agent-sdk` as the protocol reference that
+`./gradlew checkDrift` diffs the binary's surface against. None of it is
+executed by the plugin and none of it is packaged — all of it is declared under
+`devDependencies`, and `npm audit --omit=dev` (the distributed scope) reports
+zero. `npm audit` over the whole tree will report transitive advisories in that
+tooling; they reach a developer's machine at build time, never a user, and are
+handled as maintenance rather than as security releases.
+
+Verify the claim rather than taking it on trust — the artifact is inspectable:
+
+```sh
+unzip -l build/distributions/*.zip | grep -c 'node_modules'   # → 0
+```
 
 ## Out of scope
 
@@ -73,9 +100,9 @@ These are valid security concerns but **not** for this repository:
 - Social-engineering scenarios that require the attacker to already control
   the user's machine, IDE settings, or `~/.claude/` directory.
 - Reports generated solely by automated scanners with no demonstrated impact.
-- Outdated `node_modules/@anthropic-ai/claude-agent-sdk/` files — these are
-  kept as **protocol reference only**, are not executed, and are not shipped
-  in the plugin distribution.
+- Advisories in the repository's `devDependencies` — build tooling that is
+  neither executed by the plugin nor packaged. See *Scope of dependency
+  triage*, above.
 - **A link or a model suggestion that opens one of the user's own files in
   their own editor.** See below — this is a deliberate, documented position.
 

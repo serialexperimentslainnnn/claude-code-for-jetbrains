@@ -1,20 +1,16 @@
 {
-  "name": "claude-code-for-jebtrains",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "claude-code-for-jetbrains",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build-time tooling for the Claude Code Native IntelliJ plugin: frontend tests and protocol-drift reference. Nothing here is published or shipped.",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "type": "commonjs",
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.161"
-  },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.222",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "jsdom": "^29.1.1",
