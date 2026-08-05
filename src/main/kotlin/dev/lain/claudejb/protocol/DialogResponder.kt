@@ -16,7 +16,10 @@ object DialogResponder {
     /** A short transcript note for transparency when the agent requested a dialog the host doesn't render. */
     fun notice(dialogKind: String?): String {
         val kind = dialogKind?.takeIf { it.isNotBlank() }
-        return if (kind != null) "Claude requested a \"$kind\" dialog (using its default)."
-        else "Claude requested a dialog (using its default)."
+        return if (kind != null) {
+            "Claude requested a \"$kind\" dialog (using its default)."
+        } else {
+            "Claude requested a dialog (using its default)."
+        }
     }
 }

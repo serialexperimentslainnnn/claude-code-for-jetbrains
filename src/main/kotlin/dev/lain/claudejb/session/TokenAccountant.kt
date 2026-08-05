@@ -17,15 +17,23 @@ package dev.lain.claudejb.session
  * why no synchronization is needed here. The unit tests exercise it on a single thread.
  */
 class TokenAccountant {
-    var liveInputTokens: Int = 0; private set
-    var liveCacheCreationTokens: Int = 0; private set
-    var liveCacheReadTokens: Int = 0; private set
-    var liveOutputTokens: Int = 0; private set
+    var liveInputTokens: Int = 0
+        private set
+    var liveCacheCreationTokens: Int = 0
+        private set
+    var liveCacheReadTokens: Int = 0
+        private set
+    var liveOutputTokens: Int = 0
+        private set
 
-    var sessionInputTokens: Int = 0; private set
-    var sessionCacheCreationTokens: Int = 0; private set
-    var sessionCacheReadTokens: Int = 0; private set
-    var sessionOutputTokens: Int = 0; private set
+    var sessionInputTokens: Int = 0
+        private set
+    var sessionCacheCreationTokens: Int = 0
+        private set
+    var sessionCacheReadTokens: Int = 0
+        private set
+    var sessionOutputTokens: Int = 0
+        private set
 
     /** Overwrites the in-flight message's live counters with the latest usage snapshot (replace, not add). */
     fun onLiveUsage(input: Int, cacheCreation: Int, cacheRead: Int, output: Int) {

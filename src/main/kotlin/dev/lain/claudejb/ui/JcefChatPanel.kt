@@ -30,15 +30,15 @@ import dev.lain.claudejb.ui.jcef.JcefHost
 import dev.lain.claudejb.ui.jcef.JcefSessionData
 import dev.lain.claudejb.ui.jcef.JcefState
 import dev.lain.claudejb.ui.jcef.JcefTheme
-import java.awt.BorderLayout
-import java.awt.datatransfer.StringSelection
-import javax.swing.Timer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.awt.BorderLayout
+import java.awt.datatransfer.StringSelection
+import javax.swing.Timer
 
 /**
  * The JCEF tool-window tab content: a THIN assembler that binds one [ClaudeSession] to the embedded web view.
@@ -54,16 +54,42 @@ import kotlinx.serialization.json.put
 class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     JBPanel<JcefChatPanel>(BorderLayout()), Disposable, SessionListener, TranscriptModel.Listener {
 
+    private val logger = com.intellij.openapi.diagnostic.Logger.getInstance(JcefChatPanel::class.java)
+
     private val host = JcefHost(this, ::onBridgeMessage)
 
     // ── Streaming coalescer state (all touched on the EDT) ───────────────────────────────────────────────
     private val dirty = LinkedHashSet<Long>()
     private var structural = false
-    private val timer = Timer(30) { onTick() }.apply { isRepeats = true }
+    private val timer = Timer(ELAPSED_TICK_MS) { onTick() }.apply { isRepeats = true }
 
     // ── Pending attachments pinned to the next turn (editor actions, drag/drop/paste, file picker) ────────
     private val attachments = LinkedHashMap<String, Attachment>()
     private var nextAttachmentId = 0L
+
+    /**
+     * Actions deferred by [whenReady]. EDT-confined: both the add and the drain happen on the EDT.
+     *
+     * MUST be declared BEFORE the `init` block: Kotlin runs property initializers and `init` blocks in
+     * declaration order, so a list declared below `init` is still null while `init` runs — and `init` calls
+     * [whenReady] three times. Declaring it after threw NPE inside the constructor, which took the whole tab
+     * with it: no chat could be opened or restored at all.
+     */
+    private val pendingUntilReady = mutableListOf<() -> Unit>()
+
+    /**
+     * The last `get_usage` reply, and when it was asked for. Cached because [pushSession] runs on every state
+     * change (many per turn) while the usage figures move on the order of minutes — re-asking the binary each
+     * time would be a round-trip per keystroke-ish event for a number that has not changed.
+     *
+     * Declared above `init` for the same reason as [pendingUntilReady]: `init` reads `lastUsage` (via
+     * [pushMetaState]/[pushSession]) and can write `lastUsageAt` (via [requestUsage], when the session is
+     * already running). A property initializer below `init` runs AFTER it and would silently reset the throttle
+     * it had just set. Nullable and primitive types hide this — they read as null/0 rather than throwing — which
+     * is precisely why it is worth stating instead of relying on someone noticing.
+     */
+    private var lastUsage: dev.lain.claudejb.protocol.UsageReport? = null
+    private var lastUsageAt = 0L
 
     init {
         background = ChatTheme.BG
@@ -84,8 +110,11 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushPermissions()
         pushAttachments()
         pushSession()
-        requestMcp()
-        requestVersion()
+        // These three all need a live `claude` process, and the panel is constructed BEFORE session.start()
+        // runs — so calling them directly here always lost. See [whenReady].
+        whenReady(::requestMcp)
+        whenReady(::requestVersion)
+        whenReady(::requestUsage)
         structural = true
         ensureTimer()
     }
@@ -141,22 +170,60 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     // ── SessionListener ──────────────────────────────────────────────────────────────────────────────────
 
-    override fun onStateChanged() { pushMetaState(); pushSession() }
-    override fun onMetadataChanged() { pushMetaState(); pushSession() }
+    override fun onStateChanged() {
+        pushMetaState()
+        pushSession()
+        drainPendingUntilReady()
+        // A window moved (a rate_limit_event landed) → re-ask for all of them. requestUsage throttles itself.
+        if (session.rateLimits.isNotEmpty()) requestUsage()
+    }
+
+    /**
+     * Runs [action] as soon as the `claude` process is up — now if it already is.
+     *
+     * Every control request needs a live process, and this panel is constructed BEFORE `session.start()` is
+     * called (the tool window builds the tab, then starts the session). A request issued in `init` therefore
+     * finds `isRunning() == false` and is silently dropped. That is how the MCP card, the binary version and
+     * the usage panel could all sit empty on a fresh tab with nothing in any log to say why — each looked like
+     * its own separate bug.
+     *
+     * The wait is event-driven, not a poll: `onStateChanged` fires when the session flips to ready.
+     */
+    private fun whenReady(action: () -> Unit) {
+        if (session.isRunning()) {
+            action()
+            return
+        }
+        pendingUntilReady += action
+    }
+
+    private fun drainPendingUntilReady() {
+        if (pendingUntilReady.isEmpty() || !session.isRunning()) return
+        val queued = pendingUntilReady.toList()
+        pendingUntilReady.clear()
+        queued.forEach { it() }
+    }
+
+    override fun onMetadataChanged() {
+        pushMetaState()
+        pushSession()
+    }
     override fun onPermissionsChanged() = pushPermissions()
-    override fun onAttention(reason: AttentionReason) {}
-    override fun onTitleChanged() {}
+    // onAttention / onTitleChanged are not overridden: SessionListener declares them with empty default
+    // bodies, and an explicit no-op override adds nothing except a place for someone to wonder whether the
+    // omission was intentional. The tab badge and relabel are handled by ClaudeToolWindowFactory, not here.
 
     // ── Push helpers ─────────────────────────────────────────────────────────────────────────────────────
 
     private fun pushTheme() {
-        host.exec("window.cc.theme && window.cc.theme(" + JcefTheme.vars() + ")")
+        val reduceMotion = ClaudeSettings.getInstance(project).reduceMotion
+        host.exec("window.cc.theme && window.cc.theme(" + JcefTheme.vars(reduceMotion) + ")")
     }
 
     private fun pushMetaState() {
         host.exec(
             "window.cc.meta && window.cc.meta(" + JcefState.metaJson(session) + ");" +
-                "window.cc.state && window.cc.state(" + JcefState.stateJson(session) + ")"
+                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, lastUsage) + ")",
         )
     }
 
@@ -165,7 +232,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         val diffByRequest = computeDiffs(perms)
         host.exec(
             "window.cc.permissions && window.cc.permissions(" +
-                JcefBridge.permissionsJson(perms, diffByRequest) + ")"
+                JcefBridge.permissionsJson(perms, diffByRequest) + ")",
         )
     }
 
@@ -174,25 +241,26 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
      * so the card can show what's changing in red/green. Edits are accepted/rejected as a whole — there is no
      * per-line selection (it produced incoherent, broken code).
      */
-    private fun computeDiffs(perms: List<dev.lain.claudejb.permission.PendingPermission>): Map<String, String> {
-        val out = HashMap<String, String>()
-        for (p in perms) {
-            if (!p.reviewable || p.toolName !in DiffPresenter.REVIEWABLE_TOOLS) continue
-            val path = DiffPresenter.filePathOf(p.input) ?: continue
-            // Cap the synchronous (EDT) disk read + diff: a multi-MB file would freeze the UI, and an inline diff
-            // is meaningless at that size. Oversized files skip the inline diff (View diff still works); a normal
-            // accept/reject is unaffected (the binary does its own read/write).
-            val file = java.io.File(path)
-            if (file.isFile && file.length() > MAX_HUNK_FILE_BYTES) continue
-            val current = runCatching { file.takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
-            val proposed = DiffPresenter.proposedContent(p.toolName, p.input, current) ?: continue
-            val diff = DiffPresenter.unifiedDiff(current, proposed).takeIf { it.isNotBlank() } ?: continue
-            out[p.requestId] = diff
-        }
-        return out
+    private fun computeDiffs(perms: List<dev.lain.claudejb.permission.PendingPermission>): Map<String, String> =
+        perms.mapNotNull { p -> inlineDiffFor(p)?.let { p.requestId to it } }.toMap()
+
+    /**
+     * The inline unified diff for one pending permission, or null when there is nothing worth rendering.
+     *
+     * Runs on the EDT, so the file read and the diff are both capped: a multi-MB file would freeze the UI, and
+     * an inline diff is meaningless at that size. An oversized file simply skips the inline preview ("View
+     * diff" still works, and accept/reject is unaffected — the binary does its own read and write).
+     */
+    private fun inlineDiffFor(p: dev.lain.claudejb.permission.PendingPermission): String? {
+        if (!p.reviewable || p.toolName !in DiffPresenter.REVIEWABLE_TOOLS) return null
+        val path = DiffPresenter.filePathOf(p.input) ?: return null
+        val file = java.io.File(path)
+        if (file.isFile && file.length() > MAX_HUNK_FILE_BYTES) return null
+        val current = runCatching { file.takeIf { it.isFile }?.readText() }.getOrNull() ?: ""
+        val proposed = DiffPresenter.proposedContent(p.toolName, p.input, current) ?: return null
+        return DiffPresenter.unifiedDiff(current, proposed).takeIf { it.isNotBlank() }
     }
 
-    /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
     /**
      * Restore an edit: prefer the NATIVE rewind (ask Claude Code to restore the whole turn via
      * rewind_files), and only if that's unavailable offer the IDE-side per-file revert — behind a
@@ -209,9 +277,13 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                             session.refreshAfterRewind(done.filesChanged)
                             val n = done.filesChanged.size
                             notifyClipboard("Restored to this turn via Claude Code" + if (n > 0) " ($n file(s))." else ".")
-                        } else offerIdeFallback(snap, done?.error ?: "rewind failed")
+                        } else {
+                            offerIdeFallback(snap, done?.error ?: "rewind failed")
+                        }
                     }
-                } else offerIdeFallback(snap, probe?.error ?: "no checkpoint for this turn")
+                } else {
+                    offerIdeFallback(snap, probe?.error ?: "no checkpoint for this turn")
+                }
             }
         } else {
             offerIdeFallback(snap, if (!session.checkpointingEnabled) "checkpointing disabled" else "no turn anchor for this edit")
@@ -220,11 +292,21 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Confirmation (with a remembered choice) to fall back to the IDE-side per-file revert. */
     private fun offerIdeFallback(snap: dev.lain.claudejb.diff.EditSnapshot?, reason: String) {
-        if (snap == null) { notifyClipboard("Nothing to restore for this edit."); return }
+        if (snap == null) {
+            notifyClipboard("Nothing to restore for this edit.")
+            return
+        }
         val settings = ClaudeSettings.getInstance(project)
         when (settings.rewindFallback) {
-            "ide" -> { session.revertEdit(snap); return }
-            "never" -> { notifyClipboard("Native rewind unavailable ($reason)."); return }
+            "ide" -> {
+                session.revertEdit(snap)
+                return
+            }
+
+            "never" -> {
+                notifyClipboard("Native rewind unavailable ($reason).")
+                return
+            }
         }
         val doNotAsk = object : com.intellij.openapi.ui.DialogWrapper.DoNotAskOption.Adapter() {
             override fun rememberChoice(isSelected: Boolean, exitCode: Int) {
@@ -254,12 +336,46 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Refresh the session data and open the JCEF dashboard (the ⚙ menu reuses this instead of text dialogs). */
     fun openDashboard() {
-        pushSession(); requestMcp(); requestVersion()
+        pushSession()
+        requestMcp()
+        requestVersion()
+        // Opening the dashboard is one of the two documented refresh triggers for the plan limits (the other is
+        // a rate_limit_event). It was stated in requestUsage's contract and not actually wired, so the bars
+        // showed whatever the last unrelated refresh had left. Throttled, so re-opening is free.
+        requestUsage()
         host.exec("window.cc.openDashboard && window.cc.openDashboard()")
     }
 
+    /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
     private fun pushSession() {
-        host.exec("window.cc.session && window.cc.session(" + JcefSessionData.sessionJson(session) + ")")
+        host.exec("window.cc.session && window.cc.session(" + JcefSessionData.sessionJson(session, lastUsage) + ")")
+    }
+
+    /**
+     * Refreshes the plan-limit windows, then re-pushes the dashboard.
+     *
+     * Throttled rather than polled: the trigger is a `rate_limit_event` (the binary telling us a window moved)
+     * or the dashboard being opened, and never a timer. The windows reset on the hour scale, so a periodic
+     * refresh would be network traffic in service of a number nobody is watching change.
+     */
+    private fun requestUsage() {
+        val now = System.currentTimeMillis()
+        // The throttle must not swallow the FIRST reading: with no data yet there is nothing to protect, and
+        // waiting out the interval is the difference between the panel appearing at once and appearing later
+        // for no reason the user can see.
+        if (lastUsage != null && now - lastUsageAt < USAGE_MIN_INTERVAL_MS) return
+        lastUsageAt = now
+        session.requestUsage { report ->
+            if (report != null) {
+                lastUsage = report
+                // BOTH surfaces, or they disagree. `lastUsage` feeds the dashboard bars (pushSession) AND the
+                // composer's usage dots (pushMetaState → stateJson). Pushing only the dashboard left the dots
+                // blank until some unrelated state change happened to re-push — so the same number appeared in
+                // one place immediately and in the other "a while later", which reads as a broken readout.
+                pushSession()
+                pushMetaState()
+            }
+        }
     }
 
     /** Fetch MCP server status asynchronously and hand the raw payload to the dashboard's MCP health card. */
@@ -278,7 +394,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                     ?: it["binary_version"]?.jsonPrimitive?.contentOrNull
                     ?: it["claude_code_version"]?.jsonPrimitive?.contentOrNull
             }
-            if (!v.isNullOrBlank()) { session.binaryVersion = v; pushSession() }
+            if (!v.isNullOrBlank()) {
+                session.binaryVersion = v
+                pushSession()
+            }
         }
     }
 
@@ -302,8 +421,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             ApplicationManager.getApplication().invokeLater({
                 when {
                     img != null -> addAttachment(img)
+
                     !text.isNullOrEmpty() ->
                         host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
+
                     else -> notifyClipboard(
                         if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.",
                     )
@@ -321,9 +442,13 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             ApplicationManager.getApplication().invokeLater({
                 when {
                     img != null -> addAttachment(img)
+
                     shouldNotify -> notifyClipboard(
-                        if (help != null) "Couldn't read an image from the clipboard — $help"
-                        else "No image found in the clipboard.",
+                        if (help != null) {
+                            "Couldn't read an image from the clipboard — $help"
+                        } else {
+                            "No image found in the clipboard."
+                        },
                     )
                 }
             }, ModalityState.any())
@@ -332,74 +457,168 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     // ── Inbound dispatch (EDT) ───────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Inbound dispatch, in two levels: pick the message group, then the message. The groups are declared on
+     * [JcefBridge.Msg] and mirror the bridge's own parsers, so a message is parsed and handled by the same
+     * concern — and the compiler still checks exhaustiveness at both levels, so adding a message type without
+     * handling it does not compile.
+     */
     private fun onBridgeMessage(json: String) {
         when (val m = JcefBridge.parse(json)) {
-            is JcefBridge.Msg.Send -> dispatchSend(m.text)
-            JcefBridge.Msg.Interrupt -> session.interrupt()
-            JcefBridge.Msg.CycleMode -> session.cyclePermissionMode()
-            is JcefBridge.Msg.ChangeModel -> session.changeModel(m.value)
-            is JcefBridge.Msg.ChangeMode -> session.changePermissionMode(m.wire)
-            is JcefBridge.Msg.ChangeEffort -> session.changeEffort(m.value)
-            is JcefBridge.Msg.ChangeThinking ->
-                session.changeThinkingTokens(if (m.on) ClaudeSession.THINKING_ON else null)
-            is JcefBridge.Msg.ChangeVibe -> { ChatTheme.setVibeMode(m.on); broadcastTheme() }
-            is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
-            is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
-            // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
-            is JcefBridge.Msg.ResolvePermission -> session.resolvePermission(m.id, m.allow)
-            is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
-            is JcefBridge.Msg.AlwaysAllow -> {
-                ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
-                // Resolve THE card the button lives on (by requestId), not just the first pending card with that
-                // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
-                // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
-                val pending = session.pendingPermissions()
-                val target = pending.firstOrNull { it.requestId == m.id }
-                    ?: pending.firstOrNull { it.toolName == m.tool }
-                target?.let { session.resolvePermission(it.requestId, true) }
-            }
-            is JcefBridge.Msg.ViewDiff -> {
-                session.pendingPermissions().firstOrNull { it.requestId == m.id }
-                    ?.let { DiffPresenter.openDiff(project, it.toolName, it.input) }
-            }
-            is JcefBridge.Msg.ViewDiffByTool -> {
-                // Completed edit: open the native diff from the captured pre-write snapshot.
-                session.editSnapshot(m.toolUseId)?.let {
-                    DiffPresenter.openDiff(project, it.toolName, it.input, it.beforeText)
-                }
-            }
-            is JcefBridge.Msg.RevertEdit -> rewindOrRevert(m.toolUseId)
-            JcefBridge.Msg.OpenDiffHistory -> ClaudeToolWindowFactory.openDiffHistoryFor(project, session)
-            is JcefBridge.Msg.ResolveElicitation -> session.resolveElicitation(m.id, m.action, m.content)
-            is JcefBridge.Msg.Open -> openUrl(m.url)
-            is JcefBridge.Msg.ResolveLinks -> resolveLinksOffEdt(m)
-            is JcefBridge.Msg.Copy -> CopyPasteManager.getInstance().setContents(StringSelection(m.text))
-            is JcefBridge.Msg.RemoveAttachment -> { attachments.remove(m.id); pushAttachments() }
-            JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(project).forEach {
-                addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
-            }
-            JcefBridge.Msg.PickDirectory -> FilePickerHelper.chooseDirectory(project)?.let {
-                addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
-            }
-            JcefBridge.Msg.AttachSelection ->
-                EditorContextProvider.selectionAsAttachment(project)?.let { addAttachment(it) }
-            JcefBridge.Msg.AttachCurrentFile -> mentionCurrentFile()
-            JcefBridge.Msg.RequestAttachData -> pushAttachData()
-            is JcefBridge.Msg.AttachPath ->
-                addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
-            JcefBridge.Msg.PasteClipboard -> pasteFromClipboardOffEdt()
-            is JcefBridge.Msg.PasteClipboardImage -> pasteImageFromClipboardOffEdt(m.notify)
-            is JcefBridge.Msg.Attach -> addAttachment(Attachment.Image(m.name, m.mediaType, m.base64))
-            is JcefBridge.Msg.McpReconnect -> { session.reconnectMcp(m.name); requestMcp() }
-            is JcefBridge.Msg.McpToggle -> { session.toggleMcp(m.name, m.enabled); requestMcp() }
-            is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
-            JcefBridge.Msg.Ready -> {
-                host.markWebReady() // the web app is alive — cancel the first-open self-heal watchdog
-                pushTheme(); pushMetaState(); pushPermissions(); pushAttachments(); pushSession(); requestMcp(); requestVersion(); fullResync()
-            }
-            JcefBridge.Msg.OpenPalette -> {} // client-side overlay; nothing to do backend-side
-            is JcefBridge.Msg.Unknown -> {} // total dispatch, ignore
+            is JcefBridge.Msg.Prompting -> onPrompting(m)
+            is JcefBridge.Msg.Settings -> onSettings(m)
+            is JcefBridge.Msg.RequestCard -> onRequestCard(m)
+            is JcefBridge.Msg.Diffs -> onDiffs(m)
+            is JcefBridge.Msg.Attachments -> onAttachments(m)
+            is JcefBridge.Msg.SessionControl -> onSessionControl(m)
+            is JcefBridge.Msg.Lifecycle -> onLifecycle(m)
         }
+    }
+
+    private fun onPrompting(m: JcefBridge.Msg.Prompting) = when (m) {
+        is JcefBridge.Msg.Send -> dispatchSend(m.text)
+        JcefBridge.Msg.Interrupt -> session.interrupt()
+        JcefBridge.Msg.CycleMode -> session.cyclePermissionMode()
+        is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
+        is JcefBridge.Msg.Copy -> CopyPasteManager.getInstance().setContents(StringSelection(m.text))
+    }
+
+    private fun onSettings(m: JcefBridge.Msg.Settings) = when (m) {
+        is JcefBridge.Msg.ChangeModel -> session.changeModel(m.value)
+
+        is JcefBridge.Msg.ChangeMode -> session.changePermissionMode(m.wire)
+
+        is JcefBridge.Msg.ChangeEffort -> session.changeEffort(m.value)
+
+        is JcefBridge.Msg.ChangeThinking ->
+            session.changeThinkingTokens(if (m.on) ClaudeSession.THINKING_ON else null)
+
+        is JcefBridge.Msg.ChangeVibe -> {
+            ChatTheme.setVibeMode(m.on)
+            broadcastTheme()
+        }
+
+        is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
+    }
+
+    private fun onRequestCard(m: JcefBridge.Msg.RequestCard) = when (m) {
+        // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
+        is JcefBridge.Msg.ResolvePermission -> session.resolvePermission(m.id, m.allow)
+
+        is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
+
+        is JcefBridge.Msg.ResolveElicitation -> session.resolveElicitation(m.id, m.action, m.content)
+
+        is JcefBridge.Msg.AlwaysAllow -> onAlwaysAllow(m)
+    }
+
+    private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {
+        ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
+        // Resolve THE card the button lives on (by requestId), not just the first pending card with that
+        // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
+        // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
+        val pending = session.pendingPermissions()
+        val target = pending.firstOrNull { it.requestId == m.id }
+            ?: pending.firstOrNull { it.toolName == m.tool }
+        target?.let { session.resolvePermission(it.requestId, true) }
+    }
+
+    private fun onDiffs(m: JcefBridge.Msg.Diffs) = when (m) {
+        is JcefBridge.Msg.ViewDiff -> {
+            session.pendingPermissions().firstOrNull { it.requestId == m.id }
+                ?.let { DiffPresenter.openDiff(project, it.toolName, it.input) }
+            Unit
+        }
+
+        is JcefBridge.Msg.ViewDiffByTool -> {
+            // Completed edit: open the native diff from the captured pre-write snapshot.
+            session.editSnapshot(m.toolUseId)?.let {
+                DiffPresenter.openDiff(project, it.toolName, it.input, it.beforeText)
+            }
+            Unit
+        }
+
+        is JcefBridge.Msg.RevertEdit -> rewindOrRevert(m.toolUseId)
+
+        JcefBridge.Msg.OpenDiffHistory -> ClaudeToolWindowFactory.openDiffHistoryFor(project, session)
+
+        is JcefBridge.Msg.Open -> openUrl(m.url)
+
+        is JcefBridge.Msg.ResolveLinks -> resolveLinksOffEdt(m)
+    }
+
+    private fun onAttachments(m: JcefBridge.Msg.Attachments) = when (m) {
+        is JcefBridge.Msg.RemoveAttachment -> {
+            attachments.remove(m.id)
+            pushAttachments()
+        }
+
+        JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(project).forEach {
+            addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
+        }
+
+        JcefBridge.Msg.PickDirectory -> {
+            FilePickerHelper.chooseDirectory(project)?.let {
+                addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
+            }
+            Unit
+        }
+
+        JcefBridge.Msg.AttachSelection -> {
+            EditorContextProvider.selectionAsAttachment(project)?.let { addAttachment(it) }
+            Unit
+        }
+
+        JcefBridge.Msg.AttachCurrentFile -> mentionCurrentFile()
+
+        JcefBridge.Msg.RequestAttachData -> pushAttachData()
+
+        is JcefBridge.Msg.AttachPath ->
+            addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
+
+        JcefBridge.Msg.PasteClipboard -> pasteFromClipboardOffEdt()
+
+        is JcefBridge.Msg.PasteClipboardImage -> pasteImageFromClipboardOffEdt(m.notify)
+
+        is JcefBridge.Msg.Attach -> addAttachment(Attachment.Image(m.name, m.mediaType, m.base64))
+    }
+
+    private fun onSessionControl(m: JcefBridge.Msg.SessionControl) = when (m) {
+        is JcefBridge.Msg.McpReconnect -> {
+            session.reconnectMcp(m.name)
+            requestMcp()
+        }
+
+        is JcefBridge.Msg.McpToggle -> {
+            session.toggleMcp(m.name, m.enabled)
+            requestMcp()
+        }
+
+        is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
+    }
+
+    private fun onLifecycle(m: JcefBridge.Msg.Lifecycle) = when (m) {
+        JcefBridge.Msg.Ready -> {
+            host.markWebReady() // the web app is alive — cancel the first-open self-heal watchdog
+            pushTheme()
+            pushMetaState()
+            pushPermissions()
+            pushAttachments()
+            pushSession()
+            requestMcp()
+            requestVersion()
+            fullResync()
+        }
+
+        JcefBridge.Msg.OpenPalette -> {}
+
+        // client-side overlay; nothing to do backend-side
+        // INFO, not WARN. It fires once per chat tab opened, so WARN would put a warning in idea.log for a
+        // healthy session — and a log that cries wolf is one nobody reads when it finally matters. INFO is the
+        // IDE's default level, so it is still there when someone needs to read it back.
+        is JcefBridge.Msg.Diagnostics -> logger.info("JCEF diagnostics: ${m.report}")
+
+        is JcefBridge.Msg.Unknown -> {} // total dispatch, ignore
     }
 
     private fun dispatchSend(raw: String) {
@@ -410,10 +629,12 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         val text = raw.trim()
         when {
             atts.isEmpty() && text == "/login" -> session.startLogin()
+
             atts.isEmpty() && BTW.matches(text.substringBefore('\n')) -> {
                 val rest = text.removePrefix("/btw").trim()
                 session.sendSideQuestion(rest)
             }
+
             else -> session.send(raw, atts)
         }
     }
@@ -427,7 +648,17 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         val u = url.trim()
         when {
             u.lowercase().startsWith("https://") -> BrowserUtil.browse(u)
+
             u.startsWith("jb://open") -> openJbLink(u)
+
+            // A markdown link whose href is a PATH rather than a URL — `[BACKLOG](docs/BACKLOG.md)`. It carries
+            // no scheme, so it matched neither branch above and the click did NOTHING: no navigation, no error,
+            // nothing in any log. Bare paths written in prose already resolve (LinkResolver confirms them before
+            // linking), which made this the odd one out — the more deliberate the link, the less it worked.
+            //
+            // The scheme test is what keeps this from swallowing the other schemes DOMPurify allows (`mailto:`,
+            // `tel:`, `sms:`…): anything with a scheme is not a path, and is still ignored here as before.
+            LinkResolver.isFilePathHref(u) -> openPath(u.substringBefore('#').trim())
         }
     }
 
@@ -469,13 +700,24 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private fun openJbLink(url: String) {
         val query = url.substringAfter('?', "")
         val params = query.split('&').mapNotNull {
-            val k = it.substringBefore('=', ""); val v = it.substringAfter('=', "")
+            val k = it.substringBefore('=', "")
+            val v = it.substringAfter('=', "")
             if (k.isEmpty()) null else k to runCatching { java.net.URLDecoder.decode(v, Charsets.UTF_8) }.getOrDefault(v)
         }.toMap()
         val raw = params["file"] ?: return
-        // A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
-        // one. Either way this only builds the path — the gate below is what authorises it, and it is the single
-        // place that decides, so a hand-crafted `jb://` URL cannot reach a file we would not have linked.
+        openPath(raw, (params["line"]?.toIntOrNull() ?: 1))
+    }
+
+    /**
+     * Opens [raw] — project-relative or absolute — in the editor, or reveals it in the tree when it is a
+     * directory or an archive. The single authorising gate for every link the transcript can produce.
+     *
+     * A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
+     * one. Either way this only *builds* the path — [LinkResolver.isOpenable] is what authorises it, and it is
+     * the one place that decides, so neither a hand-crafted `jb://` URL nor a markdown href can reach a file we
+     * would not have linked ourselves.
+     */
+    private fun openPath(raw: String, line: Int = 1) {
         val path = resolveAgainstRoot(raw) ?: return
         if (!LinkResolver.isOpenable(path, project.basePath)) return // project or the user's own home, nothing else
         // refreshAndFind, not find: a file Claude has just written may not be in the VFS yet, and a plain lookup
@@ -489,8 +731,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             revealDirectory(vf)
             return
         }
-        val line = (params["line"]?.toIntOrNull() ?: 1).coerceAtLeast(1) - 1
-        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line, 0).navigate(true)
+        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line.coerceAtLeast(1) - 1, 0).navigate(true)
         selectInProjectView(vf)
     }
 
@@ -558,7 +799,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Data for the rich 📎 attach menu: recent files (newest-first) + what context is available right now. */
     private fun pushAttachData() {
-        val recent = FilePickerHelper.recentFiles(project, 14).map { path ->
+        val recent = FilePickerHelper.recentFiles(project, RECENT_FILES_LIMIT).map { path ->
             buildJsonObject {
                 put("path", path)
                 put("name", FilePickerHelper.displayName(project, path))
@@ -604,8 +845,19 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         // Files larger than this skip the EDT-side hunk read/diff for hunk-by-hunk review (full accept still works).
         private const val MAX_HUNK_FILE_BYTES = 1_000_000L
 
+        /** Tick driving the tool cards' live elapsed counters. ~33 fps: smooth, and the work per tick is trivial. */
+        private const val ELAPSED_TICK_MS = 30
+
+        /** How many recently-opened files the attach menu offers before the user has to search. */
+        private const val RECENT_FILES_LIMIT = 14
+
+        /** Floor between `get_usage` round-trips. The windows move on the hour scale; this is generous. */
+        private const val USAGE_MIN_INTERVAL_MS = 30_000L
+
         // Vibe Mode is global (ChatTheme.vibeMode), so a toggle on one tab must re-theme them all.
         private val livePanels = java.util.concurrent.CopyOnWriteArrayList<JcefChatPanel>()
-        fun broadcastTheme() { livePanels.forEach { it.pushTheme() } }
+        fun broadcastTheme() {
+            livePanels.forEach { it.pushTheme() }
+        }
     }
 }

@@ -17,8 +17,12 @@ class TranscriptModelTest {
     private class RecordingListener : TranscriptModel.Listener {
         val added = mutableListOf<Pair<TranscriptEntry, Int>>()
         var cleared = 0
-        override fun onAdded(entry: TranscriptEntry, index: Int) { added += entry to index }
-        override fun onCleared() { cleared++ }
+        override fun onAdded(entry: TranscriptEntry, index: Int) {
+            added += entry to index
+        }
+        override fun onCleared() {
+            cleared++
+        }
     }
 
     @Test

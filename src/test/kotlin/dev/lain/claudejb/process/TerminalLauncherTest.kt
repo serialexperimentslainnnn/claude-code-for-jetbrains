@@ -86,8 +86,11 @@ class TerminalApiContractTest {
         val cls = Class.forName("org.jetbrains.plugins.terminal.TerminalToolWindowManager")
         val m = cls.getMethod(
             "createNewSession",
-            String::class.java, String::class.java, List::class.java,
-            java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+            String::class.java,
+            String::class.java,
+            List::class.java,
+            java.lang.Boolean.TYPE,
+            java.lang.Boolean.TYPE,
         )
         assertTrue(m.returnType != Void.TYPE, "createNewSession must return a widget we can null-check")
     }

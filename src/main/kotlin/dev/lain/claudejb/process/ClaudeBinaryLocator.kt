@@ -19,25 +19,31 @@ object ClaudeBinaryLocator {
      * "%1 is not a valid Win32 application" (error 193). Prefer the native `.exe`, then the `.cmd`.
      */
     private val executableNames: List<String>
-        get() = if (SystemInfo.isWindows) listOf("claude.exe", "claude.cmd", "claude.bat")
-        else listOf("claude")
+        get() = if (SystemInfo.isWindows) {
+            listOf("claude.exe", "claude.cmd", "claude.bat")
+        } else {
+            listOf("claude")
+        }
 
     private val typicalDirs: List<String>
-        get() = if (SystemInfo.isWindows) listOfNotNull(
-            "$home\\.local\\bin",
-            System.getenv("APPDATA")?.let { "$it\\npm" },
-            System.getenv("LOCALAPPDATA")?.let { "$it\\Programs\\claude" },
-            "$home\\scoop\\shims",
-            "$home\\.volta\\bin",
-            System.getenv("ChocolateyInstall")?.let { "$it\\bin" },
-        )
-        else listOf(
-            "$home/.local/bin",
-            "$home/.claude/local",
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            "/usr/bin",
-        )
+        get() = if (SystemInfo.isWindows) {
+            listOfNotNull(
+                "$home\\.local\\bin",
+                System.getenv("APPDATA")?.let { "$it\\npm" },
+                System.getenv("LOCALAPPDATA")?.let { "$it\\Programs\\claude" },
+                "$home\\scoop\\shims",
+                "$home\\.volta\\bin",
+                System.getenv("ChocolateyInstall")?.let { "$it\\bin" },
+            )
+        } else {
+            listOf(
+                "$home/.local/bin",
+                "$home/.claude/local",
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/usr/bin",
+            )
+        }
 
     /**
      * Returns the executable, or null if it cannot be found. An explicit [override] (from Settings) wins

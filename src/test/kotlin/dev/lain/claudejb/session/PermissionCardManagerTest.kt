@@ -76,7 +76,9 @@ class PermissionCardManagerTest {
         val a = perm("a")
         val b = perm("b")
         val c = perm("c")
-        m.present(a); m.present(b); m.present(c)
+        m.present(a)
+        m.present(b)
+        m.present(c)
         assertEquals(listOf("a", "b", "c"), m.all().map { it.requestId })
     }
 

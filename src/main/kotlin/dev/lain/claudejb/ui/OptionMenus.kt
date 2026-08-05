@@ -37,8 +37,10 @@ object OptionMenus {
 
     fun modelGroup(session: ClaudeSession) = DefaultActionGroup("Model", true).apply {
         session.modelOptions().forEach { m ->
-            add(Choice(m.displayName.ifBlank { m.value }) { session.model == m.value }
-                .onChosen { session.changeModel(m.value) })
+            add(
+                Choice(m.displayName.ifBlank { m.value }) { session.model == m.value }
+                    .onChosen { session.changeModel(m.value) },
+            )
         }
     }
 
@@ -51,8 +53,10 @@ object OptionMenus {
 
     fun permissionModeGroup(session: ClaudeSession) = DefaultActionGroup("Permission mode", true).apply {
         ClaudeSession.PERMISSION_MODES.forEach { mode ->
-            add(Choice(dev.lain.claudejb.session.PermissionMode.labelFor(mode)) { session.permissionMode == mode }
-                .onChosen { session.changePermissionMode(mode) })
+            add(
+                Choice(dev.lain.claudejb.session.PermissionMode.labelFor(mode)) { session.permissionMode == mode }
+                    .onChosen { session.changePermissionMode(mode) },
+            )
         }
     }
 

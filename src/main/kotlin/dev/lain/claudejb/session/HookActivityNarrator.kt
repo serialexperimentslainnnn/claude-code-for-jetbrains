@@ -16,6 +16,11 @@ import dev.lain.claudejb.protocol.HookStartedInfo
  */
 class HookActivityNarrator(private val transcript: TranscriptModel) {
 
+    private companion object {
+        /** A hook's last output line is a status label on one transcript row, not its log — keep it to a line. */
+        const val MAX_NARRATION_CHARS = 120
+    }
+
     private val rows = HashMap<String, TranscriptEntry>()
 
     fun onStarted(info: HookStartedInfo) {
@@ -62,7 +67,7 @@ class HookActivityNarrator(private val transcript: TranscriptModel) {
     private fun lastLine(vararg sources: String): String? {
         for (s in sources) {
             val line = s.split('\n').asReversed().map { it.trim() }.firstOrNull { it.isNotEmpty() }
-            if (line != null) return line.take(120)
+            if (line != null) return line.take(MAX_NARRATION_CHARS)
         }
         return null
     }

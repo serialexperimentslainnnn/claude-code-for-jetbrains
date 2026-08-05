@@ -1,0 +1,294 @@
+# CI — the gate every change passes before it can be merged.
+#
+# Mirrors exactly what a developer runs locally (see AGENTS.md); if a gate only fails here, that is a
+# workstation-provisioning problem, not a pipeline problem, and it gets fixed on the workstation.
+#
+# Every action is pinned by full commit SHA, not by tag. A tag is mutable: whoever controls the action's
+# repository can repoint it at different code, and that code runs with this workflow's token. Dependabot
+# (.github/dependabot.yml) proposes SHA bumps weekly, so pinning costs nothing in maintenance.
+name: CI
+
+on:
+  push:
+    # Every working branch gets the same gate. A quality bar that only applies once you open the PR is a
+    # bar you discover late, when the change is already big and the rework is expensive.
+    branches:
+      - develop
+      - main
+      - 'feature/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+# Least privilege at the top; a job that needs more elevates it for itself. The default token is
+# read/write on everything, which a compromised dependency would happily use.
+permissions:
+  contents: read
+
+# One run per ref. Superseded PR runs are cancelled — but pushes to develop/main are NOT, so the history
+# of what passed on the trunk stays complete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # No daemon: a fresh JVM per job is the honest measurement on ephemeral runners, and a leaked daemon
+  # between steps is a class of "works on the second run" bug we do not want to own.
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain
+
+jobs:
+  # Unit + headless (BasePlatformTestCase, in-process IDE fixture) + integration (the bin/fake-claude
+  # Python stand-in). The whole non-UI pyramid, 677 tests.
+  test:
+    name: JVM tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          # Temurin, not the JetBrains Runtime: the JBR matters for *running* an IDE, not for compiling
+          # against the platform. The toolchain is pinned to 21 in build.gradle.kts either way.
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          # Only the trunk writes the shared cache. A PR from a fork must never be able to poison what
+          # the next build on develop reads back.
+          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
+      - name: Run tests
+        run: ./gradlew --no-daemon --stacktrace test
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jvm-test-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
+          retention-days: 14
+
+  # Static analysis and formatting, for BOTH languages in the repo. Added in 5.0.0 together with the tools
+  # themselves — before that the entire quality bar rested on review, which is the thing the standards say
+  # to mechanise ("if formatting is being discussed in a review, a formatter is missing").
+  #
+  # Deliberately NOT a dependency of any other job: it is fast, it is independent, and a formatting failure
+  # should not hide a test failure by short-circuiting the run. Both results land on the PR together.
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # detekt: rule config in config/detekt/detekt.yml, each non-default setting carrying its reasoning
+      # at the setting itself. config/detekt/baseline.xml holds exactly two accepted findings, both about
+      # ClaudeSession, both explained in that file — do NOT regenerate it to make a build pass.
+      - name: detekt
+        run: ./gradlew --no-daemon --stacktrace detekt
+
+      - name: Formatting (Spotless / ktlint)
+        run: ./gradlew --no-daemon --stacktrace spotlessCheck
+
+      # Per-package coverage gates. See docs/RELEASE_CHECKLIST.md §Coverage policy for the thresholds,
+      # what is excluded and why, and the Kover limitation behind the current floor+aggregate shape.
+      - name: Coverage gates
+        run: ./gradlew --no-daemon --stacktrace koverVerify
+
+      # The shipped JCEF JavaScript. no-eval / no-implied-eval / no-new-func are errors here because the
+      # page runs under a hash-pinned CSP with no 'unsafe-eval': without this gate, code the browser will
+      # silently refuse in a user's IDE can still reach main.
+      - name: ESLint (shipped frontend)
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: Upload analysis reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: static-analysis-reports
+          path: |
+            build/reports/detekt/
+            build/reports/kover/
+          retention-days: 14
+
+  # The JCEF web app (src/main/resources/jcef/*.js) under vitest + jsdom. Nothing here ships in the
+  # plugin — vitest and jsdom are devDependencies — but the code under test absolutely does.
+  frontend-test:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` (not `install`): it installs exactly the committed lockfile and fails if package.json
+      # and the lockfile disagree, which is the only way CI tests the dependency tree that was reviewed.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+        env:
+          CI: 'true' # switches vitest to the JUnit reporter (vitest.config.js)
+
+      - name: Upload frontend report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-test-report
+          path: build/reports/frontend/
+          retention-days: 14
+
+  # Supply-chain gate on the build tooling. The plugin ships no npm code, so a finding here reaches a
+  # developer's machine and never a user — hence `--omit=dev` (the distributed scope) is the hard gate,
+  # and the full tree is reported without breaking the build. See SECURITY.md for the reasoning.
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Audit the distributed scope (blocking)
+        run: npm audit --omit=dev --audit-level=low
+
+      - name: Audit the full tree (informational)
+        run: npm audit || true
+
+  # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
+  # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
+  # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
+  verify:
+    name: Plugin verifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [test, frontend-test]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
+      # The runner ships with a few GB of preinstalled toolchains we will never use, and the verifier
+      # needs room for multiple extracted IDEs. Reclaiming it is cheaper than debugging a disk-full run.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Verify plugin
+        run: ./gradlew --no-daemon --stacktrace verifyPlugin
+
+      - name: Upload verifier report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-verifier-report
+          path: build/reports/pluginVerifier/
+          retention-days: 30
+
+  # The distributable. Unsigned and unpublished here by design: signing and publishing happen only from
+  # a tag, in release.yml, behind a human approval. This job proves the artifact BUILDS on every change.
+  build:
+    name: Build plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [verify]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+
+      - name: Build plugin
+        run: ./gradlew --no-daemon --stacktrace buildPlugin
+
+      # A claim SECURITY.md makes to users, enforced here rather than trusted: the published artifact
+      # contains no npm code. If this ever fails, either the packaging changed or the claim was false.
+      - name: Assert no npm code is packaged
+        run: |
+          zip=$(ls build/distributions/*.zip)
+          count=$(unzip -l "$zip" | grep -c node_modules || true)
+          echo "node_modules entries in $zip: $count"
+          [ "$count" -eq 0 ] || { echo "::error::npm code leaked into the distributed artifact"; exit 1; }
+
+      # Likewise for attribution: the licences of the bundled web libraries must travel INSIDE the jar,
+      # because that is where the redistribution obligation actually lands.
+      - name: Assert third-party attribution is packaged
+        run: |
+          unzip -o -q build/distributions/*.zip -d /tmp/dist
+          jar=$(ls /tmp/dist/*/lib/claude-code-native-*.jar | grep -v searchableOptions | head -1)
+          for f in META-INF/LICENSE META-INF/THIRD-PARTY-NOTICES.md; do
+            unzip -l "$jar" | grep -q "$f" || { echo "::error::$f missing from $jar"; exit 1; }
+          done
+          echo "attribution present in $jar"
+
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-distribution
+          path: build/distributions/*.zip
+          retention-days: 30

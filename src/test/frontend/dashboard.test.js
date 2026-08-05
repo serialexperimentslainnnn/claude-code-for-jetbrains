@@ -84,8 +84,9 @@ describe('dashboard — wide cards', () => {
     const win = loadFrontend(['app-session.js']);
     win.cc.session({ backgroundTasks: [{ id: 'b1', desc: 'indexing', type: 'agent' }] });
     openDashboard(win);
-    const card = [...win.document.querySelectorAll('.dash-card')]
-      .find((c) => c.querySelector('.dash-title')?.textContent === 'Background tasks');
+    const card = [...win.document.querySelectorAll('.dash-card')].find(
+      (c) => c.querySelector('.dash-title')?.textContent === 'Background tasks'
+    );
     expect(card).toBeTruthy();
     expect(card.textContent).toContain('indexing');
 

@@ -10,7 +10,8 @@
   var cc = window.cc || (window.cc = {});
 
   // ---- small helpers (fall back if core's h/escape arrive late) -------------
-  function h(tag, props, children) {
+  // `children` are read off `arguments` below (variadic), not from a named parameter.
+  function h(tag, props) {
     if (CC && typeof CC.h === 'function') {
       var args = [tag, props || null];
       if (arguments.length > 2) {
@@ -25,30 +26,39 @@
     if (props.text != null) el.textContent = props.text;
     if (props.html != null) el.innerHTML = props.html;
     if (props.title != null) el.title = props.title;
-    if (props.attrs) for (var k in props.attrs) if (props.attrs.hasOwnProperty(k)) el.setAttribute(k, props.attrs[k]);
-    if (props.on) for (var ev in props.on) if (props.on.hasOwnProperty(ev)) el.addEventListener(ev, props.on[ev]);
+    if (props.attrs)
+      for (var k in props.attrs)
+        if (Object.prototype.hasOwnProperty.call(props.attrs, k)) el.setAttribute(k, props.attrs[k]);
+    if (props.on)
+      for (var ev in props.on)
+        if (Object.prototype.hasOwnProperty.call(props.on, ev)) el.addEventListener(ev, props.on[ev]);
     var rest = Array.prototype.slice.call(arguments, 2);
     for (var j = 0; j < rest.length; j++) {
       var c = rest[j];
       if (c == null) continue;
-      if (Array.isArray(c)) { for (var m = 0; m < c.length; m++) if (c[m] != null) el.appendChild(typeof c[m] === 'string' ? document.createTextNode(c[m]) : c[m]); }
-      else el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+      if (Array.isArray(c)) {
+        for (var m = 0; m < c.length; m++)
+          if (c[m] != null) el.appendChild(typeof c[m] === 'string' ? document.createTextNode(c[m]) : c[m]);
+      } else el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     }
     return el;
   }
-  function send(obj) { if (CC && typeof CC.send === 'function') CC.send(obj); }
+  function send(obj) {
+    if (CC && typeof CC.send === 'function') CC.send(obj);
+  }
 
   // ---- module state ---------------------------------------------------------
   var built = false;
-  var els = null;            // { card, input, send, pills:{provider,model,mode,effort,thinking}, queue, ghost, readout, sendIcon }
-  var lastState = null;      // last cc.state payload
-  var commands = [];         // from cc.meta
+  var els = null; // { card, input, send, pills:{provider,model,mode,effort,thinking}, queue, ghost, readout, sendIcon }
+  var lastState = null; // last cc.state payload
+  var announcedBoot = false; // guards the boot screen's one-per-boot screen-reader announcement
+  var commands = []; // from cc.meta
   var hostClipboard = false; // from cc.meta: native-Wayland toolkit → route paste through the host (wl-paste)
-  var ghostText = '';        // current ghost suggestion (empty field only)
-  var openMenu = null;       // { el, closer } for an open pill menu
+  var ghostText = ''; // current ghost suggestion (empty field only)
+  var openMenu = null; // { el, closer } for an open pill menu
   var paletteState = { items: [], active: 0 };
-  var attachmentsList = [];  // last cc.attachments payload: [{id,label,kind}]
-  var followOn = true;       // auto-follow scrolling (on by default)
+  var attachmentsList = []; // last cc.attachments payload: [{id,label,kind}]
+  var followOn = true; // auto-follow scrolling (on by default)
   var followBtnRef = null;
 
   function applyFollow() {
@@ -61,63 +71,109 @@
 
   // pill key → which state field + how to map a chosen option to a message
   var PILL_DEFS = [
-    { key: 'provider', field: 'provider', idKey: 'id',
-      msg: function (o) { return { type: 'changeProvider', id: o.id }; } },
-    { key: 'model', field: 'model', idKey: 'value',
-      msg: function (o) { return { type: 'changeModel', value: o.value }; } },
-    { key: 'mode', field: 'mode', idKey: 'wire',
-      msg: function (o) { return { type: 'changeMode', wire: o.wire }; } },
-    { key: 'effort', field: 'effort', idKey: 'value',
-      msg: function (o) { return { type: 'changeEffort', value: o.value == null ? null : o.value }; } },
-    { key: 'thinking', field: 'thinking', idKey: 'on',
-      msg: function (o) { return { type: 'changeThinking', on: !!o.on }; } }
+    {
+      key: 'provider',
+      field: 'provider',
+      idKey: 'id',
+      msg: function (o) {
+        return { type: 'changeProvider', id: o.id };
+      },
+    },
+    {
+      key: 'model',
+      field: 'model',
+      idKey: 'value',
+      msg: function (o) {
+        return { type: 'changeModel', value: o.value };
+      },
+    },
+    {
+      key: 'mode',
+      field: 'mode',
+      idKey: 'wire',
+      msg: function (o) {
+        return { type: 'changeMode', wire: o.wire };
+      },
+    },
+    {
+      key: 'effort',
+      field: 'effort',
+      idKey: 'value',
+      msg: function (o) {
+        return { type: 'changeEffort', value: o.value == null ? null : o.value };
+      },
+    },
+    {
+      key: 'thinking',
+      field: 'thinking',
+      idKey: 'on',
+      msg: function (o) {
+        return { type: 'changeThinking', on: !!o.on };
+      },
+    },
   ];
 
   // ---- SVG glyphs (inline, themeable via currentColor) ----------------------
   function sendGlyph() {
-    return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
-      '<path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l11 2-11 2z"/></svg>';
+    return (
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
+      '<path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l11 2-11 2z"/></svg>'
+    );
   }
   function stopGlyph() {
-    return '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
-      '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
+    return (
+      '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
+      '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>'
+    );
   }
   // auto-follow scrolling (chevrons pointing down) — chip-follow.svg
   function followGlyph() {
-    return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" ' +
+    return (
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M4 4.5 8 8l4-3.5"/><path d="M4 9 8 12.5l4-3.5"/></svg>';
+      '<path d="M4 4.5 8 8l4-3.5"/><path d="M4 9 8 12.5l4-3.5"/></svg>'
+    );
   }
   // history / rollback (a clock with a counter-clockwise arrow)
   function historyGlyph() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    return (
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M3 3v5h5"/><path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8"/><path d="M12 7v5l3 2"/></svg>';
+      '<path d="M3 3v5h5"/><path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8"/><path d="M12 7v5l3 2"/></svg>'
+    );
   }
   // attach.svg from the previous UI (paperclip), themed via currentColor.
   function attachGlyph() {
-    return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
+    return (
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M12.75 7.5 7.5 12.75a3 3 0 0 1-4.25-4.25l5.75-5.75a2 2 0 0 1 2.83 2.83l-5.75 5.75a1 1 0 0 1-1.42-1.42l5.09-5.09"/></svg>';
+      '<path d="M12.75 7.5 7.5 12.75a3 3 0 0 1-4.25-4.25l5.75-5.75a2 2 0 0 1 2.83 2.83l-5.75 5.75a1 1 0 0 1-1.42-1.42l5.09-5.09"/></svg>'
+    );
   }
   // small kind glyph for an attachment chip (file | selection | image)
   function attIconGlyph(kind) {
     if (kind === 'image') {
-      return '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
+      return (
+        '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
         '<rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>' +
         '<circle cx="8.5" cy="9" r="1.6" fill="currentColor"/>' +
-        '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="m4 18 5-5 4 4 3-3 4 4"/></svg>';
+        '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="m4 18 5-5 4 4 3-3 4 4"/></svg>'
+      );
     }
     if (kind === 'selection') {
-      return '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
+      return (
+        '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
         '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ' +
-        'd="M4 7V5a1 1 0 0 1 1-1h2M4 17v2a1 1 0 0 0 1 1h2M20 7V5a1 1 0 0 0-1-1h-2M20 17v2a1 1 0 0 1-1 1h-2M8 12h8"/></svg>';
+        'd="M4 7V5a1 1 0 0 1 1-1h2M4 17v2a1 1 0 0 0 1 1h2M20 7V5a1 1 0 0 0-1-1h-2M20 17v2a1 1 0 0 1-1 1h-2M8 12h8"/></svg>'
+      );
     }
     // file (default)
-    return '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
+    return (
+      '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
       '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" ' +
       'd="M6 2h7l5 5v15a0 0 0 0 1 0 0H6a0 0 0 0 1 0 0V2Z"/>' +
-      '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M13 2v5h5"/></svg>';
+      '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M13 2v5h5"/></svg>'
+    );
   }
 
   // ---- build (lazy, once) ---------------------------------------------------
@@ -138,13 +194,14 @@
     // textarea (two lines tall by default)
     var input = h('textarea', {
       class: 'composer-input',
-      attrs: { rows: '2', placeholder: 'Ask Claude, or type / for commands', 'aria-label': 'Message Claude' }
+      attrs: { rows: '2', placeholder: 'Ask Claude, or type / for commands', 'aria-label': 'Message Claude' },
     });
 
     // attach (📎) button
     var attachBtn = h('button', {
-      class: 'attach-btn', title: 'Attach files',
-      attrs: { type: 'button', 'aria-label': 'Attach files' }
+      class: 'attach-btn',
+      title: 'Attach files',
+      attrs: { type: 'button', 'aria-label': 'Attach files' },
     });
     attachBtn.innerHTML = attachGlyph();
     attachBtn.addEventListener('click', function (e) {
@@ -155,8 +212,9 @@
 
     // send / stop button
     var sendBtn = h('button', {
-      class: 'send-btn', title: 'Send',
-      attrs: { type: 'button', 'aria-label': 'Send' }
+      class: 'send-btn',
+      title: 'Send',
+      attrs: { type: 'button', 'aria-label': 'Send' },
     });
     sendBtn.innerHTML = sendGlyph();
     sendBtn.addEventListener('click', onSendClick);
@@ -181,32 +239,51 @@
     }
     // Vibe Mode toggle — icon only (Nyan Cat); global gag, not part of session state.
     var vibeIcon = h('span', { class: 'vibe-emoji' });
-    vibeIcon.innerHTML = (window.CC && CC.nyanSvg) ? CC.nyanSvg() : '🌈';
-    var vibeBtn = h('button', {
-      class: 'bar-icon pill-vibe', title: 'Vibe Mode',
-      attrs: { type: 'button', 'aria-label': 'Vibe Mode' },
-      on: { click: function (e) {
-        e.preventDefault(); e.stopPropagation();
-        var on = !(window.CC && CC.isVibe && CC.isVibe());
-        send({ type: 'changeVibe', on: on });
-      } }
-    }, vibeIcon);
+    vibeIcon.innerHTML = window.CC && CC.nyanSvg ? CC.nyanSvg() : '🌈';
+    var vibeBtn = h(
+      'button',
+      {
+        class: 'bar-icon pill-vibe',
+        title: 'Vibe Mode',
+        attrs: { type: 'button', 'aria-label': 'Vibe Mode' },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var on = !(window.CC && CC.isVibe && CC.isVibe());
+            send({ type: 'changeVibe', on: on });
+          },
+        },
+      },
+      vibeIcon
+    );
     // History / rollback button — opens the session's Diff History (view diffs + roll back edits).
     var historyBtn = h('button', {
-      class: 'bar-icon', title: 'Session history · diffs & rollback',
+      class: 'bar-icon',
+      title: 'Session history · diffs & rollback',
       attrs: { type: 'button', 'aria-label': 'Session history and rollback' },
-      on: { click: function (e) { e.preventDefault(); e.stopPropagation(); send({ type: 'openDiffHistory' }); } }
+      on: {
+        click: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          send({ type: 'openDiffHistory' });
+        },
+      },
     });
     historyBtn.innerHTML = historyGlyph();
     // Auto-follow scrolling toggle (on by default). Emits on the CC bus; the transcript follows.
     var followBtn = h('button', {
-      class: 'bar-icon active', title: 'Auto-scroll (follow output)',
+      class: 'bar-icon active',
+      title: 'Auto-scroll (follow output)',
       attrs: { type: 'button', 'aria-label': 'Auto-follow scrolling' },
-      on: { click: function (e) {
-        e.preventDefault(); e.stopPropagation();
-        followOn = !followOn;
-        applyFollow();
-      } }
+      on: {
+        click: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          followOn = !followOn;
+          applyFollow();
+        },
+      },
     });
     followBtn.innerHTML = followGlyph();
     followBtnRef = followBtn;
@@ -221,13 +298,19 @@
     mount.appendChild(ghost);
     mount.appendChild(queue);
     mount.appendChild(attachments);
-    mount.appendChild(readout);   // session-usage line sits ABOVE the prompt box
+    mount.appendChild(readout); // session-usage line sits ABOVE the prompt box
     mount.appendChild(card);
 
     els = {
-      card: card, input: input, send: sendBtn, pills: pills,
-      queue: queue, ghost: ghost, readout: readout,
-      attachments: attachments, attachBtn: attachBtn
+      card: card,
+      input: input,
+      send: sendBtn,
+      pills: pills,
+      queue: queue,
+      ghost: ghost,
+      readout: readout,
+      attachments: attachments,
+      attachBtn: attachBtn,
     };
 
     wireInput(input);
@@ -256,16 +339,20 @@
   // Inline chip icons for the composer pills (themeable via currentColor; ride Vibe Mode).
   // Ported from resources/icons/chip-*.svg + provider marks.
   var CHIP_ICONS = {
-    model: '<rect x="5" y="5" width="6" height="6" rx="1.2"/><path d="M6.5 3v1.8M9.5 3v1.8M6.5 11.2V13M9.5 11.2V13M3 6.5h1.8M3 9.5h1.8M11.2 6.5H13M11.2 9.5H13"/>',
+    model:
+      '<rect x="5" y="5" width="6" height="6" rx="1.2"/><path d="M6.5 3v1.8M9.5 3v1.8M6.5 11.2V13M9.5 11.2V13M3 6.5h1.8M3 9.5h1.8M11.2 6.5H13M11.2 9.5H13"/>',
     mode: '<path d="M8 2.5 13 4.3v3.4c0 3-2.1 4.9-5 5.8-2.9-.9-5-2.8-5-5.8V4.3z"/><path d="M6 7.8 7.5 9.3 10.2 6.4"/>',
     effort: '<path d="M2.8 11.6a5.2 5.2 0 0 1 10.4 0"/><path d="M8 11.6 10.4 8.1"/>',
-    thinking: '<path d="M7.5 2.4c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/>'
+    thinking:
+      '<path d="M7.5 2.4c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/>',
   };
   // Provider brand marks keep their own colours (as in the previous UI), so they're separate
   // from the monochrome currentColor chips. provider.svg from resources/icons/provider-*.svg.
   var PROVIDER_MARKS = {
-    anthropic: '<g stroke="#D97757" stroke-width="1.7" stroke-linecap="round" fill="none"><path d="M8 2.4v11.2M3.15 5.2l9.7 5.6M12.85 5.2l-9.7 5.6"/></g>',
-    deepseek: '<path d="M2.4 8.4c0-2.1 1.9-3.8 4.4-3.8 2.3 0 4.2 1.4 4.6 3.4.6-.2 1.1-.6 1.5-1.1.1 1-.3 1.9-1 2.5.5.1 1 .05 1.5-.2-.5 1.2-1.8 2.1-3.4 2.1H6.8c-2.5 0-4.4-1.8-4.4-3.9z" fill="#4D6BFE"/><circle cx="6" cy="7.7" r=".75" fill="#FFFFFF"/>'
+    anthropic:
+      '<g stroke="#D97757" stroke-width="1.7" stroke-linecap="round" fill="none"><path d="M8 2.4v11.2M3.15 5.2l9.7 5.6M12.85 5.2l-9.7 5.6"/></g>',
+    deepseek:
+      '<path d="M2.4 8.4c0-2.1 1.9-3.8 4.4-3.8 2.3 0 4.2 1.4 4.6 3.4.6-.2 1.1-.6 1.5-1.1.1 1-.3 1.9-1 2.5.5.1 1 .05 1.5-.2-.5 1.2-1.8 2.1-3.4 2.1H6.8c-2.5 0-4.4-1.8-4.4-3.9z" fill="#4D6BFE"/><circle cx="6" cy="7.7" r=".75" fill="#FFFFFF"/>',
   };
   function providerMarkSvg(id) {
     var inner = PROVIDER_MARKS[id] || PROVIDER_MARKS.anthropic;
@@ -275,8 +362,12 @@
     if (key === 'provider') return providerMarkSvg('anthropic'); // refreshed per selection in renderPills
     var inner = CHIP_ICONS[key];
     if (!inner) return null;
-    return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
-      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+    return (
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      inner +
+      '</svg>'
+    );
   }
 
   function buildPill(def) {
@@ -284,10 +375,23 @@
     var caret = h('span', { class: 'pill-caret', text: '▾' });
     var iconMarkup = chipIconSvg(def.key);
     var icon = iconMarkup ? h('span', { class: 'pill-icon', html: iconMarkup }) : null;
-    var el = h('button', {
-      class: 'pill', attrs: { type: 'button', 'data-pill': def.key },
-      on: { click: function (e) { e.preventDefault(); e.stopPropagation(); togglePillMenu(def, el); } }
-    }, icon, label, caret);
+    var el = h(
+      'button',
+      {
+        class: 'pill',
+        attrs: { type: 'button', 'data-pill': def.key },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            togglePillMenu(def, el);
+          },
+        },
+      },
+      icon,
+      label,
+      caret
+    );
     return { el: el, label: label, def: def, icon: icon };
   }
 
@@ -303,7 +407,11 @@
         return; // newline (default)
       }
       if (e.key === 'Escape') {
-        if (openMenu) { closeMenu(); e.preventDefault(); return; }
+        if (openMenu) {
+          closeMenu();
+          e.preventDefault();
+          return;
+        }
         // Only interrupt when a turn is actually running and we're not already interrupting — otherwise Escape
         // in an idle composer would fire a pointless interrupt request.
         if (lastState && lastState.turnActive && !lastState.interrupting) {
@@ -397,7 +505,10 @@
   }
 
   function togglePillMenu(def, anchorEl) {
-    if (openMenu && openMenu.pill === def.key) { closeMenu(); return; }
+    if (openMenu && openMenu.pill === def.key) {
+      closeMenu();
+      return;
+    }
     closeMenu();
     var opts = currentOptions(def);
     if (!opts.length) return;
@@ -405,11 +516,21 @@
     var menu = h('div', { class: 'menu', attrs: { role: 'listbox' } });
     for (var i = 0; i < opts.length; i++) {
       (function (o) {
-        var item = h('div', {
-          class: 'menu-item' + (o.selected ? ' selected' : ''),
-          attrs: { role: 'option' },
-          on: { click: function (e) { e.preventDefault(); e.stopPropagation(); chooseOption(def, o); } }
-        }, h('span', { class: 'menu-item-label', text: o.label != null ? String(o.label) : '' }));
+        var item = h(
+          'div',
+          {
+            class: 'menu-item' + (o.selected ? ' selected' : ''),
+            attrs: { role: 'option' },
+            on: {
+              click: function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                chooseOption(def, o);
+              },
+            },
+          },
+          h('span', { class: 'menu-item-label', text: o.label != null ? String(o.label) : '' })
+        );
         // The selected ✓ is drawn by CSS (.menu-item.selected::after) — don't ALSO append a span here, or the
         // chosen item shows two ticks.
         menu.appendChild(item);
@@ -430,13 +551,13 @@
     var r = anchorEl.getBoundingClientRect();
     var margin = 8;
     menu.style.position = 'fixed';
-    menu.style.maxWidth = (window.innerWidth - margin * 2) + 'px';
+    menu.style.maxWidth = window.innerWidth - margin * 2 + 'px';
     var mw = menu.offsetWidth;
     var mh = menu.offsetHeight;
     var left = Math.min(Math.round(r.left), window.innerWidth - mw - margin);
     if (left < margin) left = margin;
     var top = r.top - mh - 6;
-    if (top < margin) top = r.bottom + 6;                       // flip below if no room above
+    if (top < margin) top = r.bottom + 6; // flip below if no room above
     if (top + mh > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - mh - margin);
     menu.style.left = left + 'px';
     menu.style.top = Math.round(top) + 'px';
@@ -480,42 +601,111 @@
   }
 
   function attachMenuItem(label, onClick) {
-    return h('div', {
-      class: 'menu-item', attrs: { role: 'option' },
-      on: { click: function (e) { e.preventDefault(); e.stopPropagation(); onClick(); } }
-    }, h('span', { class: 'menu-item-label', text: label }));
+    return h(
+      'div',
+      {
+        class: 'menu-item',
+        attrs: { role: 'option' },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick();
+          },
+        },
+      },
+      h('span', { class: 'menu-item-label', text: label })
+    );
   }
 
-  function renderAttachMenu(menu, anchorEl) {
+  // `_anchorEl` is kept in the signature because both call sites pass the anchor and the menu may need to
+  // position against it again; nothing in the body reads it today.
+  function renderAttachMenu(menu, _anchorEl) {
     menu.innerHTML = '';
-    var search = h('input', { class: 'attach-search', attrs: { type: 'text', placeholder: 'Search recent files…' } });
+    var search = h('input', {
+      class: 'attach-search',
+      attrs: { type: 'text', placeholder: 'Search recent files…' },
+    });
     var list = h('div', { class: 'attach-list' });
 
     function paint(q) {
       list.innerHTML = '';
       var actions = [
-        { label: 'Files…',     fn: function () { send({ type: 'pickFiles' }); } },
-        { label: 'Directory…', fn: function () { send({ type: 'pickDirectory' }); } },
-        { label: 'Image…',     fn: function () { send({ type: 'pasteClipboardImage', notify: true }); } }
+        {
+          label: 'Files…',
+          fn: function () {
+            send({ type: 'pickFiles' });
+          },
+        },
+        {
+          label: 'Directory…',
+          fn: function () {
+            send({ type: 'pickDirectory' });
+          },
+        },
+        {
+          label: 'Image…',
+          fn: function () {
+            send({ type: 'pasteClipboardImage', notify: true });
+          },
+        },
       ];
-      if (lastAttachData.hasSelection) actions.push({ label: 'Current selection', fn: function () { send({ type: 'attachSelection' }); } });
-      if (lastAttachData.hasFile) actions.push({ label: 'Current file', fn: function () { send({ type: 'attachCurrentFile' }); } });
-      actions.forEach(function (a) { list.appendChild(attachMenuItem(a.label, function () { closeMenu(); a.fn(); })); });
+      if (lastAttachData.hasSelection)
+        actions.push({
+          label: 'Current selection',
+          fn: function () {
+            send({ type: 'attachSelection' });
+          },
+        });
+      if (lastAttachData.hasFile)
+        actions.push({
+          label: 'Current file',
+          fn: function () {
+            send({ type: 'attachCurrentFile' });
+          },
+        });
+      actions.forEach(function (a) {
+        list.appendChild(
+          attachMenuItem(a.label, function () {
+            closeMenu();
+            a.fn();
+          })
+        );
+      });
 
       var recent = Array.isArray(lastAttachData.recent) ? lastAttachData.recent : [];
       var ql = (q || '').toLowerCase();
       var matched = recent.filter(function (r) {
-        return !ql || (String(r.name || '')).toLowerCase().indexOf(ql) !== -1 || (String(r.path || '')).toLowerCase().indexOf(ql) !== -1;
+        return (
+          !ql ||
+          String(r.name || '')
+            .toLowerCase()
+            .indexOf(ql) !== -1 ||
+          String(r.path || '')
+            .toLowerCase()
+            .indexOf(ql) !== -1
+        );
       });
       if (matched.length) {
         list.appendChild(h('div', { class: 'attach-section', text: 'Recent files' }));
         matched.forEach(function (r) {
-          var row = h('div', {
-            class: 'menu-item attach-recent', attrs: { role: 'option', title: String(r.path || '') },
-            on: { click: function (e) { e.preventDefault(); e.stopPropagation(); closeMenu(); send({ type: 'attachPath', path: r.path }); } }
-          },
+          var row = h(
+            'div',
+            {
+              class: 'menu-item attach-recent',
+              attrs: { role: 'option', title: String(r.path || '') },
+              on: {
+                click: function (e) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closeMenu();
+                  send({ type: 'attachPath', path: r.path });
+                },
+              },
+            },
             h('span', { class: 'attach-icon', html: fileIconGlyph(r.ext) }),
-            h('span', { class: 'attach-name', text: String(r.name || r.path || '') }));
+            h('span', { class: 'attach-name', text: String(r.name || r.path || '') })
+          );
           list.appendChild(row);
         });
       }
@@ -523,14 +713,31 @@
 
     menu.appendChild(search);
     menu.appendChild(list);
-    search.addEventListener('input', function () { paint(search.value); if (openMenu && openMenu.anchor) positionMenu(menu, openMenu.anchor); });
-    search.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.preventDefault(); closeMenu(); } });
+    search.addEventListener('input', function () {
+      paint(search.value);
+      if (openMenu && openMenu.anchor) positionMenu(menu, openMenu.anchor);
+    });
+    search.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu();
+      }
+    });
     paint('');
-    setTimeout(function () { try { search.focus(); } catch (e) { /* ignore */ } }, 0);
+    setTimeout(function () {
+      try {
+        search.focus();
+      } catch (e) {
+        /* ignore */
+      }
+    }, 0);
   }
 
   function toggleAttachMenu(anchorEl) {
-    if (openMenu && openMenu.pill === '__attach') { closeMenu(); return; }
+    if (openMenu && openMenu.pill === '__attach') {
+      closeMenu();
+      return;
+    }
     closeMenu();
     var menu = h('div', { class: 'menu attach-menu' });
     document.body.appendChild(menu);
@@ -547,7 +754,7 @@
       lastAttachData = {
         recent: Array.isArray(payload.recent) ? payload.recent : [],
         hasSelection: !!payload.hasSelection,
-        hasFile: !!payload.hasFile
+        hasFile: !!payload.hasFile,
       };
     }
     if (openMenu && openMenu.pill === '__attach' && openMenu.el) {
@@ -571,11 +778,11 @@
   }
 
   // ---- queue strip ----------------------------------------------------------
-  var lastQueueKey = null;     // skip rebuilds when the queue is unchanged (state pushes are frequent)
+  var lastQueueKey = null; // skip rebuilds when the queue is unchanged (state pushes are frequent)
   function renderQueue(queue) {
     if (!els || !els.queue) return;
     var key = JSON.stringify(Array.isArray(queue) ? queue : []);
-    if (key === lastQueueKey) return;   // unchanged → don't wipe/rebuild (was causing flicker)
+    if (key === lastQueueKey) return; // unchanged → don't wipe/rebuild (was causing flicker)
     lastQueueKey = key;
     els.queue.innerHTML = '';
     if (!Array.isArray(queue) || queue.length === 0) {
@@ -586,12 +793,24 @@
     for (var i = 0; i < queue.length; i++) {
       (function (text, index) {
         var x = h('span', {
-          class: 'queue-x', text: '✕', title: 'Remove from queue',
+          class: 'queue-x',
+          text: '✕',
+          title: 'Remove from queue',
           attrs: { role: 'button', 'aria-label': 'Remove queued prompt' },
-          on: { click: function (e) { e.preventDefault(); e.stopPropagation(); send({ type: 'removeQueued', index: index }); } }
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              send({ type: 'removeQueued', index: index });
+            },
+          },
         });
-        var chip = h('span', { class: 'queue-chip', title: text },
-          h('span', { class: 'queue-text', text: text }), x);
+        var chip = h(
+          'span',
+          { class: 'queue-chip', title: text },
+          h('span', { class: 'queue-text', text: text }),
+          x
+        );
         els.queue.appendChild(chip);
       })(String(queue[i]), i);
     }
@@ -615,9 +834,17 @@
         var icon = h('span', { class: 'att-icon', html: attIconGlyph(kind) });
         var name = h('span', { class: 'att-label', text: label });
         var x = h('span', {
-          class: 'att-x', text: '✕', title: 'Remove attachment',
+          class: 'att-x',
+          text: '✕',
+          title: 'Remove attachment',
           attrs: { role: 'button', 'aria-label': 'Remove attachment' },
-          on: { click: function (e) { e.preventDefault(); e.stopPropagation(); send({ type: 'removeAttachment', id: att.id }); } }
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              send({ type: 'removeAttachment', id: att.id });
+            },
+          },
         });
         var chip = h('span', { class: 'att-chip att-' + kind, title: label }, icon, name, x);
         row.appendChild(chip);
@@ -639,10 +866,14 @@
         type: 'attach',
         name: file.name != null ? String(file.name) : 'image',
         mediaType: file.type != null ? String(file.type) : 'application/octet-stream',
-        base64: base64
+        base64: base64,
       });
     };
-    try { reader.readAsDataURL(file); } catch (e) { /* ignore unreadable file */ }
+    try {
+      reader.readAsDataURL(file);
+    } catch (e) {
+      /* ignore unreadable file */
+    }
   }
 
   function isImageFile(f) {
@@ -655,7 +886,13 @@
     card.addEventListener('dragover', function (e) {
       // signal we accept a drop (and stop the browser navigating to the file)
       if (e.preventDefault) e.preventDefault();
-      if (e.dataTransfer) { try { e.dataTransfer.dropEffect = 'copy'; } catch (x) { /* ignore */ } }
+      if (e.dataTransfer) {
+        try {
+          e.dataTransfer.dropEffect = 'copy';
+        } catch (x) {
+          /* ignore */
+        }
+      }
       card.classList.add('drag-over');
     });
     card.addEventListener('dragleave', function (e) {
@@ -680,7 +917,11 @@
     var v = input.value;
     input.value = v.slice(0, start) + text + v.slice(end);
     var pos = start + text.length;
-    try { input.setSelectionRange(pos, pos); } catch (e) { /* ignore */ }
+    try {
+      input.setSelectionRange(pos, pos);
+    } catch (e) {
+      /* ignore */
+    }
     autosize(input);
   }
 
@@ -724,8 +965,12 @@
       }
 
       // 2) Plain text already in the web clipboard → insert it ourselves (one insert, no double-paste).
-      var text = '';
-      try { text = (cd.getData && (cd.getData('text/plain') || cd.getData('text'))) || ''; } catch (x) { text = ''; }
+      var text;
+      try {
+        text = (cd.getData && (cd.getData('text/plain') || cd.getData('text'))) || '';
+      } catch (x) {
+        text = ''; // a DataTransfer that refuses getData — treat it as "no text on the clipboard"
+      }
       if (text) {
         e.preventDefault();
         insertAtCursor(input, text);
@@ -747,22 +992,66 @@
     ro.innerHTML = '';
     var running = !!s.turnActive;
 
-    var status = h('span', { class: 'ro-item' },
+    var status = h(
+      'span',
+      { class: 'ro-item' },
       h('span', { class: 'ro-dot' + (running ? ' running' : '') }),
-      h('span', { text: running ? (s.thinkingStatus ? s.thinkingStatus : 'Running…') : 'Idle' }));
+      h('span', { text: running ? (s.thinkingStatus ? s.thinkingStatus : 'Running…') : 'Idle' })
+    );
     ro.appendChild(status);
 
-    if (s.context && typeof s.context.pct === 'number') {
-      ro.appendChild(h('span', { class: 'ro-item', text: 'Context ' + Math.round(s.context.pct) + '%' }));
-    }
-    if (typeof s.tokensOut === 'number' && s.tokensOut > 0) {
-      ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(s.tokensOut) + ' out' }));
-    }
+    // These three are ALWAYS rendered, settling at 0 rather than being omitted until they are non-zero.
+    // Hiding an item until it has a value makes "nothing has happened yet" look identical to "this failed to
+    // load", which is exactly how the readout read on a fresh tab: a lone "Idle" and no numbers. A zero is a
+    // measurement; an absence is not.
+    var ctxPct = s.context && typeof s.context.pct === 'number' ? Math.round(s.context.pct) : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: 'Context ' + ctxPct + '%' }));
+
+    var out = typeof s.tokensOut === 'number' ? s.tokensOut : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(out) + ' out' }));
+
+    var reasoning = typeof s.reasoningTokens === 'number' ? s.reasoningTokens : 0;
+    ro.appendChild(h('span', { class: 'ro-item', text: formatTokens(reasoning) + ' reasoning' }));
+
+    // Cost stays gated: unlike the counters above it is a currency amount, and "$0.0000" on every idle tab is
+    // noise rather than information — there is no ambiguity to resolve, since a session that has spent nothing
+    // has nothing to report.
     if (typeof s.costUsd === 'number' && s.costUsd > 0) {
       ro.appendChild(h('span', { class: 'ro-item', text: '$' + s.costUsd.toFixed(s.costUsd < 1 ? 4 : 2) }));
     }
+
+    // Plan limits, one dot per window. A dot rather than a bar because this line is glanceable chrome: colour
+    // carries the urgency and the number carries the detail, and neither needs horizontal room the composer
+    // does not have. The dashboard shows the same windows as full bars.
+    var usage = Array.isArray(s.usage) ? s.usage : [];
+    for (var u = 0; u < usage.length; u++) {
+      var win = usage[u] || {};
+      if (typeof win.pct !== 'number') continue;
+      ro.appendChild(
+        h(
+          'span',
+          { class: 'ro-item', title: String(win.label || '') + ' — ' + win.pct + '% used' },
+          h('span', { class: 'usage-dot ' + usageLevel(win.pct) }),
+          h('span', { text: String(win.label || '') + ' ' + win.pct + '%' })
+        )
+      );
+    }
     ro.removeAttribute('hidden');
-    if (running && s.thinkingStatus) ro.classList.add('thinking'); else ro.classList.remove('thinking');
+    if (running && s.thinkingStatus) ro.classList.add('thinking');
+    else ro.classList.remove('thinking');
+  }
+
+  /**
+   * Quota severity, shared by the readout dot and the dashboard bar so the two can never disagree about
+   * whether you are in trouble: blue under 65%, amber under 85%, red at or above it.
+   *
+   * Duplicated in app-session.js by NAME on purpose — these are two independently-loaded scripts with no
+   * module system between them, so the CSS class names are the contract, and css-contract.test.js pins them.
+   */
+  function usageLevel(pct) {
+    if (pct >= 85) return 'lvl-high';
+    if (pct >= 65) return 'lvl-mid';
+    return 'lvl-low';
   }
 
   function formatTokens(n) {
@@ -827,14 +1116,70 @@
     }
   }
 
+  /**
+   * Announce turn transitions to assistive technology (WCAG 2.2 AA — 4.1.3 Status Messages).
+   *
+   * Only the EDGES are announced, never the streaming itself: a screen reader that re-reads on every token is
+   * unusable, and a user would silence it — which is worse than saying nothing.
+   *
+   * Scope note: permission cards are NOT announced from here. The composer's state payload carries no
+   * permission field (they arrive separately through cc.permissions), so a check for one here would be a
+   * branch that silently never fires. That announcement lives in app-permissions.js, where the cards are
+   * actually rendered.
+   */
+  var lastTurnPhase = null;
+  function announceTurnState(s) {
+    if (!window.CC || typeof CC.announce !== 'function') return;
+    var phase = s.interrupting ? 'interrupting' : s.turnActive ? 'working' : 'idle';
+    if (phase === lastTurnPhase) return;
+    var wasWorking = lastTurnPhase === 'working' || lastTurnPhase === 'interrupting';
+    lastTurnPhase = phase;
+    if (phase === 'working') CC.announce('Claude is working…');
+    else if (phase === 'interrupting') CC.announce('Stopping…');
+    // Only report completion if a turn was actually running — otherwise every idle state push would announce.
+    else if (wasWorking) CC.announce('Claude finished responding.');
+  }
+
+  /**
+   * The boot screen: up until the binary is running, then gone for good.
+   *
+   * Three states, not two. `running` means go; `starting` means wait; NEITHER means the launch finished without
+   * a process — a missing binary, a declined trust prompt, a refused remote-mount project. That last case must
+   * clear the screen, or a failed launch leaves the tab covered forever with no way to see the notification
+   * explaining why. The host fires a state push on that path precisely so this can happen.
+   */
+  function renderBoot(s) {
+    var boot = document.getElementById('boot');
+    var app = document.getElementById('app');
+    if (!boot) return;
+    var booting = !s.running && !!s.starting;
+    boot.hidden = !booting;
+    // Announce the FIRST booting render, not just a transition into it. The screen is already on-screen when
+    // the page loads, so the common case never transitions — and the element's own aria-live never fires
+    // either, because static markup present at load is not a mutation. Once per boot: `announcedBoot` resets
+    // when the screen comes down, so a later relaunch announces again.
+    if (booting && !announcedBoot) {
+      announcedBoot = true;
+      CC.announce && CC.announce('Loading Claude Code');
+    }
+    if (!booting) announcedBoot = false;
+    if (app) app.classList.toggle('booting', booting);
+    if (!booting) return;
+    var sub = document.getElementById('boot-sub');
+    // Distinguish the two waits: a fresh launch versus resuming an existing session, which reads a transcript
+    // back and is the slower of the two. Guessing "Starting" for both made the longer wait look like a hang.
+    if (sub) sub.textContent = s.resuming ? 'Resuming your session' : 'Starting the agent';
+  }
+
   function renderState(s) {
     if (!s) return;
+    announceTurnState(s);
     renderSendMode(s);
     renderPills(s);
     renderQueue(s.queue);
     renderReadout(s);
     // ghost suggestion
-    var newGhost = (s.suggestion != null) ? String(s.suggestion) : '';
+    var newGhost = s.suggestion != null ? String(s.suggestion) : '';
     ghostText = newGhost;
     renderGhost();
     // If a pill menu is open, only rebuild it when its selection actually changed — reopening on every state
@@ -862,7 +1207,7 @@
       var box = h('div', { class: 'palette-box' });
       var input = h('input', {
         class: 'palette-input',
-        attrs: { type: 'text', placeholder: 'Search commands…', 'aria-label': 'Search slash commands' }
+        attrs: { type: 'text', placeholder: 'Search commands…', 'aria-label': 'Search slash commands' },
       });
       var list = h('div', { class: 'palette-list' });
       box.appendChild(input);
@@ -873,14 +1218,33 @@
 
       input.addEventListener('input', function () {
         // Emptying the search closes the palette (you cleared what you were typing).
-        if (input.value === '') { hidePalette(); return; }
+        if (input.value === '') {
+          hidePalette();
+          return;
+        }
         filterPalette(input.value);
       });
       input.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') { e.preventDefault(); hidePalette(); return; }
-        if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteActive(1); return; }
-        if (e.key === 'ArrowUp') { e.preventDefault(); movePaletteActive(-1); return; }
-        if (e.key === 'Enter') { e.preventDefault(); pickPaletteActive(); return; }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hidePalette();
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          movePaletteActive(1);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          movePaletteActive(-1);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          pickPaletteActive();
+          return;
+        }
       });
       // outside-click hides
       p.addEventListener('mousedown', function (e) {
@@ -919,8 +1283,8 @@
     var matches = [];
     for (var i = 0; i < commands.length; i++) {
       var c = commands[i];
-      var name = (c && c.name != null) ? String(c.name) : '';
-      var desc = (c && c.description != null) ? String(c.description) : '';
+      var name = c && c.name != null ? String(c.name) : '';
+      var desc = c && c.description != null ? String(c.description) : '';
       if (!q || name.toLowerCase().indexOf(q) !== -1 || desc.toLowerCase().indexOf(q) !== -1) {
         matches.push({ name: name, description: desc });
       }
@@ -944,14 +1308,22 @@
     }
     for (var i = 0; i < items.length; i++) {
       (function (it, idx) {
-        var row = h('div', {
-          class: 'palette-item' + (idx === paletteState.active ? ' active' : ''),
-          attrs: { role: 'option' },
-          on: {
-            click: function (e) { e.preventDefault(); pickPalette(idx); },
-            mouseenter: function () { paletteState.active = idx; updatePaletteActiveClass(); }
-          }
-        },
+        var row = h(
+          'div',
+          {
+            class: 'palette-item' + (idx === paletteState.active ? ' active' : ''),
+            attrs: { role: 'option' },
+            on: {
+              click: function (e) {
+                e.preventDefault();
+                pickPalette(idx);
+              },
+              mouseenter: function () {
+                paletteState.active = idx;
+                updatePaletteActiveClass();
+              },
+            },
+          },
           h('span', { class: 'palette-name', text: '/' + it.name }),
           it.description ? h('span', { class: 'palette-desc', text: it.description }) : null
         );
@@ -984,7 +1356,10 @@
   }
 
   function pickPaletteActive() {
-    if (!paletteState.items.length) { hidePalette(); return; }
+    if (!paletteState.items.length) {
+      hidePalette();
+      return;
+    }
     pickPalette(paletteState.active);
   }
 
@@ -1000,18 +1375,25 @@
     try {
       var len = els.input.value.length;
       els.input.setSelectionRange(len, len);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   // ---- Kotlin-facing API ----------------------------------------------------
   cc.state = function (s) {
     lastState = s || null;
-    if (!ensureBuilt()) return;        // will render on build via lastState
+    // The boot screen is updated FIRST and OUTSIDE the ensureBuilt gate below. It covers the whole tab and
+    // blocks input, so it must never be hostage to the composer having mounted: if `ensureBuilt()` returns
+    // false we bail out early, and an overlay left up with no path to clear it is a worse failure than the
+    // empty composer this screen exists to hide.
+    if (lastState) renderBoot(lastState);
+    if (!ensureBuilt()) return; // will render on build via lastState
     renderState(lastState);
   };
 
   cc.meta = function (m) {
-    commands = (m && Array.isArray(m.commands)) ? m.commands.slice() : [];
+    commands = m && Array.isArray(m.commands) ? m.commands.slice() : [];
     if (m && typeof m.hostClipboard === 'boolean') hostClipboard = m.hostClipboard;
     // refresh palette list if open
     var p = CC.els && CC.els.palette;
@@ -1030,7 +1412,6 @@
     els.input.focus();
   };
 
-
   // Host inserts clipboard text into the composer at the caret (Ctrl+V text path on Wayland).
   cc.insertText = function (text) {
     if (text == null) return;
@@ -1041,10 +1422,14 @@
 
   cc.attachments = function (list) {
     attachmentsList = Array.isArray(list) ? list.slice() : [];
-    if (!ensureBuilt()) return;        // will render on build via attachmentsList
+    if (!ensureBuilt()) return; // will render on build via attachmentsList
     renderAttachments(attachmentsList);
   };
 
   // build eagerly if mounts already exist; otherwise first cc.state/openPalette builds.
-  try { ensureBuilt(); } catch (e) { /* defer */ }
+  try {
+    ensureBuilt();
+  } catch (e) {
+    /* defer */
+  }
 })();

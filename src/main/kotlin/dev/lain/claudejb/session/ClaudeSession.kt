@@ -3,14 +3,15 @@ package dev.lain.claudejb.session
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.ide.BrowserUtil
-import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.util.concurrency.AppExecutorUtil
+import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.diff.EditSnapshot
 import dev.lain.claudejb.permission.ElicitationCard
@@ -18,30 +19,29 @@ import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.process.ClaudeBinaryLocator
-import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
-import dev.lain.claudejb.ui.ReviewPrompt
-import dev.lain.claudejb.process.ClaudeLoginFlow
 import dev.lain.claudejb.process.ClaudeProcess
-import dev.lain.claudejb.process.TerminalLauncher
 import dev.lain.claudejb.protocol.AccountInfo
 import dev.lain.claudejb.protocol.AgentInfo
 import dev.lain.claudejb.protocol.AuthStatusInfo
 import dev.lain.claudejb.protocol.ClaudeEvent
 import dev.lain.claudejb.protocol.ClaudeJson
-import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.protocol.ContextUsage
 import dev.lain.claudejb.protocol.ControlProtocol
 import dev.lain.claudejb.protocol.DialogResponder
 import dev.lain.claudejb.protocol.ElicitationRequest
 import dev.lain.claudejb.protocol.InitializeResponse
-import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.TaskProgressInfo
+import dev.lain.claudejb.protocol.UsageReport
+import dev.lain.claudejb.protocol.parseElicitationFields
+import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
+import dev.lain.claudejb.ui.ReviewPrompt
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -49,7 +49,6 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
-import com.intellij.util.concurrency.AppExecutorUtil
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -85,48 +84,125 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val cards = PermissionCardManager(::firePermissions)
     private val hookBroker = HookBroker()
     private val hookNarrator = HookActivityNarrator(transcript)
+    private val login = LoginCoordinator(
+        project,
+        edt = ::edt,
+        notifyInfo = ::notifyInfo,
+        notifyError = ::notifyError,
+        notifyMissingBinary = ::notifyMissingBinary,
+        restartSession = { restart() },
+    )
 
     // --- session/runtime state (read by the GUI) ---
-    @Volatile var sessionId: String? = null; internal set
-    @Volatile var model: String? = null; private set
-    @Volatile var effort: String? = null; private set
-    @Volatile var permissionMode: String = "default"; private set
-    @Volatile var thinkingTokens: Int? = null; private set
-    @Volatile var allowedTools: String = ""; private set
-    @Volatile var disallowedTools: String = ""; private set
-    @Volatile var settingSources: String = "user,project,local"; private set
+    @Volatile var sessionId: String? = null
+        internal set
+
+    @Volatile var model: String? = null
+        private set
+
+    @Volatile var effort: String? = null
+        private set
+
+    @Volatile var permissionMode: String = "default"
+        private set
+
+    @Volatile var thinkingTokens: Int? = null
+        private set
+
+    @Volatile var allowedTools: String = ""
+        private set
+
+    @Volatile var disallowedTools: String = ""
+        private set
+
+    @Volatile var settingSources: String = "user,project,local"
+        private set
+
     /** Whether to wire JetBrains' own MCP server. Independent of [customMcpServers]. */
-    @Volatile var ideMcpEnabled: Boolean = false; private set
+    @Volatile var ideMcpEnabled: Boolean = false
+        private set
+
     /** JetBrains transport: "sse" / "streamable-http" (localhost at [ideMcpPort]) or "stdio" (synthesized from IDE paths). */
-    @Volatile var ideMcpTransport: String = "sse"; private set
-    @Volatile var ideMcpPort: Int = DEFAULT_IDE_MCP_PORT; private set
+    @Volatile var ideMcpTransport: String = "sse"
+        private set
+
+    @Volatile var ideMcpPort: Int = DEFAULT_IDE_MCP_PORT
+        private set
+
     /** User-defined extra MCP servers, as a JSON object with the same shape as `mcpServers` (name → server). */
-    @Volatile var customMcpServers: String = ""; private set
-    @Volatile var includePartialMessages: Boolean = true; private set
+    @Volatile var customMcpServers: String = ""
+        private set
+
+    @Volatile var includePartialMessages: Boolean = true
+        private set
+
     // E6 advanced launch options (null/empty = flag omitted). Captured into the LaunchOptions snapshot per (re)start.
-    @Volatile var maxTurns: Int? = null; private set
-    @Volatile var maxBudgetUsd: Double? = null; private set
-    @Volatile var fallbackModel: String? = null; private set
-    @Volatile var addDirs: List<String> = emptyList(); private set
-    @Volatile var betas: String? = null; private set
-    @Volatile var strictMcpConfig: Boolean = false; private set
-    @Volatile var outputStyle: String = "default"; private set
-    @Volatile var turnActive: Boolean = false; private set
+    @Volatile var maxTurns: Int? = null
+        private set
+
+    @Volatile var maxBudgetUsd: Double? = null
+        private set
+
+    @Volatile var fallbackModel: String? = null
+        private set
+
+    @Volatile var addDirs: List<String> = emptyList()
+        private set
+
+    @Volatile var betas: String? = null
+        private set
+
+    @Volatile var strictMcpConfig: Boolean = false
+        private set
+
+    @Volatile var outputStyle: String = "default"
+        private set
+
+    @Volatile var turnActive: Boolean = false
+        private set
+
     /** True between an interrupt request and its ack/timeout/turn-end — drives the Stop button's "Interrupting…" label. */
-    @Volatile var interrupting: Boolean = false; private set
-    @Volatile var rateLimit: RateLimitInfo? = null; private set
+    @Volatile var interrupting: Boolean = false
+        private set
+
+    /**
+     * The most recent `rate_limit_event`, whichever window it described. Kept for the composer's quota pill,
+     * which shows one number; [rateLimits] is the per-window view.
+     */
+    @Volatile var rateLimit: RateLimitInfo? = null
+        private set
+
+    /**
+     * The latest event PER WINDOW, keyed by `rateLimitType` (`five_hour`, `seven_day`, `seven_day_opus`…).
+     *
+     * The single [rateLimit] field above cannot express this: the binary emits a separate event per window, so
+     * consecutive events overwrote each other and the plugin could only ever display whichever arrived last.
+     * A user on a weekly limit would see their five-hour bar and conclude they had room.
+     */
+    @Volatile var rateLimits: Map<String, RateLimitInfo> = emptyMap()
+        private set
 
     // --- live state surfaced by the system/* events; read by the GUI / diagnostics / tests ---
+
     /** Authoritative turn state from session_state_changed (idle | running | requires_action), or null pre-first-event. */
-    @Volatile var sessionState: String? = null; private set
+    @Volatile var sessionState: String? = null
+        private set
+
     /** Latest auth_status from the binary (re-auth in progress / output / error), or null when never reported. */
-    @Volatile var authStatus: AuthStatusInfo? = null; private set
+    @Volatile var authStatus: AuthStatusInfo? = null
+        private set
+
     /** Live reasoning-token estimate from thinking_tokens (running total for the current thinking block). */
-    @Volatile var liveThinkingTokens: Int = 0; private set
+    @Volatile var liveThinkingTokens: Int = 0
+        private set
+
     /** Predicted next user prompt (prompt_suggestion), or null when none / cleared. Drives the composer chip. */
-    @Volatile var promptSuggestion: String? = null; private set
+    @Volatile var promptSuggestion: String? = null
+        private set
+
     /** Observable map of subagent tasks keyed by task_id (task_started/progress/updated/notification). */
     val subagentTasks: Map<String, TaskProgressInfo> get() = taskTracker.tasks
+
     /**
      * The live background-task set from `system/background_tasks_changed` — a LEVEL signal (REPLACE semantics),
      * deliberately independent of [subagentTasks] (the SDK forbids correlating the level with the edge stream).
@@ -152,14 +228,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     @Volatile private var ready = false
 
-    // Set once when we've offered the "sign in" prompt for this auth failure, so a retry storm doesn't fire a
-    // notification per failed turn. Reset on the next clean (non-error) result, or on a successful login.
-    @Volatile private var loginPrompted = false
-
-    // The in-flight native login flow (see startLogin) and the OAuth URL it surfaced, for the code dialog's hint.
-    @Volatile private var loginFlow: ClaudeLoginFlow? = null
-    @Volatile private var loginAuthUrl: String? = null
-
     // --- streaming-delta coalescing (perf) ---------------------------------------------------------------
     // The binary emits text_delta/thinking_delta at 20-100Hz during streaming; doing one edt{} (invokeLater)
     // per delta floods the EDT. Instead we accumulate consecutive deltas on the reader thread (onEvent is
@@ -176,13 +244,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // all three access points hold [deltaLock] — the buffer is tiny, the lock is uncontended in the common path.
     private val deltaLock = Any()
     private val deltaRuns = ArrayList<Pair<Boolean, StringBuilder>>()
-    private var pendingUsage: IntArray? = null  // [input, cacheCreation, cacheRead, output]; latest snapshot wins (matches TokenAccountant.onLiveUsage)
+
+    // [input, cacheCreation, cacheRead, output]; latest snapshot wins (matches TokenAccountant.onLiveUsage)
+    private var pendingUsage: IntArray? = null
 
     /** Buffer a streaming delta (thinking or assistant text), coalescing same-type runs. [deltaLock]-guarded. */
     private fun bufferDelta(isThinking: Boolean, text: String) = synchronized(deltaLock) {
         val last = deltaRuns.lastOrNull()
-        if (last != null && last.first == isThinking) last.second.append(text)
-        else deltaRuns.add(isThinking to StringBuilder(text))
+        if (last != null && last.first == isThinking) {
+            last.second.append(text)
+        } else {
+            deltaRuns.add(isThinking to StringBuilder(text))
+        }
     }
 
     /** Fold a LiveUsage event into the pending buffer (latest live total wins). [deltaLock]-guarded. */
@@ -222,22 +295,30 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile private var cachedEnv: Map<String, String>? = null
 
     // --- metadata from the initialize handshake (powers the GUI menus) ---
-    var commands: List<SlashCommand> = emptyList(); private set
-    var models: List<ModelInfo> = emptyList(); private set
-    var agents: List<AgentInfo> = emptyList(); private set
-    var availableOutputStyles: List<String> = emptyList(); private set
-    var account: AccountInfo = AccountInfo(); private set
+    var commands: List<SlashCommand> = emptyList()
+        private set
+    var models: List<ModelInfo> = emptyList()
+        private set
+    var agents: List<AgentInfo> = emptyList()
+        private set
+    var availableOutputStyles: List<String> = emptyList()
+        private set
+    var account: AccountInfo = AccountInfo()
+        private set
 
     @Volatile private var process: ClaudeProcess? = null
+
     // Bumped on every start(); a process's onTerminated carries the generation it was launched under, so a
     // restart's old-process termination callback (which arrives asynchronously, after the new process is up)
     // is ignored instead of tearing down the freshly-started session. See start()/onTerminated().
     @Volatile private var generation = 0
+
     // True from the moment start() dispatches its launch until that launch publishes the process (or bails). Set
     // synchronously on the EDT in start() so a second send()→start() during the (multi-second) env-resolution
     // window can't spawn a SECOND claude process for the same session. Cleared by the launch's own pooled block
     // (only when it still owns the current generation) and reset by stop()/dispose() so a restart can proceed.
     @Volatile private var starting = false
+
     /**
      * Pending-prompt buffer. [ArrayDeque] is NOT thread-safe; **the queue is only ever touched on the EDT**
      * (send / sendSideQuestion / removeQueued / pump wrap their queue access in [edt]). Do not access it from a
@@ -245,7 +326,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private val queue = ArrayDeque<Outgoing>()
 
-    /** One buffered prompt: the wire [text], its base64 [images] (mediaType→data), and the [displayText] shown in the transcript/queue strip. */
+    /**
+     * One buffered prompt: the wire [text], its base64 [images] (mediaType→data), and the [displayText] shown
+     * in the transcript/queue strip.
+     */
     private data class Outgoing(val text: String, val images: List<Pair<String, String>>, val displayText: String)
 
     private val listeners = CopyOnWriteArrayList<SessionListener>()
@@ -257,10 +341,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // callback — so any number of ChatPanels observing this session share a single poll. The timer is an EDT
     // (javax.swing) Timer so its callback and the cached-field writes stay on the EDT, matching the rest of
     // the GUI; it runs only while at least one listener (panel) is attached and is stopped on dispose/last-remove.
+
     /** Latest `get_session_cost` payload (or null until the first poll returns). Read by ChatPanel on the EDT. */
-    @Volatile var lastSessionCost: JsonObject? = null; private set
+    @Volatile var lastSessionCost: JsonObject? = null
+        private set
+
     /** Latest `get_context_usage` result (or null until the first poll returns). Read by ChatPanel on the EDT. */
-    @Volatile var lastContextUsage: ContextUsage? = null; private set
+    @Volatile var lastContextUsage: ContextUsage? = null
+        private set
 
     /** Working directory the binary runs in (the project root) — shown synchronously in the session dashboard. */
     val workingDir: String? get() = project.basePath
@@ -269,7 +357,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile var binaryVersion: String? = null
 
     /** Client-generated id of the current user turn (tagged on each prompt) — the rewind_files() anchor. */
-    @Volatile var currentUserMessageId: String? = null; private set
+    @Volatile var currentUserMessageId: String? = null
+        private set
     private val toolUseTurn = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /** The user-turn id an edit ([toolUseId]) belongs to, or null when unknown (then rewind isn't possible). */
@@ -288,8 +377,29 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private fun pollQuota() {
         if (!isRunning()) return
-        requestSessionCost { cost -> if (cost != null) { lastSessionCost = cost; fireState() } }
-        requestContextUsage { cu -> if (cu != null) { lastContextUsage = cu; fireState() } }
+        requestSessionCost { cost ->
+            if (cost != null) {
+                lastSessionCost = cost
+                fireState()
+            }
+        }
+        requestContextUsage { cu ->
+            if (cu != null) {
+                lastContextUsage = cu
+                fireState()
+            }
+        }
+        // The timer exists to track a turn AS IT RUNS, nothing else. Context and cost cannot move while the
+        // session sits idle, so a poll-per-minute forever was a round-trip through the binary — per tab — for
+        // two numbers that provably had not changed. It now switches itself off at the end of a turn; the
+        // turn-start, turn-end and process-ready paths each poll directly, so nothing waits on a clock.
+        if (!turnActive) edt { quotaPollTimer.stop() }
+    }
+
+    /** Begin tracking a running turn: poll now, then keep the meters live until it ends. */
+    private fun startQuotaPolling() = edt {
+        pollQuota()
+        if (!quotaPollTimer.isRunning) quotaPollTimer.start()
     }
 
     private val broker by lazy {
@@ -302,15 +412,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             projectRoot = project.basePath,
             isRemembered = { toolName, input -> ClaudeSettings.getInstance(project).isToolAlwaysAllowed(toolName, input) },
             // Credentials / private keys / credential-dumping commands: never auto-approved, whatever the mode.
-            sensitiveVerdict = { toolName, input ->
-                ClaudeSettings.getInstance(project).sensitiveVerdict(toolName, input, project.basePath)
+            sensitiveDecision = { toolName, input ->
+                ClaudeSettings.getInstance(project).sensitiveDecision(toolName, input, project.basePath)
             },
-            onSensitiveDenied = { toolName ->
+            onSensitiveDenied = { toolName, reason ->
                 edt {
+                    // The guard's own words, not a fixed sentence. The previous text asserted "MCP servers and
+                    // Skills may not read credentials or private keys" for EVERY denial — so a block on a
+                    // dangerous command, or on a path outside your own space, was described as a credential read,
+                    // and a first-party tool was told it was an MCP server. Both were visible to users.
                     transcript.add(
                         Speaker.SYSTEM,
-                        "Blocked $toolName: MCP servers and Skills may not read credentials or private keys. " +
-                            "Allow it in Settings → Claude Code if you meant it.",
+                        reason?.let { "Blocked $toolName: it $it." }
+                            ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code ▸ Security.",
                     )
                 }
                 fireState()
@@ -320,10 +434,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     fun addListener(listener: SessionListener) {
         listeners.add(listener)
-        // Start the shared quota poll on the first observer (a ChatPanel). javax.swing.Timer must be started on
-        // the EDT; addListener is called from the GUI (ChatPanel.init, on the EDT) but guard with edt{} so a
-        // non-EDT caller can't break the timer's thread affinity. Idempotent: Timer.start() is a no-op if running.
-        edt { if (!quotaPollTimer.isRunning) quotaPollTimer.start() }
+        // Fill this observer's meters NOW rather than starting a timer it would then have to wait out. A panel
+        // attaching to an ALREADY-RUNNING session (a second tab, a reopened tool window) used to show empty
+        // context and cost for up to a full poll interval for no reason: the data was one control request away
+        // the whole time. `pollQuota` no-ops when the process is not up, and the ready path polls again then.
+        edt { pollQuota() }
     }
 
     fun removeListener(listener: SessionListener) {
@@ -333,6 +448,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     fun isRunning(): Boolean = process?.isRunning() == true
+
+    /**
+     * True between [start] dispatching a launch and the process being up (or the launch failing).
+     *
+     * Exposed because "not running" alone is ambiguous to the UI: a session that is booting and one that never
+     * started look identical through [isRunning], and the composer rendered both as "Idle" — which is a claim,
+     * and a false one, during the seconds the launch takes (env resolution sources a login shell).
+     */
+    fun isStarting(): Boolean = starting
+
     fun queuedPrompts(): List<String> = queue.map { it.displayText }
     fun pendingPermissions(): List<PendingPermission> = cards.all()
 
@@ -358,114 +483,157 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // so this check/set is race-free between start() calls.
         if (isRunning() || starting) return true
         val settings = ClaudeSettings.getInstance(project)
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run {
-            notifyMissingBinary()
-            return false
-        }
-        // Persist the auto-detected path so later launches are stable and the user can see/edit it
-        // (also refreshes a stale saved path that fell back to auto-detection).
-        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
-
-        // Trust-on-open gate: a project-level claude-code.xml can ship a sourceScript or a stdio MCP server
-        // (arbitrary command), both of which we'd execute at launch. If that config is present and the project
-        // hasn't been trusted for it, ask once before running anything. Declining aborts the launch rather than
-        // silently executing code that arrived with an untrusted repo. Runs on the EDT (start()'s contract).
-        if (!ensureExecTrust(settings)) return false
-        // Network-share gate: refuse to root an autonomous agent — shell, IDE reach, coding/offensive ability — on
-        // a remote / network / foreign mount. That is a lateral-movement launchpad, not a project. No override:
-        // whoever needs the unrestricted tool has `claude` on the CLI (and, there, Anthropic's own controls). The
-        // deliberate friction — you cannot casually relocate a 90 GB network dir to local disk — is the point.
-        if (RemoteMounts.isRemote(project.basePath)) {
-            refuseRemoteProject(project.basePath)
-            return false
-        }
+        val binary = resolveBinary(settings) ?: return false
+        if (!passesLaunchGates(settings)) return false
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
         starting = true
         reconciler.onMessageBoundary()
+        // Tell the GUI we are booting BEFORE handing off to the pooled thread, so the loading screen is up for
+        // the whole launch rather than appearing after the slow part (env resolution) has already finished.
+        fireState()
         val launchGen = ++generation // this launch's generation; the process's onTerminated is gated on it
 
         // Off the EDT: env resolution sources a shell (seconds) and process spawn can block. Hand back to the EDT
         // for the state mutations the GUI observes (ready/fireState/pump) and the queue invariant.
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
-                // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
-                // launch is stale — don't spawn an orphan process nothing will ever tear down.
-                if (launchGen != generation) return@executeOnPooledThread
-                val opts = launchOptions()
-                val proc = ClaudeProcess(
-                    binary = binary,
-                    workDir = workDir,
-                    args = SessionLauncher.buildArgs(opts, resume, SessionLauncher.mcpConfigJson(opts)),
-                    nodeOverride = settings.nodePath,
-                    extraEnv = env,
-                    onEvent = ::onEvent,
-                    onTerminated = { code -> onTerminated(launchGen, code) },
-                )
-                process = proc
-                // ClaudeProcess.start() may throw if the process fails to spawn — surface it instead of leaving a
-                // half-initialized session that never becomes ready.
-                val started = runCatching { proc.start() }
-                if (started.isFailure) {
-                    process = null
-                    log.warn("Failed to start the claude process", started.exceptionOrNull())
-                    notifyError("Failed to start Claude Code: ${started.exceptionOrNull()?.message ?: "unknown error"}")
-                    return@executeOnPooledThread
-                }
-                // If a teardown raced in between the gen-check and now, destroy the freshly-spawned orphan.
-                if (launchGen != generation) {
-                    proc.destroy()
-                    if (process === proc) process = null
-                    return@executeOnPooledThread
-                }
-
-            // Optional handshake → rich command/model/agent metadata for the GUI menus.
-            controlClient.query(
-                buildRequest = ControlProtocol::initializeRequest,
-                decode = { payload ->
-                    payload?.let {
-                        runCatching { ClaudeJson.decodeFromJsonElement(InitializeResponse.serializer(), it) }
-                            .onFailure { e -> log.debug("Failed to decode initialize response", e) }
-                            .getOrNull()
-                    }
-                },
-                onResult = { info: InitializeResponse? ->
-                    info ?: return@query
-                    commands = info.commands
-                    models = info.models
-                    agents = info.agents
-                    availableOutputStyles = info.availableOutputStyles
-                    account = info.account
-                    if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
-                    // Graceful fallback: the pin ([DEFAULT_MODEL]) was chosen before the catalog was known. If this
-                    // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
-                    // so we never sit on a model it can't honour. Only touches the pin, never an explicit choice.
-                    if (model == DEFAULT_MODEL && info.models.isNotEmpty() && info.models.none { it.value == DEFAULT_MODEL }) {
-                        changeModel(preferredDefault(info.models))
-                    }
-                    edt { fireMetadata() }
-                },
-            )
-
-            // NOTE (claude 2.1.150): the binary accepts prompts on stdin from the start and only emits the
-            // `system/init` line *after* the first user turn — not on launch. So we must NOT gate readiness on
-            // the Init event (that would deadlock: pump() waits for ready, ready waits for a prompt). We're
-            // ready as soon as the process is up; Init, when it later arrives, just back-fills sessionId/model.
-                edt {
-                    ready = true
-                    transcript.add(Speaker.SYSTEM, "Claude Code ready.")
-                    fireState()
-                    pump()
-                }
+                launch(launchGen, settings, binary, workDir, resume)
             } finally {
                 // Release the launch guard, but only if we still own the current generation — a newer start()
                 // bumped it and is now the owner, so it must keep `starting` set.
-                if (launchGen == generation) starting = false
+                if (launchGen == generation) {
+                    starting = false
+                    // And tell the GUI, or a launch that FAILED leaves the loading screen up forever: `launch`
+                    // only fires state on the paths that succeed. This runs on the pooled thread, hence edt {}.
+                    edt { fireState() }
+                }
             }
         }
         return true
+    }
+
+    /** Locates the binary and persists the resolved path; null (after notifying) when there is none. */
+    private fun resolveBinary(settings: ClaudeSettings): File? {
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run {
+            notifyMissingBinary()
+            return null
+        }
+        // Persist the auto-detected path so later launches are stable and the user can see/edit it
+        // (also refreshes a stale saved path that fell back to auto-detection).
+        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
+        return binary
+    }
+
+    /**
+     * The two security gates that can refuse a launch outright. Both run on the EDT (start()'s contract).
+     *
+     * Trust-on-open: a project-level claude-code.xml can ship a sourceScript or a stdio MCP server (arbitrary
+     * command), both of which we'd execute at launch. If that config is present and the project hasn't been
+     * trusted for it, ask once before running anything. Declining aborts the launch rather than silently
+     * executing code that arrived with an untrusted repo.
+     *
+     * Network-share: refuse to root an autonomous agent — shell, IDE reach, coding/offensive ability — on a
+     * remote / network / foreign mount. That is a lateral-movement launchpad, not a project. No override:
+     * whoever needs the unrestricted tool has `claude` on the CLI (and, there, Anthropic's own controls). The
+     * deliberate friction — you cannot casually relocate a 90 GB network dir to local disk — is the point.
+     */
+    private fun passesLaunchGates(settings: ClaudeSettings): Boolean {
+        if (!ensureExecTrust(settings)) return false
+        if (RemoteMounts.isRemote(project.basePath)) {
+            refuseRemoteProject(project.basePath)
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Spawns the process off the EDT and, once it is up, hands back to the EDT to flip [ready].
+     *
+     * [launchGen] is re-checked at every step that follows a blocking call: a stop()/dispose()/newer start() can
+     * race in while the env resolves or the process spawns, and a stale launch must NOT leave an orphan process
+     * behind nor mark a session that no longer owns the generation as ready.
+     */
+    private fun launch(launchGen: Int, settings: ClaudeSettings, binary: File, workDir: File, resume: Boolean) {
+        val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
+        // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
+        // launch is stale — don't spawn an orphan process nothing will ever tear down.
+        if (launchGen != generation) return
+        val opts = launchOptions()
+        val proc = ClaudeProcess(
+            binary = binary,
+            workDir = workDir,
+            args = SessionLauncher.buildArgs(opts, resume, SessionLauncher.mcpConfigJson(opts)),
+            nodeOverride = settings.nodePath,
+            extraEnv = env,
+            onEvent = ::onEvent,
+            onTerminated = { code -> onTerminated(launchGen, code) },
+        )
+        process = proc
+        // ClaudeProcess.start() may throw if the process fails to spawn — surface it instead of leaving a
+        // half-initialized session that never becomes ready.
+        val started = runCatching { proc.start() }
+        if (started.isFailure) {
+            process = null
+            log.warn("Failed to start the claude process", started.exceptionOrNull())
+            notifyError("Failed to start Claude Code: ${started.exceptionOrNull()?.message ?: "unknown error"}")
+            return
+        }
+        // If a teardown raced in between the gen-check and now, destroy the freshly-spawned orphan.
+        if (launchGen != generation) {
+            proc.destroy()
+            if (process === proc) process = null
+            return
+        }
+        requestInitialize()
+        // NOTE (claude 2.1.150): the binary accepts prompts on stdin from the start and only emits the
+        // `system/init` line *after* the first user turn — not on launch. So we must NOT gate readiness on
+        // the Init event (that would deadlock: pump() waits for ready, ready waits for a prompt). We're
+        // ready as soon as the process is up; Init, when it later arrives, just back-fills sessionId/model.
+        edt {
+            ready = true
+            transcript.add(Speaker.SYSTEM, "Claude Code ready.")
+            fireState()
+            // Fill the context and cost meters NOW rather than on the poll timer's first tick.
+            //
+            // The timer's initial delay equals its interval (a javax.swing.Timer default), so the first poll is
+            // a full QUOTA_POLL_MS — one minute — after the panel registered. Worse, that registration happens
+            // while the binary is still launching, so `pollQuota` returns early on the not-running guard and the
+            // meters stay empty for a SECOND interval. The data is available the moment the process is up; there
+            // is no reason to make the user look at an empty readout while we wait for a clock.
+            pollQuota()
+            pump()
+        }
+    }
+
+    /** Optional handshake → rich command/model/agent metadata for the GUI menus. */
+    private fun requestInitialize() {
+        controlClient.query(
+            buildRequest = ControlProtocol::initializeRequest,
+            decode = { payload ->
+                payload?.let {
+                    runCatching { ClaudeJson.decodeFromJsonElement(InitializeResponse.serializer(), it) }
+                        .onFailure { e -> log.debug("Failed to decode initialize response", e) }
+                        .getOrNull()
+                }
+            },
+            onResult = { info: InitializeResponse? ->
+                info ?: return@query
+                commands = info.commands
+                models = info.models
+                agents = info.agents
+                availableOutputStyles = info.availableOutputStyles
+                account = info.account
+                if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
+                // Graceful fallback: the pin ([DEFAULT_MODEL]) was chosen before the catalog was known. If this
+                // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
+                // so we never sit on a model it can't honour. Only touches the pin, never an explicit choice.
+                val pinMissing = info.models.isNotEmpty() && info.models.none { it.value == DEFAULT_MODEL }
+                if (model == DEFAULT_MODEL && pinMissing) changeModel(preferredDefault(info.models))
+                edt { fireMetadata() }
+            },
+        )
     }
 
     /** Immutable snapshot of every launch-affecting option, captured once per (re)start for [SessionLauncher]. */
@@ -521,7 +689,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         controlClient.failAll("process gone")
         taskTracker.clear()
         hookNarrator.clear()
-        edt { cards.clear(); diffs.clearReviewDiffs(); fireState() }
+        edt {
+            cards.clear()
+            diffs.clearReviewDiffs()
+            fireState()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -555,7 +727,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
         val displayParts = buildList {
             trimmed?.let { add(it) }
-            nonImage.forEach { add(displayMention(it, root)) }
+            nonImage.forEach { add(displayMention(it)) }
         }
         val images = attachments.filterIsInstance<Attachment.Image>().map { it.mediaType to it.base64 }
         val combined = wireParts.joinToString("\n\n")
@@ -585,12 +757,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (path.any { it.isWhitespace() }) "@\"$path\"" else "@$path"
 
     /** Display form shown in the user bubble: a FileRef becomes a clickable `jb://open` link to the file; others
-     *  reuse their prompt text (a selection's fenced snippet, an image marker). */
-    private fun displayMention(a: Attachment, root: String?): String = when (a) {
+     *  reuse their prompt text (a selection's fenced snippet, an image marker).
+     *
+     *  Unlike [wireMention] this does NOT relativise against the project root, and that asymmetry is deliberate:
+     *  the model is sent a repo-relative path (portable, and what it should reason about), while the link needs
+     *  an ABSOLUTE one to open the file. The visible text is the display name either way, so nothing longer than
+     *  a filename is shown. It used to take an unused `root` purely to mirror [wireMention]'s signature. */
+    private fun displayMention(a: Attachment): String = when (a) {
         is Attachment.FileRef -> {
             val enc = java.net.URLEncoder.encode(a.path, Charsets.UTF_8).replace("+", "%20")
             "[@${a.displayName}](jb://open?file=$enc&line=1)"
         }
+
         else -> a.toPromptText()
     }
 
@@ -625,6 +803,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             write(ControlProtocol.userMessage(trimmed))
             if (!turnActive) {
                 turnActive = true
+                startQuotaPolling()
                 fireState()
             }
             // Flush anything still queued from startup; the binary accumulates messages mid-turn.
@@ -660,6 +839,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             currentUserMessageId = msgUuid
             write(ControlProtocol.userMessageWithImages(next.text, next.images, uuid = msgUuid))
             turnActive = true
+            startQuotaPolling()
         }
         promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
@@ -710,6 +890,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         interrupting = false
         turnActive = false
         liveThinkingTokens = 0
+        // An interrupted turn still consumed context and cost, and it is also a turn END — so this both
+        // refreshes the meters and lets the poll retire, exactly as a normal result does.
+        pollQuota()
         fireState()
     }
 
@@ -786,42 +969,54 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     /** Invoked by the chat UI when the user clicks Accept/Reject on a permission card. */
     fun resolvePermission(requestId: String, allow: Boolean, denyMessage: String? = null, overrideInput: JsonObject? = null) {
         val request = cards.remove(requestId) ?: return
-        if (allow) {
-            if (request.reviewable) {
-                // Snapshot/refresh stay on the ORIGINAL input: they describe the real file (before-text + path),
-                // independent of any narrowed payload (e.g. an edited review diff) we actually send.
-                DiffPresenter.filePathOf(request.input)?.let { diffs.markForRefresh(it) }
-                // Snapshot before answering allow (the binary writes right after), so "View diff" works from the
-                // transcript once the transient approval diff has closed. Synchronous read — small project files.
-                request.toolUseId?.let { diffs.captureForReview(request.toolName, request.input, it) }
-            }
-            // If an editable review diff was open and the user TWEAKED the proposed content, write THEIR version:
-            // re-encode the tool input so the binary writes the edited text (file_path preserved). Closes the diff.
-            // Fail-safe: no edit (or read-only viewer) → reviewOverride is null → the binary writes its own version.
-            val reviewOverride = diffs.takeReviewEdit(requestId)?.let { (currentText, editedText) ->
-                dev.lain.claudejb.diff.HunkSelection.encodeInput(request.toolName, request.input, currentText, editedText)
-            }
-            val effectiveInput = overrideInput ?: reviewOverride ?: request.input
-            // If the user edited the proposed content (or an override narrowed the write), repoint the captured
-            // snapshot at the EFFECTIVE input so the transcript's inline diff + "View diff" show what was actually
-            // written — not Claude's original proposal.
-            if (request.reviewable && effectiveInput !== request.input) {
-                request.toolUseId?.let { diffs.updateSnapshotInput(it, effectiveInput) }
-            }
-            write(ControlProtocol.permissionAllow(requestId, effectiveInput))
-            systemNotice("Approved ${request.headline}")
-            // Approving an ExitPlanMode plan leaves plan mode: the plugin is the source of truth for
-            // permissionMode, so flip it back to default (and push set_permission_mode) — otherwise the binary
-            // proceeds out of plan while the chip stays stuck on "plan".
-            if (request.isPlan && permissionMode == PermissionMode.PLAN.wire) {
-                changePermissionMode(PermissionMode.DEFAULT.wire)
-            }
-        } else {
-            diffs.closeReviewDiff(requestId) // reject → discard the review diff tab
-            write(ControlProtocol.permissionDeny(requestId, denyMessage ?: "User rejected the ${request.toolName} request."))
-            systemNotice("Rejected ${request.headline}")
-        }
+        if (allow) approvePermission(requestId, request, overrideInput) else rejectPermission(requestId, request, denyMessage)
         firePermissions()
+    }
+
+    private fun approvePermission(requestId: String, request: PendingPermission, overrideInput: JsonObject?) {
+        if (request.reviewable) {
+            // Snapshot/refresh stay on the ORIGINAL input: they describe the real file (before-text + path),
+            // independent of any narrowed payload (e.g. an edited review diff) we actually send.
+            DiffPresenter.filePathOf(request.input)?.let { diffs.markForRefresh(it) }
+            // Snapshot before answering allow (the binary writes right after), so "View diff" works from the
+            // transcript once the transient approval diff has closed. Synchronous read — small project files.
+            request.toolUseId?.let { diffs.captureForReview(request.toolName, request.input, it) }
+        }
+        val effectiveInput = overrideInput ?: reviewEditOverride(requestId, request) ?: request.input
+        // If the user edited the proposed content (or an override narrowed the write), repoint the captured
+        // snapshot at the EFFECTIVE input so the transcript's inline diff + "View diff" show what was actually
+        // written — not Claude's original proposal.
+        if (request.reviewable && effectiveInput !== request.input) {
+            request.toolUseId?.let { diffs.updateSnapshotInput(it, effectiveInput) }
+        }
+        write(ControlProtocol.permissionAllow(requestId, effectiveInput))
+        systemNotice("Approved ${request.headline}")
+        // Approving an ExitPlanMode plan leaves plan mode: the plugin is the source of truth for
+        // permissionMode, so flip it back to default (and push set_permission_mode) — otherwise the binary
+        // proceeds out of plan while the chip stays stuck on "plan".
+        if (request.isPlan && permissionMode == PermissionMode.PLAN.wire) {
+            changePermissionMode(PermissionMode.DEFAULT.wire)
+        }
+    }
+
+    /**
+     * If an editable review diff was open and the user TWEAKED the proposed content, re-encodes the tool input
+     * so the binary writes THEIR version (file_path preserved). Also closes the diff.
+     *
+     * Fail-safe by construction: no edit (or a read-only viewer) yields null, and the binary then writes its
+     * own version — an unreadable document can never turn into a wrong write.
+     */
+    private fun reviewEditOverride(requestId: String, request: PendingPermission): JsonObject? =
+        diffs.takeReviewEdit(requestId)?.let { (currentText, editedText) ->
+            dev.lain.claudejb.diff.HunkSelection
+                .encodeInput(request.toolName, request.input, currentText, editedText)
+        }
+
+    private fun rejectPermission(requestId: String, request: PendingPermission, denyMessage: String?) {
+        diffs.closeReviewDiff(requestId) // reject → discard the review diff tab
+        val message = denyMessage ?: "User rejected the ${request.toolName} request."
+        write(ControlProtocol.permissionDeny(requestId, message))
+        systemNotice("Rejected ${request.headline}")
     }
 
     /**
@@ -861,7 +1056,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     url = req.url,
                     fields = parseElicitationFields(req.requestedSchema),
                 ),
-            )
+            ),
         )
         fireAttention(AttentionReason.PERMISSION)
     }
@@ -892,7 +1087,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         permissionMode = mode
         // Persist so new tabs / restarts launch in this mode instead of falling back to "default".
         ClaudeSettings.getInstance(project).getState().permissionMode = mode
-        if (isRunning()) write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), SessionLauncher.binaryPermissionMode(permissionMode)))
+        if (isRunning()) {
+            val wire = SessionLauncher.binaryPermissionMode(permissionMode)
+            write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), wire))
+        }
         fireState()
     }
 
@@ -941,9 +1139,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     "until a key is set, and your Anthropic credentials are never used for another provider.",
                 NotificationType.WARNING,
             )
-            .addAction(NotificationAction.createSimple("Configure…") {
-                ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
-            })
+            .addAction(
+                NotificationAction.createSimple("Configure…") {
+                    ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+                },
+            )
             .notify(project)
     }
 
@@ -959,7 +1159,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         thinkingTokens = tokens
         fireState()
         if (wasRunning) {
-            systemNotice(if (tokens != null) "Extended thinking on — restarting session." else "Extended thinking off — restarting session.")
+            val state = if (tokens != null) "on" else "off"
+            systemNotice("Extended thinking $state — restarting session.")
             restart(resume = true)
         }
     }
@@ -987,7 +1188,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         this.includePartialMessages = includePartialMessages
         this.ideMcpEnabled = ideMcpEnabled
         this.ideMcpTransport = ideMcpTransport.ifBlank { "sse" }
-        this.ideMcpPort = ideMcpPort.takeIf { it in 1..65535 } ?: DEFAULT_IDE_MCP_PORT
+        this.ideMcpPort = ideMcpPort.takeIf { it in VALID_PORTS } ?: DEFAULT_IDE_MCP_PORT
         this.customMcpServers = customMcpServers
         this.maxTurns = maxTurns
         this.maxBudgetUsd = maxBudgetUsd
@@ -1009,33 +1210,112 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // -----------------------------------------------------------------------
 
     fun requestContextUsage(onResult: (ContextUsage?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(
             buildRequest = ControlProtocol::getContextUsageRequest,
             onResult = { mapped: ContextUsage? -> edt { onResult(mapped) } },
-            decode = { payload -> payload?.let { runCatching { ClaudeJson.decodeFromJsonElement(ContextUsage.serializer(), it) }.getOrNull() } },
+            decode = { payload ->
+                payload?.let {
+                    runCatching { ClaudeJson.decodeFromJsonElement(ContextUsage.serializer(), it) }.getOrNull()
+                }
+            },
         )
     }
 
+    /**
+     * Asks the binary for the FULL usage picture — every rate-limit window plus the extra-credit balance.
+     *
+     * Preferred over [rateLimits] as the dashboard's source of truth: one round-trip returns every window at
+     * once, whereas the event stream only tells you about a window when it happens to move. The events remain
+     * the live nudge that something changed and it is worth re-asking.
+     */
+    fun requestUsage(onResult: (UsageReport?) -> Unit) {
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
+        controlClient.query(
+            buildRequest = ControlProtocol::getUsageRequest,
+            onResult = { report: UsageReport? ->
+                edt {
+                    report?.windows?.forEach { (key, w) ->
+                        w.utilization?.let { warnOnQuotaCrossing(key, normalizePercent(it)) }
+                    }
+                    onResult(report)
+                }
+            },
+            decode = ::parseUsageReport,
+        )
+    }
+
+    /**
+     * Announces the first time a quota window crosses 65% and again at 85%.
+     *
+     * Announced ONCE per threshold per window, and only on the way UP: this is checked on every usage refresh,
+     * and a warning that repeats every thirty seconds is one the user learns to ignore — which costs exactly
+     * the warning that mattered. The record is cleared when the figure falls back below a threshold, so the
+     * next billing window warns again.
+     *
+     * 85% also raises an IDE notification, not just a transcript row. By then the user may be watching the
+     * editor rather than the chat, and the point of the second threshold is that the wall is close enough to
+     * change what they do next.
+     */
+    private fun warnOnQuotaCrossing(window: String, pct: Int) {
+        val announced = quotaWarned[window] ?: 0
+        val crossed = QUOTA_THRESHOLDS.lastOrNull { pct >= it } ?: 0
+        if (crossed <= announced) {
+            // Dropped below a threshold (the window reset, or the API revised it down): re-arm.
+            if (crossed < announced) quotaWarned[window] = crossed
+            return
+        }
+        quotaWarned[window] = crossed
+        val label = RateLimitInfo.windowTitleFor(window)
+        val message = "$label quota at $pct%."
+        systemNotice(message)
+        if (crossed >= QUOTA_THRESHOLD_HIGH) notifyInfo(message)
+    }
+
+    /** Window → the highest threshold already announced for it. EDT-confined (written from the usage callback). */
+    private val quotaWarned = HashMap<String, Int>()
+
+    /** The wire has sent both 0..100 and 0..1; accept either and clamp. */
+    private fun normalizePercent(raw: Double): Int =
+        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
+
     fun requestSessionCost(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(ControlProtocol::getSessionCostRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
     }
 
     fun requestMcpStatus(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(ControlProtocol::mcpStatusRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
     }
 
     /** Effective merged settings + per-source breakdown (E2-UI diagnostics dialog). */
     fun requestSettings(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(ControlProtocol::getSettingsRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
     }
 
     /** The responder's CLI binary version (E2-UI diagnostics dialog). */
     fun requestBinaryVersion(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(ControlProtocol::getBinaryVersionRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
     }
 
@@ -1054,7 +1334,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * on timeout / not running.
      */
     fun requestRewindFiles(userMessageId: String, dryRun: Boolean, onResult: (RewindResult?) -> Unit) {
-        if (!isRunning()) { edt { onResult(null) }; return }
+        if (!isRunning()) {
+            edt { onResult(null) }
+            return
+        }
         controlClient.query(
             buildRequest = { id -> ControlProtocol.rewindFilesRequest(id, userMessageId, dryRun) },
             onResult = { mapped: RewindResult? -> edt { onResult(mapped) } },
@@ -1103,8 +1386,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     fun revertEdit(snapshot: EditSnapshot): Boolean {
         val name = java.io.File(snapshot.filePath).name
         val ok = rollback.revertEdit(snapshot)
-        if (ok) notifyInfo("Reverted $name to its state before this edit.")
-        else notifyError("Couldn't revert $name (the file may be outside the project, missing, or locked).")
+        if (ok) {
+            notifyInfo("Reverted $name to its state before this edit.")
+        } else {
+            notifyError("Couldn't revert $name (the file may be outside the project, missing, or locked).")
+        }
         return ok
     }
 
@@ -1112,8 +1398,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      *  a summary notification. */
     fun revertAllEdits(): Int {
         val n = rollback.revertAllEdits()
-        if (n > 0) notifyInfo("Rolled back $n file${if (n == 1) "" else "s"} to the state before Claude's edits.")
-        else notifyError("No files were rolled back (nothing reverted).")
+        if (n > 0) {
+            notifyInfo("Rolled back $n file${if (n == 1) "" else "s"} to the state before Claude's edits.")
+        } else {
+            notifyError("No files were rolled back (nothing reverted).")
+        }
         return n
     }
 
@@ -1142,53 +1431,67 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         flushDeltas()
     }
 
+    /**
+     * The binary→host event dispatch, in TWO levels: pick the group, then the variant inside it.
+     *
+     * It used to be one `when` with 47 arms — 244 lines, cyclomatic complexity 111 — which meant every protocol
+     * concern in the plugin met in a single function. The groups are declared on [ClaudeEvent] itself (see the
+     * sub-interfaces there), so BOTH levels stay exhaustive: adding a protocol event without handling it is a
+     * compile error, not a frame that is silently dropped. That property is the whole point of `checkDrift`, so
+     * it was not up for trade against a complexity threshold.
+     */
     private fun onEvent(event: ClaudeEvent) {
         // Coalesce streaming deltas: buffer consecutive text/thinking deltas and the live-usage fold (reader
         // thread, no edt{}), and flush them in a single edt{} on the next non-delta event below. Order is
         // preserved because invokeLater is FIFO and the flush is submitted before the event's own edt{}.
-        when (event) {
-            is ClaudeEvent.TextDelta -> { bufferDelta(isThinking = false, text = event.text); return }
-            is ClaudeEvent.ThinkingDelta -> { bufferDelta(isThinking = true, text = event.text); return }
-            is ClaudeEvent.LiveUsage -> {
-                bufferUsage(event.inputTokens, event.cacheCreationTokens, event.cacheReadTokens, event.outputTokens)
-                return
-            }
-            else -> {}
+        if (event is ClaudeEvent.Stream) {
+            bufferStream(event)
+            return
         }
         // Any other event: flush the buffered deltas first so they land on the EDT ahead of this event's work.
         flushDeltas()
         when (event) {
-            is ClaudeEvent.Init -> {
-                sessionId = event.info.sessionId
-                if (model == null && event.info.model.isNotBlank()) model = event.info.model
-                if (event.info.outputStyle.isNotBlank()) outputStyle = event.info.outputStyle
-                // The plugin is the source of truth for permissionMode. system/init re-arrives every turn and
-                // reports the *launch-time* mode ("default"), which used to clobber a user choice (the
-                // recurring "reset to default" bug). Never adopt it; if the binary has drifted from our mode,
-                // push ours back so it converges instead.
-                if (event.info.permissionMode.isNotBlank() && event.info.permissionMode != SessionLauncher.binaryPermissionMode(permissionMode)) {
-                    write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), SessionLauncher.binaryPermissionMode(permissionMode)))
-                }
-                ready = true
-                edt {
-                    systemNotice("Connected · ${event.info.model.ifBlank { "claude" }} · ${event.info.cwd}")
-                    fireState()
-                    pump()
-                }
-            }
+            is ClaudeEvent.Conversation -> onConversation(event)
 
-            // TextDelta / ThinkingDelta / LiveUsage are coalesced and handled before this when (see flushDeltas).
-            is ClaudeEvent.TextDelta, is ClaudeEvent.ThinkingDelta, is ClaudeEvent.LiveUsage -> {}
-            is ClaudeEvent.AssistantText -> edt {
-                // Subagent text arrives finalized with a parent id: anchor it under its Agent without touching
-                // the top-level live stream. Top-level text keeps the existing streaming reconciliation.
-                if (event.parentToolUseId != null) {
-                    reconciler.addSubagentText(event.text, event.parentToolUseId)
-                } else {
-                    reconciler.finalizeAssistant(event.text)
-                }
-            }
+            is ClaudeEvent.Control -> onControl(event)
+
+            is ClaudeEvent.Task -> onTask(event)
+
+            is ClaudeEvent.SessionSignal -> onSessionSignal(event)
+
+            is ClaudeEvent.HookTelemetry -> onHookTelemetry(event)
+
+            is ClaudeEvent.Notice -> onNotice(event)
+
+            // Returned above; the branch exists only because the compiler checks this `when` for exhaustiveness,
+            // which is exactly the property we want it to keep checking.
+            is ClaudeEvent.Stream -> {}
+        }
+    }
+
+    /** Buffers a streaming delta on the reader thread; [flushDeltas] lands them on the EDT in one batch. */
+    private fun bufferStream(event: ClaudeEvent.Stream) = when (event) {
+        is ClaudeEvent.TextDelta -> bufferDelta(isThinking = false, text = event.text)
+
+        is ClaudeEvent.ThinkingDelta -> bufferDelta(isThinking = true, text = event.text)
+
+        is ClaudeEvent.LiveUsage ->
+            bufferUsage(event.inputTokens, event.cacheCreationTokens, event.cacheReadTokens, event.outputTokens)
+    }
+
+    /** The conversation proper: session start, assistant output, tool calls, end of turn. */
+    private fun onConversation(event: ClaudeEvent.Conversation) {
+        when (event) {
+            is ClaudeEvent.Init -> onInit(event)
+
+            is ClaudeEvent.ToolUse -> onToolUse(event)
+
+            is ClaudeEvent.ToolResult -> onToolResult(event)
+
+            is ClaudeEvent.Result -> onTurnResult(event)
+
             is ClaudeEvent.AssistantThinking -> edt { reconciler.finalizeThinking(event.text) }
+
             is ClaudeEvent.MessageStart -> edt {
                 // A turn can emit several assistant messages (e.g. around tool calls). message_delta usage
                 // restarts near 0 per message, so fold the finished message's tokens into the session total
@@ -1198,151 +1501,198 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 reconciler.onMessageBoundary()
             }
 
-            is ClaudeEvent.ToolUse -> edt {
-                // Only break the top-level live stream for top-level tool calls; a subagent's tool call must not
-                // cut a top-level paragraph that may continue after the Agent finishes.
-                if (event.parentToolUseId == null) {
-                    reconciler.onMessageBoundary()
-                }
-                transcript.add(
-                    Speaker.TOOL,
-                    formatToolUse(event.name, event.input, workingDir),
-                    meta = event.name,
-                    toolUseId = event.id,
-                    parentToolUseId = event.parentToolUseId,
-                    toolState = ToolState.LOADING, // just dispatched → light blue, until progress/result arrive
-                    // Project-relative file for the card's jump-to-code link (null for non-file tools).
-                    filePath = toolFilePath(event.name, event.input, workingDir),
-                    // The raw command/script text, when this call executes one — drives its own copyable code
-                    // block in the tool card, and is remembered so ToolResult can decide, once the output lands,
-                    // whether to render it as a copyable code block too. Covers Bash, PowerShell, and any MCP
-                    // tool that executes a command (detected by input shape, not tool name).
-                    commandText = SensitiveGuard.commandText(event.input),
-                )
-                // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
-                // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including
-                // acceptEdits/bypass/auto where the binary auto-executes without asking the host (no approval to
-                // hang the snapshot on). Idempotent + cheap (a small file read); a no-op for non-reviewable tools.
-                if (event.name in DiffPresenter.REVIEWABLE_TOOLS) {
-                    diffs.captureForReview(event.name, event.input, event.id)
-                    // Remember which user turn this edit belongs to, for a native rewind_files().
-                    currentUserMessageId?.let { toolUseTurn[event.id] = it }
-                }
-            }
-
-            is ClaudeEvent.ToolResult -> edt {
-                // Close the auto-opened diff (if any) now that the binary has finished writing — the inline diff
-                // below preserves the change visually in the tool card, and "View diff" can re-open it from the
-                // snapshot at any time, so leaving the editor tab pinned just clutters the workspace. The manager
-                // closes the tab and hands back the persisted pre-write snapshot for the inline diff below.
-                transcript.setToolState(event.toolUseId, if (event.isError) ToolState.ERROR else ToolState.FINISHED)
-                val snap = diffs.onToolResult(event.toolUseId)
-                // Refresh the VFS NOW, on each successful write — not once at the end of the turn. Until the IDE
-                // sees the file on disk it does not exist for it: the editor shows stale contents, and a
-                // jump-to-code link on the card resolves to nothing (LocalFileSystem returns null), so clicking it
-                // did nothing until the turn finished. Edit/Write refresh exactly the paths they touched; Bash and
-                // mutating MCP tools can change anything, so those mark the project tree dirty instead.
-                if (!event.isError) {
-                    diffs.refreshTouched()
-                    if (mayHaveWrittenUnknownFiles(transcript.toolNameOf(event.toolUseId))) diffs.refreshProjectTree()
-                }
-                // For a reviewable write we captured the pre-write contents at approval time: render the actual
-                // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
-                // the output box shows what changed. The diff text is self-contained, so it also survives a
-                // session restore (no snapshot needed at render time). Falls back to the binary text otherwise.
-                val diff = if (snap != null && snap.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
-                    DiffPresenter.proposedContent(snap.toolName, snap.input, snap.beforeText)
-                        ?.let { DiffPresenter.unifiedDiff(snap.beforeText, it) }
-                        ?.takeIf { it.isNotBlank() }
-                } else null
-                if (diff != null) {
-                    transcript.addToolOutput(event.toolUseId, diff, parentToolUseId = event.parentToolUseId, meta = "diff")
-                } else {
-                    val text = event.content.trim()
-                    if (text.isNotBlank()) {
-                        // meta is a space-separated tag set here, not a single value: a command's output can be
-                        // BOTH "command" (render as a copyable code block) AND "error" (the call failed) at once —
-                        // e.g. a failing build's stderr is exactly the kind of output you want to copy out.
-                        val tags = buildList {
-                            if (transcript.isCommandCall(event.toolUseId)) add("command")
-                            if (event.isError) add("error")
-                        }
-                        transcript.addToolOutput(
-                            event.toolUseId, text, parentToolUseId = event.parentToolUseId,
-                            meta = tags.joinToString(" ").ifBlank { null },
-                        )
-                    }
-                }
-            }
-
-            is ClaudeEvent.Result -> edt {
-                tokens.foldIntoSession()
-                reconciler.onMessageBoundary()
-                turnActive = false
-                interrupting = false // the turn ended (possibly via our interrupt) — clear the transient label
-                liveThinkingTokens = 0
-                if (event.result.isError) {
-                    // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
-                    // Always surface something so a failed turn never ends silently.
-                    val message = event.result.result.ifBlank {
-                        event.result.errors.joinToString("\n").ifBlank { "Turn ended with error: ${event.result.subtype}" }
-                    }
-                    transcript.add(Speaker.ERROR, message)
-                    // If the failure reads like a login/auth problem, offer to open an interactive terminal —
-                    // /login can't run inside the TTY-less stream-json session.
-                    if (LoginDetection.needsLogin(message)) maybePromptLogin()
-                } else {
-                    // A clean turn means we're authenticated; allow a future auth failure to prompt again.
-                    loginPrompted = false
-                    // Count it toward the one-and-only Marketplace review ask. Only successful turns count, so
-                    // nobody is ever asked to rate a session that was failing on them. See [ReviewPrompt].
-                    ReviewPrompt.onSuccessfulTurn(project)
-                }
-                diffs.refreshTouched()
-                fireState()
-                pump()
-                // The binary's session file is the source of truth for the transcript; we don't persist our own.
-                // Once per turn we just record the open-tab set (for restore on startup) and refresh the tab title
-                // from the binary's resolved title. Off-EDT: the sidecar JSONL read is blocking IO.
-                sessionId?.let { id -> recordOpenAndTitle(id) }
-                fireAttention(if (event.result.isError) AttentionReason.ERROR else AttentionReason.TURN_DONE)
-            }
-
             is ClaudeEvent.LocalCommandOutput -> edt {
                 if (event.content.isNotBlank()) transcript.add(Speaker.SYSTEM, event.content)
             }
 
-            is ClaudeEvent.StatusNotice -> systemNotice(event.text)
-
-            is ClaudeEvent.RateLimit -> {
-                // The binary often emits a rate_limit_event without `utilization` (it's optional and only present
-                // when the API returns it). Don't lose a previously-known utilization just because a later event
-                // omitted it — carry it forward so the quota % stays shown once we've seen it.
-                val incoming = event.info
-                rateLimit = if (incoming.utilization == null) {
-                    incoming.copy(utilization = rateLimit?.utilization)
-                } else incoming
-                edt { fireState() }
+            is ClaudeEvent.AssistantText -> edt {
+                // Subagent text arrives finalized with a parent id: anchor it under its Agent without touching
+                // the top-level live stream. Top-level text keeps the existing streaming reconciliation.
+                if (event.parentToolUseId != null) {
+                    reconciler.addSubagentText(event.text, event.parentToolUseId)
+                } else {
+                    reconciler.finalizeAssistant(event.text)
+                }
             }
+        }
+    }
 
+    private fun onInit(event: ClaudeEvent.Init) {
+        sessionId = event.info.sessionId
+        if (model == null && event.info.model.isNotBlank()) model = event.info.model
+        if (event.info.outputStyle.isNotBlank()) outputStyle = event.info.outputStyle
+        // The plugin is the source of truth for permissionMode. system/init re-arrives every turn and
+        // reports the *launch-time* mode ("default"), which used to clobber a user choice (the
+        // recurring "reset to default" bug). Never adopt it; if the binary has drifted from our mode,
+        // push ours back so it converges instead.
+        val ours = SessionLauncher.binaryPermissionMode(permissionMode)
+        if (event.info.permissionMode.isNotBlank() && event.info.permissionMode != ours) {
+            write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), ours))
+        }
+        ready = true
+        edt {
+            systemNotice("Connected · ${event.info.model.ifBlank { "claude" }} · ${event.info.cwd}")
+            fireState()
+            pump()
+        }
+    }
+
+    private fun onToolUse(event: ClaudeEvent.ToolUse) = edt {
+        // Only break the top-level live stream for top-level tool calls; a subagent's tool call must not
+        // cut a top-level paragraph that may continue after the Agent finishes.
+        if (event.parentToolUseId == null) {
+            reconciler.onMessageBoundary()
+        }
+        transcript.add(
+            Speaker.TOOL,
+            formatToolUse(event.name, event.input, workingDir),
+            meta = event.name,
+            toolUseId = event.id,
+            parentToolUseId = event.parentToolUseId,
+            toolState = ToolState.LOADING, // just dispatched → light blue, until progress/result arrive
+            // Project-relative file for the card's jump-to-code link (null for non-file tools).
+            filePath = toolFilePath(event.name, event.input, workingDir),
+            // The raw command/script text, when this call executes one — drives its own copyable code
+            // block in the tool card, and is remembered so ToolResult can decide, once the output lands,
+            // whether to render it as a copyable code block too. Covers Bash, PowerShell, and any MCP
+            // tool that executes a command (detected by input shape, not tool name).
+            commandText = SensitiveGuard.commandText(event.input),
+        )
+        // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
+        // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including
+        // acceptEdits/bypass/auto where the binary auto-executes without asking the host (no approval to
+        // hang the snapshot on). Idempotent + cheap (a small file read); a no-op for non-reviewable tools.
+        if (event.name in DiffPresenter.REVIEWABLE_TOOLS) {
+            diffs.captureForReview(event.name, event.input, event.id)
+            // Remember which user turn this edit belongs to, for a native rewind_files().
+            currentUserMessageId?.let { toolUseTurn[event.id] = it }
+        }
+    }
+
+    private fun onToolResult(event: ClaudeEvent.ToolResult) = edt {
+        // Close the auto-opened diff (if any) now that the binary has finished writing — the inline diff
+        // below preserves the change visually in the tool card, and "View diff" can re-open it from the
+        // snapshot at any time, so leaving the editor tab pinned just clutters the workspace. The manager
+        // closes the tab and hands back the persisted pre-write snapshot for the inline diff below.
+        transcript.setToolState(event.toolUseId, if (event.isError) ToolState.ERROR else ToolState.FINISHED)
+        val snap = diffs.onToolResult(event.toolUseId)
+        // Refresh the VFS NOW, on each successful write — not once at the end of the turn. Until the IDE
+        // sees the file on disk it does not exist for it: the editor shows stale contents, and a
+        // jump-to-code link on the card resolves to nothing (LocalFileSystem returns null), so clicking it
+        // did nothing until the turn finished. Edit/Write refresh exactly the paths they touched; Bash and
+        // mutating MCP tools can change anything, so those mark the project tree dirty instead.
+        if (!event.isError) {
+            diffs.refreshTouched()
+            if (mayHaveWrittenUnknownFiles(transcript.toolNameOf(event.toolUseId))) diffs.refreshProjectTree()
+        }
+        // For a reviewable write we captured the pre-write contents at approval time: render the actual
+        // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
+        // the output box shows what changed. The diff text is self-contained, so it also survives a
+        // session restore (no snapshot needed at render time). Falls back to the binary text otherwise.
+        val diff = if (snap != null && snap.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
+            DiffPresenter.proposedContent(snap.toolName, snap.input, snap.beforeText)
+                ?.let { DiffPresenter.unifiedDiff(snap.beforeText, it) }
+                ?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        if (diff != null) {
+            transcript.addToolOutput(event.toolUseId, diff, parentToolUseId = event.parentToolUseId, meta = "diff")
+        } else {
+            val text = event.content.trim()
+            if (text.isNotBlank()) {
+                // meta is a space-separated tag set here, not a single value: a command's output can be
+                // BOTH "command" (render as a copyable code block) AND "error" (the call failed) at once —
+                // e.g. a failing build's stderr is exactly the kind of output you want to copy out.
+                val tags = buildList {
+                    if (transcript.isCommandCall(event.toolUseId)) add("command")
+                    if (event.isError) add("error")
+                }
+                transcript.addToolOutput(
+                    event.toolUseId,
+                    text,
+                    parentToolUseId = event.parentToolUseId,
+                    meta = tags.joinToString(" ").ifBlank { null },
+                )
+            }
+        }
+    }
+
+    private fun onTurnResult(event: ClaudeEvent.Result) = edt {
+        tokens.foldIntoSession()
+        reconciler.onMessageBoundary()
+        turnActive = false
+        // The turn just moved both numbers; read them once now. Setting turnActive false first means the poll
+        // also retires the timer, so an idle session goes quiet instead of ticking forever.
+        pollQuota()
+        interrupting = false // the turn ended (possibly via our interrupt) — clear the transient label
+        liveThinkingTokens = 0
+        if (event.result.isError) {
+            // error_* results carry no `result` text — the message is in `errors` (sdk.d.ts SDKResultError).
+            // Always surface something so a failed turn never ends silently.
+            val message = event.result.result.ifBlank {
+                event.result.errors.joinToString("\n").ifBlank { "Turn ended with error: ${event.result.subtype}" }
+            }
+            transcript.add(Speaker.ERROR, message)
+            // If the failure reads like a login/auth problem, offer to open an interactive terminal —
+            // /login can't run inside the TTY-less stream-json session.
+            if (LoginDetection.needsLogin(message)) login.maybePrompt()
+        } else {
+            // A clean turn means we're authenticated; allow a future auth failure to prompt again.
+            login.onCleanResult()
+            // Count it toward the one-and-only Marketplace review ask. Only successful turns count, so
+            // nobody is ever asked to rate a session that was failing on them. See [ReviewPrompt].
+            ReviewPrompt.onSuccessfulTurn(project)
+        }
+        diffs.refreshTouched()
+        fireState()
+        pump()
+        // The binary's session file is the source of truth for the transcript; we don't persist our own.
+        // Once per turn we just record the open-tab set (for restore on startup) and refresh the tab title
+        // from the binary's resolved title. Off-EDT: the sidecar JSONL read is blocking IO.
+        sessionId?.let { id -> recordOpenAndTitle(id) }
+        fireAttention(if (event.result.isError) AttentionReason.ERROR else AttentionReason.TURN_DONE)
+    }
+
+    /** Control traffic. Every request here MUST be answered, or the binary blocks on us forever. */
+    private fun onControl(event: ClaudeEvent.Control) {
+        when (event) {
             is ClaudeEvent.PermissionRequest -> broker.handle(event.requestId, event.request)
+
             is ClaudeEvent.HookCallback -> handleHookCallback(event.requestId, event.request)
+
             // request_user_dialog: we render no custom dialog kinds — cancel (the CLI applies the dialog's default)
             // and leave a transparency note so the user sees the agent asked for one.
             is ClaudeEvent.UserDialogRequest -> {
                 write(DialogResponder.response(event.requestId))
                 systemNotice(DialogResponder.notice(event.dialogKind))
             }
+
             // elicitation: an MCP server wants user input — surface a non-modal card; the user's choice replies.
             is ClaudeEvent.Elicitation -> presentElicitation(event.requestId, event.request)
-            is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
-            is ClaudeEvent.ControlResult -> controlClient.onControlResult(event)
 
-            // --- E1: subagent task lifecycle. [TaskTracker] owns the observable map keyed by task_id (latest
-            // progress wins); the rich panel lands in E10 — here we only keep the state and fire so the UI refreshes. ---
+            is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
+
+            is ClaudeEvent.ControlResult -> controlClient.onControlResult(event)
+        }
+    }
+
+    // --- E1: subagent task lifecycle. [TaskTracker] owns the observable map keyed by task_id (latest
+    // progress wins); here we only keep the state and fire so the UI refreshes. ---
+    private fun onTask(event: ClaudeEvent.Task) {
+        when (event) {
             is ClaudeEvent.TaskStarted -> edt { if (taskTracker.onStarted(event.info)) fireState() }
-            is ClaudeEvent.TaskProgress -> edt { taskTracker.onProgress(event.info); fireState() }
-            is ClaudeEvent.TaskUpdated -> edt { taskTracker.onUpdated(event.info); fireState() }
+
+            is ClaudeEvent.TaskProgress -> edt {
+                taskTracker.onProgress(event.info)
+                fireState()
+            }
+
+            is ClaudeEvent.TaskUpdated -> edt {
+                taskTracker.onUpdated(event.info)
+                fireState()
+            }
+
             is ClaudeEvent.TaskNotification -> edt {
                 // Settled: drop from the live map (TaskTracker); surface a discreet notice unless asked to skip it.
                 if (taskTracker.onNotification(event.info)) {
@@ -1352,121 +1702,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 fireState()
             }
 
-            // notification → in-transcript notice; high/immediate also raises an IDE notification so it isn't missed.
-            is ClaudeEvent.Notification -> {
-                val text = event.info.text
-                if (text.isNotBlank()) {
-                    systemNotice(text)
-                    if (event.info.priority == "high" || event.info.priority == "immediate") notifyInfo(text)
-                }
-            }
-
-            // permission_denied → render the denial (the model only otherwise sees an is_error tool_result).
-            is ClaudeEvent.PermissionDenied -> edt {
-                val reason = event.info.message.ifBlank { event.info.decisionReason ?: event.info.decisionReasonType ?: "denied" }
-                transcript.add(Speaker.ERROR, "Denied ${event.info.toolName}: $reason")
-            }
-
-            is ClaudeEvent.SessionStateChanged -> { sessionState = event.info.state; edt { fireState() } }
-            is ClaudeEvent.AuthStatus -> {
-                authStatus = event.info
-                event.info.error?.takeIf { it.isNotBlank() }?.let {
-                    edt {
-                        transcript.add(Speaker.ERROR, "Authentication error: $it")
-                        if (LoginDetection.needsLogin(it)) maybePromptLogin()
-                    }
-                }
-                edt { fireState() }
-            }
-
-            // thinking_tokens → live reasoning estimate shown in the composer status line. EDT for single-threaded
-            // counter writes; fireState so the status row repaints (thinking_tokens fires far slower than text deltas).
-            is ClaudeEvent.ThinkingTokens -> edt { liveThinkingTokens = event.info.estimatedTokens; fireState() }
-
-            is ClaudeEvent.ApiRetry -> {
-                val of = if (event.info.maxRetries > 0) "/${event.info.maxRetries}" else ""
-                systemNotice("Retrying (attempt ${event.info.attempt}$of)…")
-            }
-
-            // commands_changed → REPLACE the cached command list (supportedCommands() never reflects mid-session changes).
-            is ClaudeEvent.CommandsChanged -> edt { commands = event.info.commands; fireMetadata() }
-
-            // memory_recall → a collapsible "Recalled N memories" row listing what context influenced the turn.
-            is ClaudeEvent.MemoryRecall -> {
-                if (event.info.memories.isNotEmpty()) edt {
-                    transcript.add(
-                        Speaker.MEMORY,
-                        MemoryRecallFormatter.body(event.info),
-                        meta = MemoryRecallFormatter.summary(event.info),
-                    )
-                }
-            }
-            // prompt_suggestion → the predicted next prompt, surfaced as a clickable composer chip (see SuggestionStripPanel).
-            is ClaudeEvent.PromptSuggestion -> {
-                promptSuggestion = event.info.suggestion.takeIf { it.isNotBlank() }
-                edt { fireState() }
-            }
-            is ClaudeEvent.FilesPersisted -> {
-                if (event.info.files.isNotEmpty()) {
-                    systemNotice("Uploaded ${event.info.files.size} file(s): " + event.info.files.joinToString(", ") { it.filename })
-                }
-                if (event.info.failed.isNotEmpty()) systemNotice("Failed to persist ${event.info.failed.size} file(s)")
-            }
-            is ClaudeEvent.PluginInstall -> {
-                log.debug("plugin_install status=${event.info.status} name=${event.info.name}")
-                when (event.info.status) {
-                    "installed" -> systemNotice("Plugin installed${event.info.name?.let { ": $it" } ?: ""}")
-                    "failed" -> systemNotice("Plugin install failed${event.info.error?.let { ": $it" } ?: ""}")
-                }
-            }
-            // hook_started/progress/response → one evolving "⚙ Hook …" transcript row per hook (HookActivityNarrator).
-            is ClaudeEvent.HookStarted -> edt { hookNarrator.onStarted(event.info) }
-            is ClaudeEvent.HookProgress -> edt { hookNarrator.onProgress(event.info) }
-            is ClaudeEvent.HookResponse -> edt { hookNarrator.onResponse(event.info) }
             // tool_progress → RUNNING (animated box) + elapsed time (the protocol carries no completion %).
             is ClaudeEvent.ToolProgress -> edt {
                 transcript.setToolState(event.info.toolUseId, ToolState.RUNNING, event.info.elapsedTimeSeconds)
             }
+
             // tool_use_summary → a quiet dim note summarizing the preceding tool calls.
             is ClaudeEvent.ToolUseSummary -> edt {
                 if (event.info.summary.isNotBlank()) transcript.add(Speaker.SYSTEM, "↳ ${event.info.summary}")
-            }
-            // mirror_error → the binary lost transcript data; warn the user (their session file may be incomplete).
-            is ClaudeEvent.MirrorError -> {
-                log.warn("mirror_error: ${event.info.error}")
-                systemNotice("Warning: failed to persist part of the session transcript.")
-            }
-
-            is ClaudeEvent.ModelRefusalFallback -> {
-                val i = event.info
-                val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
-                val to = i.fallbackModel.takeIf { it.isNotBlank() }?.let { " → retried on $it" } ?: " → retried on a fallback model"
-                systemNotice("The model declined to respond$cat$to.")
-            }
-
-            is ClaudeEvent.ModelRefusalNoFallback -> edt {
-                // Refusal with no fallback configured → the turn ends in error. Surface it (the content is display
-                // prose) so a refused turn never ends silently.
-                val i = event.info
-                val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
-                val msg = i.content.ifBlank { "The model declined to respond$cat and no fallback model was configured." }
-                transcript.add(Speaker.ERROR, msg)
-            }
-
-            is ClaudeEvent.Informational -> {
-                // Generic loop banner. Only surface the more prominent levels (suggestion/warning) plus any blocking
-                // message; info/notice are already implied by the turn state and would just add noise.
-                val i = event.info
-                val text = i.content.trim()
-                if (text.isNotEmpty() && (i.level == "warning" || i.level == "suggestion" || i.preventContinuation)) {
-                    systemNotice(if (i.level == "warning") "Warning: $text" else text)
-                }
-            }
-
-            is ClaudeEvent.WorkerShuttingDown -> {
-                // Live-tail only: a resumed session may replay historical instances, so don't tear anything down —
-                // just log it. (Reasons like host_exit/remote_control_disabled are host-set, not user input.)
-                log.info("worker_shutting_down: ${event.info.reason}")
             }
 
             is ClaudeEvent.BackgroundTasksChanged -> edt {
@@ -1475,21 +1718,208 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 taskTracker.replaceBackgroundTasks(event.info.tasks)
                 fireState()
             }
+        }
+    }
 
-            is ClaudeEvent.ControlRequestProgress -> {
-                // Progress for one of OUR long-running control requests (currently only side_question, i.e. /btw).
-                // `started` just means the worker accepted it — the transcript already shows the question. An
-                // `api_retry` carries the same counters as system/api_retry, so surface it the same way.
-                val i = event.info
-                if (i.status == "api_retry") {
-                    val of = (i.maxRetries ?: 0).takeIf { it > 0 }?.let { "/$it" } ?: ""
-                    systemNotice("Retrying (attempt ${i.attempt ?: 1}$of)…")
-                } else {
-                    log.debug("control_request_progress: ${i.status} for ${i.requestId}")
-                }
+    /** Session state and metadata: drives the UI chrome (quota, turn state, commands), not transcript text. */
+    private fun onSessionSignal(event: ClaudeEvent.SessionSignal) {
+        when (event) {
+            is ClaudeEvent.RateLimit -> onRateLimit(event)
+
+            is ClaudeEvent.AuthStatus -> onAuthStatus(event)
+
+            is ClaudeEvent.ControlRequestProgress -> onControlRequestProgress(event)
+
+            is ClaudeEvent.SessionStateChanged -> {
+                sessionState = event.info.state
+                edt { fireState() }
             }
 
+            // thinking_tokens → live reasoning estimate in the composer status line. EDT for single-threaded
+            // counter writes; fireState so the status row repaints (it fires far slower than text deltas).
+            is ClaudeEvent.ThinkingTokens -> edt {
+                liveThinkingTokens = event.info.estimatedTokens
+                fireState()
+            }
+
+            is ClaudeEvent.ApiRetry -> {
+                val of = if (event.info.maxRetries > 0) "/${event.info.maxRetries}" else ""
+                systemNotice("Retrying (attempt ${event.info.attempt}$of)…")
+            }
+
+            // commands_changed → REPLACE the cached list (supportedCommands() never reflects mid-session changes).
+            is ClaudeEvent.CommandsChanged -> edt {
+                commands = event.info.commands
+                fireMetadata()
+            }
+
+            // prompt_suggestion → the predicted next prompt, surfaced as a clickable composer chip.
+            is ClaudeEvent.PromptSuggestion -> {
+                promptSuggestion = event.info.suggestion.takeIf { it.isNotBlank() }
+                edt { fireState() }
+            }
+        }
+    }
+
+    private fun onRateLimit(event: ClaudeEvent.RateLimit) {
+        val incoming = event.info
+        val window = incoming.rateLimitType
+        // The binary often emits a rate_limit_event without `utilization` (it's optional and only present when
+        // the API returns it). Don't lose a previously-known utilization just because a later event omitted
+        // it — carry it forward so the quota % stays shown once we've seen it. Carried forward PER WINDOW:
+        // filling a five-hour gap with a seven-day percentage would be worse than showing nothing.
+        val previous = window?.let { rateLimits[it] } ?: rateLimit.takeIf { it?.rateLimitType == window }
+        val merged = if (incoming.utilization == null) {
+            incoming.copy(utilization = previous?.utilization)
+        } else {
+            incoming
+        }
+        rateLimit = merged
+        if (window != null) rateLimits = rateLimits + (window to merged)
+        edt { fireState() }
+    }
+
+    private fun onAuthStatus(event: ClaudeEvent.AuthStatus) {
+        authStatus = event.info
+        event.info.error?.takeIf { it.isNotBlank() }?.let {
+            edt {
+                transcript.add(Speaker.ERROR, "Authentication error: $it")
+                if (LoginDetection.needsLogin(it)) login.maybePrompt()
+            }
+        }
+        edt { fireState() }
+    }
+
+    private fun onControlRequestProgress(event: ClaudeEvent.ControlRequestProgress) {
+        // Progress for one of OUR long-running control requests (currently only side_question, i.e. /btw).
+        // `started` just means the worker accepted it — the transcript already shows the question. An
+        // `api_retry` carries the same counters as system/api_retry, so surface it the same way.
+        val i = event.info
+        if (i.status == "api_retry") {
+            val of = (i.maxRetries ?: 0).takeIf { it > 0 }?.let { "/$it" } ?: ""
+            systemNotice("Retrying (attempt ${i.attempt ?: 1}$of)…")
+        } else {
+            log.debug("control_request_progress: ${i.status} for ${i.requestId}")
+        }
+    }
+
+    /** hook_started/progress/response → one evolving "⚙ Hook …" transcript row per hook. */
+    private fun onHookTelemetry(event: ClaudeEvent.HookTelemetry) = edt {
+        when (event) {
+            is ClaudeEvent.HookStarted -> hookNarrator.onStarted(event.info)
+            is ClaudeEvent.HookProgress -> hookNarrator.onProgress(event.info)
+            is ClaudeEvent.HookResponse -> hookNarrator.onResponse(event.info)
+        }
+    }
+
+    /** Informational text surfaced as a transcript row. Fire-and-forget: nothing here answers the binary. */
+    private fun onNotice(event: ClaudeEvent.Notice) {
+        when (event) {
+            is ClaudeEvent.StatusNotice -> systemNotice(event.text)
+
+            is ClaudeEvent.MemoryRecall -> onMemoryRecall(event)
+
+            is ClaudeEvent.FilesPersisted -> onFilesPersisted(event)
+
+            is ClaudeEvent.PluginInstall -> onPluginInstall(event)
+
+            is ClaudeEvent.ModelRefusalFallback -> onModelRefusalFallback(event)
+
+            is ClaudeEvent.ModelRefusalNoFallback -> onModelRefusalNoFallback(event)
+
+            is ClaudeEvent.Informational -> onInformational(event)
+
+            is ClaudeEvent.Notification -> onNotification(event)
+
+            is ClaudeEvent.PermissionDenied -> onPermissionDenied(event)
+
+            // mirror_error → the binary lost transcript data; warn the user (their session file may be incomplete).
+            is ClaudeEvent.MirrorError -> {
+                log.warn("mirror_error: ${event.info.error}")
+                systemNotice("Warning: failed to persist part of the session transcript.")
+            }
+
+            // Live-tail only: a resumed session may replay historical instances, so don't tear anything down —
+            // just log it. (Reasons like host_exit/remote_control_disabled are host-set, not user input.)
+            is ClaudeEvent.WorkerShuttingDown -> log.info("worker_shutting_down: ${event.info.reason}")
+
             is ClaudeEvent.Other -> log.debug("Ignored ${event.type}/${event.subtype}")
+        }
+    }
+
+    /** notification → in-transcript notice; high/immediate also raises an IDE notification so it isn't missed. */
+    private fun onNotification(event: ClaudeEvent.Notification) {
+        val text = event.info.text
+        if (text.isBlank()) return
+        systemNotice(text)
+        if (event.info.priority == "high" || event.info.priority == "immediate") notifyInfo(text)
+    }
+
+    /** permission_denied → render the denial (the model only otherwise sees an is_error tool_result). */
+    private fun onPermissionDenied(event: ClaudeEvent.PermissionDenied) = edt {
+        val i = event.info
+        val reason = i.message.ifBlank { i.decisionReason ?: i.decisionReasonType ?: "denied" }
+        transcript.add(Speaker.ERROR, "Denied ${i.toolName}: $reason")
+    }
+
+    /** memory_recall → a collapsible "Recalled N memories" row listing what context influenced the turn. */
+    private fun onMemoryRecall(event: ClaudeEvent.MemoryRecall) {
+        if (event.info.memories.isEmpty()) return
+        edt {
+            transcript.add(
+                Speaker.MEMORY,
+                MemoryRecallFormatter.body(event.info),
+                meta = MemoryRecallFormatter.summary(event.info),
+            )
+        }
+    }
+
+    private fun onFilesPersisted(event: ClaudeEvent.FilesPersisted) {
+        val files = event.info.files
+        if (files.isNotEmpty()) {
+            systemNotice("Uploaded ${files.size} file(s): " + files.joinToString(", ") { it.filename })
+        }
+        if (event.info.failed.isNotEmpty()) systemNotice("Failed to persist ${event.info.failed.size} file(s)")
+    }
+
+    private fun onPluginInstall(event: ClaudeEvent.PluginInstall) {
+        val i = event.info
+        log.debug("plugin_install status=${i.status} name=${i.name}")
+        when (i.status) {
+            "installed" -> systemNotice("Plugin installed${i.name?.let { ": $it" } ?: ""}")
+            "failed" -> systemNotice("Plugin install failed${i.error?.let { ": $it" } ?: ""}")
+        }
+    }
+
+    private fun onModelRefusalFallback(event: ClaudeEvent.ModelRefusalFallback) {
+        val i = event.info
+        val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+        val to = i.fallbackModel.takeIf { it.isNotBlank() }
+            ?.let { " → retried on $it" } ?: " → retried on a fallback model"
+        systemNotice("The model declined to respond$cat$to.")
+    }
+
+    /**
+     * Refusal with no fallback configured → the turn ends in error. Surface it (the content is display prose)
+     * so a refused turn never ends silently.
+     */
+    private fun onModelRefusalNoFallback(event: ClaudeEvent.ModelRefusalNoFallback) = edt {
+        val i = event.info
+        val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+        val msg = i.content.ifBlank { "The model declined to respond$cat and no fallback model was configured." }
+        transcript.add(Speaker.ERROR, msg)
+    }
+
+    /**
+     * Generic loop banner. Only the more prominent levels (suggestion/warning) plus any blocking message reach
+     * the transcript; info/notice are already implied by the turn state and would just add noise.
+     */
+    private fun onInformational(event: ClaudeEvent.Informational) {
+        val i = event.info
+        val text = i.content.trim()
+        val prominent = i.level == "warning" || i.level == "suggestion" || i.preventContinuation
+        if (text.isNotEmpty() && prominent) {
+            systemNotice(if (i.level == "warning") "Warning: $text" else text)
         }
     }
 
@@ -1554,11 +1984,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val effects = hookBroker.sideEffects(ctx, decision)
         if (effects.isEmpty()) return
         edt {
-            for (effect in effects) when (effect) {
-                is HookSideEffect.NotifyUser -> notifyInfo(effect.message)
-                is HookSideEffect.RefreshFile -> { diffs.markForRefresh(effect.path); diffs.refreshTouched() }
-                is HookSideEffect.TranscriptNote -> transcript.add(Speaker.SYSTEM, effect.text)
-                is HookSideEffect.Marker -> log.debug("hook marker ${effect.event} ${effect.detail ?: ""}")
+            for (effect in effects) {
+                when (effect) {
+                    is HookSideEffect.NotifyUser -> notifyInfo(effect.message)
+
+                    is HookSideEffect.RefreshFile -> {
+                        diffs.markForRefresh(effect.path)
+                        diffs.refreshTouched()
+                    }
+
+                    is HookSideEffect.TranscriptNote -> transcript.add(Speaker.SYSTEM, effect.text)
+
+                    is HookSideEffect.Marker -> log.debug("hook marker ${effect.event} ${effect.detail ?: ""}")
+                }
             }
         }
     }
@@ -1602,144 +2040,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         starting = false
     }
 
-    /** Offer the sign-in once per auth-failure streak (see [loginPrompted]). EDT-confined. */
-    private fun maybePromptLogin() {
-        // Only the Anthropic provider uses OAuth login. On a third-party provider an auth failure means a
-        // wrong/missing API key, not a missing login — don't offer the Anthropic sign-in there.
-        if (ClaudeSettings.getInstance(project).provider != Provider.ANTHROPIC) return
-        if (loginPrompted) return
-        loginPrompted = true
-        notifyLoginNeeded()
-    }
-
-    /** A warning notification whose action runs the native `claude login` flow. */
-    private fun notifyLoginNeeded() {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup(NOTIFICATION_GROUP)
-            .createNotification(
-                "Claude Code",
-                "You don't seem to be logged in. Sign in to Claude to continue.",
-                NotificationType.WARNING,
-            )
-            .addAction(NotificationAction.createSimple("Sign in") { startLogin() })
-            .notify(project)
-    }
-
-    /**
-     * Runs the OAuth login. The `--print` stream-json chat session has no TTY and cannot host the interactive
-     * flow, so it runs outside it, through three paths tried in order — each a real fallback, never a dead end:
-     *
-     *  1. an **IDE terminal tab** running `claude auth login` ([openLoginTerminal]) — preferred: the binary drives
-     *     its whole TUI visibly and captures the OAuth callback automatically, usually with nothing to paste;
-     *  2. the **native PTY flow** ([startNativeLoginFlow]) when the terminal can't open (Terminal plugin disabled,
-     *     or its API moved again) — same binary, same flow, just headless with a code dialog if it asks for one;
-     *  3. only if both fail, a notice carrying the exact command to run by hand.
-     *
-     * Before 4.4.1 this method called the terminal path unconditionally and, on a current IDE, that path silently
-     * failed (see [TerminalLauncher.openAndRunCommand]) — so `/login` *always* landed on step 3 and the PTY flow
-     * was unreachable code. Public so the composer can route a typed `/login` here.
-     */
-    fun startLogin() {
-        val settings = ClaudeSettings.getInstance(project)
-        // /login is the Anthropic OAuth flow — only meaningful for the official Anthropic provider. For a
-        // third-party provider, auth is its own API key (configured in Settings), not an OAuth login.
-        if (settings.provider != Provider.ANTHROPIC) {
-            notifyInfo("Sign-in is only for the Anthropic provider. You're on ${settings.provider.label} — set its API key in Settings instead.")
-            return
-        }
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run { notifyMissingBinary(); return }
-        edt {
-            if (openLoginTerminal(binary)) return@edt
-            log.info("IDE terminal unavailable for /login — falling back to the native PTY flow")
-            if (startNativeLoginFlow(binary)) {
-                notifyInfo("Signing in… your browser should open. Approve access there to finish.")
-                return@edt
-            }
-            notifyError(
-                "Couldn't start the sign-in flow. Run this in a terminal, then restart the chat:\n" +
-                    TerminalLauncher.loginCommand(binary.absolutePath)
-            )
-        }
-    }
-
-    /** EDT-only. Asks for the authorization code and feeds it to the running [ClaudeLoginFlow] (or cancels it). */
-    private fun promptForLoginCode(flow: ClaudeLoginFlow) {
-        val urlHint = loginAuthUrl?.let { "\n\nIf the browser didn't open, visit:\n$it" }.orEmpty()
-        val code = Messages.showInputDialog(
-            project,
-            "Approve access in your browser, then paste the authorization code here.$urlHint",
-            "Sign in to Claude",
-            null,
-        )
-        if (code.isNullOrBlank()) {
-            flow.cancel()
-            loginFlow = null
-            notifyInfo("Login canceled.")
-        } else {
-            flow.submitCode(code.trim())
-        }
-    }
-
-    /**
-     * Opens an IDE terminal running `claude auth login`. Preferred over the PTY flow because the binary drives its
-     * whole interactive TUI visibly and captures the OAuth callback automatically (usually nothing to paste).
-     * Always uses the binary's absolute path so a GUI IDE that didn't inherit the user's login `$PATH` still
-     * launches the right binary. Returns whether the terminal actually opened, so [startLogin] can fall through to
-     * the native PTY flow instead of dead-ending on a "do it yourself" notice.
-     */
-    private fun openLoginTerminal(binary: java.io.File): Boolean {
-        val opened = TerminalLauncher.openAndRunCommand(
-            project, TerminalLauncher.loginArgv(binary.absolutePath), "claude login",
-        )
-        if (opened) {
-            // We can't observe the terminal's completion, so offer a one-click restart to pick up the
-            // new auth once the user finishes signing in there.
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup(NOTIFICATION_GROUP)
-                .createNotification(
-                    "Claude Code",
-                    "Finish signing in in the terminal — the browser opens automatically. When it confirms you're logged in, restart the chat to use it.",
-                    NotificationType.INFORMATION,
-                )
-                .addAction(NotificationAction.createSimple("Restart chat") { restart() })
-                .notify(project)
-        }
-        return opened
-    }
-
-    /**
-     * Native PTY fallback for [startLogin]: runs `claude auth login` under a pseudo-terminal ([ClaudeLoginFlow])
-     * with no IDE terminal involved, so signing in still works when the bundled Terminal plugin is disabled or its
-     * API has moved again. The binary opens the browser itself; if it asks for a code we scrape the prompt and
-     * collect it in a dialog. Returns whether the PTY spawned.
-     */
-    private fun startNativeLoginFlow(binary: java.io.File): Boolean {
-        // pty4j REPLACES the child env wholesale (unlike ClaudeProcess, which inherits the parent's and layers
-        // extras on top), so the base environment has to be merged in here or the binary loses PATH/HOME entirely.
-        val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
-        val flow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
-        val started = flow.start(object : ClaudeLoginFlow.Listener {
-            override fun onAuthUrl(url: String) {
-                loginAuthUrl = url
-                edt { BrowserUtil.browse(url) }
-            }
-
-            override fun onCodeRequested() = edt { promptForLoginCode(flow) }
-
-            override fun onResult(success: Boolean, message: String) = edt {
-                loginFlow = null
-                loginAuthUrl = null
-                if (success) {
-                    notifyInfo(message)
-                    restart() // pick up the new credentials
-                } else {
-                    notifyError(message)
-                }
-            }
-        })
-        if (started) loginFlow = flow
-        return started
-    }
+    /** Runs the OAuth sign-in. Delegates to [login]; public so the composer can route a typed `/login` here. */
+    fun startLogin() = login.start()
 
     /**
      * EDT-only. Returns true if the session may launch: either there's no risky exec config (sourceScript / stdio
@@ -1776,9 +2078,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     "Install Claude Code (https://claude.com/code), or set the executable path manually.",
                 NotificationType.ERROR,
             )
-            .addAction(NotificationAction.createSimple("Configure paths…") {
-                ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
-            })
+            .addAction(
+                NotificationAction.createSimple("Configure paths…") {
+                    ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+                },
+            )
             .notify(project)
     }
 
@@ -1850,6 +2154,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
         // Allowed values come from the typed enums in ClaudeEnums.kt (single source of truth); exposed as the
         // wire strings so the UI/persistence/protocol callers stay string-based and unchanged.
+
         /** Shift+Tab cycles through these, like the CLI. */
         val PERMISSION_MODES_CYCLE = PermissionMode.CYCLE.map { it.wire }
 
@@ -1863,6 +2168,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
         /** Default port of JetBrains' MCP Server plugin (used to synthesize the sse/streamable-http endpoint). */
         const val DEFAULT_IDE_MCP_PORT = 64342
+
+        /** Listenable TCP port range; anything outside it falls back to [DEFAULT_IDE_MCP_PORT]. */
+        private val VALID_PORTS = 1..65_535
+
+        /**
+         * Quota levels worth interrupting the user about, ascending. They match the composer dot's colour
+         * scale exactly (blue → amber → red), so the warning and the indicator always agree.
+         */
+        private val QUOTA_THRESHOLDS = listOf(65, 85)
+        private const val QUOTA_THRESHOLD_HIGH = 85
 
         /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
         val IDE_MCP_TRANSPORTS = McpTransport.entries.map { it.wire }

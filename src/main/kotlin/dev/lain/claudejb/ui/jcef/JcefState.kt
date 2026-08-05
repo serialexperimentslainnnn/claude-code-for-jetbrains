@@ -1,6 +1,8 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.protocol.ModelInfo
+import dev.lain.claudejb.protocol.RateLimitInfo
+import dev.lain.claudejb.protocol.UsageReport
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.StatusLineFormatter
@@ -21,7 +23,34 @@ import kotlinx.serialization.json.put
  */
 object JcefState {
 
-    fun stateJson(session: ClaudeSession): String {
+    /**
+     * `[{ key, label, pct }]` for the composer readout — the windows that actually have a percentage.
+     *
+     * Windows without one are dropped here rather than shown as "—": the readout is a glanceable line, and a
+     * placeholder that can never resolve is worse than one fewer indicator. The dashboard card keeps them,
+     * because there the distinction between "unknown" and "unused" is worth the row.
+     */
+    private fun compactUsageJson(session: ClaudeSession, usage: UsageReport?) = buildJsonArray {
+        val fromReport = usage?.windows.orEmpty().mapNotNull { (key, w) ->
+            w.utilization?.let { key to normalizePercent(it) }
+        }
+        val fromEvents = session.rateLimits
+            .filterKeys { key -> fromReport.none { it.first == key } }
+            .mapNotNull { (key, info) -> info.utilizationPercent()?.let { key to it } }
+        (fromReport + fromEvents).forEach { (key, pct) ->
+            addJsonObject {
+                put("key", key)
+                put("label", RateLimitInfo.windowTitleFor(key))
+                put("pct", pct)
+            }
+        }
+    }
+
+    /** The wire has sent both 0..100 and 0..1 historically; accept either, clamp, never crash. */
+    private fun normalizePercent(raw: Double): Int =
+        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
+
+    fun stateJson(session: ClaudeSession, usage: UsageReport? = null): String {
         val provider = session.provider
         val mode = session.permissionMode
         val effort = session.effort
@@ -32,107 +61,54 @@ object JcefState {
             put("turnActive", session.turnActive)
             put("interrupting", session.interrupting)
             put("running", session.isRunning())
+            // "Booting" is a THIRD state, not the absence of `running`: the web app blocks input behind a loading
+            // screen while this is true, and a session that failed to launch must fall out of it (both flags
+            // false) rather than wait forever.
+            put("starting", session.isStarting())
+            // Resuming reads an existing transcript back and is the slower of the two waits, so the boot screen
+            // labels it differently rather than calling both "Starting" and making the long one look hung.
+            put("resuming", session.isStarting() && session.sessionId != null)
+
+            // The live reasoning estimate as a NUMBER, always present (0 when nothing is being reasoned about),
+            // so the readout can render a settled "0" instead of omitting the item. An item that only exists
+            // once it is non-zero is indistinguishable from one that failed to load.
+            put("reasoningTokens", session.liveThinkingTokens)
 
             // Live reasoning suffix while a thinking block is accumulating; null when there's nothing to show.
             val suffix = StatusLineFormatter.thinkingSuffix(session.liveThinkingTokens)
-            if (session.turnActive && suffix.isNotEmpty()) put("thinkingStatus", "Thinking… · $suffix")
-            else put("thinkingStatus", null as String?)
+            if (session.turnActive && suffix.isNotEmpty()) {
+                put("thinkingStatus", "Thinking… · $suffix")
+            } else {
+                put("thinkingStatus", null as String?)
+            }
 
-            // provider { id, label, options[{id,label,selected}] }
-            put("provider", buildJsonObject {
-                put("id", provider.id)
-                put("label", provider.label)
-                put("options", buildJsonArray {
-                    Provider.entries.forEach { p ->
-                        addJsonObject {
-                            put("id", p.id)
-                            put("label", p.label)
-                            put("selected", p == provider)
-                        }
-                    }
-                })
-            })
-
-            // model { label, options[{value,label,selected}] }
-            // The list is autodetected from the binary's `initialize` catalog. We drop the floating "default"
-            // alias (it duplicated the concrete tier and showed no version) and label each entry with its version
-            // (see modelDisplayLabel), so Opus 5 vs Sonnet 5 vs Haiku 4.5 read at a glance.
-            val selectedModel = session.model ?: session.preferredDefaultModel()
-            put("model", buildJsonObject {
-                put("label", modelLabel(session))
-                put("options", buildJsonArray {
-                    session.models
-                        .filter { it.value != ClaudeSession.RECOMMENDED_ALIAS }
-                        .forEach { m ->
-                            addJsonObject {
-                                put("value", m.value)
-                                put("label", modelDisplayLabel(m))
-                                put("selected", m.value == selectedModel)
-                            }
-                        }
-                })
-            })
-
-            // mode { wire, label, options[{wire,label,selected}] }
-            put("mode", buildJsonObject {
-                put("wire", mode)
-                put("label", PermissionMode.labelFor(mode))
-                put("options", buildJsonArray {
-                    ClaudeSession.PERMISSION_MODES.forEach { wire ->
-                        addJsonObject {
-                            put("wire", wire)
-                            put("label", PermissionMode.labelFor(wire))
-                            put("selected", wire == mode)
-                        }
-                    }
-                })
-            })
-
-            // effort { label, options[{value:String?,label,selected}] } — include a null "Default" option.
-            put("effort", buildJsonObject {
-                put("label", effort?.replaceFirstChar { it.uppercase() } ?: "Default")
-                put("options", buildJsonArray {
-                    addJsonObject {
-                        put("value", null as String?)
-                        put("label", "Default")
-                        put("selected", effort == null)
-                    }
-                    ClaudeSession.EFFORT_LEVELS.forEach { lvl ->
-                        addJsonObject {
-                            put("value", lvl)
-                            put("label", lvl.replaceFirstChar { it.uppercase() })
-                            put("selected", lvl == effort)
-                        }
-                    }
-                })
-            })
-
-            // thinking { on, options[{on,label,selected}] }
-            put("thinking", buildJsonObject {
-                put("on", thinkingOn)
-                put("options", buildJsonArray {
-                    addJsonObject {
-                        put("on", false)
-                        put("label", "Off")
-                        put("selected", !thinkingOn)
-                    }
-                    addJsonObject {
-                        put("on", true)
-                        put("label", "Extended")
-                        put("selected", thinkingOn)
-                    }
-                })
-            })
+            // One builder per composer pill — each is an independent { label, options[…] } shape, and inlining
+            // all five made this one function longer than the whole rest of the file.
+            put("provider", providerJson(provider))
+            put("model", modelJson(session))
+            put("mode", modeJson(mode))
+            put("effort", effortJson(effort))
+            put("thinking", thinkingJson(thinkingOn))
 
             put("queue", buildJsonArray { session.queuedPrompts().forEach { add(it) } })
             put("suggestion", session.promptSuggestion)
 
+            // Plan limits, COMPACT — the composer readout is one line, so it carries label + percentage only.
+            // The dashboard's card (JcefSessionData.usageJson) is the full version with reset times and
+            // credits. Deliberately duplicated rather than shared: the two views answer different questions
+            // ("am I close to a wall right now?" vs "where did my week go?") and forcing one shape on both is
+            // how the readout ends up wrapping to three lines on a narrow tool window.
+            put("usage", compactUsageJson(session, usage))
+
             if (context != null) {
-                put("context", buildJsonObject {
-                    put("used", context.totalTokens)
-                    put("max", context.maxTokens)
-                    put("pct", context.percentage)
-                })
+                put(
+                    "context",
+                    buildJsonObject {
+                        put("used", context.totalTokens)
+                        put("max", context.maxTokens)
+                        put("pct", context.percentage)
+                    },
+                )
             } else {
                 put("context", null as String?)
             }
@@ -143,6 +119,110 @@ object JcefState {
         return obj.toString()
     }
 
+    /** provider { id, label, options[{id,label,selected}] } */
+    private fun providerJson(provider: Provider) = buildJsonObject {
+        put("id", provider.id)
+        put("label", provider.label)
+        put(
+            "options",
+            buildJsonArray {
+                Provider.entries.forEach { p ->
+                    addJsonObject {
+                        put("id", p.id)
+                        put("label", p.label)
+                        put("selected", p == provider)
+                    }
+                }
+            },
+        )
+    }
+
+    /**
+     * model { label, options[{value,label,selected}] }
+     *
+     * The list is autodetected from the binary's `initialize` catalog. We drop the floating "default" alias (it
+     * duplicated the concrete tier and showed no version) and label each entry with its version (see
+     * [modelDisplayLabel]), so Opus 5 vs Sonnet 5 vs Haiku 4.5 read at a glance.
+     */
+    private fun modelJson(session: ClaudeSession) = buildJsonObject {
+        val selectedModel = session.model ?: session.preferredDefaultModel()
+        put("label", modelLabel(session))
+        put(
+            "options",
+            buildJsonArray {
+                session.models
+                    .filter { it.value != ClaudeSession.RECOMMENDED_ALIAS }
+                    .forEach { m ->
+                        addJsonObject {
+                            put("value", m.value)
+                            put("label", modelDisplayLabel(m))
+                            put("selected", m.value == selectedModel)
+                        }
+                    }
+            },
+        )
+    }
+
+    /** mode { wire, label, options[{wire,label,selected}] } */
+    private fun modeJson(mode: String) = buildJsonObject {
+        put("wire", mode)
+        put("label", PermissionMode.labelFor(mode))
+        put(
+            "options",
+            buildJsonArray {
+                ClaudeSession.PERMISSION_MODES.forEach { wire ->
+                    addJsonObject {
+                        put("wire", wire)
+                        put("label", PermissionMode.labelFor(wire))
+                        put("selected", wire == mode)
+                    }
+                }
+            },
+        )
+    }
+
+    /** effort { label, options[{value:String?,label,selected}] } — includes a null "Default" option. */
+    private fun effortJson(effort: String?) = buildJsonObject {
+        put("label", effort?.replaceFirstChar { it.uppercase() } ?: "Default")
+        put(
+            "options",
+            buildJsonArray {
+                addJsonObject {
+                    put("value", null as String?)
+                    put("label", "Default")
+                    put("selected", effort == null)
+                }
+                ClaudeSession.EFFORT_LEVELS.forEach { lvl ->
+                    addJsonObject {
+                        put("value", lvl)
+                        put("label", lvl.replaceFirstChar { it.uppercase() })
+                        put("selected", lvl == effort)
+                    }
+                }
+            },
+        )
+    }
+
+    /** thinking { on, options[{on,label,selected}] } */
+    private fun thinkingJson(thinkingOn: Boolean) = buildJsonObject {
+        put("on", thinkingOn)
+        put(
+            "options",
+            buildJsonArray {
+                addJsonObject {
+                    put("on", false)
+                    put("label", "Off")
+                    put("selected", !thinkingOn)
+                }
+                addJsonObject {
+                    put("on", true)
+                    put("label", "Extended")
+                    put("selected", thinkingOn)
+                }
+            },
+        )
+    }
+
     fun metaJson(session: ClaudeSession): String {
         // Commands the plugin handles itself (not reported by the binary's slash_commands).
         val pluginCommands = mapOf(
@@ -151,21 +231,26 @@ object JcefState {
         )
         val binaryNames = session.commands.map { it.name }.toSet()
         val obj = buildJsonObject {
-            put("commands", buildJsonArray {
-                // Plugin commands first, skipping any the binary already reports.
-                pluginCommands.forEach { (name, desc) ->
-                    if (name !in binaryNames) addJsonObject {
-                        put("name", name)
-                        put("description", desc)
+            put(
+                "commands",
+                buildJsonArray {
+                    // Plugin commands first, skipping any the binary already reports.
+                    pluginCommands.forEach { (name, desc) ->
+                        if (name !in binaryNames) {
+                            addJsonObject {
+                                put("name", name)
+                                put("description", desc)
+                            }
+                        }
                     }
-                }
-                session.commands.forEach { cmd ->
-                    addJsonObject {
-                        put("name", cmd.name)
-                        put("description", cmd.description.ifBlank { cmd.name })
+                    session.commands.forEach { cmd ->
+                        addJsonObject {
+                            put("name", cmd.name)
+                            put("description", cmd.description.ifBlank { cmd.name })
+                        }
                     }
-                }
-            })
+                },
+            )
             // Under the native Wayland toolkit CEF's web clipboard is isolated from the system clipboard,
             // so the composer must route Ctrl+V through the host (which reads via wl-paste) instead of
             // trusting the paste event's clipboardData. See JcefChatPanel.PasteClipboard.

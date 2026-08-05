@@ -2,12 +2,14 @@ package dev.lain.claudejb.diff
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.addJsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -17,6 +19,32 @@ import org.junit.jupiter.api.Test
  * what the binary will write when we answer `allow`.
  */
 class DiffPresenterTest {
+
+    // --- diff tab title ---
+    //
+    // ChainDiffVirtualFile takes its title AS ITS FILE NAME, so the title is not cosmetic: the IDE reads it as
+    // a filename and hands it to whatever machinery claims that extension. The old title, "Claude · <name>",
+    // ended in the file's own extension — so reviewing build.gradle.kts produced a virtual file called
+    // "Claude · build.gradle.kts", which Kotlin's script support tried to resolve and could not, raising
+    // "Circular script import — Not a kotlin file" at the user on every Gradle edit. These pin the shape.
+
+    @Test
+    fun `diff title does not end in the reviewed file's extension`() {
+        for (name in listOf("build.gradle.kts", "App.kt", "main.py", "pom.xml", "script.sh", "a.gradle")) {
+            val title = DiffPresenter.diffTitle(name)
+            val ext = name.substringAfterLast('.', "")
+            assertFalse(
+                title.endsWith(".$ext"),
+                "Diff title '$title' ends in .$ext — the IDE will treat the diff tab as a file of that type",
+            )
+        }
+    }
+
+    @Test
+    fun `diff title still names the file, so tabs stay identifiable`() {
+        assertTrue(DiffPresenter.diffTitle("build.gradle.kts").startsWith("build.gradle.kts"))
+        assertTrue(DiffPresenter.diffTitle("App.kt").contains("Claude"))
+    }
 
     // --- Write ---
 

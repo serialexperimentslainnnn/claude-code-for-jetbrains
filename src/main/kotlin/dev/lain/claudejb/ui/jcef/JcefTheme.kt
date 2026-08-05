@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
+import com.intellij.ide.ui.UISettings
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.ui.JBColor
@@ -11,6 +12,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.awt.Color
+import java.util.Locale
 
 /**
  * Produces the flat CSS-variable theme map the JCEF web layer consumes (see JCEF_CONTRACT §THEME).
@@ -24,7 +26,30 @@ import java.awt.Color
  */
 object JcefTheme {
 
-    fun vars(): JsonObject {
+    /** Alpha of the translucent accent/link fills (selection wash, link hover). */
+    private const val ACCENT_SOFT_ALPHA = 0.16
+    private const val LINK_SOFT_ALPHA = 0.14
+
+    /** Base chat font size in unscaled px, before [JBUI.scale]. */
+    private const val BASE_FONT_PX = 13
+
+    // Relative luminance, ITU-R BT.601 coefficients — enough to tell a light theme from a dark one, which is
+    // all [surfaceTwo] needs (no need for the sRGB-linearised BT.709 form used for contrast ratios).
+    private const val LUMA_RED = 0.299
+    private const val LUMA_GREEN = 0.587
+    private const val LUMA_BLUE = 0.114
+
+    /** 8-bit channel maximum, for normalising and for clamping. */
+    private const val CHANNEL_MAX = 255
+
+    /** Below this relative luminance the theme counts as dark, so the second surface lightens instead of darkens. */
+    private const val DARK_THEME_LUMA = 0.5
+
+    /** How far the second surface moves from the editor background: up on dark themes, down on light ones. */
+    private const val SURFACE_NUDGE_UP = 18
+    private const val SURFACE_NUDGE_DOWN = -12
+
+    fun vars(reduceMotion: Boolean = false): JsonObject {
         val scheme = EditorColorsManager.getInstance().globalScheme
         val editorBg = scheme.defaultBackground
         val panelBg = UIUtil.getPanelBackground()
@@ -50,16 +75,16 @@ object JcefTheme {
             put("dim", hex(dim))
             put("border", hex(border))
             put("accent", hex(accent))
-            put("accentSoft", rgba(accent, 0.16))
+            put("accentSoft", rgba(accent, ACCENT_SOFT_ALPHA))
             put("link", hex(link))
-            put("linkSoft", rgba(link, 0.14))
+            put("linkSoft", rgba(link, LINK_SOFT_ALPHA))
             put("codeBg", hex(editorBg))
             put("success", "#2e9e4f")
             put("warning", "#c9920a")
             put("danger", hex(danger))
             put("fontFamily", "\"${labelFont.family}\", system-ui, sans-serif")
             put("monoFamily", "\"$monoFamily\", \"JetBrains Mono\", monospace")
-            put("fontSize", "${JBUI.scale(13)}px")
+            put("fontSize", "${JBUI.scale(BASE_FONT_PX)}px")
             // Syntax-token colours straight from the IDE's editor scheme → the chat's code blocks
             // (highlight.js classes) match the IDE exactly, in any theme. Fall back to text/dim.
             val syn = { key: com.intellij.openapi.editor.colors.TextAttributesKey, fallback: Color ->
@@ -73,25 +98,35 @@ object JcefTheme {
             put("synType", syn(com.intellij.openapi.editor.DefaultLanguageHighlighterColors.CLASS_NAME, text))
             // 🌈 Vibe Mode flag — the web layer toggles the rainbow loop on this (not a CSS var).
             put("vibe", ChatTheme.vibeMode)
+            // Reduced motion — the plugin's OWN setting, off by default. See ClaudeSettings.reduceMotion for
+            // why neither the browser's media query nor the IDE's window-animation toggle could answer this.
+            put("reducedMotion", reduceMotion)
         }
     }
 
     /** A slightly nudged variant of the editor background for secondary surfaces (cards, code heads). */
     private fun surfaceTwo(base: Color): Color {
         // Lighten on dark themes, darken on light themes, so the second surface always reads as a layer.
-        val lum = (0.299 * base.red + 0.587 * base.green + 0.114 * base.blue) / 255.0
-        val d = if (lum < 0.5) 18 else -12
+        val luma = (LUMA_RED * base.red + LUMA_GREEN * base.green + LUMA_BLUE * base.blue) / CHANNEL_MAX
+        val nudge = if (luma < DARK_THEME_LUMA) SURFACE_NUDGE_UP else SURFACE_NUDGE_DOWN
         return Color(
-            (base.red + d).coerceIn(0, 255),
-            (base.green + d).coerceIn(0, 255),
-            (base.blue + d).coerceIn(0, 255),
+            (base.red + nudge).coerceIn(0, CHANNEL_MAX),
+            (base.green + nudge).coerceIn(0, CHANNEL_MAX),
+            (base.blue + nudge).coerceIn(0, CHANNEL_MAX),
         )
     }
 
     /** "#rrggbb" for a Color. */
-    private fun hex(c: Color): String = "#%02x%02x%02x".format(c.red, c.green, c.blue)
+    private fun hex(c: Color): String = String.format(Locale.ROOT, "#%02x%02x%02x", c.red, c.green, c.blue)
 
-    /** "rgba(r,g,b,a)" for a translucent fill (alpha 0..1). */
+    /**
+     * "rgba(r,g,b,a)" for a translucent fill (alpha 0..1).
+     *
+     * [Locale.ROOT] is load-bearing, not defensive: the default-locale `"%.3f".format(0.16)` renders `0,160`
+     * under any comma-decimal locale (es, de, fr…), which makes the value `rgba(r, g, b, 0,160)` — four
+     * components instead of three, so the browser drops the declaration and the fill disappears. Same class of
+     * bug as the locale-formatted token counts.
+     */
     private fun rgba(c: Color, alpha: Double): String =
-        "rgba(${c.red}, ${c.green}, ${c.blue}, ${"%.3f".format(alpha)})"
+        "rgba(${c.red}, ${c.green}, ${c.blue}, ${String.format(Locale.ROOT, "%.3f", alpha)})"
 }

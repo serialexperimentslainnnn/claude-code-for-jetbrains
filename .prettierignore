@@ -1,0 +1,14 @@
+# Vendored third-party bundles — redistributed unmodified; reformatting them would fork a dependency.
+src/main/resources/jcef/marked.min.js
+src/main/resources/jcef/purify.min.js
+src/main/resources/jcef/highlight.min.js
+
+build/
+node_modules/
+package-lock.json
+
+# Prose. These are hand-written documents with hand-aligned tables and deliberate line breaks; a formatter
+# reflows them into a diff nobody can review and gains nothing — the audience is human, not a parser.
+*.md
+.github/**/*.yml
+.github/**/*.yaml

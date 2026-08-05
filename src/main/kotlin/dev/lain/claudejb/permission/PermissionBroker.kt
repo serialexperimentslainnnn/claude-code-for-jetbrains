@@ -2,12 +2,12 @@ package dev.lain.claudejb.permission
 
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.protocol.AskQuestion
-import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.protocol.CanUseToolRequest
 import dev.lain.claudejb.protocol.ControlProtocol
 import dev.lain.claudejb.protocol.ElicitField
 import dev.lain.claudejb.protocol.parseAskQuestions
 import dev.lain.claudejb.protocol.str
+import dev.lain.claudejb.session.PermissionMode
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -56,7 +56,7 @@ data class ElicitationCard(
     val serverName: String,
     val message: String,
     val description: String?,
-    val mode: String?,            // "url" | "form" | null
+    val mode: String?, // "url" | "form" | null
     val url: String?,
     val fields: List<ElicitField>,
 )
@@ -79,74 +79,105 @@ class PermissionBroker(
     private val isRemembered: (toolName: String, input: JsonObject) -> Boolean = { _, _ -> false },
     /** Project root for turning absolute paths into relative ones in permission cards. */
     private val projectRoot: String? = null,
-    /** The verdict for a call that trips the sensitive-data guard — see [SensitiveGuard]. ALLOW when disabled. */
-    private val sensitiveVerdict: (toolName: String, input: JsonObject) -> SensitiveGuard.Verdict =
-        { _, _ -> SensitiveGuard.Verdict.ALLOW },
-    /** A third-party (MCP/Skill) call was refused access to a sensitive path — surface it in the transcript. */
-    private val onSensitiveDenied: (toolName: String) -> Unit = {},
+    /** Verdict **and reason** for a call that trips the sensitive-data guard — see [SensitiveGuard.evaluate].
+     *  ALLOW with no reason when the guard is not configured. One call, not two: classification canonicalises
+     *  paths on disk under a timeout, and doing that twice per request is latency the user feels on the card. */
+    private val sensitiveDecision: (toolName: String, input: JsonObject) -> SensitiveGuard.Decision =
+        { _, _ -> SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
+    /** A call was refused by the sensitive-data guard — surface it in the transcript, with the guard's reason. */
+    private val onSensitiveDenied: (toolName: String, reason: String?) -> Unit = { _, _ -> },
 ) {
 
+    /**
+     * Three gates, in a fixed order that is itself the policy: the two tools that are not permission questions
+     * at all, then the sensitive-data guard, then mode-based auto-approval. Anything that survives all three
+     * gets a manual card.
+     */
     fun handle(requestId: String, request: CanUseToolRequest) {
-        // AskUserQuestion is not a permission: it carries questions the user must answer. Always surface it
-        // to the UI (never auto-approve, regardless of mode) so the answers can be collected and returned.
-        if (request.toolName == "AskUserQuestion") {
-            present(
-                PendingPermission(
-                    requestId = requestId,
-                    toolName = request.toolName,
-                    input = request.input,
-                    title = request.title ?: "Claude has a question",
-                    summary = "",
-                    reviewable = false,
-                    questions = parseAskQuestions(request.input),
-                    toolUseId = request.toolUseId.ifBlank { null },
-                )
-            )
-            return
+        if (presentSpecialCard(requestId, request)) return
+        if (applySensitiveGuard(requestId, request)) return
+        if (tryAutoApprove(requestId, request)) return
+        // Not auto-approved (default/plan mode, or a write that escapes the project root): surface a manual card.
+        present(presentable(requestId, request, request.toolName in DiffPresenter.REVIEWABLE_TOOLS))
+    }
+
+    /**
+     * The two tools that are never auto-approved regardless of mode, because neither is really a permission
+     * question: [AskUserQuestion] carries questions the user must answer, and ExitPlanMode is the agent asking
+     * to leave plan mode — a deliberate user decision. Returns true when it presented a card.
+     */
+    private fun presentSpecialCard(requestId: String, request: CanUseToolRequest): Boolean {
+        when (request.toolName) {
+            "AskUserQuestion" -> present(questionPresentable(requestId, request))
+            "ExitPlanMode" -> present(planPresentable(requestId, request))
+            else -> return false
         }
-        // ExitPlanMode is the agent proposing a plan and asking to leave plan mode. It is never auto-approved
-        // (leaving plan mode is a deliberate user decision): always surface a dedicated plan card whose
-        // Approve plan / Keep planning map onto the standard allow / deny resolution.
-        if (request.toolName == "ExitPlanMode") {
-            present(planPresentable(requestId, request))
-            return
-        }
-        // The sensitive-data guard runs BEFORE the mode is even looked at, so `bypassPermissions`, `acceptEdits`
-        // and "Always allow" simply never reach their fast paths for a call that trips it (see [SensitiveGuard]).
-        // The mode itself is untouched — this branch just never falls through to it.
-        //   MCP / Skills → denied outright: third-party code has no business reading the user's keys.
-        //   The agent's own tools → the user authorises it, explicitly, every time.
-        when (sensitiveVerdict(request.toolName, request.input)) {
+        return true
+    }
+
+    /**
+     * The sensitive-data guard, which runs BEFORE the mode is even looked at — so `bypassPermissions`,
+     * `acceptEdits` and "Always allow" simply never reach their fast paths for a call that trips it (see
+     * [SensitiveGuard]). The mode itself is untouched; this gate just never falls through to it.
+     *   MCP / Skills → denied outright: third-party code has no business reading the user's keys.
+     *   The agent's own tools → the user authorises it, explicitly, every time.
+     *
+     * Returns true when the guard settled the request (denied or turned it into a card).
+     */
+    private fun applySensitiveGuard(requestId: String, request: CanUseToolRequest): Boolean {
+        val decision = sensitiveDecision(request.toolName, request.input)
+        return when (decision.verdict) {
             SensitiveGuard.Verdict.DENY -> {
-                respond(ControlProtocol.permissionDeny(requestId, SENSITIVE_DENIED))
-                onSensitiveDenied(request.toolName)
-                return
+                // Tell the model WHICH rule refused and WHERE to change it. Until 5.0.0 this was a fixed string
+                // that always said "credentials or private keys" and "allow it in Settings" — inaccurate for a
+                // dangerous-command or foreign-territory denial, and vague about a setting that has an exact
+                // path. SensitiveGuard.reason has produced the precise wording since 4.4.0; nothing was calling
+                // it, so the user never saw it.
+                respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
+                onSensitiveDenied(request.toolName, decision.reason)
+                true
             }
+
             SensitiveGuard.Verdict.ASK -> {
                 present(presentable(requestId, request, request.toolName in DiffPresenter.REVIEWABLE_TOOLS))
-                return
+                true
             }
-            SensitiveGuard.Verdict.ALLOW -> Unit // not our business — the normal flow runs below
+
+            SensitiveGuard.Verdict.ALLOW -> false // not our business — the normal flow runs
         }
-        val mode = permissionMode()
-        val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
-        // A reviewable write is only eligible for auto-approval when its target is confined to the project root.
-        // See [autoAllow] / [isWithinRoot] for the rationale (blast-radius containment of acceptEdits/bypass).
-        val autoApprovable = !reviewable ||
-            DiffPresenter.isWithinRoot(DiffPresenter.filePathOf(request.input), projectRoot)
-        when (PermissionMode.from(mode)) {
-            PermissionMode.BYPASS -> if (autoApprovable) { autoAllow(requestId, request, reviewable); return }
-            PermissionMode.ACCEPT_EDITS -> if (reviewable && autoApprovable) { autoAllow(requestId, request, reviewable); return }
-            else -> {}
-        }
-        // "Always allow" honoured here, gated by the same autoApprovable check: a remembered reviewable write
-        // outside the project root still falls through to a manual card (path containment is non-negotiable).
-        if (isRemembered(request.toolName, request.input) && autoApprovable) {
-            autoAllow(requestId, request, reviewable); return
-        }
-        // Not auto-approved (default/plan mode, or a write that escapes the project root): surface a manual card.
-        present(presentable(requestId, request, reviewable))
     }
+
+    /** Auto-approves when the mode (or "Always allow") says so AND the write is contained. True when approved. */
+    private fun tryAutoApprove(requestId: String, request: CanUseToolRequest): Boolean {
+        val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
+        // A reviewable write is only ever eligible when its target is confined to the project root. See
+        // [autoAllow] / [isWithinRoot] for the rationale (blast-radius containment of acceptEdits/bypass).
+        // Non-negotiable, and checked first so no later branch can bypass it — including "Always allow".
+        val contained = !reviewable ||
+            DiffPresenter.isWithinRoot(DiffPresenter.filePathOf(request.input), projectRoot)
+        if (!contained) return false
+        val allowedByMode = when (PermissionMode.from(permissionMode())) {
+            PermissionMode.BYPASS -> true
+            PermissionMode.ACCEPT_EDITS -> reviewable
+            else -> false
+        }
+        if (!allowedByMode && !isRemembered(request.toolName, request.input)) return false
+        autoAllow(requestId, request, reviewable)
+        return true
+    }
+
+    /** The AskUserQuestion card: the questions come from the tool input, and the answers go back as its result. */
+    private fun questionPresentable(requestId: String, request: CanUseToolRequest) =
+        PendingPermission(
+            requestId = requestId,
+            toolName = request.toolName,
+            input = request.input,
+            title = request.title ?: "Claude has a question",
+            summary = "",
+            reviewable = false,
+            questions = parseAskQuestions(request.input),
+            toolUseId = request.toolUseId.ifBlank { null },
+        )
 
     private fun presentable(requestId: String, request: CanUseToolRequest, reviewable: Boolean) =
         PendingPermission(
@@ -217,19 +248,50 @@ class PermissionBroker(
             (DiffPresenter.filePathOf(request.input)?.let { " on ${relativize(it)}" } ?: "")
 
     private fun summarize(toolName: String, input: JsonObject): String = when (toolName) {
-        "Bash" -> input.str("command")?.let { "$ $it" } ?: ""
-        "Read", "Glob", "Grep" -> (input.str("file_path") ?: input.str("path") ?: input.str("pattern") ?: "")
-            .let { if (it.startsWith('/')) relativize(it) else it }
-        "Write", "Edit", "MultiEdit" -> DiffPresenter.filePathOf(input)?.let { relativize(it) } ?: ""
-        "WebFetch" -> input.str("url") ?: ""
-        "WebSearch" -> input.str("query") ?: ""
-        else -> DiffPresenter.filePathOf(input)?.let { relativize(it) } ?: ""
-    }.take(2000)
+        "Bash" -> input.str("command")?.let { "$ $it" }.orEmpty()
+
+        "Read", "Glob", "Grep" -> searchTarget(input)
+
+        "WebFetch" -> input.str("url").orEmpty()
+
+        "WebSearch" -> input.str("query").orEmpty()
+
+        // Write/Edit/MultiEdit and everything else (incl. MCP tools) summarise as their `file_path`, if any.
+        else -> relativeFilePath(input)
+    }.take(MAX_SUMMARY_CHARS)
+
+    /** What a search-shaped tool is pointed at: a file, a directory, or a pattern — whichever it carries. */
+    private fun searchTarget(input: JsonObject): String {
+        val target = input.str("file_path") ?: input.str("path") ?: input.str("pattern") ?: return ""
+        // Only an absolute path is worth shortening; a bare pattern (`*.kt`) must survive untouched.
+        return if (target.startsWith('/')) relativize(target) else target
+    }
+
+    private fun relativeFilePath(input: JsonObject): String =
+        DiffPresenter.filePathOf(input)?.let { relativize(it) }.orEmpty()
 
     companion object {
-        /** Told to the MODEL when a third-party (MCP/Skill) call is refused a secret — so it stops retrying. */
+        /**
+         * Cap on the one-line summary shown on a permission card. The input can carry a whole file's contents
+         * (a Write), and the card is a fixed-height box — past this the text is unreadable anyway, and the
+         * card's own scroll area is what handles the rest.
+         */
+        private const val MAX_SUMMARY_CHARS = 2000
+
+        /** Fallback told to the MODEL when the guard refused but produced no reason — should not happen (a DENY
+         *  always comes from a classification), so this exists so an unexpected null degrades to something
+         *  truthful rather than to an empty message. */
         const val SENSITIVE_DENIED: String =
-            "Denied by the IDE: this call touches credentials or private keys, and MCP servers and Skills are not " +
-                "allowed to read them. Ask the user to run it themselves, or to allow it in Settings."
+            "Denied by the IDE: this call touches credentials, a dangerous command, or territory outside your own " +
+                "space. Ask the user to run it themselves, or to adjust Settings ▸ Claude Code ▸ Security."
+
+        /** The model-facing refusal: the guard's own words, framed so the model stops retrying instead of
+         *  rephrasing the same call. Kept pure and public so the wording is unit-testable. */
+        fun denialMessage(reason: String?): String =
+            reason?.let {
+                "Denied by the IDE: it $it. This is not something retrying will change — ask the user to " +
+                    "run it themselves if they intended it."
+            }
+                ?: SENSITIVE_DENIED
     }
 }

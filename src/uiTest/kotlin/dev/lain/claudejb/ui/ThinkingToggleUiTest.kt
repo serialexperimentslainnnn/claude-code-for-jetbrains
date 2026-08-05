@@ -4,8 +4,8 @@ import com.intellij.remoterobot.fixtures.ComponentFixture
 import com.intellij.remoterobot.search.locators.byXpath
 import com.intellij.remoterobot.utils.keyboard
 import com.intellij.remoterobot.utils.waitFor
-import java.awt.event.KeyEvent
 import org.junit.jupiter.api.Test
+import java.awt.event.KeyEvent
 import java.time.Duration
 
 /**

@@ -58,11 +58,14 @@ object DiffPresenter {
     /** Reconstructs the proposed file content, or null if it cannot be derived from [input]. */
     fun proposedContent(toolName: String, input: JsonObject, currentText: String): String? = when (toolName) {
         "Write" -> input.str("content") ?: ""
+
         "Edit" -> applyEdit(currentText, input)
+
         "MultiEdit" -> {
             val edits = input["edits"] as? JsonArray ?: return null
             edits.fold(currentText) { acc, element -> applyEdit(acc, element.jsonObject) ?: acc }
         }
+
         else -> null
     }
 
@@ -72,6 +75,21 @@ object DiffPresenter {
         val replaceAll = (edit["replace_all"] as? JsonPrimitive)?.booleanOrNull ?: false
         return if (replaceAll) text.replace(old, new) else text.replaceFirst(old, new)
     }
+
+    /**
+     * The diff tab's title — and, because [ChainDiffVirtualFile] adopts its title AS ITS FILE NAME, a name the
+     * rest of the IDE will try to interpret.
+     *
+     * That is not theoretical. The title used to be `"Claude · ${file.name}"`, so reviewing a change to
+     * `build.gradle.kts` produced a virtual file literally named `Claude · build.gradle.kts` — ending in
+     * `.kts`. Kotlin's script support picked it up as a build script, failed to resolve a file that is not a
+     * file, and raised **"Circular script import — Not a kotlin file"** at the user every single time Claude
+     * edited a Gradle script. The same trap is waiting for any extension the IDE attaches machinery to.
+     *
+     * So the file name goes FIRST and a plain suffix goes last: the tab still reads well, sorts by file, and
+     * cannot be mistaken for a document of that type.
+     */
+    internal fun diffTitle(fileName: String) = "$fileName — Claude"
 
     /**
      * Opens the proposed change as a diff in an **editor tab** (never a separate window) and returns the tab's
@@ -88,7 +106,7 @@ object DiffPresenter {
 
         val fileType = FileTypeManager.getInstance().getFileTypeByFileName(file.name)
         val factory = DiffContentFactory.getInstance()
-        val title = "Claude · ${file.name}"
+        val title = diffTitle(file.name)
         val request = SimpleDiffRequest(
             title,
             factory.create(project, current, fileType),
@@ -135,7 +153,7 @@ object DiffPresenter {
         // createEditable (NOT create) marks the proposed side writable so the diff viewer lets the user TWEAK it
         // before accepting; plain create() renders it read-only.
         val proposedDoc = factory.createEditable(project, proposedText, fileType)
-        val title = "Claude · ${file.name}"
+        val title = diffTitle(file.name)
         val request = SimpleDiffRequest(
             title,
             factory.create(project, current, fileType),
@@ -159,7 +177,8 @@ object DiffPresenter {
     fun computeHunks(current: String, proposed: String): List<Hunk> {
         val fragments = com.intellij.diff.comparison.ComparisonManager.getInstance()
             .compareLines(
-                current, proposed,
+                current,
+                proposed,
                 com.intellij.diff.comparison.ComparisonPolicy.DEFAULT,
                 com.intellij.openapi.progress.DumbProgressIndicator.INSTANCE,
             )

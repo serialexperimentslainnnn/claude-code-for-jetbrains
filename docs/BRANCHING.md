@@ -31,13 +31,14 @@ Naming: `feature/<short-kebab-summary>`, e.g. `feature/hunk-selection`, `bugfix/
 
 1. Land everything for the version on `develop`; bump `version` in `build.gradle.kts` and add the section to
    `RELEASE_NOTES.md` / `CHANGELOG.md`.
-2. Merge `develop` → `main` via PR (the GitLab pipeline — test/verify/build — must be green).
-3. Tag the merge commit `vX.Y.Z` and push the tag. The **GitLab tag pipeline** then runs
-   `test` → `verify` → `build` automatically; the maintainer presses **play** on the manual `publish` job
-   (stage `release`), which runs `signPlugin publishPlugin` to sign and publish to the Marketplace.
+2. Merge `develop` → `main` via PR. `main` is protected: the CI checks must be green and the PR approved.
+3. Tag the merge commit `vX.Y.Z` and push the tag. `release.yml` then verifies the tag came from `main`,
+   re-runs the full gate on the tagged tree, builds and attests, and waits on the `marketplace` environment
+   approval before `signPlugin publishPlugin`.
 
-> **Note:** The real CI runs on **GitLab self-hosted**; GitHub Actions is inert (billing). See
-> `.gitlab-ci.yml`.
+> A tag pushed from anywhere other than `main` is rejected by the workflow's first job, before any
+> credential is in scope. That is the mechanism that makes "release only via PR into main" true rather
+> than merely intended.
 
 ## Cleaning up obsolete branches
 
@@ -65,18 +66,63 @@ commands. They are commented so nothing is deleted by accident — the maintaine
 Note the naming drift: `fix/security-issues` and `test/MCPSkills` predate this convention (they would be
 `bugfix/*` and a `feature/*` today). New branches should follow the prefixes in the table above.
 
-## Branch protection (configure in GitHub UI)
+## Branch protection (versioned, not clicked)
 
-Set these rules for both `main` and `develop` under **Settings → Branches → Branch protection rules** (or a
-repository ruleset):
+Since 5.0.0 the protections live in **`.github/rulesets/*.json`** and are applied with:
 
-- **Require a pull request before merging** — no direct pushes.
-- **Require status checks to pass before merging** — select the checks reported by the **GitLab pipeline**
-  (test/verify/build), surfaced either via the GitLab↔GitHub integration or the GitLab MR pipeline,
-  depending on the team's flow. The UI test suite is **advisory only** and must NOT be a required check.
-- **Require branches to be up to date before merging.**
-- **Require signed commits** — GPG/SSH-signed (matches the repo's existing `required_signatures` setup).
-- **Allow administrators to bypass** — keep the documented admin bypass so a maintainer can land an urgent
-  hotfix when a structural check (e.g. capped Actions) would otherwise block the merge.
-- **Restrict who can push to matching branches** — maintainers only.
-- For `main` additionally: **do not allow force pushes or deletions.**
+```sh
+./scripts/apply-rulesets.sh --dry-run   # show what would change
+./scripts/apply-rulesets.sh             # apply (idempotent — updates by name, never duplicates)
+```
+
+They are in the repository rather than in a settings page for the same reason the pipeline is: a control
+whose job is to be non-bypassable should be reviewable in a diff, not silently editable by whoever holds
+admin. What they enforce:
+
+| | `main` | `develop` |
+|---|---|---|
+| Pull request required | yes | yes |
+| Required approvals | **0** — see below | **0** — see below |
+| Status checks | tests, **static analysis**, frontend, audit, verifier, build, **both CodeQL analyses** | tests, **static analysis**, frontend, audit, verifier, build |
+| Branch must be up to date | yes | yes |
+| Signed commits | required | required |
+| Merge method | **merge commit — the only one enabled** | **merge commit — the only one enabled** |
+| Force push / deletion | blocked | blocked |
+| Admin bypass | **none** | **none** |
+
+Four deliberate choices worth stating:
+
+- **Merge commit is the ONLY method enabled on this repository**, and squash and rebase are switched off at
+  the repository level rather than merely discouraged here. This is a *signing* decision, not a taste in
+  history shape. Every commit in this project is signed by a hardware-backed key, and both of the other
+  methods **rewrite commits**: GitHub creates new SHAs and new committer information, which invalidates those
+  signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits required" would
+  still pass — the commits are signed, just no longer *by the author*, which is the entire property the rule
+  exists to give. Leaving the buttons enabled meant one wrong click could quietly destroy that provenance, so
+  the buttons are gone.
+
+  The cost, stated plainly: the merge node itself is created and signed by GitHub, because the alternative is
+  merging locally and pushing, which the pull-request requirement blocks — and relaxing *that* to save one
+  commit's provenance would be a far worse trade. `main` therefore ends up with the same *tree* as `develop`
+  but not the same SHA. Release provenance rests on the **tag**, which the maintainer signs with the YubiKey,
+  not on the merge node.
+
+- **Zero required approvals, and this is not a weakened gate — it is the only value that is not a
+  deadlock.** GitHub does not let an author approve their own pull request. With one maintainer and no
+  bypass actors, "require 1 approval" means *nothing can ever be merged*: not by push, not by PR, not by
+  admin. We found this the direct way, by locking the repository and having to unlock it. What is actually
+  enforced here is mechanical and cannot be talked out of: a pull request, an up-to-date branch, and every
+  status check green. A human approval is a real control when a second human exists; requiring one that
+  cannot exist is theatre that bolts the door from the inside. **Raise it to 1 — and re-enable
+  `require_code_owner_review` and `require_last_push_approval` — the day someone else has write access.**
+- **No bypass actors, including admins.** The previous version of this document kept an admin bypass "so a
+  maintainer can land an urgent hotfix when a structural check would otherwise block the merge". The
+  structural check it referred to — capped GitHub Actions — never existed. A bypass exists to be used at the
+  worst possible moment, under time pressure, on the change least likely to have been reviewed. The hotfix
+  path goes through `main` like everything else.
+- **The UI test suite (`uiTest`) is advisory and must NOT become a required check.** It needs a display, it
+  is slower, and a flaky required check teaches people to re-run until green.
+
+> A ruleset references a status check by the job's **display name**. Renaming a job does not fail the
+> gate — it silently stops applying. After renaming anything in `.github/workflows/`, re-check the names in
+> `.github/rulesets/*.json`.

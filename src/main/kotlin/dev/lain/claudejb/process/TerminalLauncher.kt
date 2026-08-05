@@ -99,8 +99,11 @@ object TerminalLauncher {
         val method = runCatching {
             mgr.javaClass.getMethod(
                 "createNewSession",
-                String::class.java, String::class.java, List::class.java,
-                java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+                String::class.java,
+                String::class.java,
+                List::class.java,
+                java.lang.Boolean.TYPE,
+                java.lang.Boolean.TYPE,
             )
         }.getOrNull() ?: return false
         return runCatching {
@@ -162,7 +165,10 @@ object TerminalLauncher {
         runCatching {
             val m = cls.getMethod(
                 "createShellWidget",
-                String::class.java, String::class.java, java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+                String::class.java,
+                String::class.java,
+                java.lang.Boolean.TYPE,
+                java.lang.Boolean.TYPE,
             )
             return m.invoke(mgr, cwd, tabName, true, false)
         }

@@ -78,7 +78,9 @@ object McpConfigBuilder {
             put("type", "stdio")
             put("command", p.javaBin.absolutePath)
             putJsonArray("args") {
-                add("-classpath"); add(classpath); add("com.intellij.mcpserver.stdio.McpStdioRunnerKt")
+                add("-classpath")
+                add(classpath)
+                add("com.intellij.mcpserver.stdio.McpStdioRunnerKt")
             }
             putJsonObject("env") { put("IJ_MCP_SERVER_PORT", p.port.toString()) }
         }

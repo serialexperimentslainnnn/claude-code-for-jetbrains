@@ -43,10 +43,14 @@ class HookBrokerTest {
 
     @Test
     fun `parses PreToolUse with tool name and input`() {
-        val req = callback("cb1", toolUseId = "tu1", input = input("PreToolUse") {
-            put("tool_name", "Bash")
-            put("tool_input", buildJsonObject { put("command", "ls") })
-        })
+        val req = callback(
+            "cb1",
+            toolUseId = "tu1",
+            input = input("PreToolUse") {
+                put("tool_name", "Bash")
+                put("tool_input", buildJsonObject { put("command", "ls") })
+            },
+        )
         val ctx = broker.parse(req)!!
         assertEquals("PreToolUse", ctx.hookEventName)
         assertEquals("cb1", ctx.callbackId)
@@ -58,11 +62,16 @@ class HookBrokerTest {
 
     @Test
     fun `parses Notification message and title`() {
-        val ctx = broker.parse(callback("cb", input = input("Notification") {
-            put("message", "Claude needs your input")
-            put("title", "Claude Code")
-            put("notification_type", "permission")
-        }))!!
+        val ctx = broker.parse(
+            callback(
+                "cb",
+                input = input("Notification") {
+                    put("message", "Claude needs your input")
+                    put("title", "Claude Code")
+                    put("notification_type", "permission")
+                },
+            ),
+        )!!
         assertEquals("Notification", ctx.hookEventName)
         assertEquals("Claude needs your input", ctx.message)
         assertEquals("Claude Code", ctx.title)
@@ -70,10 +79,15 @@ class HookBrokerTest {
 
     @Test
     fun `parses FileChanged path and event`() {
-        val ctx = broker.parse(callback("cb", input = input("FileChanged") {
-            put("file_path", "/proj/src/Main.kt")
-            put("event", "change")
-        }))!!
+        val ctx = broker.parse(
+            callback(
+                "cb",
+                input = input("FileChanged") {
+                    put("file_path", "/proj/src/Main.kt")
+                    put("event", "change")
+                },
+            ),
+        )!!
         assertEquals("/proj/src/Main.kt", ctx.filePath)
         assertEquals("change", ctx.fileEvent)
     }
@@ -96,8 +110,10 @@ class HookBrokerTest {
 
     @Test
     fun `default handlers Continue for every default event`() {
-        for (event in listOf("PreToolUse", "PermissionRequest", "Notification", "FileChanged",
-            "SessionStart", "SessionEnd", "Stop", "PreCompact", "PostCompact", "UserPromptSubmit")) {
+        for (event in listOf(
+            "PreToolUse", "PermissionRequest", "Notification", "FileChanged",
+            "SessionStart", "SessionEnd", "Stop", "PreCompact", "PostCompact", "UserPromptSubmit",
+        )) {
             val ctx = broker.parse(callback("cb", input = input(event)))!!
             assertInstanceOf(HookDecision.Continue::class.java, broker.decide(ctx), event)
         }
@@ -196,9 +212,15 @@ class HookBrokerTest {
 
     @Test
     fun `Notification yields NotifyUser side effect`() {
-        val ctx = broker.parse(callback("cb", input = input("Notification") {
-            put("message", "hi"); put("title", "T")
-        }))!!
+        val ctx = broker.parse(
+            callback(
+                "cb",
+                input = input("Notification") {
+                    put("message", "hi")
+                    put("title", "T")
+                },
+            ),
+        )!!
         val fx = broker.sideEffects(ctx, HookDecision.Continue)
         val notify = fx.filterIsInstance<HookSideEffect.NotifyUser>().single()
         assertEquals("hi", notify.message)
@@ -207,9 +229,15 @@ class HookBrokerTest {
 
     @Test
     fun `FileChanged yields RefreshFile side effect`() {
-        val ctx = broker.parse(callback("cb", input = input("FileChanged") {
-            put("file_path", "/proj/a.kt"); put("event", "add")
-        }))!!
+        val ctx = broker.parse(
+            callback(
+                "cb",
+                input = input("FileChanged") {
+                    put("file_path", "/proj/a.kt")
+                    put("event", "add")
+                },
+            ),
+        )!!
         val refresh = broker.sideEffects(ctx, HookDecision.Continue)
             .filterIsInstance<HookSideEffect.RefreshFile>().single()
         assertEquals("/proj/a.kt", refresh.path)

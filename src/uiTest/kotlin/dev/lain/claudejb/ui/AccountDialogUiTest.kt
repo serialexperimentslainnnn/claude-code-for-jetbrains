@@ -37,7 +37,9 @@ class AccountDialogUiTest : UiTestBase() {
             runCatching {
                 remoteRobot.find(
                     ComponentFixture::class.java,
-                    byXpath("//div[contains(@text,'Email') or contains(@text,'Plan') or contains(@text,'Provider') or contains(@text,'Not signed in')]"),
+                    byXpath(
+                        "//div[contains(@text,'Email') or contains(@text,'Plan') or contains(@text,'Provider') or contains(@text,'Not signed in')]",
+                    ),
                     shortTimeout,
                 )
             }.isSuccess

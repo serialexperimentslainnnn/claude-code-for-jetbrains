@@ -19,6 +19,15 @@ import javax.swing.JList
  */
 object CommandPalette {
 
+    /** Max characters of a command's description in the list row before it is ellipsized. */
+    private const val DESCRIPTION_MAX = 72
+
+    /** How much wider than the composer input an ancestor must be to count as the card, not the input itself. */
+    private const val WIDER_THAN_INPUT_PX = 40
+
+    /** Popup width when no suitable ancestor is found (the composer is not laid out yet). */
+    private const val FALLBACK_POPUP_WIDTH = 500
+
     /** Commands the REPL handles client-side and the SDK does not report in the initialize handshake. */
     private val CLIENT_SIDE = listOf(
         SlashCommand(
@@ -49,10 +58,17 @@ object CommandPalette {
             .createPopupChooserBuilder(commands)
             .setTitle("Slash commands")
             .setRenderer(object : SimpleListCellRenderer<SlashCommand>() {
-                override fun customize(list: JList<out SlashCommand>, cmd: SlashCommand?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                override fun customize(
+                    list: JList<out SlashCommand>,
+                    cmd: SlashCommand?,
+                    index: Int,
+                    selected: Boolean,
+                    hasFocus: Boolean,
+                ) {
                     cmd ?: return
                     val hint = if (cmd.argumentHint.isNotBlank()) "  ${cmd.argumentHint}" else ""
-                    val desc = cmd.description.let { if (it.length > 72) it.take(72) + "…" else it }
+                    val desc = cmd.description
+                        .let { if (it.length > DESCRIPTION_MAX) it.take(DESCRIPTION_MAX) + "…" else it }
                     text = "/${cmd.name}$hint  —  $desc"
                 }
             })
@@ -64,8 +80,8 @@ object CommandPalette {
         // Walk up the component tree to find the chat panel's actual width: the first ancestor
         // significantly wider than the input textarea is the card or outer panel.
         var c: java.awt.Component? = anchor.parent
-        while (c != null && c.width <= anchor.width + JBUIScale.scale(40)) c = c.parent
-        val popupWidth = c?.width ?: JBUIScale.scale(500)
+        while (c != null && c.width <= anchor.width + JBUIScale.scale(WIDER_THAN_INPUT_PX)) c = c.parent
+        val popupWidth = c?.width ?: JBUIScale.scale(FALLBACK_POPUP_WIDTH)
 
         // Constrain width and measure height BEFORE showing, so we can place above the anchor.
         val content = popup.content

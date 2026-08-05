@@ -39,6 +39,14 @@ class ClaudeProcess(
          * eventually OOM. If the trailing partial line exceeds this, we drop it (see `consumeStdout`).
          */
         const val MAX_LINE_LENGTH = 16 * 1024 * 1024 // 16 MiB
+
+        /**
+         * How much of an offending NDJSON line reaches the log. A protocol line can carry a whole file's
+         * contents, so logging it whole would dump user data into idea.log; enough to identify the frame is
+         * all a diagnosis needs.
+         */
+        const val LOG_PREVIEW_CHARS = 200
+        const val STDIN_LOG_PREVIEW_CHARS = 120
     }
 
     @Volatile
@@ -57,11 +65,12 @@ class ClaudeProcess(
         // launching the shim through cmd.exe breaks streaming stdio and arg quoting.
         val nodeScript = ClaudeBinaryLocator.resolveNodeScript(binary)
         val commandLine = (
-            if (nodeScript != null)
+            if (nodeScript != null) {
                 GeneralCommandLine(ClaudeBinaryLocator.locateNode(binary, nodeOverride))
                     .withParameters(nodeScript.absolutePath).withParameters(args)
-            else
+            } else {
                 GeneralCommandLine(binary.absolutePath).withParameters(args)
+            }
             )
             .withWorkDirectory(workDir)
             .withCharset(StandardCharsets.UTF_8)
@@ -91,6 +100,11 @@ class ClaudeProcess(
         log.info("claude started: ${binary.name} (${args.size} args)")
     }
 
+    // Suppressed, not silenced. detekt is right that a broad catch is usually a smell; it is wrong here, for
+    // the reason spelled out at the catch itself — this is the reader loop for the entire session, and one bad
+    // line must not take the thread down with it. Scoped to this function so it cannot drift into covering a
+    // second, unexamined catch somewhere else in the class.
+    @Suppress("TooGenericExceptionCaught")
     private fun consumeStdout(text: String) {
         val lines = ArrayList<String>()
         synchronized(stdoutBuffer) {
@@ -117,8 +131,13 @@ class ClaudeProcess(
         for (line in lines) {
             try {
                 ProtocolParser.parse(line).forEach(onEvent)
-            } catch (t: Throwable) {
-                log.warn("Failed to handle claude line: ${line.take(200)}", t)
+            } catch (e: Exception) {
+                // Deliberately broad, and deliberately NOT Throwable. Broad because this is the reader loop for
+                // the whole session: one unparseable line must not kill the thread that carries every subsequent
+                // event. Not Throwable because that also swallows OutOfMemoryError and StackOverflowError, and
+                // continuing to read after the JVM has told us it is out of memory turns a clear failure into a
+                // mysterious one. Errors propagate and kill the thread, which is the correct outcome for them.
+                log.warn("Failed to handle claude line: ${line.take(LOG_PREVIEW_CHARS)}", e)
             }
         }
     }
@@ -132,7 +151,7 @@ class ClaudeProcess(
      */
     fun writeLine(line: String): Boolean {
         val stream = handler?.processInput ?: run {
-            log.warn("Dropping line to dead claude stdin: ${line.take(120)}")
+            log.warn("Dropping line to dead claude stdin: ${line.take(STDIN_LOG_PREVIEW_CHARS)}")
             return false
         }
         synchronized(writeLock) {

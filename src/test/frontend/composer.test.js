@@ -5,7 +5,9 @@ const { loadFrontend } = require('./helpers/load');
 // Minimal state payload (shape mirrors JcefState.stateJson — only the fields renderState reads here).
 function state(extra) {
   return {
-    turnActive: false, interrupting: false, running: true,
+    turnActive: false,
+    interrupting: false,
+    running: true,
     provider: { id: 'anthropic', label: 'Anthropic', options: [] },
     model: { label: 'Opus', options: [] },
     mode: { wire: 'default', label: 'Default', options: [] },
@@ -18,7 +20,9 @@ function state(extra) {
 
 describe('composer — send/stop/interrupting button', () => {
   let win;
-  beforeEach(() => { win = loadFrontend(['app-composer.js']); });
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js']);
+  });
 
   const sendBtn = () => win.CC.els.composer.querySelector('.send-btn');
 

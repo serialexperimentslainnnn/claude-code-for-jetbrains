@@ -24,5 +24,10 @@ class AddFileAsContextAction : AnAction() {
         e.presentation.isEnabledAndVisible = hasFile && e.project != null
     }
 
-    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+    /**
+     * BGT: [update] reads nothing but the [AnActionEvent]'s data context, which the platform resolves for a
+     * background update by design. (The sibling selection actions stay on the EDT — they dereference
+     * `Editor.selectionModel`, which is EDT-bound; this one does not.)
+     */
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 }

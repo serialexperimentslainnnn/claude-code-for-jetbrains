@@ -1,0 +1,40 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+  TWO entries, both about ClaudeSession, both deliberate — and that count is the point.
+
+  This baseline started 5.0.0 with 203 entries and ends it with 2. The other 201 were fixed, not frozen:
+  95 magic numbers named, 45 long lines wrapped, and ~60 structural findings refactored (the 244-line,
+  complexity-111 `onEvent` among them). Three rules were re-calibrated in detekt.yml with the reasoning
+  written at the setting itself. No `@Suppress` was added anywhere in the source.
+
+  What is left is not a lint problem, it is an architecture decision:
+
+    LargeClass       — ClaudeSession is ~1900 lines.
+    TooManyFunctions — it exposes 46 public functions (ignorePrivate is on, so that count is real API
+                       surface, not extracted helpers).
+
+  Both are true, and neither is fixable by the moves that fixed the rest. ClaudeSession is a deliberate
+  FACADE: ten collaborators have already been extracted out of it (LoginCoordinator, TokenAccountant,
+  TaskTracker, TranscriptReconciler, DiffLifecycleManager, SessionControlClient, PermissionCardManager,
+  HookBroker, HookActivityNarrator, SessionLauncher), and what remains is the orchestration itself plus the
+  verb list the UI calls. Shaving it further by moving thin delegates into a second object would trade one
+  wide-but-honest surface for indirection — a previous pass evaluated exactly that and rejected it in
+  writing. The real fix is a genuine split into session-lifecycle vs. UI-facing-commands, which is a large,
+  behaviour-preserving refactor of the hottest file in the repository and belongs in its own reviewed
+  change, not in the release that is already rewriting this much.
+
+  Why a baseline rather than raising the two thresholds: a threshold high enough to admit ClaudeSession
+  would stop catching the NEXT class that grows to this size. This file accepts two named, examined findings
+  and leaves the rules strict everywhere else.
+
+  Do NOT regenerate this file with `./gradlew detektBaseline` — that would silently absorb whatever happens
+  to be failing at the time and delete this explanation. Adding an entry here is a decision someone has to
+  argue for in review.
+-->
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LargeClass:ClaudeSession.kt$ClaudeSession : Disposable</ID>
+    <ID>TooManyFunctions:ClaudeSession.kt$ClaudeSession : Disposable</ID>
+  </CurrentIssues>
+</SmellBaseline>

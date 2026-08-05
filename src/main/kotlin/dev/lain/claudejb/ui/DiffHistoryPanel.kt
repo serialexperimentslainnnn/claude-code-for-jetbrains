@@ -45,11 +45,14 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
         isOpaque = true
         background = ChatTheme.BG
         add(header(), BorderLayout.NORTH)
-        add(JBScrollPane(list).apply {
-            border = BorderFactory.createEmptyBorder()
-            verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-        }, BorderLayout.CENTER)
+        add(
+            JBScrollPane(list).apply {
+                border = BorderFactory.createEmptyBorder()
+                verticalScrollBarPolicy = JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+                horizontalScrollBarPolicy = JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+            },
+            BorderLayout.CENTER,
+        )
         refresh()
     }
 
@@ -58,11 +61,13 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
         list.removeAll()
         val edits = session.reviewableEdits()
         if (edits.isEmpty()) {
-            list.add(JBLabel("No edits yet in this session.").apply {
-                foreground = ChatTheme.TEXT_DIM
-                font = ChatTheme.small
-                horizontalAlignment = SwingConstants.LEFT
-            })
+            list.add(
+                JBLabel("No edits yet in this session.").apply {
+                    foreground = ChatTheme.TEXT_DIM
+                    font = ChatTheme.small
+                    horizontalAlignment = SwingConstants.LEFT
+                },
+            )
         } else {
             edits.forEach { list.add(row(it)) }
         }
@@ -73,10 +78,13 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
     private fun header(): JPanel = JPanel(BorderLayout()).apply {
         isOpaque = false
         border = JBUI.Borders.empty(8, 8, 4, 8)
-        add(JBLabel("Diff History").apply {
-            foreground = ChatTheme.TEXT
-            font = ChatTheme.body.deriveFont(Font.BOLD)
-        }, BorderLayout.WEST)
+        add(
+            JBLabel("Diff History").apply {
+                foreground = ChatTheme.TEXT
+                font = ChatTheme.body.deriveFont(Font.BOLD)
+            },
+            BorderLayout.WEST,
+        )
         add(button("Roll back all changes", ChatTheme.ERROR) { rollbackAll() }, BorderLayout.EAST)
     }
 
@@ -85,7 +93,10 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
         val ok = Messages.showYesNoDialog(
             project,
             "Revert every Edit/Write Claude made in this session?\nEach file is restored to its captured pre-write state.",
-            "Roll Back All Changes", "Revert All", "Cancel", Messages.getWarningIcon(),
+            "Roll Back All Changes",
+            "Revert All",
+            "Cancel",
+            Messages.getWarningIcon(),
         )
         if (ok != Messages.YES) return
         val reverted = session.revertAllEdits()
@@ -103,27 +114,39 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
             layout = BorderLayout(JBUIScale.scale(8), 0)
             border = JBUI.Borders.empty(8, 10, 10, 8)
 
-            add(JPanel(VerticalLayout(JBUIScale.scale(2))).apply {
-                isOpaque = false
-                add(JBLabel(edit.displayPath).apply {
-                    foreground = ChatTheme.TEXT
-                    font = ChatTheme.body.deriveFont(Font.BOLD)
-                })
-                add(JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            add(
+                JPanel(VerticalLayout(JBUIScale.scale(2))).apply {
                     isOpaque = false
-                    add(JBLabel(snapshot.toolName).apply {
-                        foreground = ChatTheme.TEXT_DIM
-                        font = ChatTheme.small
-                    })
-                    addDiffStat(this, snapshot)
-                })
-            }, BorderLayout.CENTER)
+                    add(
+                        JBLabel(edit.displayPath).apply {
+                            foreground = ChatTheme.TEXT
+                            font = ChatTheme.body.deriveFont(Font.BOLD)
+                        },
+                    )
+                    add(
+                        JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                            isOpaque = false
+                            add(
+                                JBLabel(snapshot.toolName).apply {
+                                    foreground = ChatTheme.TEXT_DIM
+                                    font = ChatTheme.small
+                                },
+                            )
+                            addDiffStat(this, snapshot)
+                        },
+                    )
+                },
+                BorderLayout.CENTER,
+            )
 
-            add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                isOpaque = false
-                add(button("View diff", ChatTheme.ACCENT) { viewDiff(snapshot) })
-                add(button("Revert", ChatTheme.TEXT) { revert(snapshot) })
-            }, BorderLayout.EAST)
+            add(
+                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                    isOpaque = false
+                    add(button("View diff", ChatTheme.ACCENT) { viewDiff(snapshot) })
+                    add(button("Revert", ChatTheme.TEXT) { revert(snapshot) })
+                },
+                BorderLayout.EAST,
+            )
         }
     }
 
@@ -140,14 +163,18 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
                 line.startsWith("-") -> removed++
             }
         }
-        host.add(JBLabel("+$added").apply {
-            foreground = ChatTheme.DIFF_ADDED_FG
-            font = ChatTheme.small
-        })
-        host.add(JBLabel("-$removed").apply {
-            foreground = ChatTheme.DIFF_REMOVED_FG
-            font = ChatTheme.small
-        })
+        host.add(
+            JBLabel("+$added").apply {
+                foreground = ChatTheme.DIFF_ADDED_FG
+                font = ChatTheme.small
+            },
+        )
+        host.add(
+            JBLabel("-$removed").apply {
+                foreground = ChatTheme.DIFF_REMOVED_FG
+                font = ChatTheme.small
+            },
+        )
     }
 
     private fun viewDiff(snapshot: EditSnapshot) {
@@ -155,8 +182,11 @@ class DiffHistoryPanel(private val project: Project, private val session: Claude
     }
 
     private fun revert(snapshot: EditSnapshot) {
-        if (session.revertEdit(snapshot)) refresh()
-        else Messages.showErrorDialog(project, "Could not revert this change.", "Revert Change")
+        if (session.revertEdit(snapshot)) {
+            refresh()
+        } else {
+            Messages.showErrorDialog(project, "Could not revert this change.", "Revert Change")
+        }
     }
 
     private fun button(text: String, fg: java.awt.Color, onClick: () -> Unit): JButton = JButton(text).apply {

@@ -118,7 +118,9 @@ class TranscriptModel {
         val toolEntry = byToolUseId[toolUseId]
         val toolIdx = if (toolEntry != null) backing.indexOf(toolEntry) else -1
         val parent = parentToolUseId ?: toolEntry?.parentToolUseId
-        val insertAt = if (toolIdx < 0) backing.size else {
+        val insertAt = if (toolIdx < 0) {
+            backing.size
+        } else {
             var i = toolIdx + 1
             while (i < backing.size && backing[i].speaker == Speaker.TOOL_OUTPUT && backing[i].toolUseId == toolUseId) i++
             i

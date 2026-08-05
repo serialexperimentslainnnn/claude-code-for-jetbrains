@@ -1,31 +1,56 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
-  <!-- The host injects the real, hash-pinned Content-Security-Policy here (and as an HTTP response header).
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- The host injects the real, hash-pinned Content-Security-Policy here (and as an HTTP response header).
        Scripts are allowed only by exact sha256 hash — no 'unsafe-inline', so injected markup can never execute. -->
-  <!--CSP-->
-  <title>Claude Code</title>
-  <!--CSS-->
-</head>
-<body>
-  <div id="app">
-    <div id="conversation">
-      <div id="empty" class="empty-state">
-        <div class="empty-mark">✶</div>
-        <div class="empty-title">Claude Code</div>
-        <div class="empty-sub">Ask Claude, or type / for commands.</div>
+    <!--CSP-->
+    <title>Claude Code</title>
+    <!--CSS-->
+  </head>
+  <body>
+    <div id="app">
+      <!-- Status message region (WCAG 2.2 AA — 4.1.3 Status Messages).
+         The transcript streams in without ever moving focus, so a screen-reader user otherwise gets no signal
+         that Claude started answering, finished, or is asking for permission. This region announces those
+         transitions without stealing focus.
+
+         It is declared HERE, in the static shell, rather than created when the first message arrives: a live
+         region has to be present in the DOM *before* the text is written into it, or assistive technology
+         never announces that first change. `polite` so it waits for a pause instead of interrupting, and
+         `atomic` so the whole short phrase is read rather than just the diff. -->
+      <div id="a11y-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
+        <div id="empty" class="empty-state">
+          <div class="empty-mark">✶</div>
+          <div class="empty-title">Claude Code</div>
+          <div class="empty-sub">Ask Claude, or type / for commands.</div>
+        </div>
+      </div>
+      <div id="dock">
+        <div id="permissions"></div>
+        <div id="composer"></div>
+      </div>
+      <div id="palette" hidden></div>
+
+      <!-- Boot screen, shown while the `claude` binary is launching.
+         Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
+         binary is launched FIRST and this page loads while it boots, so at load time the process is normally
+         not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
+         flashes a live-looking composer it cannot yet send anything with.
+
+         role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
+      <div id="boot" role="status" aria-live="polite">
+        <div class="boot-inner">
+          <div class="boot-mark" aria-hidden="true">✶</div>
+          <div class="boot-title">Loading Claude Code<span class="boot-dots" aria-hidden="true"></span></div>
+          <div class="boot-sub" id="boot-sub">Starting the agent</div>
+        </div>
       </div>
     </div>
-    <div id="dock">
-      <div id="permissions"></div>
-      <div id="composer"></div>
-    </div>
-    <div id="palette" hidden></div>
-  </div>
-  <!--LIBS-->
-  <!--APP-->
-</body>
+    <!--LIBS-->
+    <!--APP-->
+  </body>
 </html>

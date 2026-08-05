@@ -5,12 +5,12 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.IdeFocusManager
-import com.intellij.util.Alarm
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefBrowserBase
 import com.intellij.ui.jcef.JBCefJSQuery
+import com.intellij.util.Alarm
 import org.cef.CefApp
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
@@ -94,7 +94,7 @@ class JcefHost(
             browser = null
             jsQuery = null
             component = JBLabel(
-                "Claude Code needs JCEF — enable `ide.browser.jcef.enabled` in the Registry and restart."
+                "Claude Code needs JCEF — enable `ide.browser.jcef.enabled` in the Registry and restart.",
             ).apply {
                 border = EmptyBorder(16, 16, 16, 16)
             }
@@ -200,21 +200,24 @@ class JcefHost(
     // --- internals -------------------------------------------------------------------------------------------
 
     private fun installLoadHandler(b: JBCefBrowser, query: JBCefJSQuery) {
-        b.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
-            override fun onLoadEnd(cefBrowser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
-                // Only react to the top frame finishing.
-                if (frame != null && !frame.isMain) return
-                val inject = "window.__ccSend = function(p){ " + query.inject("p") + " };"
-                executeNow(b, inject)
-                runOnEdt {
-                    ready = true
-                    while (pending.isNotEmpty()) {
-                        executeNow(b, pending.poll())
+        b.jbCefClient.addLoadHandler(
+            object : CefLoadHandlerAdapter() {
+                override fun onLoadEnd(cefBrowser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
+                    // Only react to the top frame finishing.
+                    if (frame != null && !frame.isMain) return
+                    val inject = "window.__ccSend = function(p){ " + query.inject("p") + " };"
+                    executeNow(b, inject)
+                    runOnEdt {
+                        ready = true
+                        while (pending.isNotEmpty()) {
+                            executeNow(b, pending.poll())
+                        }
+                        armReadyWatchdog(b)
                     }
-                    armReadyWatchdog(b)
                 }
-            }
-        }, b.cefBrowser)
+            },
+            b.cefBrowser,
+        )
     }
 
     /**
@@ -237,29 +240,35 @@ class JcefHost(
 
     private fun installNavigationGuards(b: JBCefBrowser) {
         // Cancel any attempt to navigate the top-level frame: all links are routed through the bridge.
-        b.jbCefClient.addRequestHandler(object : CefRequestHandlerAdapter() {
-            override fun onBeforeBrowse(
-                cefBrowser: CefBrowser?,
-                frame: CefFrame?,
-                request: CefRequest?,
-                userGesture: Boolean,
-                isRedirect: Boolean,
-            ): Boolean {
-                // Returning true cancels the navigation. The initial programmatic load has no user gesture and is
-                // allowed; anything the user could trigger is cancelled (links go through the bridge instead).
-                return userGesture
-            }
-        }, b.cefBrowser)
+        b.jbCefClient.addRequestHandler(
+            object : CefRequestHandlerAdapter() {
+                override fun onBeforeBrowse(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    request: CefRequest?,
+                    userGesture: Boolean,
+                    isRedirect: Boolean,
+                ): Boolean {
+                    // Returning true cancels the navigation. The initial programmatic load has no user gesture and is
+                    // allowed; anything the user could trigger is cancelled (links go through the bridge instead).
+                    return userGesture
+                }
+            },
+            b.cefBrowser,
+        )
 
         // Never spawn popups / external browser windows from the view.
-        b.jbCefClient.addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {
-            override fun onBeforePopup(
-                cefBrowser: CefBrowser?,
-                frame: CefFrame?,
-                targetUrl: String?,
-                targetFrameName: String?,
-            ): Boolean = true
-        }, b.cefBrowser)
+        b.jbCefClient.addLifeSpanHandler(
+            object : CefLifeSpanHandlerAdapter() {
+                override fun onBeforePopup(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    targetUrl: String?,
+                    targetFrameName: String?,
+                ): Boolean = true
+            },
+            b.cefBrowser,
+        )
     }
 
     private fun executeNow(b: JBCefBrowser, js: String) {
@@ -325,6 +334,9 @@ class JcefHost(
         /** How long to wait after load-end for the web app's `ready` before the self-heal reload kicks in. */
         private const val READY_WATCHDOG_MS = 2500
 
+        /** Every response our scheme handler serves comes from memory and always succeeds — hence a fixed 200. */
+        private const val HTTP_OK = 200
+
         // A synthetic, network-less origin under the reserved `.localhost` namespace. Chromium treats
         // `*.localhost` as a potentially-trustworthy (secure) context, so the cross-origin-isolation and
         // Clear-Site-Data headers actually take effect — yet our scheme handler intercepts every request, so no
@@ -381,7 +393,7 @@ class JcefHost(
         @Volatile
         private var schemeRegistered = false
 
-        private val FALLBACK_HTML =
+        private const val FALLBACK_HTML =
             "<!doctype html><html><body style=\"font-family:sans-serif;padding:16px\">" +
                 "Claude Code failed to load its UI resources." +
                 "</body></html>"
@@ -427,7 +439,7 @@ class JcefHost(
 
         override fun getResponseHeaders(response: CefResponse?, responseLength: IntRef?, redirectUrl: StringRef?) {
             response ?: return
-            response.status = 200
+            response.status = HTTP_OK
             response.mimeType = "text/html"
             headers.forEach { (name, value) -> response.setHeaderByName(name, value, true) }
             responseLength?.set(bytes.size)

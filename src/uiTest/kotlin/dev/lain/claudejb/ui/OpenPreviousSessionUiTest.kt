@@ -41,7 +41,9 @@ class OpenPreviousSessionUiTest : UiTestBase() {
         // an info dialog instead; in CI the fixture project should have a seeded session so the chooser opens.
         waitFor(longTimeout, Duration.ofMillis(500), "expected the Open Previous Session chooser to appear") {
             remoteRobot.findAll<ComponentFixture>(
-                byXpath("//div[@accessiblename='Open Previous Session'] | //div[@class='HeavyWeightWindow']//div[contains(@text,'Open Previous Session')]"),
+                byXpath(
+                    "//div[@accessiblename='Open Previous Session'] | //div[@class='HeavyWeightWindow']//div[contains(@text,'Open Previous Session')]",
+                ),
             ).isNotEmpty()
         }
     }

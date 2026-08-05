@@ -109,7 +109,10 @@ class DriftLiveCheck {
         val out = StringBuilder()
         val reader = Thread {
             runCatching { proc.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
-        }.apply { isDaemon = true; start() }
+        }.apply {
+            isDaemon = true
+            start()
+        }
 
         if (!proc.waitFor(60, TimeUnit.SECONDS)) proc.destroyForcibly()
         reader.join(2_000)

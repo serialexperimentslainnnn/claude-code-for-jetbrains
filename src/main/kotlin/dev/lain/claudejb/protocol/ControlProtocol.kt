@@ -15,7 +15,15 @@ import java.util.UUID
  */
 object ControlProtocol {
 
-    fun newRequestId(): String = "req_" + UUID.randomUUID().toString().replace("-", "").take(16)
+    /**
+     * Hex characters kept from a random UUID for a request id. 16 hex chars = 64 bits, which only has to be
+     * unique among the handful of control requests in flight on ONE session at ONE moment — this is a
+     * correlation key, not a security token.
+     */
+    private const val REQUEST_ID_HEX_CHARS = 16
+
+    fun newRequestId(): String =
+        "req_" + UUID.randomUUID().toString().replace("-", "").take(REQUEST_ID_HEX_CHARS)
 
     /** stdin user message — sends a prompt (or a slash command, which is just user content starting with '/'). */
     fun userMessage(content: String, parentToolUseId: String? = null, uuid: String? = null): String =
@@ -49,16 +57,20 @@ object ControlProtocol {
             putJsonObject("message") {
                 put("role", "user")
                 putJsonArray("content") {
-                    if (content.isNotBlank()) addJsonObject {
-                        put("type", "text")
-                        put("text", content)
+                    if (content.isNotBlank()) {
+                        addJsonObject {
+                            put("type", "text")
+                            put("text", content)
+                        }
                     }
-                    for ((mediaType, base64) in images) addJsonObject {
-                        put("type", "image")
-                        putJsonObject("source") {
-                            put("type", "base64")
-                            put("media_type", mediaType)
-                            put("data", base64)
+                    for ((mediaType, base64) in images) {
+                        addJsonObject {
+                            put("type", "image")
+                            putJsonObject("source") {
+                                put("type", "base64")
+                                put("media_type", mediaType)
+                                put("data", base64)
+                            }
                         }
                     }
                 }
@@ -80,16 +92,22 @@ object ControlProtocol {
         controlRequest(requestId, buildJsonObject { put("subtype", "interrupt") })
 
     fun setModelRequest(requestId: String, model: String?): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "set_model")
-            if (model != null) put("model", model)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "set_model")
+                if (model != null) put("model", model)
+            },
+        )
 
     fun setPermissionModeRequest(requestId: String, mode: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "set_permission_mode")
-            put("mode", mode)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "set_permission_mode")
+                put("mode", mode)
+            },
+        )
 
     /** Optional handshake that returns rich SlashCommand + ModelInfo metadata for the UI. */
     fun initializeRequest(requestId: String): String =
@@ -97,6 +115,15 @@ object ControlProtocol {
 
     fun getContextUsageRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "get_context_usage") })
+
+    /**
+     * `get_usage` — every rate-limit window at once (session, weekly, per-model) plus the extra-credit
+     * balance. The plugin knew about this subtype since 4.0.1 and never sent it; the composer's quota pill was
+     * driven only by whichever `rate_limit_event` happened to arrive last, which can only ever describe ONE
+     * window. This is the request that answers "how much of my week is left".
+     */
+    fun getUsageRequest(requestId: String): String =
+        controlRequest(requestId, buildJsonObject { put("subtype", "get_usage") })
 
     fun getSessionCostRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "get_session_cost") })
@@ -109,17 +136,23 @@ object ControlProtocol {
 
     /** Sets the user-facing title for the current session. */
     fun renameSessionRequest(requestId: String, title: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "rename_session")
-            put("title", title)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "rename_session")
+                put("title", title)
+            },
+        )
 
     /** Sets the session accent color (an agent color name or "default" to reset). */
     fun setColorRequest(requestId: String, color: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "set_color")
-            put("color", color)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "set_color")
+                put("color", color)
+            },
+        )
 
     /** Returns the effective merged settings and the raw per-source settings. */
     fun getSettingsRequest(requestId: String): String =
@@ -131,86 +164,119 @@ object ControlProtocol {
 
     /** Requests at-mention file autocomplete suggestions for a partial path prefix. */
     fun fileSuggestionsRequest(requestId: String, query: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "file_suggestions")
-            put("query", query)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "file_suggestions")
+                put("query", query)
+            },
+        )
 
     /** Reads a file from the session filesystem (gated by the same read-permission rules as the Read tool). */
     fun readFileRequest(requestId: String, path: String, maxBytes: Int? = null, encoding: String? = null): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "read_file")
-            put("path", path)
-            if (maxBytes != null) put("max_bytes", maxBytes)
-            if (encoding != null) put("encoding", encoding)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "read_file")
+                put("path", path)
+                if (maxBytes != null) put("max_bytes", maxBytes)
+                if (encoding != null) put("encoding", encoding)
+            },
+        )
 
     /** Rewinds file changes made since a specific user message. */
     fun rewindFilesRequest(requestId: String, userMessageId: String, dryRun: Boolean? = null): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "rewind_files")
-            put("user_message_id", userMessageId)
-            if (dryRun != null) put("dry_run", dryRun)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "rewind_files")
+                put("user_message_id", userMessageId)
+                if (dryRun != null) put("dry_run", dryRun)
+            },
+        )
 
     /** Seeds the readFileState cache with a path+mtime entry so Edit validation passes after the Read was dropped. */
     fun seedReadStateRequest(requestId: String, path: String, mtime: Long): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "seed_read_state")
-            put("path", path)
-            put("mtime", mtime)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "seed_read_state")
+                put("path", path)
+                put("mtime", mtime)
+            },
+        )
 
     /** Stops a running task. */
     fun stopTaskRequest(requestId: String, taskId: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "stop_task")
-            put("task_id", taskId)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "stop_task")
+                put("task_id", taskId)
+            },
+        )
 
     /** Backgrounds in-flight foreground tasks (a single tool_use's task when given, else all — Ctrl+B semantics). */
     fun backgroundTasksRequest(requestId: String, toolUseId: String? = null): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "background_tasks")
-            if (toolUseId != null) put("tool_use_id", toolUseId)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "background_tasks")
+                if (toolUseId != null) put("tool_use_id", toolUseId)
+            },
+        )
 
     /** Reconnects a disconnected or failed MCP server. NB: wire field is camelCase `serverName`. */
     fun mcpReconnectRequest(requestId: String, serverName: String): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "mcp_reconnect")
-            put("serverName", serverName)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "mcp_reconnect")
+                put("serverName", serverName)
+            },
+        )
 
     /** Enables or disables an MCP server. NB: wire field is camelCase `serverName`. */
     fun mcpToggleRequest(requestId: String, serverName: String, enabled: Boolean): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "mcp_toggle")
-            put("serverName", serverName)
-            put("enabled", enabled)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "mcp_toggle")
+                put("serverName", serverName)
+                put("enabled", enabled)
+            },
+        )
 
     /** Replaces the set of dynamically managed MCP servers (a `name -> server config` object). */
     fun mcpSetServersRequest(requestId: String, servers: JsonObject): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "mcp_set_servers")
-            put("servers", servers)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "mcp_set_servers")
+                put("servers", servers)
+            },
+        )
 
     /** Invokes an MCP tool via the subprocess MCP client without a model turn. */
     fun mcpCallRequest(requestId: String, tool: String, arguments: JsonObject? = null): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "mcp_call")
-            put("tool", tool)
-            if (arguments != null) put("arguments", arguments)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "mcp_call")
+                put("tool", tool)
+                if (arguments != null) put("arguments", arguments)
+            },
+        )
 
     /** Applies a set of flag-derived settings to the session. */
     fun applyFlagSettingsRequest(requestId: String, settings: JsonObject): String =
-        controlRequest(requestId, buildJsonObject {
-            put("subtype", "apply_flag_settings")
-            put("settings", settings)
-        })
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", "apply_flag_settings")
+                put("settings", settings)
+            },
+        )
 
     // --- control_response: host's reply to a binary -> host control_request (e.g. can_use_tool) ---
 
@@ -222,18 +288,22 @@ object ControlProtocol {
 
     /** Generic success reply carrying an optional response body. */
     fun success(requestId: String, response: JsonObject? = null): String =
-        controlResponse(buildJsonObject {
-            put("subtype", "success")
-            put("request_id", requestId)
-            if (response != null) put("response", response)
-        })
+        controlResponse(
+            buildJsonObject {
+                put("subtype", "success")
+                put("request_id", requestId)
+                if (response != null) put("response", response)
+            },
+        )
 
     fun error(requestId: String, message: String): String =
-        controlResponse(buildJsonObject {
-            put("subtype", "error")
-            put("request_id", requestId)
-            put("error", message)
-        })
+        controlResponse(
+            buildJsonObject {
+                put("subtype", "error")
+                put("request_id", requestId)
+                put("error", message)
+            },
+        )
 
     /**
      * PermissionResult allow. [updatedInput] is the input the binary will use to execute the tool: the
@@ -242,18 +312,24 @@ object ControlProtocol {
      * omitting it causes the binary to reject the response and the tool to fail.
      */
     fun permissionAllow(requestId: String, updatedInput: JsonObject): String =
-        success(requestId, buildJsonObject {
-            put("behavior", "allow")
-            put("updatedInput", updatedInput)
-        })
+        success(
+            requestId,
+            buildJsonObject {
+                put("behavior", "allow")
+                put("updatedInput", updatedInput)
+            },
+        )
 
     /** PermissionResult deny. */
     fun permissionDeny(requestId: String, message: String, interrupt: Boolean = false): String =
-        success(requestId, buildJsonObject {
-            put("behavior", "deny")
-            put("message", message)
-            put("interrupt", interrupt)
-        })
+        success(
+            requestId,
+            buildJsonObject {
+                put("behavior", "deny")
+                put("message", message)
+                put("interrupt", interrupt)
+            },
+        )
 
     /**
      * request_user_dialog reply. The host implements no custom dialog kinds, so it cancels — the CLI then
@@ -264,15 +340,21 @@ object ControlProtocol {
 
     /** request_user_dialog completed with a host-produced [result] (UserDialogResult = {behavior:"completed",result}). */
     fun userDialogCompleted(requestId: String, result: JsonObject): String =
-        success(requestId, buildJsonObject {
-            put("behavior", "completed")
-            put("result", result)
-        })
+        success(
+            requestId,
+            buildJsonObject {
+                put("behavior", "completed")
+                put("result", result)
+            },
+        )
 
     /** elicitation reply (ElicitResult). [action] ∈ accept|decline|cancel; [content] is only meaningful for accept. */
     fun elicitationResult(requestId: String, action: String, content: JsonObject? = null): String =
-        success(requestId, buildJsonObject {
-            put("action", action)
-            if (content != null) put("content", content)
-        })
+        success(
+            requestId,
+            buildJsonObject {
+                put("action", action)
+                if (content != null) put("content", content)
+            },
+        )
 }

@@ -1,10 +1,10 @@
 package dev.lain.claudejb.session
 
 import dev.lain.claudejb.protocol.TaskNotificationInfo
+import dev.lain.claudejb.protocol.TaskPatch
 import dev.lain.claudejb.protocol.TaskProgressInfo
 import dev.lain.claudejb.protocol.TaskStartedInfo
 import dev.lain.claudejb.protocol.TaskUpdatedInfo
-import dev.lain.claudejb.protocol.TaskPatch
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -27,7 +27,7 @@ class TaskTrackerTest {
                 toolUseId = "tu1",
                 description = "find bugs",
                 subagentType = "general",
-            )
+            ),
         )
         assertTrue(added)
         val task = t.tasks["t1"]!!
@@ -56,7 +56,7 @@ class TaskTrackerTest {
                 description = "halfway",
                 lastToolName = "Grep",
                 summary = "scanning",
-            )
+            ),
         )
         val task = t.tasks["t1"]!!
         assertEquals("halfway", task.description)

@@ -5,9 +5,9 @@ import com.intellij.remoterobot.fixtures.ComponentFixture
 import com.intellij.remoterobot.search.locators.byXpath
 import com.intellij.remoterobot.utils.keyboard
 import com.intellij.remoterobot.utils.waitFor
-import java.awt.event.KeyEvent
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.awt.event.KeyEvent
 import java.time.Duration
 
 /**
@@ -44,7 +44,10 @@ class SettingsModelComboUiTest : UiTestBase() {
         waitFor(longTimeout, Duration.ofMillis(500), "expected the Claude Code settings page to be reachable") {
             remoteRobot.findAll<ComponentFixture>(byXpath("//div[contains(@text,'Claude Code')]")).isNotEmpty()
         }
-        remoteRobot.find<ComponentFixture>(byXpath("//div[@class='MyTree']//div[contains(@text,'Claude Code')] | //div[contains(@text,'Claude Code')]"), shortTimeout)
+        remoteRobot.find<ComponentFixture>(
+            byXpath("//div[@class='MyTree']//div[contains(@text,'Claude Code')] | //div[contains(@text,'Claude Code')]"),
+            shortTimeout,
+        )
             .click()
 
         // The model combo. inspector: there are several combos on the page (model/mode/effort/transport);

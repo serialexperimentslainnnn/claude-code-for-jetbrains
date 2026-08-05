@@ -25,6 +25,17 @@ class ClaudeLoginFlow(
     private val env: Map<String, String>,
 ) {
 
+    private companion object {
+        /** Wide enough that the binary emits the OAuth authorize URL on ONE line — [pump] parses it per line. */
+        const val PTY_COLUMNS = 1000
+
+        /** Rows are irrelevant to parsing; a plausible terminal height keeps the child from reformatting output. */
+        const val PTY_ROWS = 50
+
+        /** PTY read chunk. One page — the login flow's whole output is a few KB. */
+        const val READ_BUFFER_BYTES = 4096
+    }
+
     /** Callbacks fired from the reader thread — implementations must marshal any UI work onto the EDT. */
     interface Listener {
         /** The OAuth authorize URL, as soon as it appears (open the browser here). */
@@ -38,9 +49,13 @@ class ClaudeLoginFlow(
     }
 
     private val log = thisLogger()
+
     @Volatile private var process: PtyProcess? = null
+
     @Volatile private var urlSeen = false
+
     @Volatile private var promptSeen = false
+
     @Volatile private var finished = false
 
     /**
@@ -49,9 +64,9 @@ class ClaudeLoginFlow(
      */
     fun start(listener: Listener): Boolean {
         val builder = PtyProcessBuilder(arrayOf(binaryPath, "auth", "login"))
-            .setEnvironment(env)            // pty4j replaces the env wholesale — [env] must already carry the base
-            .setInitialColumns(1000)        // wide enough that the OAuth URL is emitted on a single line
-            .setInitialRows(50)
+            .setEnvironment(env) // pty4j replaces the env wholesale — [env] must already carry the base
+            .setInitialColumns(PTY_COLUMNS) // wide enough that the OAuth URL is emitted on a single line
+            .setInitialRows(PTY_ROWS)
             .setRedirectErrorStream(true)
         if (!cwd.isNullOrBlank()) builder.setDirectory(cwd)
 
@@ -60,14 +75,17 @@ class ClaudeLoginFlow(
             return false
         }
         process = proc
-        Thread({ pump(proc, listener) }, "claude-login-reader").apply { isDaemon = true; start() }
+        Thread({ pump(proc, listener) }, "claude-login-reader").apply {
+            isDaemon = true
+            start()
+        }
         return true
     }
 
     /** Reads the PTY until EOF, firing URL/prompt signals, then resolves the result from the exit code. */
     private fun pump(proc: PtyProcess, listener: Listener) {
         val acc = StringBuilder()
-        val buf = ByteArray(4096)
+        val buf = ByteArray(READ_BUFFER_BYTES)
         runCatching {
             val input = proc.inputStream
             while (true) {
@@ -76,7 +94,10 @@ class ClaudeLoginFlow(
                 acc.append(String(buf, 0, n, StandardCharsets.UTF_8))
                 val text = acc.toString()
                 if (!urlSeen) {
-                    LoginOutputParser.extractAuthUrl(text)?.let { url -> urlSeen = true; listener.onAuthUrl(url) }
+                    LoginOutputParser.extractAuthUrl(text)?.let { url ->
+                        urlSeen = true
+                        listener.onAuthUrl(url)
+                    }
                 }
                 if (urlSeen && !promptSeen && LoginOutputParser.isCodePrompt(text)) {
                     promptSeen = true

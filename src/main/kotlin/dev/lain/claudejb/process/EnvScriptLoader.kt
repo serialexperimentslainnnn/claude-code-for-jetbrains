@@ -20,6 +20,9 @@ object EnvScriptLoader {
     private val log = thisLogger()
     private const val TIMEOUT_MS = 15_000
 
+    /** How much of a failing script's stderr is logged. A shell can print a lot; enough to diagnose is enough. */
+    private const val STDERR_PREVIEW_CHARS = 200
+
     fun load(scriptPath: String?): Map<String, String> {
         val path = scriptPath?.trim().orEmpty()
         if (path.isEmpty()) return emptyMap()
@@ -31,7 +34,11 @@ object EnvScriptLoader {
 
         val cmd = if (SystemInfo.isWindows) {
             GeneralCommandLine(
-                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
                 ". '${script.absolutePath.replace("'", "''")}'; " +
                     "Get-ChildItem Env: | ForEach-Object { \"\$(\$_.Name)=\$(\$_.Value)\" }",
             )
@@ -49,7 +56,10 @@ object EnvScriptLoader {
         return runCatching {
             val output = CapturingProcessHandler(cmd).runProcess(TIMEOUT_MS)
             if (output.isTimeout || output.exitCode != 0) {
-                log.warn("Source script '$path' exited ${output.exitCode} (timeout=${output.isTimeout}): ${output.stderr.take(200)}")
+                log.warn(
+                    "Source script '$path' exited ${output.exitCode} " +
+                        "(timeout=${output.isTimeout}): ${output.stderr.take(STDERR_PREVIEW_CHARS)}",
+                )
             }
             parse(output.stdout)
         }.getOrElse {
