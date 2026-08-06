@@ -50,7 +50,7 @@ and for these UI tests.
 Two steps, in order — the IDE must be **up** before the client suite connects:
 
 ```bash
-export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
+export JAVA_HOME=~/.jdks/jbr-21.0.11
 
 # Terminal 1: boot the IDE-under-test (keep it running). robot-server listens on :8082.
 ./gradlew runIdeForUiTests
@@ -64,7 +64,7 @@ export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
 Wrap the IDE launch in `xvfb-run` (or start an `Xvfb` on a `$DISPLAY` and export it). Example:
 
 ```bash
-export JAVA_HOME=~/.local/jdks/jdk-21.0.11+10
+export JAVA_HOME=~/.jdks/jbr-21.0.11
 
 # Boot the IDE under a virtual framebuffer, in the background.
 xvfb-run -a -s "-screen 0 1920x1080x24" ./gradlew runIdeForUiTests &
@@ -84,9 +84,10 @@ exit $ST
 ```
 
 Notes:
-- This repo's **real CI is GitLab self-hosted** (`.gitlab-ci.yml`); add the above as a manual / scheduled job
-  on a runner that has `xvfb` and a display-capable image. The `.github/workflows/ui-tests.yml` is inert
-  reference (Actions capped by billing).
+- CI runs on **GitHub Actions**, and the UI suite is deliberately **not** part of the gate: it needs a
+  display, it is slower than everything else combined, and a flaky required check teaches people to re-run
+  until green. Add it as a scheduled or `workflow_dispatch` workflow on a runner with `xvfb` if you want it
+  automated — never as a required status check.
 - Override the endpoint with `-Drobot-server.url=http://<host>:<port>` (forwarded to the `uiTest` task) when
   the IDE runs on a different machine.
 - `runIdeForUiTests` also disables the privacy/consent dialogs and startup tips so the first run is clean

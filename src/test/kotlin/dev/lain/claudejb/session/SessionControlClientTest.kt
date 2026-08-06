@@ -95,7 +95,10 @@ class SessionControlClientTest {
         var calls = 0
         client.query(
             buildRequest = { "line" },
-            onResult = { v: JsonObject? -> captured = v; calls++ },
+            onResult = { v: JsonObject? ->
+                captured = v
+                calls++
+            },
             decode = { it }, // identity, like requestSessionCost/requestMcpStatus
         )
 

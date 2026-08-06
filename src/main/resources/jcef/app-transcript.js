@@ -10,36 +10,74 @@
   var cc = (window.cc = window.cc || {});
 
   // ---- shared helpers (degrade gracefully if core not yet ready) ----------
-  function CCobj() { return window.CC || {}; }
+  function CCobj() {
+    return window.CC || {};
+  }
   function el(tag, props) {
     var C = CCobj();
-    if (C.h) { return C.h(tag, props); }
+    if (C.h) {
+      return C.h(tag, props);
+    }
     // minimal fallback hyperscript
     var node = document.createElement(tag);
     props = props || {};
-    if (props.class) { node.className = props.class; }
-    if (props.text != null) { node.textContent = String(props.text); }
-    if (props.html != null) { node.innerHTML = props.html; }
-    if (props.title != null) { node.title = String(props.title); }
-    if (props.attrs) { for (var a in props.attrs) { if (props.attrs.hasOwnProperty(a)) { node.setAttribute(a, props.attrs[a]); } } }
-    if (props.on) { for (var ev in props.on) { if (props.on.hasOwnProperty(ev)) { node.addEventListener(ev, props.on[ev]); } } }
+    if (props.class) {
+      node.className = props.class;
+    }
+    if (props.text != null) {
+      node.textContent = String(props.text);
+    }
+    if (props.html != null) {
+      node.innerHTML = props.html;
+    }
+    if (props.title != null) {
+      node.title = String(props.title);
+    }
+    if (props.attrs) {
+      for (var a in props.attrs) {
+        if (Object.prototype.hasOwnProperty.call(props.attrs, a)) {
+          node.setAttribute(a, props.attrs[a]);
+        }
+      }
+    }
+    if (props.on) {
+      for (var ev in props.on) {
+        if (Object.prototype.hasOwnProperty.call(props.on, ev)) {
+          node.addEventListener(ev, props.on[ev]);
+        }
+      }
+    }
     return node;
   }
   function md(text) {
     var C = CCobj();
-    if (C.markdown) { try { return C.markdown(text == null ? '' : text); } catch (e) { /* fall through */ } }
+    if (C.markdown) {
+      try {
+        return C.markdown(text == null ? '' : text);
+      } catch (e) {
+        /* fall through */
+      }
+    }
     return esc(text);
   }
   function esc(text) {
     var C = CCobj();
-    if (C.escape) { return C.escape(text == null ? '' : text); }
+    if (C.escape) {
+      return C.escape(text == null ? '' : text);
+    }
     var d = document.createElement('div');
     d.textContent = text == null ? '' : String(text);
     return d.innerHTML;
   }
   function safeSend(obj) {
     var C = CCobj();
-    if (C.send) { try { C.send(obj); } catch (e) { /* ignore */ } }
+    if (C.send) {
+      try {
+        C.send(obj);
+      } catch (e) {
+        /* ignore */
+      }
+    }
   }
   function conversationEl() {
     var C = CCobj();
@@ -61,21 +99,52 @@
   var NEAR_BOTTOM = 80;
   var scrollScheduled = false;
 
+  // Above this distance, jump instead of gliding. A smooth scroll is a fixed-duration animation regardless of
+  // distance, so over a long one it becomes a crawl the user simply waits through — the opposite of smooth.
+  var SMOOTH_SCROLL_MAX_PX = 400;
+
   function isNearBottom() {
     var c = conversationEl();
-    if (!c) { return true; }
+    if (!c) {
+      return true;
+    }
     var distance = c.scrollHeight - c.scrollTop - c.clientHeight;
     return distance <= NEAR_BOTTOM;
   }
   function scheduleScroll(stick) {
-    if (!stick) { return; }
-    if (scrollScheduled) { return; }
+    if (!stick) {
+      return;
+    }
+    if (scrollScheduled) {
+      return;
+    }
     scrollScheduled = true;
-    var raf = window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); };
+    var raf =
+      window.requestAnimationFrame ||
+      function (fn) {
+        return setTimeout(fn, 16);
+      };
     raf(function () {
       scrollScheduled = false;
       var c = conversationEl();
-      if (c) { c.scrollTop = c.scrollHeight; }
+      if (!c) {
+        return;
+      }
+      // A new row takes its full height the instant it is inserted, so the content below it jumps down by that
+      // height while the row itself is still fading in — the layout shift and the animation are two separate
+      // motions, and the mismatch is what reads as "brusque". Scrolling smoothly puts the two on the same
+      // timeline: the space opens at roughly the pace the row appears.
+      //
+      // Only for a SMALL step, and never mid-stream: a smooth scroll across a long distance (jumping to the
+      // bottom of a restored transcript) is a slow crawl the user has to wait out, and re-issuing one every
+      // streaming delta cancels and restarts it constantly, which stalls the scroll entirely.
+      var distance = c.scrollHeight - c.scrollTop - c.clientHeight;
+      var smooth = distance > 0 && distance < SMOOTH_SCROLL_MAX_PX && !CC.reducedMotion;
+      if (smooth && typeof c.scrollTo === 'function') {
+        c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
+      } else {
+        c.scrollTop = c.scrollHeight;
+      }
     });
   }
 
@@ -90,8 +159,11 @@
           e.preventDefault();
           e.stopPropagation();
           safeSend({ type: 'copy', text: getText() });
-        }
-      }
+          // Same "Copied" confirmation the code-block buttons give. Without it this button did its job and
+          // said nothing, which is indistinguishable from a broken one — and was reported as exactly that.
+          if (CC.flashCopied) CC.flashCopied(e.currentTarget || this);
+        },
+      },
     });
   }
 
@@ -102,7 +174,9 @@
     var body = el('div', { class: 'body' });
     var head = el('div', { class: 'msg-head' });
     head.appendChild(el('span', { class: 'name', text: 'You' }));
-    var copy = copyButton(function () { return body.__rawText || ''; });
+    var copy = copyButton(function () {
+      return body.__rawText || '';
+    });
     head.appendChild(copy);
     var node = el('div', { class: 'msg user' });
     node.appendChild(head);
@@ -121,10 +195,14 @@
     // avatar: ✶ normally, Nyan Cat while Vibe Mode is on (swap via body.vibe in CSS)
     var avatar = el('span', { class: 'avatar' });
     avatar.appendChild(el('span', { class: 'avatar-star', text: '✶' }));
-    avatar.appendChild(el('span', { class: 'avatar-nyan', html: (window.CC && window.CC.nyanSvg) ? window.CC.nyanSvg() : '' }));
+    avatar.appendChild(
+      el('span', { class: 'avatar-nyan', html: window.CC && window.CC.nyanSvg ? window.CC.nyanSvg() : '' })
+    );
     head.appendChild(avatar);
     head.appendChild(el('span', { class: 'name', text: 'Claude' }));
-    var copy = copyButton(function () { return body.__rawText || ''; });
+    var copy = copyButton(function () {
+      return body.__rawText || '';
+    });
     head.appendChild(copy);
     var node = el('div', { class: 'msg assistant' });
     node.appendChild(head);
@@ -139,12 +217,14 @@
 
   function buildFold(summaryText, dim, startOpen, hint) {
     var node = el('details', { class: 'fold' + (dim ? ' dim' : '') });
-    node.open = (startOpen !== false);
+    node.open = startOpen !== false;
     var summary = el('summary', {});
     summary.appendChild(el('span', { class: 'tri' }));
     var label = el('span', { class: 'fold-label', text: summaryText });
     summary.appendChild(label);
-    if (hint) { summary.appendChild(el('span', { class: 'fold-hint', text: 'Press Ctrl+O to expand' })); }
+    if (hint) {
+      summary.appendChild(el('span', { class: 'fold-hint', text: 'Press Ctrl+O to expand' }));
+    }
     var body = el('div', { class: 'body fold-body' });
     node.appendChild(summary);
     node.appendChild(body);
@@ -159,7 +239,7 @@
   }
 
   function buildMemory(meta) {
-    var title = (meta && String(meta).trim()) ? String(meta) : '🧠 Recalled memories';
+    var title = meta && String(meta).trim() ? String(meta) : '🧠 Recalled memories';
     return buildFold(title, true);
   }
 
@@ -172,7 +252,8 @@
     search: '<circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3 3"/>',
     web: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12"/><path d="M8 2c1.75 1.6 2.75 3.7 2.75 6S9.75 12.4 8 14C6.25 12.4 5.25 10.3 5.25 8S6.25 3.6 8 2z"/>',
     task: '<circle cx="8" cy="8" r="6"/><path d="M6.5 5.5 11 8l-4.5 2.5z" fill="currentColor"/>',
-    generic: '<path d="M6.25 2.75h3.5v1.5a1.25 1.25 0 1 0 2.5 0v-1.5h.75v3.5h1.5a1.25 1.25 0 1 1 0 2.5h-1.5v3.5H9.5v-1.5a1.25 1.25 0 1 0-2.5 0v1.5H3.5v-3.5H2a1.25 1.25 0 1 1 0-2.5h1.5v-3.5h2.75z"/>'
+    generic:
+      '<path d="M6.25 2.75h3.5v1.5a1.25 1.25 0 1 0 2.5 0v-1.5h.75v3.5h1.5a1.25 1.25 0 1 1 0 2.5h-1.5v3.5H9.5v-1.5a1.25 1.25 0 1 0-2.5 0v1.5H3.5v-3.5H2a1.25 1.25 0 1 1 0-2.5h1.5v-3.5h2.75z"/>',
   };
   function toolIconKey(meta) {
     var m = meta == null ? '' : String(meta);
@@ -186,8 +267,12 @@
   }
   function toolIconSvg(meta) {
     var inner = TOOL_ICONS[toolIconKey(meta)] || TOOL_ICONS.generic;
-    return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
-      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+    return (
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      inner +
+      '</svg>'
+    );
   }
 
   function buildTool() {
@@ -204,14 +289,23 @@
     diffBtn.hidden = true;
     diffBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (node.__toolUseId) { safeSend({ type: 'viewDiffByTool', toolUseId: node.__toolUseId }); }
+      if (node.__toolUseId) {
+        safeSend({ type: 'viewDiffByTool', toolUseId: node.__toolUseId });
+      }
     });
     head.appendChild(diffBtn);
-    var restoreBtn = el('button', { class: 'tool-restore', text: 'Restore', attrs: { type: 'button' }, title: 'Revert this edit' });
+    var restoreBtn = el('button', {
+      class: 'tool-restore',
+      text: 'Restore',
+      attrs: { type: 'button' },
+      title: 'Revert this edit',
+    });
     restoreBtn.hidden = true;
     restoreBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (node.__toolUseId) { safeSend({ type: 'revertEdit', toolUseId: node.__toolUseId }); }
+      if (node.__toolUseId) {
+        safeSend({ type: 'revertEdit', toolUseId: node.__toolUseId });
+      }
     });
     head.appendChild(restoreBtn);
     node.__restoreBtn = restoreBtn;
@@ -243,15 +337,19 @@
   // Format an elapsed-seconds value as a dim "· N.Ns" suffix; null-safe.
   function formatElapsed(secs) {
     var n = Number(secs);
-    if (!isFinite(n) || n <= 0) { return ''; }
+    if (!isFinite(n) || n <= 0) {
+      return '';
+    }
     return '· ' + n.toFixed(1) + 's';
   }
 
   // Show/hide the .tool-elapsed badge based on RUNNING state.
   function applyToolElapsed(node, state, elapsedSecs) {
     var badge = node.__elapsedNode || node.querySelector('.tool-elapsed');
-    if (!badge) { return; }
-    var running = (state === 'RUNNING' || state === 'LOADING');
+    if (!badge) {
+      return;
+    }
+    var running = state === 'RUNNING' || state === 'LOADING';
     var label = running ? formatElapsed(elapsedSecs) : '';
     if (label) {
       badge.textContent = label;
@@ -280,29 +378,41 @@
 
   function builderFor(speaker, entry) {
     switch (speaker) {
-      case 'USER': return buildUser();
-      case 'ASSISTANT': return buildAssistant();
-      case 'THINKING': return buildThinking();
-      case 'MEMORY': return buildMemory(entry.meta);
-      case 'TOOL': return buildTool();
-      case 'TOOL_OUTPUT': return buildToolOutputStandalone();
-      case 'ERROR': return buildNotice(true);
-      case 'SYSTEM': return buildNotice(false);
-      default: return buildNotice(false);
+      case 'USER':
+        return buildUser();
+      case 'ASSISTANT':
+        return buildAssistant();
+      case 'THINKING':
+        return buildThinking();
+      case 'MEMORY':
+        return buildMemory(entry.meta);
+      case 'TOOL':
+        return buildTool();
+      case 'TOOL_OUTPUT':
+        return buildToolOutputStandalone();
+      case 'ERROR':
+        return buildNotice(true);
+      case 'SYSTEM':
+        return buildNotice(false);
+      default:
+        return buildNotice(false);
     }
   }
 
   // ---- body rendering -----------------------------------------------------
   function setBody(rec, text) {
     var body = rec.bodyNode;
-    if (!body) { return; }
+    if (!body) {
+      return;
+    }
     var kind = rec.kind;
     if (kind === 'md') {
       body.innerHTML = md(text);
       body.__rawText = text == null ? '' : String(text);
     } else if (kind === 'pre') {
       body.textContent = text == null ? '' : String(text);
-    } else { // text / tool name
+    } else {
+      // text / tool name
       body.textContent = text == null ? '' : String(text);
       body.__rawText = text == null ? '' : String(text);
     }
@@ -311,13 +421,21 @@
   function applyToolState(node, state, meta) {
     node.classList.remove('loading', 'running', 'done', 'failed');
     if (state === 'ERROR' || meta === 'error') {
-      node.classList.add('failed');          // red — wins over done/loading
+      node.classList.add('failed'); // red — wins over done/loading
+      // Reveal the failure. A tool card is collapsed by default, and its output — which for a failed call is
+      // the ERROR — lives behind that collapse, so a red header was the entire message: you had to know to
+      // expand a card to find out what went wrong. Opened ONCE, tracked on the node, so this never fights a
+      // user who deliberately collapsed it (applyToolState runs again on every state push).
+      if (!node.__autoOpenedOnError) {
+        node.__autoOpenedOnError = true;
+        node.classList.add('open');
+      }
     } else if (state === 'LOADING') {
-      node.classList.add('loading');         // fade sky-blue ↔ amber (active)
+      node.classList.add('loading'); // fade sky-blue ↔ amber (active)
     } else if (state === 'RUNNING') {
-      node.classList.add('running');         // fade sky-blue ↔ amber
+      node.classList.add('running'); // fade sky-blue ↔ amber
     } else if (state === 'FINISHED') {
-      node.classList.add('done');            // green
+      node.classList.add('done'); // green
     }
   }
 
@@ -325,11 +443,17 @@
   function routeToolOutput(entry) {
     // returns true if it was routed into an existing tool card
     var tid = entry.toolUseId;
-    if (!tid) { return false; }
+    if (!tid) {
+      return false;
+    }
     var card = toolCards.get(tid);
-    if (!card) { return false; }
+    if (!card) {
+      return false;
+    }
     var out = card.__outNode || card.querySelector('.tool-out');
-    if (!out) { return false; }
+    if (!out) {
+      return false;
+    }
     // store/append a pre>code block keyed by entry id so updates replace it
     var pid = 'to-' + entry.id;
     var block = out.querySelector('[data-out-id="' + pid + '"]');
@@ -344,8 +468,9 @@
     if (codeEl) {
       // `meta` is a space-separated tag set here (see ClaudeSession.kt), not a single value: a command's
       // output can be "command error" at once (a failing build's stderr is exactly what you want to copy).
-      var tags = (' ' + (entry.meta || '') + ' ');
-      var fileLang = (window.CC && typeof CC.languageForPath === 'function') ? CC.languageForPath(card.__filePath) : null;
+      var tags = ' ' + (entry.meta || '') + ' ';
+      var fileLang =
+        window.CC && typeof CC.languageForPath === 'function' ? CC.languageForPath(card.__filePath) : null;
       if (entry.meta === 'diff') {
         renderDiff(codeEl, entry.text == null ? '' : String(entry.text), fileLang);
         block.classList.add('diff');
@@ -361,7 +486,9 @@
           CC.decorateOneCodeBlock(codeEl);
           var langLabel = block.querySelector('.code-lang');
           // Generic label — we deliberately don't guess Bash vs PowerShell vs cmd.exe from the tool name.
-          if (langLabel) { langLabel.textContent = 'shell'; }
+          if (langLabel) {
+            langLabel.textContent = 'shell';
+          }
         }
       } else {
         block.classList.remove('diff');
@@ -371,7 +498,9 @@
         // as a markdown fence, with syntax highlighting from the file's extension when known (falls back to
         // hljs's own autodetection when it isn't — see CC.languageForPath).
         if (card.__filePath && window.CC && typeof CC.decorateOneCodeBlock === 'function') {
-          if (fileLang) { codeEl.className = 'language-' + fileLang; }
+          if (fileLang) {
+            codeEl.className = 'language-' + fileLang;
+          }
           CC.decorateOneCodeBlock(codeEl);
         }
       }
@@ -386,16 +515,25 @@
     codeEl.innerHTML = '';
     var lines = String(text).split('\n');
     var hljs = window.hljs;
-    var canHighlight = !!(lang && hljs && typeof hljs.getLanguage === 'function' && hljs.getLanguage(lang) &&
-      typeof hljs.highlight === 'function');
+    var canHighlight = !!(
+      lang &&
+      hljs &&
+      typeof hljs.getLanguage === 'function' &&
+      hljs.getLanguage(lang) &&
+      typeof hljs.highlight === 'function'
+    );
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       var c0 = line.charAt(0);
       var isHunk = line.indexOf('@@') === 0;
       var cls = 'dl-ctx';
-      if (isHunk) { cls = 'dl-hunk'; }
-      else if (c0 === '+') { cls = 'dl-add'; }
-      else if (c0 === '-') { cls = 'dl-del'; }
+      if (isHunk) {
+        cls = 'dl-hunk';
+      } else if (c0 === '+') {
+        cls = 'dl-add';
+      } else if (c0 === '-') {
+        cls = 'dl-del';
+      }
       var span = el('span', { class: 'diff-line ' + cls });
       var trailingNl = i < lines.length - 1;
       var highlighted = false;
@@ -406,22 +544,22 @@
           var hi = hljs.highlight(line.slice(1), { language: lang, ignoreIllegals: true }).value;
           span.appendChild(document.createTextNode(c0));
           span.insertAdjacentHTML('beforeend', hi);
-          if (trailingNl) { span.appendChild(document.createTextNode('\n')); }
+          if (trailingNl) {
+            span.appendChild(document.createTextNode('\n'));
+          }
           highlighted = true;
         } catch (e) {
           // Highlighting is best-effort — fall through to the plain-text line below.
         }
       }
-      if (!highlighted) { span.textContent = trailingNl ? line + '\n' : line; }
+      if (!highlighted) {
+        span.textContent = trailingNl ? line + '\n' : line;
+      }
       codeEl.appendChild(span);
     }
   }
 
   // ---- upsert -------------------------------------------------------------
-  function isAgentTool(meta) {
-    var m = meta == null ? '' : String(meta);
-    return m === 'Task' || m === 'Agent';
-  }
 
   function createRow(entry) {
     var rec = builderFor(entry.speaker, entry);
@@ -436,7 +574,9 @@
     }
     if (entry.speaker === 'TOOL') {
       var icNode = rec.el.querySelector('.ic');
-      if (icNode) { icNode.innerHTML = toolIconSvg(entry.meta); }
+      if (icNode) {
+        icNode.innerHTML = toolIconSvg(entry.meta);
+      }
       // The raw command text (Bash/PowerShell/MCP…) is fixed for the life of this row — render it once, as its
       // own copyable code block RIGHT UNDER THE HEADER (.tool-cmd, a sibling of .tool-out — not gated by the
       // collapse toggle), so you see what ran without expanding the card. `cmd-tool` gives the whole card its
@@ -455,7 +595,9 @@
   // The command a tool call executes, as its own code-head+Copy block — same chrome as the output blocks
   // (via the shared decorator), so Copy just works via the delegated handler in app-core.js.
   function renderCommandBlock(cmdNode, commandText) {
-    if (!cmdNode) { return; }
+    if (!cmdNode) {
+      return;
+    }
     var block = el('pre', { class: 'command-src' });
     var code = el('code', {});
     code.textContent = String(commandText);
@@ -465,7 +607,9 @@
       CC.decorateOneCodeBlock(code);
       var langLabel = block.querySelector('.code-lang');
       // Generic label — we deliberately don't guess Bash vs PowerShell vs cmd.exe from the tool name.
-      if (langLabel) { langLabel.textContent = 'shell'; }
+      if (langLabel) {
+        langLabel.textContent = 'shell';
+      }
     }
   }
 
@@ -473,7 +617,9 @@
   // the project root and refuses anything outside it (isWithinRoot), so this never needs an absolute path.
   function jbHref(relPath, line) {
     var u = 'jb://open?file=' + encodeURIComponent(String(relPath));
-    if (line) { u += '&line=' + encodeURIComponent(String(line)); }
+    if (line) {
+      u += '&line=' + encodeURIComponent(String(line));
+    }
     return u;
   }
 
@@ -481,16 +627,25 @@
   // jump-to-code link. The path is inserted via textContent (never innerHTML), so a hostile path can't inject
   // markup; the delegated <a> handler in app-core routes the click to the host.
   function renderToolLabel(nameEl, text, filePath) {
-    if (!nameEl) { return; }
+    if (!nameEl) {
+      return;
+    }
     var label = text == null ? '' : String(text);
     var p = String(filePath);
     var at = label.indexOf(p);
-    if (at < 0) { nameEl.textContent = label; return; } // path not in the label — render plainly
-    while (nameEl.firstChild) { nameEl.removeChild(nameEl.firstChild); }
+    if (at < 0) {
+      nameEl.textContent = label;
+      return;
+    } // path not in the label — render plainly
+    while (nameEl.firstChild) {
+      nameEl.removeChild(nameEl.firstChild);
+    }
     nameEl.appendChild(document.createTextNode(label.slice(0, at)));
     var a = el('a', { class: 'jb-link', text: p, attrs: { href: jbHref(p), title: 'Open ' + p } });
     // The card head toggles collapse on click — don't collapse it just because the user followed the link.
-    a.addEventListener('click', function (e) { e.stopPropagation(); });
+    a.addEventListener('click', function (e) {
+      e.stopPropagation();
+    });
     nameEl.appendChild(a);
     nameEl.appendChild(document.createTextNode(label.slice(at + p.length)));
   }
@@ -513,18 +668,19 @@
     '(?:' +
       '(?:~\\/|\\.{1,2}\\/|\\/)[\\w.-]+(?:\\/[\\w.-]+)*\\/?' + // 1. anchored
       '|' +
-      '[\\w.-]+\\/(?:[\\w.-]+\\/?)*' +                          // 2. has segments (incl. a trailing-slash dir)
+      '[\\w.-]+\\/(?:[\\w.-]+\\/?)*' + // 2. has segments (incl. a trailing-slash dir)
       '|' +
-      '[\\w.-]+\\.[A-Za-z][\\w]{0,9}' +                         // 3. bare name with an extension
-    ')(?::\\d+)?',
-    'g',
+      '[\\w.-]+\\.[A-Za-z][\\w]{0,9}' + // 3. bare name with an extension
+      ')(?::\\d+)?',
+    'g'
   );
   // A plausible symbol: CamelCase (PermissionBroker) or a call (resolvePermission()). Deliberately conservative —
   // the host rejects anything that isn't a real declaration anyway, this just keeps the batch small.
   var SYMBOL_RE = /\b([A-Z][A-Za-z0-9]{2,}|[a-z][A-Za-z0-9]{2,}(?=\(\)))\b/g;
 
   function collectCandidates(root) {
-    var paths = {}, symbols = {};
+    var paths = {},
+      symbols = {};
     // Only look inside inline code spans and plain text — never inside fenced code blocks (a whole file's source
     // would flood the batch with noise) and never inside an existing link.
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -532,44 +688,67 @@
         var p = n.parentNode;
         while (p && p !== root) {
           var t = p.tagName;
-          if (t === 'A') { return NodeFilter.FILTER_REJECT; }
-          if (t === 'PRE') { return NodeFilter.FILTER_REJECT; }
+          if (t === 'A') {
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (t === 'PRE') {
+            return NodeFilter.FILTER_REJECT;
+          }
           p = p.parentNode;
         }
         return NodeFilter.FILTER_ACCEPT;
-      }
+      },
     });
     var n, m;
     while ((n = walker.nextNode())) {
       var txt = n.nodeValue || '';
       PATH_RE.lastIndex = 0;
-      while ((m = PATH_RE.exec(txt))) { paths[m[0]] = true; }
+      while ((m = PATH_RE.exec(txt))) {
+        paths[m[0]] = true;
+      }
       var inCode = n.parentNode && n.parentNode.tagName === 'CODE';
-      if (inCode) { // symbols only inside `code spans` — prose would produce mostly noise
+      if (inCode) {
+        // symbols only inside `code spans` — prose would produce mostly noise
         SYMBOL_RE.lastIndex = 0;
-        while ((m = SYMBOL_RE.exec(txt))) { symbols[m[1]] = true; }
+        while ((m = SYMBOL_RE.exec(txt))) {
+          symbols[m[1]] = true;
+        }
       }
     }
     return { paths: Object.keys(paths), symbols: Object.keys(symbols) };
   }
 
   function requestLinks(rec, entry) {
-    if (!rec || !rec.bodyNode) { return; }
+    if (!rec || !rec.bodyNode) {
+      return;
+    }
     var c = collectCandidates(rec.bodyNode);
-    if (!c.paths.length && !c.symbols.length) { return; }
+    if (!c.paths.length && !c.symbols.length) {
+      return;
+    }
     safeSend({ type: 'resolveLinks', rowId: entry.id, paths: c.paths, symbols: c.symbols });
   }
 
   // Host answered: turn the confirmed tokens into links, in place, without re-rendering the row.
   function applyLinks(payload) {
-    if (!payload || payload.rowId == null) { return; }
+    if (!payload || payload.rowId == null) {
+      return;
+    }
     var rec = rows.get(payload.rowId);
-    if (!rec || !rec.bodyNode) { return; }
+    if (!rec || !rec.bodyNode) {
+      return;
+    }
     var links = Array.isArray(payload.links) ? payload.links : [];
-    if (!links.length) { return; }
+    if (!links.length) {
+      return;
+    }
     // Longest token first, so `Foo.kt:42` wins over `Foo.kt`.
-    links.sort(function (a, b) { return String(b.token).length - String(a.token).length; });
-    for (var i = 0; i < links.length; i++) { linkifyToken(rec.bodyNode, links[i]); }
+    links.sort(function (a, b) {
+      return String(b.token).length - String(a.token).length;
+    });
+    for (var i = 0; i < links.length; i++) {
+      linkifyToken(rec.bodyNode, links[i]);
+    }
   }
 
   // A token may only be linked as a WHOLE token — never as a fragment of something bigger. Without this, a
@@ -579,7 +758,9 @@
   var TOKEN_LEFT = /[\w.\-/~]/;
   var TOKEN_RIGHT = /[\w.\-/]/;
   function atTokenBoundary(txt, at, token) {
-    if (at > 0 && TOKEN_LEFT.test(txt.charAt(at - 1))) { return false; }
+    if (at > 0 && TOKEN_LEFT.test(txt.charAt(at - 1))) {
+      return false;
+    }
     var after = txt.charAt(at + token.length);
     return !(after && TOKEN_RIGHT.test(after));
   }
@@ -588,36 +769,56 @@
   // textContent (never innerHTML), so a hostile token cannot inject markup.
   function linkifyToken(root, link) {
     var token = String(link.token || '');
-    if (!token) { return; }
+    if (!token) {
+      return;
+    }
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         var p = n.parentNode;
         while (p && p !== root) {
-          if (p.tagName === 'A' || p.tagName === 'PRE') { return NodeFilter.FILTER_REJECT; }
+          if (p.tagName === 'A' || p.tagName === 'PRE') {
+            return NodeFilter.FILTER_REJECT;
+          }
           p = p.parentNode;
         }
-        return (n.nodeValue && n.nodeValue.indexOf(token) >= 0) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      }
+        return n.nodeValue && n.nodeValue.indexOf(token) >= 0
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      },
     });
-    var targets = [], n;
-    while ((n = walker.nextNode())) { targets.push(n); }
+    var targets = [],
+      n;
+    while ((n = walker.nextNode())) {
+      targets.push(n);
+    }
     for (var i = 0; i < targets.length; i++) {
       var node = targets[i];
       var txt = node.nodeValue;
       var frag = document.createDocumentFragment();
-      var from = 0, hit = false;
+      var from = 0,
+        hit = false;
       // Walk EVERY occurrence in this node (the old code linked only the first one and dropped the rest).
       for (var at = txt.indexOf(token); at >= 0; at = txt.indexOf(token, at + token.length)) {
-        if (!atTokenBoundary(txt, at, token)) { continue; }
+        if (!atTokenBoundary(txt, at, token)) {
+          continue;
+        }
         frag.appendChild(document.createTextNode(txt.slice(from, at)));
-        frag.appendChild(el('a', {
-          class: 'jb-link', text: token,
-          attrs: { href: jbHref(link.path, link.line), title: 'Open ' + link.path + (link.line ? ':' + link.line : '') }
-        }));
+        frag.appendChild(
+          el('a', {
+            class: 'jb-link',
+            text: token,
+            attrs: {
+              href: jbHref(link.path, link.line),
+              title: 'Open ' + link.path + (link.line ? ':' + link.line : ''),
+            },
+          })
+        );
         from = at + token.length;
         hit = true;
       }
-      if (!hit) { continue; } // nothing was a whole token here — leave the node exactly as it was
+      if (!hit) {
+        continue;
+      } // nothing was a whole token here — leave the node exactly as it was
       frag.appendChild(document.createTextNode(txt.slice(from)));
       node.parentNode.replaceChild(frag, node);
     }
@@ -635,7 +836,9 @@
       setBody(rec, entry.text);
       // Model prose/code spans: ask the host to confirm which paths/symbols are real, then link those. Only for
       // settled assistant rows — doing it per streaming delta would spam the host and fight the re-render.
-      if (rec.speaker === 'ASSISTANT' && entry.state !== 'RUNNING') { requestLinks(rec, entry); }
+      if (rec.speaker === 'ASSISTANT' && entry.state !== 'RUNNING') {
+        requestLinks(rec, entry);
+      }
     }
     rec.text = entry.text;
     rec.meta = entry.meta;
@@ -643,17 +846,23 @@
     if (rec.speaker === 'TOOL') {
       applyToolState(rec.el, entry.state, entry.meta);
       applyToolElapsed(rec.el, entry.state, entry.elapsed);
-      if (rec.el.__diffBtn) { rec.el.__diffBtn.hidden = !entry.reviewable; }
-      if (rec.el.__restoreBtn) { rec.el.__restoreBtn.hidden = !entry.reviewable; }
+      if (rec.el.__diffBtn) {
+        rec.el.__diffBtn.hidden = !entry.reviewable;
+      }
+      if (rec.el.__restoreBtn) {
+        rec.el.__restoreBtn.hidden = !entry.reviewable;
+      }
     }
     if (rec.speaker === 'MEMORY' && rec.el.__label) {
-      var title = (entry.meta && String(entry.meta).trim()) ? String(entry.meta) : '🧠 Recalled memories';
+      var title = entry.meta && String(entry.meta).trim() ? String(entry.meta) : '🧠 Recalled memories';
       rec.el.__label.textContent = title;
     }
   }
 
   function upsert(entry) {
-    if (entry == null || entry.id == null) { return null; }
+    if (entry == null || entry.id == null) {
+      return null;
+    }
 
     // TOOL_OUTPUT: try routing into an existing tool card first.
     if (entry.speaker === 'TOOL_OUTPUT') {
@@ -666,8 +875,12 @@
     var rec = rows.get(entry.id);
     if (rec && rec.speaker !== entry.speaker) {
       // speaker changed for same id (rare) — rebuild
-      if (rec.el && rec.el.parentNode) { rec.el.parentNode.removeChild(rec.el); }
-      if (rec.toolUseId) { toolCards.delete(rec.toolUseId); }
+      if (rec.el && rec.el.parentNode) {
+        rec.el.parentNode.removeChild(rec.el);
+      }
+      if (rec.toolUseId) {
+        toolCards.delete(rec.toolUseId);
+      }
       rows.delete(entry.id);
       rec = null;
     }
@@ -699,40 +912,63 @@
   // us robust to any non-managed nodes (#empty, tool heads) sharing a container.
   function reposition(entry) {
     var rec = rows.get(entry.id);
-    if (!rec || !rec.el) { return; }
+    if (!rec || !rec.el) {
+      return;
+    }
     var order = entry.order;
-    rec.el.__order = (typeof order === 'number' && order >= 0) ? order : null;
+    rec.el.__order = typeof order === 'number' && order >= 0 ? order : null;
     var container = containerFor(entry);
-    if (!container) { return; }
+    if (!container) {
+      return;
+    }
 
     var ref = null;
     if (rec.el.__order != null) {
       var kids = container.children;
       for (var i = 0; i < kids.length; i++) {
         var k = kids[i];
-        if (k === rec.el) { continue; }
-        if (k.__order == null) { continue; }       // skip non-managed nodes
-        if (k.__order > rec.el.__order) { ref = k; break; }
+        if (k === rec.el) {
+          continue;
+        }
+        if (k.__order == null) {
+          continue;
+        } // skip non-managed nodes
+        if (k.__order > rec.el.__order) {
+          ref = k;
+          break;
+        }
       }
     }
     // already correctly placed → no move (avoids needless reflow/scroll jumps)
-    if (rec.el.parentNode === container && rec.el.nextSibling === ref) { return; }
-    if (ref) { container.insertBefore(rec.el, ref); }
-    else { container.appendChild(rec.el); }
+    if (rec.el.parentNode === container && rec.el.nextSibling === ref) {
+      return;
+    }
+    if (ref) {
+      container.insertBefore(rec.el, ref);
+    } else {
+      container.appendChild(rec.el);
+    }
   }
 
   function showEmptyState(show) {
     var empty = emptyEl();
-    if (empty) { empty.hidden = !show; }
+    if (empty) {
+      empty.hidden = !show;
+    }
   }
 
   // ---- public: cc.batch ---------------------------------------------------
   cc.batch = function (entries) {
-    if (!entries) { return; }
+    if (!entries) {
+      return;
+    }
     if (!Array.isArray(entries)) {
       // tolerate a single entry or {entries:[...]}
-      if (entries.entries && Array.isArray(entries.entries)) { entries = entries.entries; }
-      else { entries = [entries]; }
+      if (entries.entries && Array.isArray(entries.entries)) {
+        entries = entries.entries;
+      } else {
+        entries = [entries];
+      }
     }
     var c = conversationEl();
     var stick = followFlag || isNearBottom();
@@ -757,7 +993,9 @@
     }
 
     // re-apply active search highlight to refreshed bodies
-    if (currentQuery) { runSearch(currentQuery, true); }
+    if (currentQuery) {
+      runSearch(currentQuery, true);
+    }
 
     scheduleScroll(stick);
   };
@@ -765,7 +1003,11 @@
   // ---- public: cc.clear ---------------------------------------------------
   // Host's answer to `resolveLinks`: upgrade the confirmed tokens in that row to jump-to-code links.
   cc.links = function (payload) {
-    try { applyLinks(payload); } catch (e) { /* linkification is best-effort — never break the transcript */ }
+    try {
+      applyLinks(payload);
+    } catch (e) {
+      /* linkification is best-effort — never break the transcript */
+    }
   };
 
   cc.clear = function () {
@@ -776,7 +1018,9 @@
       // remove everything except a persistent #empty if it lives inside
       var kids = Array.prototype.slice.call(c.children);
       for (var i = 0; i < kids.length; i++) {
-        if (kids[i].id === 'empty') { continue; }
+        if (kids[i].id === 'empty') {
+          continue;
+        }
         c.removeChild(kids[i]);
       }
     }
@@ -794,7 +1038,11 @@
   // previously marked the first hit but never scrolled to it and offered no next/prev — you could see "10 matches"
   // and never reach any of them.
   function setActiveHit(i, scroll) {
-    if (!searchHits.length) { activeIndex = 0; updateFindCount(); return; }
+    if (!searchHits.length) {
+      activeIndex = 0;
+      updateFindCount();
+      return;
+    }
     var n = searchHits.length;
     activeIndex = ((i % n) + n) % n; // wrap both directions
     for (var k = 0; k < n; k++) searchHits[k].classList.remove('active');
@@ -803,20 +1051,34 @@
     // Only scroll on an explicit navigation (fresh query / next / prev). The silent re-highlight that runs on
     // every streaming batch must NOT scroll, or it would yank the viewport to the active match on every frame
     // and fight auto-follow.
-    if (scroll) { try { hit.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* older engines */ } }
+    if (scroll) {
+      try {
+        hit.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (e) {
+        /* older engines */
+      }
+    }
     updateFindCount();
   }
-  function nextHit() { setActiveHit(activeIndex + 1, true); }
-  function prevHit() { setActiveHit(activeIndex - 1, true); }
+  function nextHit() {
+    setActiveHit(activeIndex + 1, true);
+  }
+  function prevHit() {
+    setActiveHit(activeIndex - 1, true);
+  }
 
   function clearHighlights() {
     var c = conversationEl();
-    if (!c) { return; }
+    if (!c) {
+      return;
+    }
     var marks = c.querySelectorAll('mark.cc-hit');
     for (var i = 0; i < marks.length; i++) {
       var m = marks[i];
       var parent = m.parentNode;
-      if (!parent) { continue; }
+      if (!parent) {
+        continue;
+      }
       // replace mark with its text
       var txt = document.createTextNode(m.textContent || '');
       parent.replaceChild(txt, m);
@@ -832,18 +1094,24 @@
     var n;
     while ((n = walker.nextNode())) {
       // skip text already inside code-head copy controls etc. — fine to include
-      if (n.nodeValue && n.nodeValue.length) { textNodes.push(n); }
+      if (n.nodeValue && n.nodeValue.length) {
+        textNodes.push(n);
+      }
     }
     for (var i = 0; i < textNodes.length; i++) {
       var tn = textNodes[i];
       var val = tn.nodeValue;
       var hay = val.toLowerCase();
-      if (hay.indexOf(lower) === -1) { continue; }
+      if (hay.indexOf(lower) === -1) {
+        continue;
+      }
       var frag = document.createDocumentFragment();
       var idx = 0;
       var pos;
       while ((pos = hay.indexOf(lower, idx)) !== -1) {
-        if (pos > idx) { frag.appendChild(document.createTextNode(val.slice(idx, pos))); }
+        if (pos > idx) {
+          frag.appendChild(document.createTextNode(val.slice(idx, pos)));
+        }
         var mark = document.createElement('mark');
         mark.className = 'cc-hit';
         mark.textContent = val.slice(pos, pos + lower.length);
@@ -852,8 +1120,12 @@
         count++;
         idx = pos + lower.length;
       }
-      if (idx < val.length) { frag.appendChild(document.createTextNode(val.slice(idx))); }
-      if (tn.parentNode) { tn.parentNode.replaceChild(frag, tn); }
+      if (idx < val.length) {
+        frag.appendChild(document.createTextNode(val.slice(idx)));
+      }
+      if (tn.parentNode) {
+        tn.parentNode.replaceChild(frag, tn);
+      }
     }
     return count;
   }
@@ -862,22 +1134,31 @@
     clearHighlights();
     currentQuery = q || '';
     if (!currentQuery) {
-      if (!silent) { safeSend({ type: 'search', count: 0 }); }
+      if (!silent) {
+        safeSend({ type: 'search', count: 0 });
+      }
       return;
     }
     var lower = currentQuery.toLowerCase();
     var total = 0;
     rows.forEach(function (rec) {
-      if (!rec || !rec.bodyNode) { return; }
+      if (!rec || !rec.bodyNode) {
+        return;
+      }
       total += highlightInNode(rec.bodyNode, lower);
     });
     if (searchHits.length) {
       // Fresh (non-silent) query → jump+scroll to the first hit. Silent re-highlight (streaming batch) → only
       // restore the active class at the current position, NEVER scroll (that yanked the viewport every frame).
-      if (silent) { setActiveHit(Math.min(activeIndex, searchHits.length - 1), false); }
-      else { setActiveHit(0, true); }
+      if (silent) {
+        setActiveHit(Math.min(activeIndex, searchHits.length - 1), false);
+      } else {
+        setActiveHit(0, true);
+      }
     }
-    if (!silent) { safeSend({ type: 'search', count: total }); }
+    if (!silent) {
+      safeSend({ type: 'search', count: total });
+    }
   }
 
   // ---- find bar overlay (Ctrl/Cmd+F) -------------------------------------
@@ -891,29 +1172,50 @@
   function emitSearch(q) {
     var C = CCobj();
     if (C.emit) {
-      try { C.emit('search', q); return; } catch (e) { /* fall through */ }
+      try {
+        C.emit('search', q);
+        return;
+      } catch (e) {
+        /* fall through */
+      }
     }
     runSearch(q, false);
   }
 
   function updateFindCount() {
-    if (!findCount) { return; }
+    if (!findCount) {
+      return;
+    }
     var q = (findInput && findInput.value) || '';
-    if (!q) { findCount.textContent = ''; return; }
+    if (!q) {
+      findCount.textContent = '';
+      return;
+    }
     var n = searchHits.length;
-    findCount.textContent = n === 0 ? 'No results' : ((activeIndex + 1) + ' / ' + n);
+    findCount.textContent = n === 0 ? 'No results' : activeIndex + 1 + ' / ' + n;
   }
 
   function ensureFindBar() {
-    if (findBar) { return findBar; }
+    if (findBar) {
+      return findBar;
+    }
     findInput = el('input', {
       class: 'find-input',
-      attrs: { type: 'text', placeholder: 'Find…', spellcheck: 'false' }
+      attrs: { type: 'text', placeholder: 'Find…', spellcheck: 'false' },
     });
     findCount = el('span', { class: 'find-count' });
     var closeBtn = el('span', {
-      class: 'find-x', text: '✕', title: 'Close', attrs: { role: 'button' },
-      on: { click: function (e) { e.preventDefault(); e.stopPropagation(); closeFindBar(); } }
+      class: 'find-x',
+      text: '✕',
+      title: 'Close',
+      attrs: { role: 'button' },
+      on: {
+        click: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeFindBar();
+        },
+      },
     });
     findBar = el('div', { class: 'find-bar' });
     findBar.hidden = true;
@@ -933,21 +1235,31 @@
       } else if (e.key === 'Enter' || e.keyCode === 13) {
         // Enter → next match, Shift+Enter → previous (standard find-bar navigation).
         e.preventDefault();
-        if (e.shiftKey) prevHit(); else nextHit();
+        if (e.shiftKey) prevHit();
+        else nextHit();
       }
     });
 
     var host = document.body || conversationEl() || document.documentElement;
-    if (host) { host.appendChild(findBar); }
+    if (host) {
+      host.appendChild(findBar);
+    }
     return findBar;
   }
 
   function openFindBar() {
     ensureFindBar();
-    if (!findBar) { return; }
+    if (!findBar) {
+      return;
+    }
     findBar.hidden = false;
     if (findInput) {
-      try { findInput.focus(); findInput.select(); } catch (e) { /* ignore */ }
+      try {
+        findInput.focus();
+        findInput.select();
+      } catch (e) {
+        /* ignore */
+      }
       if (findInput.value) {
         emitSearch(findInput.value);
         updateFindCount();
@@ -956,51 +1268,73 @@
   }
 
   function closeFindBar() {
-    if (findBar) { findBar.hidden = true; }
+    if (findBar) {
+      findBar.hidden = true;
+    }
     emitSearch('');
-    if (findCount) { findCount.textContent = ''; }
+    if (findCount) {
+      findCount.textContent = '';
+    }
   }
 
   // Ctrl/Cmd+O — collapse/expand every "Thought process" (reasoning) fold at once.
   // If any reasoning fold is currently open we collapse them all; otherwise expand them all.
   function toggleReasoningFolds() {
-    reasoningExpanded = !reasoningExpanded;       // persists to folds that stream in later
+    reasoningExpanded = !reasoningExpanded; // persists to folds that stream in later
     var c = conversationEl();
-    if (!c) { return; }
+    if (!c) {
+      return;
+    }
     var folds = c.querySelectorAll('details.fold.reasoning');
-    for (var j = 0; j < folds.length; j++) { folds[j].open = reasoningExpanded; }
+    for (var j = 0; j < folds.length; j++) {
+      folds[j].open = reasoningExpanded;
+    }
   }
 
   // Expose so the host can drive the toggle if the IDE swallows Ctrl+O before
   // the web view ever sees the keydown.
   cc.toggleReasoning = toggleReasoningFolds;
 
-  document.addEventListener('keydown', function (e) {
-    var key = e.key;
-    var isF = (key === 'f' || key === 'F' || e.keyCode === 70);
-    var isO = (key === 'o' || key === 'O' || e.keyCode === 79);
-    if (isF && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      openFindBar();
-    } else if (isO && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
-      toggleReasoningFolds();
-    } else if ((key === 'Escape' || e.keyCode === 27) && findBar && !findBar.hidden) {
-      e.preventDefault();
-      // Stop the event here so closing the find bar doesn't ALSO reach the composer's Escape handler, which
-      // would interrupt the running turn (capture phase runs before the composer's bubble handler).
-      e.stopPropagation();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      closeFindBar();
-    }
-  }, true); // capture phase — beat in-view handlers; IDE-level capture is handled host-side if needed
+  document.addEventListener(
+    'keydown',
+    function (e) {
+      var key = e.key;
+      var isF = key === 'f' || key === 'F' || e.keyCode === 70;
+      var isO = key === 'o' || key === 'O' || e.keyCode === 79;
+      if (isF && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        openFindBar();
+      } else if (isO && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        toggleReasoningFolds();
+      } else if ((key === 'Escape' || e.keyCode === 27) && findBar && !findBar.hidden) {
+        e.preventDefault();
+        // Stop the event here so closing the find bar doesn't ALSO reach the composer's Escape handler, which
+        // would interrupt the running turn (capture phase runs before the composer's bubble handler).
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        closeFindBar();
+      }
+    },
+    true
+  ); // capture phase — beat in-view handlers; IDE-level capture is handled host-side if needed
 
   // ---- subscribe to bus events -------------------------------------------
   function subscribe() {
     var C = CCobj();
-    if (!C.on) { return false; }
-    C.on('follow', function (b) { followFlag = !!b; if (followFlag) { scheduleScroll(true); } });
-    C.on('search', function (q) { runSearch(q, false); updateFindCount(); });
+    if (!C.on) {
+      return false;
+    }
+    C.on('follow', function (b) {
+      followFlag = !!b;
+      if (followFlag) {
+        scheduleScroll(true);
+      }
+    });
+    C.on('search', function (q) {
+      runSearch(q, false);
+      updateFindCount();
+    });
     return true;
   }
 
@@ -1009,7 +1343,9 @@
     var tries = 0;
     var iv = setInterval(function () {
       tries++;
-      if (subscribe() || tries > 50) { clearInterval(iv); }
+      if (subscribe() || tries > 50) {
+        clearInterval(iv);
+      }
     }, 20);
   }
 })();

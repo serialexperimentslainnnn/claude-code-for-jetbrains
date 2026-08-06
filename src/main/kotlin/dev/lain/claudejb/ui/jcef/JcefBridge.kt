@@ -1,6 +1,8 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
+import dev.lain.claudejb.protocol.AskQuestion
 import dev.lain.claudejb.session.TranscriptEntry
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -25,7 +27,10 @@ import kotlinx.serialization.json.put
  */
 object JcefBridge {
 
-    private val lenient = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val lenient = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 
     // ── Kotlin → JS : serialization ────────────────────────────────────────────────────────────────────
 
@@ -80,45 +85,60 @@ object JcefBridge {
         // A read-only unified diff for reviewable edits, so the card shows what's changing (red/green) — edits are
         // accepted/rejected as a whole; there is no per-line selection (that produced incoherent, broken code).
         diff?.takeIf { it.isNotBlank() }?.let { put("diff", it) }
-        p.questions?.let { qs ->
-            put("questions", buildJsonArray {
-                qs.forEach { q ->
-                    add(buildJsonObject {
-                        put("question", q.question)
-                        put("header", q.header)
-                        put("multiSelect", q.multiSelect)
-                        put("options", buildJsonArray {
+        // The two card shapes that carry their own nested payload; each is only present on its own kind of card.
+        p.questions?.let { put("questions", questionsJson(it)) }
+        p.elicitation?.let { put("elicitation", elicitationJson(it)) }
+    }
+
+    /** The AskUserQuestion payload: questions, each with its options. */
+    private fun questionsJson(questions: List<AskQuestion>) = buildJsonArray {
+        questions.forEach { q ->
+            add(
+                buildJsonObject {
+                    put("question", q.question)
+                    put("header", q.header)
+                    put("multiSelect", q.multiSelect)
+                    put(
+                        "options",
+                        buildJsonArray {
                             q.options.forEach { o ->
-                                add(buildJsonObject {
-                                    put("label", o.label)
-                                    put("description", o.description)
-                                    o.preview?.let { put("preview", it) }
-                                })
+                                add(
+                                    buildJsonObject {
+                                        put("label", o.label)
+                                        put("description", o.description)
+                                        o.preview?.let { put("preview", it) }
+                                    },
+                                )
                             }
-                        })
-                    })
-                }
-            })
+                        },
+                    )
+                },
+            )
         }
-        p.elicitation?.let { e ->
-            put("elicitation", buildJsonObject {
-                put("serverName", e.serverName)
-                put("message", e.message)
-                e.description?.let { put("description", it) }
-                e.mode?.let { put("mode", it) }
-                e.url?.let { put("url", it) }
-                put("fields", buildJsonArray {
-                    e.fields.forEach { f ->
-                        add(buildJsonObject {
+    }
+
+    /** The MCP elicitation payload: the server's ask, plus the form fields derived from its schema. */
+    private fun elicitationJson(e: ElicitationCard) = buildJsonObject {
+        put("serverName", e.serverName)
+        put("message", e.message)
+        e.description?.let { put("description", it) }
+        e.mode?.let { put("mode", it) }
+        e.url?.let { put("url", it) }
+        put(
+            "fields",
+            buildJsonArray {
+                e.fields.forEach { f ->
+                    add(
+                        buildJsonObject {
                             put("name", f.name)
                             put("type", f.type)
                             put("title", f.title)
                             put("required", f.required)
-                        })
-                    }
-                })
-            })
-        }
+                        },
+                    )
+                }
+            },
+        )
     }
 
     fun permissionsJson(list: List<PendingPermission>, diffByRequest: Map<String, String> = emptyMap()): String =
@@ -126,108 +146,198 @@ object JcefBridge {
 
     // ── JS → Kotlin : parsing ──────────────────────────────────────────────────────────────────────────
 
-    /** A typed message from the web frontend. [Unknown] keeps the dispatcher total without throwing. */
+    /**
+     * A typed message from the web frontend. [Unknown] keeps the dispatcher total without throwing.
+     *
+     * Grouped into sub-interfaces for the same reason [dev.lain.claudejb.protocol.ClaudeEvent] is: the panel
+     * dispatches in two levels instead of one 40-arm `when`, and the compiler still checks exhaustiveness at
+     * both, so a new message type cannot be added and then silently ignored. The groups mirror the `parseX`
+     * helpers below one-for-one, so a message is parsed and handled by the same concern.
+     */
     sealed interface Msg {
-        data class Send(val text: String) : Msg
-        object Interrupt : Msg
-        object CycleMode : Msg
-        object Ready : Msg
-        object OpenPalette : Msg
-        data class ChangeModel(val value: String?) : Msg
-        data class ChangeMode(val wire: String) : Msg
-        data class ChangeEffort(val value: String?) : Msg
-        data class ChangeThinking(val on: Boolean) : Msg
-        data class ChangeVibe(val on: Boolean) : Msg
-        data class ChangeProvider(val id: String) : Msg
-        data class RemoveQueued(val index: Int) : Msg
-        data class ResolvePermission(val id: String, val allow: Boolean) : Msg
-        data class ResolveQuestion(val id: String, val answers: Map<String, String>) : Msg
-        data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : Msg
-        data class AlwaysAllow(val tool: String, val id: String) : Msg
-        data class ViewDiff(val id: String) : Msg
-        data class ViewDiffByTool(val toolUseId: String) : Msg
-        data class RevertEdit(val toolUseId: String) : Msg
-        object OpenDiffHistory : Msg
-        data class Open(val url: String) : Msg
+
+        /** Driving a turn from the composer. */
+        sealed interface Prompting : Msg
+
+        /** Changing a launch/runtime setting (model, mode, effort, thinking, provider, vibe). */
+        sealed interface Settings : Msg
+
+        /** Answering one of the request cards (permission, question, elicitation). */
+        sealed interface RequestCard : Msg
+
+        /** Diff review, rollback and jump-to-code. */
+        sealed interface Diffs : Msg
+
+        /** Composer attachments: chips, drag/drop/paste, file picker. */
+        sealed interface Attachments : Msg
+
+        /** Session dashboard: MCP health and subagent control. */
+        sealed interface SessionControl : Msg
+
+        /** Web-app lifecycle and anything the host does not act on. */
+        sealed interface Lifecycle : Msg
+
+        data class Send(val text: String) : Prompting
+        object Interrupt : Prompting
+        object CycleMode : Prompting
+        data class RemoveQueued(val index: Int) : Prompting
+        data class Copy(val text: String) : Prompting
+
+        object Ready : Lifecycle
+        object OpenPalette : Lifecycle
+
+        /**
+         * A one-shot report of what the embedded browser actually resolves at runtime — media queries, CSS
+         * feature support, computed styles. The plugin's UI *is* a browser, and until now nothing could see
+         * inside it: a rule that silently did not apply looked identical to a backend that never sent the
+         * state, and both looked identical to a bug in between. This closes that blind spot.
+         */
+        data class Diagnostics(val report: String) : Lifecycle
+
+        data class Unknown(val type: String) : Lifecycle
+
+        data class ChangeModel(val value: String?) : Settings
+        data class ChangeMode(val wire: String) : Settings
+        data class ChangeEffort(val value: String?) : Settings
+        data class ChangeThinking(val on: Boolean) : Settings
+        data class ChangeVibe(val on: Boolean) : Settings
+        data class ChangeProvider(val id: String) : Settings
+
+        data class ResolvePermission(val id: String, val allow: Boolean) : RequestCard
+        data class ResolveQuestion(val id: String, val answers: Map<String, String>) : RequestCard
+        data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : RequestCard
+        data class AlwaysAllow(val tool: String, val id: String) : RequestCard
+
+        data class ViewDiff(val id: String) : Diffs
+        data class ViewDiffByTool(val toolUseId: String) : Diffs
+        data class RevertEdit(val toolUseId: String) : Diffs
+        object OpenDiffHistory : Diffs
+        data class Open(val url: String) : Diffs
 
         /**
          * The transcript detected jump-to-code candidates in a settled row and asks the host which are real. Only
          * the resolved ones become links, so a path that doesn't exist (or a word that isn't a symbol) never turns
          * into a dead hyperlink. Answered with `cc.links({ rowId, links: [...] })`.
          */
-        data class ResolveLinks(val rowId: Long, val paths: List<String>, val symbols: List<String>) : Msg
-        data class Copy(val text: String) : Msg
-        // Stage 2 — attachments (composer chips, drag/drop/paste, file picker).
-        data class RemoveAttachment(val id: String) : Msg
-        object PickFiles : Msg
-        object PickDirectory : Msg
-        object RequestAttachData : Msg
-        data class AttachPath(val path: String) : Msg
-        object AttachSelection : Msg
-        object AttachCurrentFile : Msg
-        data class PasteClipboardImage(val notify: Boolean) : Msg
-        object PasteClipboard : Msg  // Ctrl+V: host reads text OR image from the system clipboard
-        data class Attach(val name: String, val mediaType: String, val base64: String) : Msg
-        // Stage 3 — session dashboard (MCP health + subagent control).
-        data class McpReconnect(val name: String) : Msg
-        data class McpToggle(val name: String, val enabled: Boolean) : Msg
-        data class StopTask(val taskId: String) : Msg
-        data class Unknown(val type: String) : Msg
+        data class ResolveLinks(val rowId: Long, val paths: List<String>, val symbols: List<String>) : Diffs
+
+        data class RemoveAttachment(val id: String) : Attachments
+        object PickFiles : Attachments
+        object PickDirectory : Attachments
+        object RequestAttachData : Attachments
+        data class AttachPath(val path: String) : Attachments
+        object AttachSelection : Attachments
+        object AttachCurrentFile : Attachments
+        data class PasteClipboardImage(val notify: Boolean) : Attachments
+        object PasteClipboard : Attachments // Ctrl+V: host reads text OR image from the system clipboard
+        data class Attach(val name: String, val mediaType: String, val base64: String) : Attachments
+
+        data class McpReconnect(val name: String) : SessionControl
+        data class McpToggle(val name: String, val enabled: Boolean) : SessionControl
+        data class StopTask(val taskId: String) : SessionControl
     }
 
-    /** Parses one `window.__ccSend` payload. Malformed input or an unrecognized `type` maps to [Msg.Unknown]. */
+    /** Typed accessors over one inbound payload, so the per-group parsers below read as plain field reads. */
+    private class Fields(val obj: JsonObject) {
+        fun str(key: String): String? = obj[key]?.jsonPrimitive?.contentOrNull
+        fun text(key: String): String = str(key).orEmpty()
+        fun bool(key: String): Boolean = obj[key]?.jsonPrimitive?.booleanOrNull ?: false
+        fun int(key: String, fallback: Int): Int = obj[key]?.jsonPrimitive?.intOrNull ?: fallback
+        fun long(key: String, fallback: Long): Long = (obj[key] as? JsonPrimitive)?.longOrNull ?: fallback
+        fun json(key: String): JsonObject? = obj[key] as? JsonObject
+    }
+
+    /**
+     * Parses one `window.__ccSend` payload. Malformed input or an unrecognized `type` maps to [Msg.Unknown].
+     *
+     * Dispatch is split by CONCERN across the `parseX` helpers below, each returning null for a type it does
+     * not own, rather than one `when` over all 40 message types. Unlike [dev.lain.claudejb.protocol.ClaudeEvent]
+     * there is no exhaustiveness to preserve here — the subject is a string off the wire, so an unrecognized
+     * value is a normal outcome ([Msg.Unknown]) and not a missing branch.
+     */
     fun parse(json: String): Msg {
         val obj = runCatching { lenient.parseToJsonElement(json).jsonObject }.getOrNull()
             ?: return Msg.Unknown("malformed")
         val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: return Msg.Unknown("notype")
-        fun str(key: String): String? = obj[key]?.jsonPrimitive?.contentOrNull
-        fun bool(key: String): Boolean = obj[key]?.jsonPrimitive?.booleanOrNull ?: false
-        return when (type) {
-            "send" -> Msg.Send(str("text").orEmpty())
-            "interrupt" -> Msg.Interrupt
-            "cycleMode" -> Msg.CycleMode
-            "ready" -> Msg.Ready
-            "palette" -> Msg.OpenPalette
-            "changeModel" -> Msg.ChangeModel(str("value"))
-            "changeMode" -> Msg.ChangeMode(str("wire").orEmpty())
-            "changeEffort" -> Msg.ChangeEffort(str("value"))
-            "changeThinking" -> Msg.ChangeThinking(bool("on"))
-            "changeVibe" -> Msg.ChangeVibe(bool("on"))
-            "changeProvider" -> Msg.ChangeProvider(str("id").orEmpty())
-            "removeQueued" -> Msg.RemoveQueued(obj["index"]?.jsonPrimitive?.intOrNull ?: -1)
-            "resolvePermission" -> Msg.ResolvePermission(str("id").orEmpty(), bool("allow"))
-            "resolveQuestion" -> {
-                val answers = (obj["answers"] as? JsonObject).orEmptyAnswers()
-                Msg.ResolveQuestion(str("id").orEmpty(), answers)
-            }
-            "resolveElicitation" -> Msg.ResolveElicitation(str("id").orEmpty(), str("action").orEmpty(), obj["content"] as? JsonObject)
-            "alwaysAllow" -> Msg.AlwaysAllow(str("tool").orEmpty(), str("id").orEmpty())
-            "viewDiff" -> Msg.ViewDiff(str("id").orEmpty())
-            "viewDiffByTool" -> Msg.ViewDiffByTool(str("toolUseId").orEmpty())
-            "revertEdit" -> Msg.RevertEdit(str("toolUseId").orEmpty())
-            "openDiffHistory" -> Msg.OpenDiffHistory
-            "open" -> Msg.Open(str("url").orEmpty())
-            "resolveLinks" -> Msg.ResolveLinks(
-                (obj["rowId"] as? JsonPrimitive)?.longOrNull ?: -1L,
-                strList(obj["paths"]),
-                strList(obj["symbols"]),
-            )
-            "copy" -> Msg.Copy(str("text").orEmpty())
-            "removeAttachment" -> Msg.RemoveAttachment(str("id").orEmpty())
-            "pickFiles" -> Msg.PickFiles
-            "pickDirectory" -> Msg.PickDirectory
-            "requestAttachData" -> Msg.RequestAttachData
-            "attachPath" -> Msg.AttachPath(str("path").orEmpty())
-            "attachSelection" -> Msg.AttachSelection
-            "attachCurrentFile" -> Msg.AttachCurrentFile
-            "pasteClipboardImage" -> Msg.PasteClipboardImage(bool("notify"))
-            "pasteClipboard" -> Msg.PasteClipboard
-            "attach" -> Msg.Attach(str("name").orEmpty(), str("mediaType").orEmpty(), str("base64").orEmpty())
-            "mcpReconnect" -> Msg.McpReconnect(str("name").orEmpty())
-            "mcpToggle" -> Msg.McpToggle(str("name").orEmpty(), bool("enabled"))
-            "stopTask" -> Msg.StopTask(str("taskId").orEmpty())
-            else -> Msg.Unknown(type)
-        }
+        val f = Fields(obj)
+        return parseComposer(type, f)
+            ?: parseSettings(type, f)
+            ?: parseRequestCards(type, f)
+            ?: parseDiffs(type, f)
+            ?: parseAttachments(type, f)
+            ?: parseSessionControls(type, f)
+            ?: Msg.Unknown(type)
+    }
+
+    private fun parseComposer(type: String, f: Fields): Msg? = when (type) {
+        "send" -> Msg.Send(f.text("text"))
+        "interrupt" -> Msg.Interrupt
+        "cycleMode" -> Msg.CycleMode
+        "ready" -> Msg.Ready
+        "palette" -> Msg.OpenPalette
+        "diag" -> Msg.Diagnostics(f.text("report"))
+        "copy" -> Msg.Copy(f.text("text"))
+        "removeQueued" -> Msg.RemoveQueued(f.int("index", -1))
+        else -> null
+    }
+
+    private fun parseSettings(type: String, f: Fields): Msg? = when (type) {
+        "changeModel" -> Msg.ChangeModel(f.str("value"))
+        "changeMode" -> Msg.ChangeMode(f.text("wire"))
+        "changeEffort" -> Msg.ChangeEffort(f.str("value"))
+        "changeThinking" -> Msg.ChangeThinking(f.bool("on"))
+        "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
+        "changeProvider" -> Msg.ChangeProvider(f.text("id"))
+        else -> null
+    }
+
+    private fun parseRequestCards(type: String, f: Fields): Msg? = when (type) {
+        "resolvePermission" -> Msg.ResolvePermission(f.text("id"), f.bool("allow"))
+        "resolveQuestion" -> Msg.ResolveQuestion(f.text("id"), f.json("answers").orEmptyAnswers())
+        "resolveElicitation" -> Msg.ResolveElicitation(f.text("id"), f.text("action"), f.json("content"))
+        "alwaysAllow" -> Msg.AlwaysAllow(f.text("tool"), f.text("id"))
+        else -> null
+    }
+
+    private fun parseDiffs(type: String, f: Fields): Msg? = when (type) {
+        "viewDiff" -> Msg.ViewDiff(f.text("id"))
+
+        "viewDiffByTool" -> Msg.ViewDiffByTool(f.text("toolUseId"))
+
+        "revertEdit" -> Msg.RevertEdit(f.text("toolUseId"))
+
+        "openDiffHistory" -> Msg.OpenDiffHistory
+
+        "open" -> Msg.Open(f.text("url"))
+
+        "resolveLinks" -> Msg.ResolveLinks(
+            f.long("rowId", -1L),
+            strList(f.obj["paths"]),
+            strList(f.obj["symbols"]),
+        )
+
+        else -> null
+    }
+
+    private fun parseAttachments(type: String, f: Fields): Msg? = when (type) {
+        "removeAttachment" -> Msg.RemoveAttachment(f.text("id"))
+        "pickFiles" -> Msg.PickFiles
+        "pickDirectory" -> Msg.PickDirectory
+        "requestAttachData" -> Msg.RequestAttachData
+        "attachPath" -> Msg.AttachPath(f.text("path"))
+        "attachSelection" -> Msg.AttachSelection
+        "attachCurrentFile" -> Msg.AttachCurrentFile
+        "pasteClipboardImage" -> Msg.PasteClipboardImage(f.bool("notify"))
+        "pasteClipboard" -> Msg.PasteClipboard
+        "attach" -> Msg.Attach(f.text("name"), f.text("mediaType"), f.text("base64"))
+        else -> null
+    }
+
+    private fun parseSessionControls(type: String, f: Fields): Msg? = when (type) {
+        "mcpReconnect" -> Msg.McpReconnect(f.text("name"))
+        "mcpToggle" -> Msg.McpToggle(f.text("name"), f.bool("enabled"))
+        "stopTask" -> Msg.StopTask(f.text("taskId"))
+        else -> null
     }
 
     private fun JsonObject?.orEmptyAnswers(): Map<String, String> =
@@ -246,14 +356,19 @@ object JcefBridge {
     fun linksJson(rowId: Long, resolved: List<dev.lain.claudejb.ui.LinkResolver.Resolved>): String =
         buildJsonObject {
             put("rowId", rowId)
-            put("links", buildJsonArray {
-                resolved.forEach { r ->
-                    add(buildJsonObject {
-                        put("token", r.token)
-                        put("path", r.path)
-                        r.line?.let { put("line", it) }
-                    })
-                }
-            })
+            put(
+                "links",
+                buildJsonArray {
+                    resolved.forEach { r ->
+                        add(
+                            buildJsonObject {
+                                put("token", r.token)
+                                put("path", r.path)
+                                r.line?.let { put("line", it) }
+                            },
+                        )
+                    }
+                },
+            )
         }.toString()
 }

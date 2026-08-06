@@ -105,8 +105,12 @@ class EditorContextProviderImageTest {
     fun `preferredTextType returns null for an image-only clipboard (the Wayland leak guard)`() {
         // KDE Plasma screenshot copy: image types + a suggested-filename, but NO real text/* target.
         val kdeImageTypes = listOf(
-            "image/png", "application/x-qt-image", "x-kde-force-image-copy",
-            "application/x-kde-suggestedfilename", "image/avif", "image/bmp",
+            "image/png",
+            "application/x-qt-image",
+            "x-kde-force-image-copy",
+            "application/x-kde-suggestedfilename",
+            "image/avif",
+            "image/bmp",
         )
         assertNull(EditorContextProvider.preferredTextType(kdeImageTypes))
     }

@@ -44,7 +44,9 @@ class JumpToCodeUiTest : UiTestBase() {
         // `EditorTabLabel`/`TabLabel` carrying the file name.
         waitFor(longTimeout, Duration.ofMillis(500), "expected an editor tab for Foo.kt to open") {
             remoteRobot.findAll<ComponentFixture>(
-                byXpath("//div[@class='EditorTabLabel' and @accessiblename='Foo.kt'] | //div[@class='TabLabel' and contains(@text,'Foo.kt')]"),
+                byXpath(
+                    "//div[@class='EditorTabLabel' and @accessiblename='Foo.kt'] | //div[@class='TabLabel' and contains(@text,'Foo.kt')]",
+                ),
             ).isNotEmpty()
         }
     }

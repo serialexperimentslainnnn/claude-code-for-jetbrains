@@ -4,9 +4,9 @@ import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.util.IconLoader
 import com.intellij.ui.ColorUtil
 import com.intellij.ui.JBColor
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.NamedColorUtil
-import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.UIUtil
 import java.awt.Color
 import java.awt.Graphics
@@ -24,13 +24,48 @@ import javax.swing.JPanel
  * the IDE theme in effect when the chat is opened/rebuilt).
  */
 object ChatTheme {
-    val BG: Color get() = UIUtil.getPanelBackground()                       // transcript / composer surface
-    val USER_BUBBLE: Color get() = editorBg()                              // the user's message block
-    val CARD_BG: Color get() = editorBg()                                 // tool calls, composer card
+
+    // ── Animation and geometry ────────────────────────────────────────────────────────────────────────────
+    // Colour literals below are deliberately left inline: a 0xRRGGBB inside a property named DIFF_ADDED_BG is
+    // the definition of that name, not a magic number. These, by contrast, encode decisions someone might
+    // revisit, so they get names.
+
+    /** Vibe Mode repaint tick. 30 ms × [VIBE_HUE_STEP] ≈ 55 steps ≈ 1.8 s per rotation. */
+    private const val VIBE_TICK_MS = 30
+
+    /** Hue advanced per tick, 0..1. Kept coherent with the JCEF side's `vibeStep` in `app-core.js`. */
+    private const val VIBE_HUE_STEP = 0.018f
+
+    /** Saturation/brightness of the Vibe Mode rainbow — vivid, but not so saturated that text on it stops reading. */
+    private const val VIBE_SATURATION = 0.85f
+    private const val VIBE_BRIGHTNESS = 1.0f
+
+    /** Where the second stop of the animated vibe border sits, as a fraction of the spectrum from the first. */
+    private const val VIBE_GRADIENT_STOP = 0.45f
+
+    /** Vibe border stroke, in unscaled px (thicker than the themed hairline so the gradient is visible). */
+    private const val VIBE_BORDER_WIDTH = 1.6f
+
+    /** Nyan Cat needs more room than the 16 px Claude mark for its detail to read in the composer button. */
+    private const val VIBE_ICON_SCALE = 1.4f
+
+    /** Card drop-shadow alpha, light and dark themes. Low enough to hint depth without reading as a border. */
+    private const val SHADOW_ALPHA_LIGHT = 28
+    private const val SHADOW_ALPHA_DARK = 60
+
+    // Channel offsets and mask for the packed ARGB ints [vibeIcon] recolours pixel by pixel.
+    private const val ALPHA_SHIFT = 24
+    private const val RED_SHIFT = 16
+    private const val GREEN_SHIFT = 8
+    private const val CHANNEL_MASK = 0xFF
+
+    val BG: Color get() = UIUtil.getPanelBackground() // transcript / composer surface
+    val USER_BUBBLE: Color get() = editorBg() // the user's message block
+    val CARD_BG: Color get() = editorBg() // tool calls, composer card
     val CARD_HOVER: Color get() = ColorUtil.brighter(editorBg(), 1)
-    val CODE_BG: Color get() = editorBg()                                 // fenced code background
-    val TEXT: Color get() = UIUtil.getLabelForeground()                   // primary text
-    val TEXT_DIM: Color get() = NamedColorUtil.getInactiveTextColor()     // secondary / metadata
+    val CODE_BG: Color get() = editorBg() // fenced code background
+    val TEXT: Color get() = UIUtil.getLabelForeground() // primary text
+    val TEXT_DIM: Color get() = NamedColorUtil.getInactiveTextColor() // secondary / metadata
 
     /** The Claude coral, fixed product identity. */
     private val CORAL = Color(0xD97757)
@@ -42,6 +77,7 @@ object ChatTheme {
      */
     @Volatile var vibeMode: Boolean = false
         private set
+
     @Volatile var vibeHue: Float = 0f
         private set
 
@@ -50,10 +86,11 @@ object ChatTheme {
     // animation speed and desync), and closing the tab that toggled Vibe Mode doesn't leave the others frozen on a
     // static rainbow with no driver. The timer runs only while at least one panel is registered AND vibing.
     private val vibeRepaints = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
     // Faster rainbow (~1.8s per full cycle, coherent with the JCEF side in app-core.js vibeStep): 30ms tick × 0.018
     // hue step ≈ 55 steps per rotation.
-    private val vibeTimer = javax.swing.Timer(30) {
-        vibeHue = (vibeHue + 0.018f) % 1f
+    private val vibeTimer = javax.swing.Timer(VIBE_TICK_MS) {
+        vibeHue = (vibeHue + VIBE_HUE_STEP) % 1f
         vibeRepaints.forEach { it() }
     }
 
@@ -74,16 +111,22 @@ object ChatTheme {
     fun setVibeMode(on: Boolean) {
         if (vibeMode == on) return
         vibeMode = on
-        if (on) { if (vibeRepaints.isNotEmpty()) vibeTimer.start() } else vibeTimer.stop()
+        if (on) {
+            if (vibeRepaints.isNotEmpty()) vibeTimer.start()
+        } else {
+            vibeTimer.stop()
+        }
         vibeRepaints.forEach { it() }
     }
 
     /** Claude coral — links, send, avatar. In Vibe Mode it becomes the animated rainbow hue. */
-    val ACCENT: Color get() = if (vibeMode) Color(Color.HSBtoRGB(vibeHue % 1f, 0.85f, 1.0f)) else CORAL
+    val ACCENT: Color
+        get() = if (vibeMode) Color(Color.HSBtoRGB(vibeHue % 1f, VIBE_SATURATION, VIBE_BRIGHTNESS)) else CORAL
     val ACCENT_TEXT = Color(0xFFFFFF)
 
     /** A rainbow colour offset [fraction] of the spectrum from the current [vibeHue] — for gradient vibe borders. */
-    fun vibeColorAt(fraction: Float): Color = Color(Color.HSBtoRGB((vibeHue + fraction) % 1f, 0.85f, 1.0f))
+    fun vibeColorAt(fraction: Float): Color =
+        Color(Color.HSBtoRGB((vibeHue + fraction) % 1f, VIBE_SATURATION, VIBE_BRIGHTNESS))
 
     /**
      * Wraps a stencil [base] icon so that, while 🌈 Vibe Mode is on, every non-transparent pixel is retinted to the
@@ -93,6 +136,7 @@ object ChatTheme {
     fun vibeIcon(base: Icon): Icon = object : Icon {
         private val w = base.iconWidth.coerceAtLeast(1)
         private val h = base.iconHeight.coerceAtLeast(1)
+
         // The base is a static stencil: render it ONCE to capture its pixels (we only need the alpha mask), then
         // reuse one output buffer and only re-run the recolor when the tint actually changed — so an animating
         // frame costs an int-array recolor, not an SVG re-render + fresh BufferedImage per icon per frame.
@@ -105,7 +149,10 @@ object ChatTheme {
         override fun getIconHeight() = base.iconHeight
 
         override fun paintIcon(c: java.awt.Component?, g: Graphics, x: Int, y: Int) {
-            if (!vibeMode) { base.paintIcon(c, g, x, y); return }
+            if (!vibeMode) {
+                base.paintIcon(c, g, x, y)
+                return
+            }
             var src = srcArgb
             if (src == null) {
                 val tmp = java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB)
@@ -116,13 +163,13 @@ object ChatTheme {
                 srcArgb = src
             }
             val t = ACCENT
-            val rgb = (t.red shl 16) or (t.green shl 8) or t.blue
+            val rgb = (t.red shl RED_SHIFT) or (t.green shl GREEN_SHIFT) or t.blue
             val o = out ?: java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB).also { out = it }
             if (rgb != cachedRgb) {
                 val px = pxBuf ?: IntArray(w * h).also { pxBuf = it }
                 for (i in src.indices) {
-                    val a = src[i] ushr 24 and 0xFF
-                    px[i] = if (a != 0) (a shl 24) or rgb else 0
+                    val a = src[i] ushr ALPHA_SHIFT and CHANNEL_MASK
+                    px[i] = if (a != 0) (a shl ALPHA_SHIFT) or rgb else 0
                 }
                 o.setRGB(0, 0, w, h, px, 0, w)
                 cachedRgb = rgb
@@ -133,22 +180,22 @@ object ChatTheme {
     val BORDER: Color get() = JBColor.border()
     val ERROR: Color get() = NamedColorUtil.getErrorForeground()
     val ERROR_BG: Color get() = JBColor(Color(0xFBE9E7), Color(0x3D2422))
-    val WARNING: Color get() = JBColor(Color(0xB8860B), Color(0xE0A030))     // amber — quota warning
+    val WARNING: Color get() = JBColor(Color(0xB8860B), Color(0xE0A030)) // amber — quota warning
 
     // Tool-call lifecycle box colours: loading (sky blue) · running (amber, pulses to sky) · finished (green).
-    val TOOL_LOADING: Color get() = JBColor(Color(0x3B9DD6), Color(0x4FC3F7))  // azul celeste
-    val TOOL_RUNNING: Color get() = JBColor(Color(0xC9920A), Color(0xE0A030))  // amber
+    val TOOL_LOADING: Color get() = JBColor(Color(0x3B9DD6), Color(0x4FC3F7)) // azul celeste
+    val TOOL_RUNNING: Color get() = JBColor(Color(0xC9920A), Color(0xE0A030)) // amber
     val TOOL_FINISHED: Color get() = JBColor(Color(0x2E9E4F), Color(0x66BB6A)) // green
 
     // Soft drop-shadow tint for cards (translucent black; lighter on light themes, deeper on dark).
-    val SHADOW: Color get() = JBColor(Color(0, 0, 0, 28), Color(0, 0, 0, 60))
+    val SHADOW: Color get() = JBColor(Color(0, 0, 0, SHADOW_ALPHA_LIGHT), Color(0, 0, 0, SHADOW_ALPHA_DARK))
 
     // Inline unified-diff colors (added / removed), GitHub-style, themed for light & dark.
     val DIFF_ADDED_FG: Color get() = JBColor(Color(0x22863A), Color(0x7EE787))
     val DIFF_ADDED_BG: Color get() = JBColor(Color(0xE6FFEC), Color(0x12261C))
     val DIFF_REMOVED_FG: Color get() = JBColor(Color(0xB31D28), Color(0xFFA198))
     val DIFF_REMOVED_BG: Color get() = JBColor(Color(0xFFEEF0), Color(0x301A1D))
-    val DIFF_HUNK_FG: Color get() = NamedColorUtil.getInactiveTextColor()    // @@ … @@ hunk headers
+    val DIFF_HUNK_FG: Color get() = NamedColorUtil.getInactiveTextColor() // @@ … @@ hunk headers
 
     /** The Claude starburst, used as the assistant avatar — or, in 🌈 Vibe Mode, Nyan Cat. Both load at the SAME
      *  intrinsic size as the original Claude mark. */
@@ -160,7 +207,9 @@ object ChatTheme {
      *  composer's repaint loop) and re-reports its size on every layout (so the bigger helmet gets the room it
      *  needs). Painted centred so the swap doesn't shift the baseline. Use instead of `JLabel(avatar)`. */
     fun avatarLabel(): javax.swing.JComponent = object : javax.swing.JComponent() {
-        init { isOpaque = false }
+        init {
+            isOpaque = false
+        }
         override fun getPreferredSize() = java.awt.Dimension(avatar.iconWidth, avatar.iconHeight)
         override fun paintComponent(g: Graphics) {
             val ic = avatar
@@ -182,6 +231,7 @@ object ChatTheme {
 
     /** Attachment chip icon for an editor selection (snippet). */
     val iconSelection: Icon = vibeIcon(IconLoader.getIcon("/icons/attachment-selection.svg", ChatTheme::class.java))
+
     /** Attachment chip icon for an image (clipboard paste / drag&drop). */
     val iconImage: Icon = vibeIcon(IconLoader.getIcon("/icons/attachment-image.svg", ChatTheme::class.java))
 
@@ -203,6 +253,7 @@ object ChatTheme {
     val iconChipMode: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-mode.svg", ChatTheme::class.java))
     val iconChipEffort: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-effort.svg", ChatTheme::class.java))
     val iconChipThinking: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-thinking.svg", ChatTheme::class.java))
+
     /** Coral sparkle shown on the thinking chip while extended thinking is on (active-state accent). */
     val iconChipThinkingOn: Icon = vibeIcon(IconLoader.getIcon("/icons/chip-thinking-on.svg", ChatTheme::class.java))
 
@@ -212,21 +263,21 @@ object ChatTheme {
 
     /** Vibe Mode toggle glyphs: the Claude star when off, Nyan Cat when the rainbow show is on. Scaled up from the
      *  16px base so Nyan's detail (rainbow trail, pop-tart, face) actually reads in the composer button. */
-    val iconVibe: Icon =
-        com.intellij.util.IconUtil.scale(IconLoader.getIcon("/icons/claude.svg", ChatTheme::class.java), null, 1.4f)
-    val iconVibeOn: Icon =
-        com.intellij.util.IconUtil.scale(IconLoader.getIcon("/icons/claude-vibe.svg", ChatTheme::class.java), null, 1.4f)
+    val iconVibe: Icon = com.intellij.util.IconUtil
+        .scale(IconLoader.getIcon("/icons/claude.svg", ChatTheme::class.java), null, VIBE_ICON_SCALE)
+    val iconVibeOn: Icon = com.intellij.util.IconUtil
+        .scale(IconLoader.getIcon("/icons/claude-vibe.svg", ChatTheme::class.java), null, VIBE_ICON_SCALE)
 
     /** The tool-window stripe icon (its default), restored when Vibe Mode turns off. */
     val iconToolWindow: Icon = IconLoader.getIcon("/icons/toolwindow.svg", ChatTheme::class.java)
 
     // Cached per-category tool icons backing [toolIcon].
-    private val toolBash    = vibeIcon(IconLoader.getIcon("/icons/tool-bash.svg", ChatTheme::class.java))
-    private val toolRead    = vibeIcon(IconLoader.getIcon("/icons/tool-read.svg", ChatTheme::class.java))
-    private val toolEdit    = vibeIcon(IconLoader.getIcon("/icons/tool-edit.svg", ChatTheme::class.java))
-    private val toolSearch  = vibeIcon(IconLoader.getIcon("/icons/tool-search.svg", ChatTheme::class.java))
-    private val toolWeb     = vibeIcon(IconLoader.getIcon("/icons/tool-web.svg", ChatTheme::class.java))
-    private val toolTask    = vibeIcon(IconLoader.getIcon("/icons/tool-task.svg", ChatTheme::class.java))
+    private val toolBash = vibeIcon(IconLoader.getIcon("/icons/tool-bash.svg", ChatTheme::class.java))
+    private val toolRead = vibeIcon(IconLoader.getIcon("/icons/tool-read.svg", ChatTheme::class.java))
+    private val toolEdit = vibeIcon(IconLoader.getIcon("/icons/tool-edit.svg", ChatTheme::class.java))
+    private val toolSearch = vibeIcon(IconLoader.getIcon("/icons/tool-search.svg", ChatTheme::class.java))
+    private val toolWeb = vibeIcon(IconLoader.getIcon("/icons/tool-web.svg", ChatTheme::class.java))
+    private val toolTask = vibeIcon(IconLoader.getIcon("/icons/tool-task.svg", ChatTheme::class.java))
     private val toolGeneric = vibeIcon(IconLoader.getIcon("/icons/tool-generic.svg", ChatTheme::class.java))
 
     /** Custom icon for a tool-call card by tool name. */
@@ -259,7 +310,7 @@ object ChatTheme {
 
     private fun editorBg(): Color = EditorColorsManager.getInstance().globalScheme.defaultBackground
 
-    fun hex(c: Color): String = "#%02x%02x%02x".format(c.red, c.green, c.blue)
+    fun hex(c: Color): String = String.format(java.util.Locale.ROOT, "#%02x%02x%02x", c.red, c.green, c.blue)
 
     /**
      * A panel that paints a rounded background (and optional border), for bubbles and cards.
@@ -277,11 +328,17 @@ object ChatTheme {
     ) : JPanel() {
         /** Fill colour; settable so callers can recolour the card on hover and repaint. */
         var fill: Color? = fill
-            set(value) { field = value; repaint() }
+            set(value) {
+                field = value
+                repaint()
+            }
 
         /** Border colour; settable so callers can recolour the box (e.g. a tool's lifecycle state) and repaint. */
         var line: Color? = line
-            set(value) { field = value; repaint() }
+            set(value) {
+                field = value
+                repaint()
+            }
 
         init {
             isOpaque = false
@@ -309,9 +366,14 @@ object ChatTheme {
                     if (vibeMode) {
                         // 🌈 Vibe Mode: every bordered box (tool cards, error cards, chips…) gets an animated
                         // two-stop rainbow outline instead of its themed hairline.
-                        g2.stroke = java.awt.BasicStroke(JBUIScale.scale(1.6f))
+                        g2.stroke = java.awt.BasicStroke(JBUIScale.scale(VIBE_BORDER_WIDTH))
                         g2.paint = java.awt.GradientPaint(
-                            0f, 0f, vibeColorAt(0f), w.toFloat(), h.toFloat(), vibeColorAt(0.45f),
+                            0f,
+                            0f,
+                            vibeColorAt(0f),
+                            w.toFloat(),
+                            h.toFloat(),
+                            vibeColorAt(VIBE_GRADIENT_STOP),
                         )
                     } else {
                         g2.color = line

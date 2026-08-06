@@ -159,7 +159,12 @@ class DiffLifecycleManager(private val project: Project) {
         val root = project.basePath ?: return
         val dir = LocalFileSystem.getInstance().findFileByPath(root) ?: return
         ApplicationManager.getApplication().invokeLater(
-            { VfsUtil.markDirtyAndRefresh(/* async = */ true, /* recursive = */ true, /* reloadChildren = */ true, dir) },
+            {
+                // markDirtyAndRefresh(async, recursive, reloadChildren, file) — a Java API, so the flags cannot
+                // be named at the call site. All three are on: async keeps it off the hot path, and recursive +
+                // reloadChildren are what make a file created by a tool we did not track actually appear.
+                VfsUtil.markDirtyAndRefresh(true, true, true, dir)
+            },
             ModalityState.nonModal(),
         )
     }

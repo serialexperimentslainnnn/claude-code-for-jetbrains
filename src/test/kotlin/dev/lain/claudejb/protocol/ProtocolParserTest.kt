@@ -77,7 +77,7 @@ class ProtocolParserTest {
     @Test
     fun `local command output is captured`() {
         val event = parseOne<ClaudeEvent.LocalCommandOutput>(
-            """{"type":"system","subtype":"local_command_output","content":"hello"}"""
+            """{"type":"system","subtype":"local_command_output","content":"hello"}""",
         )
         assertEquals("hello", event.content)
     }
@@ -135,6 +135,34 @@ class ProtocolParserTest {
         assertTrue(event.isError)
     }
 
+    /**
+     * The CLI wraps a failed tool call's `content` in `<tool_use_error>…</tool_use_error>`. Verified against
+     * `claude` 2.1.222, which emits exactly:
+     *   `content: "<tool_use_error>Error: …</tool_use_error>", is_error: true`
+     * and carries the same message UNWRAPPED in the sibling `toolUseResult` field — i.e. the tag is framing for
+     * the model, not text for a human. Rendered verbatim it put raw markup in a native GUI's transcript, which
+     * is the "never mirror raw CLI output" antipattern. `is_error` already conveys the failure structurally.
+     */
+    @Test
+    fun `tool_use_error wrapper is stripped from the rendered text`() {
+        val inner = "Error: No such tool available: Glob. Glob is not available in this session."
+        val line = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result",""" +
+            """"tool_use_id":"t9","content":"<tool_use_error>$inner</tool_use_error>","is_error":true}]}}"""
+        val event = parseOne<ClaudeEvent.ToolResult>(line)
+        assertEquals(inner, event.content)
+        assertTrue(event.isError) // the failure survives structurally, which is what reddens the card
+    }
+
+    @Test
+    fun `a tool result that merely mentions the tag is left intact`() {
+        // Only a wrapper enclosing the WHOLE payload is stripped — otherwise output that legitimately discusses
+        // the tag (this project's own source and tests do) would be silently mangled.
+        val body = "see <tool_use_error> in the CLI bundle"
+        val line = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result",""" +
+            """"tool_use_id":"t10","content":"$body","is_error":false}]}}"""
+        assertEquals(body, parseOne<ClaudeEvent.ToolResult>(line).content)
+    }
+
     // --- stream events (partial messages) ---
 
     @Test
@@ -145,7 +173,7 @@ class ProtocolParserTest {
     @Test
     fun `stream content_block_delta text_delta becomes TextDelta`() {
         val event = parseOne<ClaudeEvent.TextDelta>(
-            """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}"""
+            """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}""",
         )
         assertEquals("par", event.text)
     }
@@ -153,7 +181,7 @@ class ProtocolParserTest {
     @Test
     fun `stream message_delta usage becomes LiveUsage with all four token components`() {
         val event = parseOne<ClaudeEvent.LiveUsage>(
-            """{"type":"stream_event","event":{"type":"message_delta","usage":{"input_tokens":6,"cache_creation_input_tokens":29195,"cache_read_input_tokens":0,"output_tokens":123}}}"""
+            """{"type":"stream_event","event":{"type":"message_delta","usage":{"input_tokens":6,"cache_creation_input_tokens":29195,"cache_read_input_tokens":0,"output_tokens":123}}}""",
         )
         assertEquals(6, event.inputTokens)
         assertEquals(29195, event.cacheCreationTokens)
@@ -166,7 +194,7 @@ class ProtocolParserTest {
         // The binary emits the per-message usage at message_start; previously we ignored it and only updated
         // on message_delta, which left input/cache out of the running total. Now MessageStart + LiveUsage flow.
         val events = ProtocolParser.parse(
-            """{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":6,"cache_creation_input_tokens":29195,"output_tokens":1}}}}"""
+            """{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":6,"cache_creation_input_tokens":29195,"output_tokens":1}}}}""",
         )
         assertTrue(events.any { it is ClaudeEvent.MessageStart })
         val live = events.filterIsInstance<ClaudeEvent.LiveUsage>().single()
@@ -183,7 +211,7 @@ class ProtocolParserTest {
     fun `stream message_start without usage yields only the boundary`() {
         // No message.usage present -> exactly one MessageStart, no LiveUsage.
         val events = ProtocolParser.parse(
-            """{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}"""
+            """{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}""",
         )
         assertEquals(1, events.size)
         assertInstanceOf(ClaudeEvent.MessageStart::class.java, events.first())
@@ -192,7 +220,7 @@ class ProtocolParserTest {
     @Test
     fun `stream content_block_delta thinking_delta becomes ThinkingDelta`() {
         val event = parseOne<ClaudeEvent.ThinkingDelta>(
-            """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}}"""
+            """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}}""",
         )
         assertEquals("reasoning", event.text)
     }
@@ -200,7 +228,7 @@ class ProtocolParserTest {
     @Test
     fun `stream message_delta with partial usage zero-fills the missing token components`() {
         val event = parseOne<ClaudeEvent.LiveUsage>(
-            """{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":42}}}"""
+            """{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":42}}}""",
         )
         assertEquals(0, event.inputTokens)
         assertEquals(0, event.cacheCreationTokens)
@@ -211,7 +239,7 @@ class ProtocolParserTest {
     @Test
     fun `stream message_delta without usage yields nothing`() {
         assertTrue(
-            ProtocolParser.parse("""{"type":"stream_event","event":{"type":"message_delta"}}""").isEmpty()
+            ProtocolParser.parse("""{"type":"stream_event","event":{"type":"message_delta"}}""").isEmpty(),
         )
     }
 
@@ -219,8 +247,8 @@ class ProtocolParserTest {
     fun `stream content_block_delta with unknown delta type yields nothing`() {
         assertTrue(
             ProtocolParser.parse(
-                """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}"""
-            ).isEmpty()
+                """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}""",
+            ).isEmpty(),
         )
     }
 
@@ -228,8 +256,8 @@ class ProtocolParserTest {
     fun `stream content_block_delta text_delta without text yields nothing`() {
         assertTrue(
             ProtocolParser.parse(
-                """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta"}}}"""
-            ).isEmpty()
+                """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta"}}}""",
+            ).isEmpty(),
         )
     }
 
@@ -242,8 +270,8 @@ class ProtocolParserTest {
     fun `stream_event with an unknown event type yields nothing`() {
         assertTrue(
             ProtocolParser.parse(
-                """{"type":"stream_event","event":{"type":"content_block_start","index":0}}"""
-            ).isEmpty()
+                """{"type":"stream_event","event":{"type":"content_block_start","index":0}}""",
+            ).isEmpty(),
         )
     }
 

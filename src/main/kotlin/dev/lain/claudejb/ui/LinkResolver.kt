@@ -71,6 +71,24 @@ object LinkResolver {
     fun userHome(): String? = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
 
     /** `~/notes/x.md` → an absolute path under the user's home. Anything else is returned unchanged. */
+    // A URI scheme prefix (`https:`, `mailto:`, `jb:`…), used to tell a link's href apart from a file path.
+    // Two-or-more characters before the colon on purpose: a single letter is a WINDOWS DRIVE (`C:\src`), which
+    // is a path, not a scheme. This plugin ships on Windows, so getting that backwards would break every
+    // absolute-path link there.
+    private val HAS_SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.\\-]+:")
+
+    /**
+     * True when a link's href is a FILE PATH rather than a URL — that is, it carries no URI scheme.
+     *
+     * Markdown links written by the model use plain relative paths (`[BACKLOG](docs/BACKLOG.md)`). Those matched
+     * no scheme branch in the host's link handler and were silently dropped, so the most deliberate kind of link
+     * was the only one that did nothing. Bare paths in prose already worked, which is what made it confusing.
+     */
+    fun isFilePathHref(href: String): Boolean {
+        val h = href.trim()
+        return h.isNotEmpty() && !HAS_SCHEME.containsMatchIn(h)
+    }
+
     fun expandHome(raw: String): String {
         if (raw != "~" && !raw.startsWith("~/")) return raw
         val home = userHome() ?: return raw
@@ -85,28 +103,36 @@ object LinkResolver {
      */
     fun resolvePaths(project: Project, candidates: List<String>): List<Resolved> {
         val root = project.basePath
-        val out = ArrayList<Resolved>()
-        val byName = ArrayList<Pair<String, Int?>>()
-        for (raw in candidates.take(MAX_PATHS)) {
-            val (pathPart, line) = splitLine(raw)
-            if (pathPart.isBlank()) continue
-            val expanded = expandHome(pathPart)
-            val abs = when {
-                File(expanded).isAbsolute -> File(expanded)
-                root != null -> File(root, expanded)
-                else -> continue // a relative path with no project to resolve it against
-            }
-            if (!abs.exists()) {
-                // Not a path relative to the root — but a BARE FILE NAME (`app.css:190`, `JcefHost.kt`) is how a
-                // developer normally cites a file, so give it a second chance against the project's file index.
-                if (!pathPart.contains('/') && !pathPart.contains('\\')) byName += pathPart to line
-                continue // never a dead link: if the index doesn't know it either, it stays plain text
-            }
-            if (!isOpenable(abs.path, root)) continue    // project or home only
-            out.add(Resolved(raw, displayPath(abs.path, root), line))
+        val outcomes = candidates.take(MAX_PATHS).mapNotNull { resolveOnePath(it, root) }
+        val onDisk = outcomes.filterIsInstance<PathOutcome.Direct>().map { it.resolved }
+        val bareNames = outcomes.filterIsInstance<PathOutcome.BareName>().map { it.name to it.line }
+        return onDisk + resolveByName(project, bareNames)
+    }
+
+    /** What one path candidate turned out to be: a real path, a bare name to look up later, or nothing. */
+    private sealed interface PathOutcome {
+        data class Direct(val resolved: Resolved) : PathOutcome
+        data class BareName(val name: String, val line: Int?) : PathOutcome
+    }
+
+    /** Resolves ONE candidate. Null means "not a link" — never a dead link; the token stays plain text. */
+    private fun resolveOnePath(raw: String, root: String?): PathOutcome? {
+        val (pathPart, line) = splitLine(raw)
+        if (pathPart.isBlank()) return null
+        val expanded = expandHome(pathPart)
+        val abs = when {
+            File(expanded).isAbsolute -> File(expanded)
+            root != null -> File(root, expanded)
+            else -> return null // a relative path with no project to resolve it against
         }
-        out += resolveByName(project, byName)
-        return out
+        if (!abs.exists()) {
+            // Not a path relative to the root — but a BARE FILE NAME (`app.css:190`, `JcefHost.kt`) is how a
+            // developer normally cites a file, so give it a second chance against the project's file index.
+            val isBareName = !pathPart.contains('/') && !pathPart.contains('\\')
+            return if (isBareName) PathOutcome.BareName(pathPart, line) else null
+        }
+        if (!isOpenable(abs.path, root)) return null // project or home only
+        return PathOutcome.Direct(Resolved(raw, displayPath(abs.path, root), line))
     }
 
     /**
@@ -122,24 +148,46 @@ object LinkResolver {
         val unresolved = ArrayList<Pair<String, Int?>>()
         val indexed = try {
             ReadAction.nonBlocking<List<Resolved>> {
-                val out = ArrayList<Resolved>()
-                for ((name, line) in names.take(MAX_PATHS)) {
-                    val hits = runCatching {
-                        FilenameIndex.getVirtualFilesByName(name, GlobalSearchScope.projectScope(project))
-                    }.getOrNull().orEmpty()
-                    if (hits.size > 1) continue                    // ambiguous → don't guess
-                    if (hits.isEmpty()) { unresolved += name to line; continue } // maybe an EXCLUDED dir — see below
-                    val vf = hits.first()
-                    if (vf.isDirectory || !isOpenable(vf.path, root)) continue
-                    val token = if (line != null) "$name:$line" else name
-                    out.add(Resolved(token, displayPath(vf.path, root), line))
+                names.take(MAX_PATHS).mapNotNull { (name, line) ->
+                    when (val hit = lookUpName(project, name, line, root)) {
+                        is NameLookup.Found -> hit.resolved
+
+                        // Not in the index at all — it may live in an EXCLUDED dir, so the disk scan gets a turn.
+                        NameLookup.NotIndexed -> {
+                            unresolved += name to line
+                            null
+                        }
+
+                        NameLookup.NoLink -> null
+                    }
                 }
-                out
             }.inSmartMode(project).expireWith(project).executeSynchronously()
         } catch (_: ProcessCanceledException) {
             emptyList()
         }
         return indexed + scanForNames(root, unresolved)
+    }
+
+    /** The outcome of one file-name-index lookup. */
+    private sealed interface NameLookup {
+        data class Found(val resolved: Resolved) : NameLookup
+
+        /** The index has never heard of it — worth a disk scan (excluded dirs are not indexed). */
+        object NotIndexed : NameLookup
+
+        /** Ambiguous, a directory, or outside the openable roots: deliberately no link. */
+        object NoLink : NameLookup
+    }
+
+    private fun lookUpName(project: Project, name: String, line: Int?, root: String?): NameLookup {
+        val hits = runCatching {
+            FilenameIndex.getVirtualFilesByName(name, GlobalSearchScope.projectScope(project))
+        }.getOrNull().orEmpty()
+        if (hits.size > 1) return NameLookup.NoLink // ambiguous → don't guess
+        val vf = hits.firstOrNull() ?: return NameLookup.NotIndexed
+        if (vf.isDirectory || !isOpenable(vf.path, root)) return NameLookup.NoLink
+        val token = if (line != null) "$name:$line" else name
+        return NameLookup.Found(Resolved(token, displayPath(vf.path, root), line))
     }
 
     /**
@@ -156,27 +204,49 @@ object LinkResolver {
     fun scanForNames(root: String?, names: List<Pair<String, Int?>>): List<Resolved> {
         if (root == null || names.isEmpty()) return emptyList()
         val lineOf = names.toMap()
-        val hits = HashMap<String, MutableList<File>>()
-        var seen = 0
-        val queue = ArrayDeque<File>().apply { add(File(root)) }
-        while (queue.isNotEmpty() && seen < MAX_SCAN_ENTRIES) {
-            val children = queue.removeFirst().listFiles() ?: continue
-            for (child in children) {
-                seen++
-                if (child.isDirectory) {
-                    if (child.name !in SKIP_DIRS && !child.name.startsWith(".")) queue.addLast(child)
-                } else if (child.name in lineOf) {
-                    hits.getOrPut(child.name) { ArrayList() }.add(child)
-                }
-            }
-        }
+        val hits = scanTree(File(root), lineOf.keys)
         return hits.mapNotNull { (name, files) ->
-            val file = files.singleOrNull() ?: return@mapNotNull null   // ambiguous → no link
+            val file = files.singleOrNull() ?: return@mapNotNull null // ambiguous → no link
             if (!isOpenable(file.path, root)) return@mapNotNull null
             val line = lineOf[name]
             Resolved(if (line != null) "$name:$line" else name, displayPath(file.path, root), line)
         }
     }
+
+    /**
+     * One bounded breadth-first pass under [root], collecting every file whose name is in [wanted]. Returns all
+     * matches per name — deciding what to do with two of them is [scanForNames]'s call, not this one's.
+     */
+    private fun scanTree(root: File, wanted: Set<String>): Map<String, List<File>> {
+        val hits = HashMap<String, MutableList<File>>()
+        val queue = ArrayDeque<File>().apply { add(root) }
+        var seen = 0
+        while (queue.isNotEmpty() && seen < MAX_SCAN_ENTRIES) {
+            val children = queue.removeFirst().listFiles() ?: continue
+            for (child in children) {
+                seen++
+                visit(child, wanted, queue, hits)
+            }
+        }
+        return hits
+    }
+
+    /** Enqueues [child] if it is a directory worth descending, or records it if its name is [wanted]. */
+    private fun visit(
+        child: File,
+        wanted: Set<String>,
+        queue: ArrayDeque<File>,
+        hits: MutableMap<String, MutableList<File>>,
+    ) {
+        if (child.isDirectory) {
+            if (isWorthDescending(child)) queue.addLast(child)
+            return
+        }
+        if (child.name in wanted) hits.getOrPut(child.name) { ArrayList() }.add(child)
+    }
+
+    /** Skips the directories that would blow the entry budget without ever holding an interesting file. */
+    private fun isWorthDescending(dir: File): Boolean = dir.name !in SKIP_DIRS && !dir.name.startsWith(".")
 
     /**
      * Resolves symbol-name candidates (a function, class, …) to their declaration site via the *Go to Symbol*
@@ -194,21 +264,21 @@ object LinkResolver {
         if (names.isEmpty()) return emptyList()
         return try {
             ReadAction.nonBlocking<List<Resolved>> {
-                val out = ArrayList<Resolved>()
-                for (name in names) {
-                    val hits = itemsFor(project, name)
-                    // Ambiguous (or nothing): don't guess. A wrong jump is worse than no link.
-                    if (hits.size != 1) continue
-                    val psi = hits.first() as? PsiElement ?: continue
-                    val vf = psi.containingFile?.virtualFile ?: continue
-                    if (!isOpenable(vf.path, root)) continue
-                    out.add(Resolved(name, displayPath(vf.path, root), lineOf(psi)))
-                }
-                out
+                names.mapNotNull { resolveOneSymbol(project, it, root) }
             }.inSmartMode(project).expireWith(project).executeSynchronously()
         } catch (_: ProcessCanceledException) {
             emptyList()
         }
+    }
+
+    /** One symbol → its declaration site, or null. Ambiguous never links: a wrong jump is worse than no link. */
+    private fun resolveOneSymbol(project: Project, name: String, root: String): Resolved? {
+        val hits = itemsFor(project, name)
+        if (hits.size != 1) return null
+        val psi = hits.first() as? PsiElement ?: return null
+        val vf = psi.containingFile?.virtualFile ?: return null
+        if (!isOpenable(vf.path, root)) return null
+        return Resolved(name, displayPath(vf.path, root), lineOf(psi))
     }
 
     /** All project-scoped declarations named [name], across every language that contributes to Go-to-Symbol. */
@@ -216,8 +286,10 @@ object LinkResolver {
         val hits = LinkedHashSet<NavigationItem>()
         for (contributor in ChooseByNameContributor.SYMBOL_EP_NAME.extensionList) {
             // A misbehaving language contributor must not break the whole transcript.
+            // getItemsByName(name, pattern, project, includeNonProjectItems) — a Java API, so the trailing
+            // `false` cannot be named: we want PROJECT symbols only, never library or SDK declarations.
             val items = runCatching {
-                contributor.getItemsByName(name, name, project, /* includeNonProjectItems = */ false)
+                contributor.getItemsByName(name, name, project, false)
             }.getOrNull() ?: continue
             items.filterNotNullTo(hits)
             if (hits.size > 1) return hits.toList() // already ambiguous — stop early

@@ -23,7 +23,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `assistant text becomes ASSISTANT entry`() {
         val lines = listOf(
-            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi, how can I help?"}]}}"""
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi, how can I help?"}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("ASSISTANT", e.speaker)
@@ -45,7 +45,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `tool_use becomes TOOL with meta name and toolUseId`() {
         val lines = listOf(
-            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls -la"}}]}}"""
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls -la"}}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("TOOL", e.speaker)
@@ -65,7 +65,7 @@ class SessionTranscriptReaderTest {
         val root = "/home/u/proj"
         val lines = listOf(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2",""" +
-                """"name":"Read","input":{"file_path":"$root/src/main/Foo.kt"}}]}}"""
+                """"name":"Read","input":{"file_path":"$root/src/main/Foo.kt"}}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines, projectRoot = root).single()
         assertEquals("Read(src/main/Foo.kt)", e.text)
@@ -76,7 +76,7 @@ class SessionTranscriptReaderTest {
     fun `without a project root a restored file tool falls back to the raw path and no link`() {
         val lines = listOf(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_3",""" +
-                """"name":"Read","input":{"file_path":"/home/u/proj/src/main/Foo.kt"}}]}}"""
+                """"name":"Read","input":{"file_path":"/home/u/proj/src/main/Foo.kt"}}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("Read(/home/u/proj/src/main/Foo.kt)", e.text)
@@ -86,7 +86,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `user tool_result with string content becomes TOOL_OUTPUT`() {
         val lines = listOf(
-            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"total 0"}]}}"""
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"total 0"}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("TOOL_OUTPUT", e.speaker)
@@ -97,7 +97,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `user tool_result with array content is concatenated`() {
         val lines = listOf(
-            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"line one"},{"type":"text","text":"line two"}]}]}}"""
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"line one"},{"type":"text","text":"line two"}]}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("TOOL_OUTPUT", e.speaker)
@@ -108,7 +108,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `user text block in array becomes USER`() {
         val lines = listOf(
-            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"a question"}]}}"""
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"a question"}]}}""",
         )
         val e = SessionTranscriptReader.parseEntries(lines).single()
         assertEquals("USER", e.speaker)
@@ -118,7 +118,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `tool_use without a name is dropped`() {
         val lines = listOf(
-            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","input":{"command":"ls"}}]}}"""
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","input":{"command":"ls"}}]}}""",
         )
         assertTrue(SessionTranscriptReader.parseEntries(lines).isEmpty())
     }
@@ -135,7 +135,7 @@ class SessionTranscriptReaderTest {
     @Test
     fun `mixed assistant blocks are emitted in order`() {
         val lines = listOf(
-            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"Doing it"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/b/foo.kt"}}]}}"""
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"Doing it"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/b/foo.kt"}}]}}""",
         )
         val entries = SessionTranscriptReader.parseEntries(lines)
         assertEquals(listOf("THINKING", "ASSISTANT", "TOOL"), entries.map { it.speaker })

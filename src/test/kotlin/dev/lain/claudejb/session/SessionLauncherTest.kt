@@ -218,7 +218,9 @@ class SessionLauncherTest {
     @Test
     fun `add-dir is emitted once per directory and blanks are skipped`() {
         val args = SessionLauncher.buildArgs(
-            opts(addDirs = listOf("/a", "  ", "/b")), resume = false, mcpConfig = null,
+            opts(addDirs = listOf("/a", "  ", "/b")),
+            resume = false,
+            mcpConfig = null,
         )
         assertEquals(2, args.count { it == "--add-dir" })
         assertEquals(baseHead + listOf("--add-dir", "/a", "--add-dir", "/b"), args)

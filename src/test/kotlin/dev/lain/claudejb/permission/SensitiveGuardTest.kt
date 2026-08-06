@@ -2,11 +2,11 @@ package dev.lain.claudejb.permission
 
 import dev.lain.claudejb.permission.SensitiveGuard.Verdict
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.add
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -121,9 +121,14 @@ class SensitiveGuardTest {
     @Test
     fun `credential-dumping commands are caught wherever they run`() {
         listOf(
-            "gpg --export-secret-keys --armor", "security dump-keychain", "aws configure get secret",
-            "kubectl get secret db -o yaml", "git credential fill", "openssl rsa -in key.pem -text",
-            "certutil -exportPFX my C:/x.pfx", "reg save hklm\\sam sam.hive",
+            "gpg --export-secret-keys --armor",
+            "security dump-keychain",
+            "aws configure get secret",
+            "kubectl get secret db -o yaml",
+            "git credential fill",
+            "openssl rsa -in key.pem -text",
+            "certutil -exportPFX my C:/x.pfx",
+            "reg save hklm\\sam sam.hive",
         ).forEach { assertEquals(Verdict.ASK, v("Bash", bash(it)), it) }
     }
 
@@ -180,7 +185,12 @@ class SensitiveGuardTest {
 
     @Test
     fun `a command split into an args array is reassembled and matched`() {
-        val argv = buildJsonObject { putJsonArray("args") { add("gpg"); add("--export-secret-keys") } }
+        val argv = buildJsonObject {
+            putJsonArray("args") {
+                add("gpg")
+                add("--export-secret-keys")
+            }
+        }
         assertTrue(SensitiveGuard.runsDangerousCommand(argv))
     }
 
@@ -192,10 +202,10 @@ class SensitiveGuardTest {
 
     @Test
     fun `reason names the surface, and is null on clean input`() {
-        assertNotNull(SensitiveGuard.reason("Read", read("~/.ssh/id_rsa"), policy))
-        assertNotNull(SensitiveGuard.reason("Read", read("/home/bob/x"), policy))
-        assertNotNull(SensitiveGuard.reason("Bash", bash("mimikatz"), policy))
-        assertNull(SensitiveGuard.reason("Read", read("/home/me/proj/Foo.kt"), policy))
+        assertNotNull(SensitiveGuard.reason(read("~/.ssh/id_rsa"), policy))
+        assertNotNull(SensitiveGuard.reason(read("/home/bob/x"), policy))
+        assertNotNull(SensitiveGuard.reason(bash("mimikatz"), policy))
+        assertNull(SensitiveGuard.reason(read("/home/me/proj/Foo.kt"), policy))
     }
 
     @Test
@@ -352,9 +362,9 @@ class SensitiveGuardTest {
 
     @Test
     fun `reason() always names where to change the rule, whether enforced or downgraded`() {
-        assertTrue(SensitiveGuard.reason("Read", read("/home/bob/x"), policy)!!.contains("Settings"))
+        assertTrue(SensitiveGuard.reason(read("/home/bob/x"), policy)!!.contains("Settings"))
         val relaxed = policy.copy(enforceForeignOtherUserHome = false)
-        val downgradedReason = SensitiveGuard.reason("Read", read("/home/bob/x"), relaxed)!!
+        val downgradedReason = SensitiveGuard.reason(read("/home/bob/x"), relaxed)!!
         assertTrue(downgradedReason.contains("Settings"))
         assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
     }
@@ -459,7 +469,12 @@ class SensitiveGuardResolverPerformanceTest {
     /** A resolver that counts invocations and always returns the input unchanged (a no-op, correctness-neutral). */
     private fun countingResolver(): Pair<(String) -> String?, () -> Int> {
         var calls = 0
-        return ({ p: String -> calls++; p } to { calls })
+        return (
+            { p: String ->
+                calls++
+                p
+            } to { calls }
+            )
     }
 
     @Test
@@ -504,7 +519,10 @@ class SensitiveGuardResolverPerformanceTest {
     fun `a hung resolver still lets the LITERAL candidate be judged — only its resolved form is missing`() {
         // Even though the resolver never returns in time, the literal path itself is a known credential glob,
         // so the verdict must still be correct — a timeout must never silently downgrade to ALLOW.
-        val policy = basePolicy.copy(pathResolver = { _ -> Thread.sleep(5_000); "/should/never/see/this" })
+        val policy = basePolicy.copy(pathResolver = { _ ->
+            Thread.sleep(5_000)
+            "/should/never/see/this"
+        })
         assertEquals(SensitiveGuard.Verdict.ASK, SensitiveGuard.verdict("Read", read("/home/me/.ssh/id_rsa"), policy))
     }
 

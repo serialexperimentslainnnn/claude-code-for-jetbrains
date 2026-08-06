@@ -3,10 +3,8 @@
 blank_issues_enabled: false
 
 contact_links:
-  # TODO: replace with the actual JetBrains Marketplace URL once the listing
-  # short-link is confirmed.
   - name: JetBrains Marketplace review
-    url: https://plugins.jetbrains.com/plugin/dev.lain.claude-code-for-jetbrains
+    url: https://plugins.jetbrains.com/plugin/31965-claude-code-native/reviews
     about: Leave a rating or short review on the Marketplace listing.
 
   # TODO: replace with the GitHub Discussions URL once enabled for the repo.
@@ -15,5 +13,5 @@ contact_links:
     about: Ask a question, share a workflow, or discuss ideas before filing an issue.
 
   - name: Security vulnerability
-    url: https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/security/policy
-    about: Do NOT open a public issue. See SECURITY.md and email lain.agent604@passmail.com.
+    url: https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/security/advisories/new
+    about: Do NOT open a public issue. Report it privately here; see SECURITY.md.

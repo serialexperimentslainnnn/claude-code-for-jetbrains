@@ -33,7 +33,10 @@ data class ProtocolSurface(
         // Quote-tolerant: the SDK uses single quotes today, but don't let a future double-quote break us.
         private val SUBTYPE = Regex("""subtype:\s*['"]([^'"]+)['"]""")
         private val UNION = Regex("""type\s+(?:SDKMessage|StdoutMessage)\s*=\s*([^;]+);""")
-        private val LENIENT = Json { ignoreUnknownKeys = true; isLenient = true }
+        private val LENIENT = Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
 
         /**
          * Extracts the protocol surface from a `sdk.d.ts` body: every `subtype` string literal, and every

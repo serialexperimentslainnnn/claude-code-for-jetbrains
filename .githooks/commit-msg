@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Conventional Commits gate (git-workflow-standards §3.2). Local, because this repo has no CI gate yet.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# The hook is VERSIONED so the rule travels with the repository instead of living in one laptop's .git/hooks,
+# where it is invisible to everyone else and lost on the next clone.
+#
+# Design rule: this hook may block a BAD MESSAGE, but it must never block because the tool itself is broken.
+# Those two failures are indistinguishable from an exit code, so the hook SELF-TESTS first against a message
+# known to be valid. If that self-test fails, commitlint (or its runtime) is at fault, not the author — warn
+# and let the commit through. A hook that fails closed on its own bugs gets bypassed with --no-verify within a
+# day, and after that it protects nothing.
+set -uo pipefail
+
+msg_file="$1"
+cli="node_modules/.bin/commitlint"
+
+[ -x "$cli" ] || {
+  echo "commit-msg: commitlint not installed (npm install) — Conventional Commits check skipped." >&2
+  exit 0
+}
+
+run_lint() {
+  "$cli" --edit "$1" 2>&1
+}
+
+# --- self-test: can the tool validate a message we know is well-formed? -------------------------------------
+# This decides TWO things at once: whether commitlint works at all, and — because Node 24 aborts on some
+# hosts' system OpenSSL config (a documented local quirk, absent from clean images) — whether this host needs
+# OPENSSL_CONF neutralised. Settling that here, on a message known to be valid, means the real check below
+# runs exactly ONCE. Retrying the real check instead would print the whole failure report twice.
+probe="$(mktemp)"; trap 'rm -f "$probe"' EXIT
+printf 'chore: commitlint self-test\n' > "$probe"
+if ! run_lint "$probe" >/dev/null 2>&1; then
+  export OPENSSL_CONF=/dev/null
+  if ! run_lint "$probe" >/dev/null 2>&1; then
+    echo "commit-msg: commitlint could not run (toolchain issue, not your message) — check skipped." >&2
+    exit 0
+  fi
+fi
+
+# --- the real check ----------------------------------------------------------------------------------------
+if output="$(run_lint "$msg_file")"; then
+  exit 0
+fi
+
+echo "$output" >&2
+cat >&2 <<'EOF'
+
+The commit message is not a Conventional Commit.
+
+  <type>[optional scope]: <description>
+
+  feat:     a user-visible capability          -> minor
+  fix:      a user-visible bug fix             -> patch
+  docs, refactor, perf, test, build, ci, chore -> no version bump
+  Breaking: add ! after the type, or a "BREAKING CHANGE:" footer -> major
+
+This is not style policing: the CHANGELOG and the version bump are derived from these
+messages, and the release tooling SILENTLY SKIPS what it cannot parse. An unparseable
+message is a change that never appears in a release note.
+
+EOF
+exit 1

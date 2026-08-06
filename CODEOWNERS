@@ -7,10 +7,18 @@
 *                       @serialexperimentslainnnn
 
 # Security-sensitive policies — keep ownership explicit even though the glob
-# above already matches.
+# above already matches. The last matching rule wins, so order matters here.
 /SECURITY.md            @serialexperimentslainnnn
-/.github/               @serialexperimentslainnnn
+/docs/adr/              @serialexperimentslainnnn
 /build.gradle.kts       @serialexperimentslainnnn
 /src/main/kotlin/dev/lain/claudejb/process/      @serialexperimentslainnnn
 /src/main/kotlin/dev/lain/claudejb/permission/   @serialexperimentslainnnn
 /src/main/kotlin/dev/lain/claudejb/protocol/     @serialexperimentslainnnn
+
+# A workflow is privileged code: it runs with a token, and on a tag it can publish to the Marketplace.
+# A ruleset is the gate that decides what reaches main at all. Both are listed LAST so they win over
+# every earlier glob, and both are the reason `require_code_owner_review` is on for main.
+/.github/               @serialexperimentslainnnn
+/.github/workflows/     @serialexperimentslainnnn
+/.github/rulesets/      @serialexperimentslainnnn
+/scripts/               @serialexperimentslainnnn

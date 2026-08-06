@@ -1,0 +1,457 @@
+# CI — the gate every change passes before it can be merged.
+#
+# Mirrors exactly what a developer runs locally (see AGENTS.md); if a gate only fails here, that is a
+# workstation-provisioning problem, not a pipeline problem, and it gets fixed on the workstation.
+#
+# Every action is pinned by full commit SHA, not by tag. A tag is mutable: whoever controls the action's
+# repository can repoint it at different code, and that code runs with this workflow's token. Dependabot
+# (.github/dependabot.yml) proposes SHA bumps weekly, so pinning costs nothing in maintenance.
+name: CI
+
+on:
+  # Pull requests ONLY — there is deliberately no `push` trigger.
+  #
+  # A branch with an open PR fires `pull_request` on every push to it (the `synchronize` event), so the
+  # iteration loop is fully covered, and covered ONCE. Having both triggers meant two complete pipelines per
+  # commit for identical information; this removes that at the root instead of relying on the concurrency
+  # group to cancel one of them in time.
+  #
+  # Two consequences, recorded because each removes something we were leaning on:
+  #
+  #  - No CI on the push that a merge into `develop` creates. That run was the stated justification for
+  #    dropping the up-to-date requirement on develop — two pull requests that are green apart can break
+  #    together, and develop's own run was what would have caught it. It is now caught at the pull request
+  #    into `main`, where the full gate runs, rather than immediately after the merge.
+  #  - A branch with no open pull request gets no checks at all. That is the intent: no PR, no promotion.
+  #
+  # `release.yml` is unaffected — it carries its own `push: branches: [main]` trigger and still fires on the
+  # merge that publishes.
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+# Least privilege at the top; a job that needs more elevates it for itself. The default token is
+# read/write on everything, which a compromised dependency would happily use.
+permissions:
+  contents: read
+
+# One run per ref. Superseded PR runs are cancelled — but pushes to develop/main are NOT, so the history
+# of what passed on the trunk stays complete.
+concurrency:
+  # Keyed on the COMMIT, not the ref. A branch with an open PR fires both `push` and `pull_request` for the
+  # same commit, and `github.ref` differs between them (refs/heads/x vs refs/pull/N/merge) — so the old group
+  # let both run to completion, doubling every job on every push for no extra information. Same SHA now means
+  # same group, so the duplicate is cancelled and whichever run survives reports the checks.
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  # Cancel superseded runs on EVERY event, not just PRs. Pushing three times in a row previously left three
+  # full pipelines racing, each spending ten minutes downloading IDEs for a commit already replaced.
+  cancel-in-progress: true
+
+env:
+  # No daemon: a fresh JVM per job is the honest measurement on ephemeral runners, and a leaked daemon
+  # between steps is a class of "works on the second run" bug we do not want to own.
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain
+
+jobs:
+  # Unit + headless (BasePlatformTestCase, in-process IDE fixture) + integration (the bin/fake-claude
+  # Python stand-in). The whole non-UI pyramid, 677 tests.
+  test:
+    name: JVM tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # EVERY job in this file runs in this image, and the image is the ONLY caching mechanism.
+    #
+    # `gradle/actions/setup-gradle` used to sit in the heavy jobs and was quietly useless here: the warm
+    # GRADLE_USER_HOME measures 31 GB (23 GB of extracted IDE transforms under caches/9.5.1, 7.7 GB of the
+    # downloaded IDE artifacts under modules-2), and a GitHub Actions cache entry is capped at 10 GB per
+    # repository. It could never have stored what it appeared to be storing — it was saving a partial
+    # cache, evicting it, and re-downloading the rest on the next run. The image has no such ceiling, and
+    # the trade is explicit: refreshing what CI has cached now means rebuilding and pushing the image,
+    # which is a deliberate act rather than something that drifts between runs.
+    container:
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. This requires the package to have been granted Read access to
+      # THIS repository (package settings -> Manage Actions access): `packages: read` widens what the token
+      # may ask for, it does not authorise it against a package the repo was never linked to. Without that
+      # link the pull fails with a bare `denied`, which reads like a wrong image name.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      # NB there is deliberately no `setup-gradle` step, in this job or any other. See the note at the
+      # `container:` block above: the image IS the cache, and the action's cache was never doing the job
+      # it looked like it was doing.
+
+      # Coverage is verified HERE, in the same job and the same Gradle invocation as the tests.
+      # `koverVerify` depends on `:test`, so running it in the separate `Static analysis` job re-ran the whole
+      # JVM suite on a second runner with a cold cache — the single most expensive duplicate in this pipeline,
+      # and invisible because both jobs were green. Coverage is a property OF a test run; it belongs with it.
+      - name: Run tests and verify coverage gates
+        run: ./gradlew --no-daemon --stacktrace test koverVerify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jvm-test-reports
+          path: |
+            build/reports/tests/
+            build/test-results/
+          retention-days: 14
+
+  # Static analysis and formatting, for BOTH languages in the repo. Added in 5.0.0 together with the tools
+  # themselves — before that the entire quality bar rested on review, which is the thing the standards say
+  # to mechanise ("if formatting is being discussed in a review, a formatter is missing").
+  #
+  # Deliberately NOT a dependency of any other job: it is fast, it is independent, and a formatting failure
+  # should not hide a test failure by short-circuiting the run. Both results land on the PR together.
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
+    # Same door as the verifier: pull requests into main, and the protected branches themselves.
+    # A branch iterating towards develop runs only the two test suites; formatting, lint and coverage are
+    # settled before anything is promoted. The cost is real and worth naming — a formatting or detekt
+    # failure now lands ON develop and is fixed by a follow-up commit, instead of being caught in the PR.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      # `npm ci` is fast rather than free here: node_modules is NOT baked into the image (it must match the
+      # lockfile of the commit under test, not the one current when the image was cut), but the npm cache is,
+      # so this resolves from /opt/npm-cache without touching the network.
+      - run: npm ci
+
+      # detekt: rule config in config/detekt/detekt.yml, each non-default setting carrying its reasoning
+      # at the setting itself. config/detekt/baseline.xml holds exactly two accepted findings, both about
+      # ClaudeSession, both explained in that file — do NOT regenerate it to make a build pass.
+      - name: detekt
+        run: ./gradlew --no-daemon --stacktrace detekt
+
+      - name: Formatting (Spotless / ktlint)
+        run: ./gradlew --no-daemon --stacktrace spotlessCheck
+
+      # NB the per-package coverage gates (`koverVerify`) are NOT run here. They live in the `JVM tests` job,
+      # because Kover derives coverage from an actual test run: invoking it here re-executed the entire JVM
+      # suite on this runner. See docs/RELEASE_CHECKLIST.md §Coverage policy for the thresholds themselves.
+
+      # The shipped JCEF JavaScript. no-eval / no-implied-eval / no-new-func are errors here because the
+      # page runs under a hash-pinned CSP with no 'unsafe-eval': without this gate, code the browser will
+      # silently refuse in a user's IDE can still reach main.
+      - name: ESLint (shipped frontend)
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: Upload analysis reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: static-analysis-reports
+          path: |
+            build/reports/detekt/
+            build/reports/kover/
+          retention-days: 14
+
+  # The JCEF web app (src/main/resources/jcef/*.js) under vitest + jsdom. Nothing here ships in the
+  # plugin — vitest and jsdom are devDependencies — but the code under test absolutely does.
+  frontend-test:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      # `node-test`, not `jvm-test`: this job is `npm ci` and then vitest. On the single combined image it
+      # pulled a JDK, a Gradle distribution and 3.4 GB of extracted IntelliJ Platform it never opened —
+      # 1m05s of container init for 8 seconds of work.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    # No GRADLE_USER_HOME here: there is no Gradle in this image and nothing in this job invokes it.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      # `npm ci` (not `install`): it installs exactly the committed lockfile and fails if package.json
+      # and the lockfile disagree, which is the only way CI tests the dependency tree that was reviewed.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+        env:
+          CI: 'true' # switches vitest to the JUnit reporter (vitest.config.js)
+
+      - name: Upload frontend report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-test-report
+          path: build/reports/frontend/
+          retention-days: 14
+
+  # Supply-chain gate on the build tooling. The plugin ships no npm code, so a finding here reaches a
+  # developer's machine and never a user — hence `--omit=dev` (the distributed scope) is the hard gate,
+  # and the full tree is reported without breaking the build. See SECURITY.md for the reasoning.
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      # `node-test`: this job is `npm ci` and two `npm audit` invocations. Nothing here touches the JVM.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
+    # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
+    # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      - run: npm ci
+
+      - name: Audit the distributed scope (blocking)
+        run: npm audit --omit=dev --audit-level=low
+
+      - name: Audit the full tree (informational)
+        run: npm audit || true
+
+  # Release readiness: refuse to promote develop -> main while a bot still has work in flight.
+  #
+  # A release is a claim that `develop` is a finished state. An open pull request from Claude or from
+  # Dependabot is the opposite of that claim: it is a change someone intended to be in this release,
+  # sitting one click away from being in it. Merging past it does not lose the work, it does something
+  # worse — it ships a version whose CHANGELOG was written as if that work had landed. For Dependabot
+  # specifically it also means shipping with a known dependency update sitting unmerged, which is the
+  # one class of pending change a security advisory can be written about.
+  #
+  # This is a status check and NOT a ruleset entry because it cannot be one: a GitHub ruleset can require
+  # a check, a signature or an approval, and has no vocabulary for "no other pull request exists". The
+  # gate is therefore this job, and `.github/rulesets/main.json` requires it by DISPLAY name.
+  #
+  # THE COST, stated rather than discovered: Dependabot's resting state is "has something open" — this
+  # repository's history shows long runs of them. So this gate will block releases until that queue is
+  # drained, and draining it becomes a release step. That is the intended trade (nothing ships alongside
+  # an un-merged dependency bump), but it is the kind of gate that gets bypassed if the queue is ignored
+  # for weeks. If it starts being routinely in the way, the fix is to merge Dependabot more often — not
+  # to widen the filter.
+  bot-work-in-flight:
+    name: No bot PRs pending on develop
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Not in the CI image on purpose: this job needs `gh`, which the image does not install, and needs
+    # nothing the image does provide. A bare runner ships `gh` and starts instantly.
+    permissions:
+      contents: read
+      pull-requests: read
+    # Only at the release door. On a pull request into develop this would be self-referential.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - name: Fail if Claude or Dependabot has open pull requests into develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The login is matched by PATTERN because the exact one depends on how each integration is
+          # installed: the REST API renders an app author as `app/<slug>` (`app/dependabot` is what this
+          # repository's history shows), while a bot user appears as `<name>[bot]`. Anchored rather than
+          # a bare substring, so a human whose username merely contains "claude" or "dependabot" is not
+          # caught by a release gate.
+          pending=$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --state open \
+                      --json number,title,url,author \
+                      --jq '[.[] | select(.author.login
+                                          | ascii_downcase
+                                          | test("^app/(claude|dependabot)$|^(claude|dependabot)(\\[bot\\])?$"))]')
+
+          count=$(printf '%s' "$pending" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "no bot pull requests open against develop — clear to promote."
+            exit 0
+          fi
+
+          echo "::error::$count bot pull request(s) still open against develop. Merge or close them before releasing."
+          printf '%s' "$pending" | jq -r '.[] | "  #\(.number)  \(.author.login)  \(.title)\n      \(.url)"'
+          exit 1
+
+  # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
+  # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
+  # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
+  verify:
+    name: Plugin verifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
+      # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
+      # on its own runner, to save ten minutes on the one job that runs least often.
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
+    needs: [test, frontend-test]
+    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads. It runs where the answer is load-bearing —
+    # on every pull request, and on the protected branches — and NOT on each push to a topic branch, where it
+    # was re-verifying a commit nobody was about to merge. The gate is unchanged: it is still a required check
+    # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
+    # is a real cost and the reason it ran everywhere until now.
+    # Where the exhaustive check belongs: the develop -> main door, plus the protected branches themselves.
+    #
+    # NOT on topic branches and NOT on pull requests into develop — those iterate constantly and this job is
+    # ~10 minutes and 1.25 GB of IDE downloads. It DOES run on any pull request targeting main, because that
+    # is the merge that publishes, and it is the only gate that catches a BINARY incompatibility across the
+    # 251 -> 262 range (compiling against 252 proves nothing about 262 — see the 4.4.1 /login regression).
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      # The old `Free disk space` step is gone. It deleted /usr/share/dotnet and friends, and inside a
+      # container those paths are the IMAGE's, not the runner's — it was freeing nothing while looking
+      # like the safety margin for this job. The margin now comes from the IDEs being baked: this job no
+      # longer downloads or extracts 1.25 GB, it reads what is already on disk.
+
+      - name: Verify plugin
+        run: ./gradlew --no-daemon --stacktrace verifyPlugin
+
+      # `verifyPlugin` depends on `buildPlugin`, so the distributable already exists here. Hand it to the
+      # `Build plugin` job instead of letting it build a second time on a fresh runner: that job asserts
+      # properties OF the artifact, and asserting them on a DIFFERENT build than the one just verified was
+      # both wasteful and subtly wrong — the bytes checked were never the bytes verified.
+      - name: Hand the built distributable to the assertions job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-distribution
+          path: build/distributions/*.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload verifier report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-verifier-report
+          path: build/reports/pluginVerifier/
+          retention-days: 30
+
+  # Properties of the DISTRIBUTABLE, asserted on the exact artifact the verifier just checked.
+  #
+  # It no longer builds its own: `verifyPlugin` already produced one, and rebuilding meant these assertions
+  # ran against bytes that were never verified — a second build on a fresh runner is not guaranteed to be
+  # the same artifact. Downloading it also drops a full Gradle setup, JDK provision and compile from the
+  # critical path. Unsigned and unpublished by design: signing and publishing happen only in release.yml,
+  # behind a human approval.
+  build:
+    name: Build plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # NO container, deliberately. This job downloads an artifact and runs `unzip`, `grep` and `ls` over it —
+    # it does not build anything despite the name, and it used to pull GB of JDK, Gradle and extracted
+    # IntelliJ Platform to do it. `unzip` is on the bare runner, and the job now starts instantly.
+    permissions:
+      contents: read
+    needs: [verify]
+    steps:
+      - name: Fetch the verified distributable
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-distribution
+          path: build/distributions
+
+      # A claim SECURITY.md makes to users, enforced here rather than trusted: the published artifact
+      # contains no npm code. If this ever fails, either the packaging changed or the claim was false.
+      - name: Assert no npm code is packaged
+        run: |
+          zip=$(ls build/distributions/*.zip)
+          count=$(unzip -l "$zip" | grep -c node_modules || true)
+          echo "node_modules entries in $zip: $count"
+          [ "$count" -eq 0 ] || { echo "::error::npm code leaked into the distributed artifact"; exit 1; }
+
+      # Likewise for attribution: the licences of the bundled web libraries must travel INSIDE the jar,
+      # because that is where the redistribution obligation actually lands.
+      - name: Assert third-party attribution is packaged
+        run: |
+          unzip -o -q build/distributions/*.zip -d /tmp/dist
+          jar=$(ls /tmp/dist/*/lib/claude-code-native-*.jar | grep -v searchableOptions | head -1)
+          for f in META-INF/LICENSE META-INF/THIRD-PARTY-NOTICES.md; do
+            unzip -l "$jar" | grep -q "$f" || { echo "::error::$f missing from $jar"; exit 1; }
+          done
+          echo "attribution present in $jar"
+
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-distribution
+          path: build/distributions/*.zip
+          retention-days: 30

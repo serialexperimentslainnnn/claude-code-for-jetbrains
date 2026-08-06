@@ -37,13 +37,18 @@ import javax.swing.SwingConstants
  */
 object InfoDialogs {
 
+    /** Preferred size of the scrollable MCP-server list, in unscaled px (wide enough for a server name + status). */
+    private const val MCP_LIST_WIDTH = 420
+    private const val MCP_LIST_HEIGHT = 260
+
     fun showContextUsage(project: Project, session: ClaudeSession) {
         session.requestContextUsage { usage ->
             val text = if (usage == null) {
                 "No context data available."
             } else {
                 buildString {
-                    append("Tokens: ${usage.totalTokens} / ${usage.maxTokens}  (${"%.1f".format(usage.percentage)}%)\n\n")
+                    val pct = String.format(java.util.Locale.ROOT, "%.1f", usage.percentage)
+                    append("Tokens: ${usage.totalTokens} / ${usage.maxTokens}  ($pct%)\n\n")
                     usage.categories.sortedByDescending { it.tokens }.forEach { append("• ${it.name}: ${it.tokens}\n") }
                 }
             }
@@ -66,9 +71,14 @@ object InfoDialogs {
                     if (rl.isUsingOverage) append(" · using overage")
                     append("\n")
                     rl.resetsAt?.let {
-                        append("  Resets: " + java.time.Instant.ofEpochSecond(it)
-                            .atZone(java.time.ZoneId.systemDefault())
-                            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) + "\n")
+                        append(
+                            "  Resets: " + java.time.Instant.ofEpochSecond(it)
+                                .atZone(java.time.ZoneId.systemDefault())
+                                .format(
+                                    java.time.format.DateTimeFormatter
+                                        .ofPattern("yyyy-MM-dd HH:mm", java.util.Locale.ROOT),
+                                ) + "\n",
+                        )
                     }
                     append("\n")
                 }
@@ -205,7 +215,7 @@ object InfoDialogs {
         val wrapper = JPanel(BorderLayout()).apply { add(list, BorderLayout.NORTH) }
         return JBScrollPane(wrapper).apply {
             border = BorderFactory.createEmptyBorder()
-            preferredSize = JBUI.size(420, 260)
+            preferredSize = JBUI.size(MCP_LIST_WIDTH, MCP_LIST_HEIGHT)
         }
     }
 
@@ -218,33 +228,50 @@ object InfoDialogs {
         border = JBUI.Borders.empty(4, 2)
         val gc = GridBagConstraints()
 
-        gc.gridx = 0; gc.weightx = 1.0; gc.fill = GridBagConstraints.HORIZONTAL; gc.anchor = GridBagConstraints.WEST
-        add(JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-            add(JBLabel(server.name).apply { alignmentX = Component.LEFT_ALIGNMENT })
-            add(JBLabel(server.status).apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                foreground = JBUI.CurrentTheme.Label.disabledForeground()
-            })
-        }, gc)
+        gc.gridx = 0
+        gc.weightx = 1.0
+        gc.fill = GridBagConstraints.HORIZONTAL
+        gc.anchor = GridBagConstraints.WEST
+        add(
+            JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+                add(JBLabel(server.name).apply { alignmentX = Component.LEFT_ALIGNMENT })
+                add(
+                    JBLabel(server.status).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        foreground = JBUI.CurrentTheme.Label.disabledForeground()
+                    },
+                )
+            },
+            gc,
+        )
 
-        gc.gridx = 1; gc.weightx = 0.0; gc.fill = GridBagConstraints.NONE; gc.anchor = GridBagConstraints.EAST
-        add(JButton("Reconnect").apply {
-            name = "reconnect-${server.name}"
-            horizontalAlignment = SwingConstants.CENTER
-            addActionListener { onReconnect(server.name) }
-        }, gc)
+        gc.gridx = 1
+        gc.weightx = 0.0
+        gc.fill = GridBagConstraints.NONE
+        gc.anchor = GridBagConstraints.EAST
+        add(
+            JButton("Reconnect").apply {
+                name = "reconnect-${server.name}"
+                horizontalAlignment = SwingConstants.CENTER
+                addActionListener { onReconnect(server.name) }
+            },
+            gc,
+        )
 
         // Toggle flips the current enabled state; default to "currently enabled" when unknown, so the button
         // offers to disable (the safe, reversible direction).
         gc.gridx = 2
         val currentlyEnabled = server.enabled ?: true
-        add(JButton(if (currentlyEnabled) "Disable" else "Enable").apply {
-            name = "toggle-${server.name}"
-            horizontalAlignment = SwingConstants.CENTER
-            addActionListener { onToggle(server.name, !currentlyEnabled) }
-        }, gc)
+        add(
+            JButton(if (currentlyEnabled) "Disable" else "Enable").apply {
+                name = "toggle-${server.name}"
+                horizontalAlignment = SwingConstants.CENTER
+                addActionListener { onToggle(server.name, !currentlyEnabled) }
+            },
+            gc,
+        )
     }
 
     /**
@@ -273,12 +300,19 @@ object InfoDialogs {
             host.add(
                 buildMcpPanel(
                     servers,
-                    onReconnect = { name -> session.reconnectMcp(name); refresh() },
-                    onToggle = { name, enabled -> session.toggleMcp(name, enabled); refresh() },
+                    onReconnect = { name ->
+                        session.reconnectMcp(name)
+                        refresh()
+                    },
+                    onToggle = { name, enabled ->
+                        session.toggleMcp(name, enabled)
+                        refresh()
+                    },
                 ),
                 BorderLayout.CENTER,
             )
-            host.revalidate(); host.repaint()
+            host.revalidate()
+            host.repaint()
         }
 
         private fun refresh() {

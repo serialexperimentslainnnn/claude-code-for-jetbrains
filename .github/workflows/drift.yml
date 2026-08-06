@@ -1,0 +1,95 @@
+# Protocol drift watcher.
+#
+# The plugin speaks to the `claude` binary directly over stream-json + control frames. That protocol is
+# not versioned for us and not ours to freeze: Anthropic ships a new binary, a new message kind appears,
+# and the plugin quietly stops modelling part of the surface. The user's symptom is not an error — it is
+# a feature that silently does nothing, which is the worst kind of regression to notice.
+#
+# So we do not wait to notice. This job installs the current CLI, pulls the current SDK, and asks
+# `checkDrift` whether anything appeared that the Kotlin does not handle. It opens an issue when it does.
+#
+# It NEVER commits. Reconciling drift is a judgement call — is this a new message we should surface, or
+# one we deliberately ignore? — and a bot that answers that on its own would be wrong at the worst time.
+name: Protocol drift
+
+on:
+  schedule:
+    - cron: '23 6 * * 2' # weekly, Tuesday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Weekly, so overlap is unlikely — but a manual dispatch during a scheduled run would have two of these
+# racing to file the same issue. Queued rather than cancelled: a drift report half-written is worse than
+# one that starts a few minutes late.
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Check protocol drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      # `jvm-test`: this job runs `npm install` and the global claude CLI install AND `./gradlew checkDrift`.
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+      issues: write # to file the drift report
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile.
+      GRADLE_USER_HOME: /opt/gradle-home
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Deliberately NOT `npm ci`: checkDrift's whole job is to compare the pinned baseline against the
+      # LATEST published SDK, so it needs the tree to be updatable. It runs `npm update` itself.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install the claude CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          echo "CLAUDE_BINARY=$(command -v claude)" >> "$GITHUB_ENV"
+          claude --version
+
+      # No credentials are provided and none are needed: the check reads the binary's advertised
+      # protocol surface, it does not run a session. If this ever starts needing auth, that is a
+      # finding in itself and the job should fail loudly rather than be handed a token.
+      - name: Check drift
+        id: drift
+        run: |
+          set +e
+          ./gradlew --no-daemon checkDrift 2>&1 | tee /tmp/drift.log
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Extract the report
+        if: always()
+        run: |
+          awk '/DRIFT REPORT/,/^={10,}$/' /tmp/drift.log > /tmp/report.md || true
+          [ -s /tmp/report.md ] || cp /tmp/drift.log /tmp/report.md
+          {
+            echo ''
+            echo '---'
+            echo "Produced by [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+            echo 'Reconcile it by hand — see `docs/DRIFT_DETECTION.md`. Do not bump the baseline without'
+            echo 'checking whether the new surface needs modelling in `ProtocolSurface.KNOWN_SUBTYPES`.'
+          } >> /tmp/report.md
+          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: File an issue on real drift
+        if: steps.drift.outputs.status != '0'
+        uses: peter-evans/create-issue-from-file@fca9117c27cdc29c6c4db3b86c48e4115a786710 # v6.0.0
+        with:
+          title: 'Protocol drift detected in the claude binary / SDK'
+          content-filepath: /tmp/report.md
+          labels: protocol-drift

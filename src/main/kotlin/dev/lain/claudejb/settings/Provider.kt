@@ -16,7 +16,8 @@ package dev.lain.claudejb.settings
  */
 enum class Provider(val id: String, val label: String, val baseUrl: String?) {
     ANTHROPIC("anthropic", "Anthropic", null),
-    DEEPSEEK("deepseek", "DeepSeek", "https://api.deepseek.com/anthropic");
+    DEEPSEEK("deepseek", "DeepSeek", "https://api.deepseek.com/anthropic"),
+    ;
 
     /** True when this provider needs its own `ANTHROPIC_API_KEY` (everything except first-party Anthropic). */
     val requiresApiKey: Boolean get() = baseUrl != null

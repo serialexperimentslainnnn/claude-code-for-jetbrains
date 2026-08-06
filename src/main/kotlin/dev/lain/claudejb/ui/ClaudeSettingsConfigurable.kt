@@ -3,19 +3,19 @@ package dev.lain.claudejb.ui
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.project.Project
-import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBPasswordField
-import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBList
-import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.components.JBTextField
 import com.intellij.ui.CollectionListModel
 import com.intellij.ui.ToolbarDecorator
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
+import com.intellij.ui.components.JBPasswordField
+import com.intellij.ui.components.JBScrollPane
+import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.JBTextField
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
-import com.intellij.ui.scale.JBUIScale
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
@@ -49,6 +49,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val thinkingCheck = JBCheckBox("Extended thinking (adaptive — the model decides depth)")
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
     private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
+    private val reduceMotionCheck = JBCheckBox("Reduce motion (flatten chat animations)")
 
     // --- Security (permission/SensitiveGuard.kt) — each ON by default; OFF downgrades an automatic block to a
     // permission card (never a silent allow) — see securityWarningLabel() below. ---------------------------
@@ -61,9 +62,17 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val providerCombo = JComboBox(Provider.entries.toTypedArray()).apply {
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
-                list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
             ): java.awt.Component = super.getListCellRendererComponent(
-                list, (value as? Provider)?.label ?: value, index, isSelected, cellHasFocus,
+                list,
+                (value as? Provider)?.label ?: value,
+                index,
+                isSelected,
+                cellHasFocus,
             )
         }
         addActionListener { onProviderSelectionChanged() }
@@ -77,7 +86,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val nodePathField = JBTextField().apply {
         emptyText.text = "Auto-detect (set only if Node is in a custom dir not on PATH — Windows npm installs)"
     }
-    private val envVarsArea = JBTextArea(4, 0).apply {
+    private val envVarsArea = JBTextArea(ENV_VARS_ROWS, 0).apply {
         emptyText.text = "One KEY=VALUE per line (e.g. PATH=C:\\custom\\bin;%PATH%). Useful on Windows."
     }
     private val sourceScriptField = JBTextField().apply {
@@ -86,13 +95,14 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
     private val ideMcpCheck = JBCheckBox("Enable JetBrains MCP server — lets Claude query the IDE")
     private val ideMcpTransportCombo = JComboBox(ClaudeSession.IDE_MCP_TRANSPORTS.toTypedArray())
-    private val ideMcpPortSpinner = JSpinner(SpinnerNumberModel(ClaudeSession.DEFAULT_IDE_MCP_PORT, 1, 65535, 1))
-    private val customMcpArea = JBTextArea(7, 0).apply {
+    private val ideMcpPortSpinner =
+        JSpinner(SpinnerNumberModel(ClaudeSession.DEFAULT_IDE_MCP_PORT, MIN_PORT, MAX_PORT, 1))
+    private val customMcpArea = JBTextArea(CUSTOM_MCP_ROWS, 0).apply {
         emptyText.text = "JSON object of name → server config; add as many as you like (sse / streamable-http / stdio)"
     }
 
     private val maxTurnsSpinner = JSpinner(SpinnerNumberModel(0, 0, 1_000, 1))
-    private val maxBudgetSpinner = JSpinner(SpinnerNumberModel(0.0, 0.0, 10_000.0, 0.5))
+    private val maxBudgetSpinner = JSpinner(SpinnerNumberModel(0.0, 0.0, MAX_BUDGET_USD, BUDGET_STEP_USD))
     private val fallbackModelField = JBTextField().apply {
         emptyText.text = "Optional model to retry with on overload (e.g. sonnet); blank = none"
     }
@@ -107,7 +117,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val alwaysAllowModel = CollectionListModel<String>()
     private val alwaysAllowList = JBList(alwaysAllowModel).apply {
         emptyText.text = "No tools are auto-approved — every tool call shows a permission card."
-        visibleRowCount = 4
+        visibleRowCount = COMBO_VISIBLE_ROWS
     }
 
     private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
@@ -129,7 +139,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
      *  (what we send to the binary), so power users can type a custom id. */
     private val modelRenderer = object : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
-            list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+            list: JList<*>?,
+            value: Any?,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean,
         ): java.awt.Component {
             val raw = (value as? String).orEmpty()
             val pretty = currentModels.firstOrNull { it.value == raw }?.let { JcefState.modelDisplayLabel(it) } ?: raw
@@ -143,7 +157,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         modelCombo.renderer = modelRenderer
         modeCombo.renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
-                list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
             ): java.awt.Component {
                 val label = dev.lain.claudejb.session.PermissionMode.labelFor(value as? String)
                 return super.getListCellRendererComponent(list, label, index, isSelected, cellHasFocus)
@@ -151,65 +169,17 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         }
         rebuildModelCombo()
         ensureModelListener()
-        val built = FormBuilder.createFormBuilder()
-            .addLabeledComponent("Model:", modelCombo)
-            .addLabeledComponent("Effort:", effortCombo)
-            .addLabeledComponent("Permission mode:", modeCombo)
-            .addComponent(thinkingCheck)
-            .addComponent(partialCheck)
-            .addComponent(restoreChatsCheck)
-            .addSeparator()
-            .addComponent(sectionLabel("Security — deterministic tool-call lock, evaluated before every permission"))
-            .addComponent(blockCredentialsCheck)
-            .addComponent(blockDangerousCommandsCheck)
-            .addComponent(blockForeignOtherUserHomeCheck)
-            .addComponent(blockForeignNetworkMountsCheck)
-            .addComponent(blockForeignWslMountsCheck)
-            .addComponent(securityWarningLabel())
-            .addSeparator()
-            .addComponent(sectionLabel("API provider"))
-            .addLabeledComponent("Provider:", providerCombo)
-            .addLabeledComponent("API key:", apiKeyField)
-            .addComponent(providerWarningLabel())
-            .addSeparator()
-            .addLabeledComponent("claude executable path:", claudePathField)
-            .addLabeledComponent("node executable path:", nodePathField)
-            .addLabeledComponent("Source script:", sourceScriptField)
-            .addComponent(sourceScriptWarningLabel())
-            .addComponent(sectionLabel("Environment variables (KEY=VALUE per line)"))
-            .addComponent(JBScrollPane(envVarsArea))
-            .addComponent(envVarsWarningLabel())
-            .addSeparator()
-            .addComponent(sectionLabel("Setting sources (none = don't pass --setting-sources)"))
-            .addComponent(settingSourcesGroup.component)
-            .addComponent(sectionLabel("Allowed tools (none = all tools allowed)"))
-            .addComponent(allowedToolsGroup.component)
-            .addComponent(sectionLabel("Disallowed tools (none = nothing blocked)"))
-            .addComponent(disallowedToolsGroup.component)
-            .addComponent(sectionLabel("Always-allowed tools"))
-            .addComponent(alwaysAllowedWarningLabel())
-            .addComponent(alwaysAllowedComponent())
-            .addSeparator()
-            .addComponent(sectionLabel("JetBrains MCP server (opt-in) — requires the MCP Server plugin enabled"))
-            .addComponent(ideMcpCheck)
-            .addLabeledComponent("Transport:", ideMcpTransportCombo)
-            .addLabeledComponent("Port:", ideMcpPortSpinner)
-            .addComponent(jetbrainsMcpWarningLabel())
-            .addSeparator()
-            .addComponent(sectionLabel("Custom MCP servers (advanced) — add any number"))
-            .addComponent(JBScrollPane(customMcpArea))
-            .addComponent(customMcpWarningLabel())
-            .addComponent(strictMcpCheck)
-            .addSeparator()
-            .addComponent(sectionLabel("Advanced launch (0 / blank = flag omitted)"))
-            .addLabeledComponent("Max turns:", maxTurnsSpinner)
-            .addLabeledComponent("Max budget (USD):", maxBudgetSpinner)
-            .addLabeledComponent("Fallback model:", fallbackModelField)
-            .addComponent(sectionLabel("Additional directories (one path per line)"))
-            .addComponent(JBScrollPane(addDirsArea))
-            .addLabeledComponent("Betas:", betasField)
-            .addComponentFillVertically(JPanel(), 0)
-            .panel
+        // One builder call per settings section, in page order. The sections are just the form's own visual
+        // grouping made explicit — the page reads the same, and each section is now editable on its own.
+        var form = FormBuilder.createFormBuilder()
+        form = addModelSection(form)
+        form = addSecuritySection(form)
+        form = addProviderSection(form)
+        form = addExecutableSection(form)
+        form = addToolsSection(form)
+        form = addMcpSection(form)
+        form = addAdvancedSection(form)
+        val built = form.addComponentFillVertically(JPanel(), 0).panel
         panel = built
         reset()
         // Pin the form to its preferred width on the LEFT instead of letting it stretch edge-to-edge: on a wide
@@ -232,41 +202,127 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         }
     }
 
-    override fun isModified(): Boolean {
+    private fun addModelSection(form: FormBuilder): FormBuilder = form
+        .addLabeledComponent("Model:", modelCombo)
+        .addLabeledComponent("Effort:", effortCombo)
+        .addLabeledComponent("Permission mode:", modeCombo)
+        .addComponent(thinkingCheck)
+        .addComponent(partialCheck)
+        .addComponent(restoreChatsCheck)
+        .addComponent(reduceMotionCheck)
+
+    private fun addSecuritySection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addComponent(sectionLabel("Security — deterministic tool-call lock, evaluated before every permission"))
+        .addComponent(blockCredentialsCheck)
+        .addComponent(blockDangerousCommandsCheck)
+        .addComponent(blockForeignOtherUserHomeCheck)
+        .addComponent(blockForeignNetworkMountsCheck)
+        .addComponent(blockForeignWslMountsCheck)
+        .addComponent(securityWarningLabel())
+
+    private fun addProviderSection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addComponent(sectionLabel("API provider"))
+        .addLabeledComponent("Provider:", providerCombo)
+        .addLabeledComponent("API key:", apiKeyField)
+        .addComponent(providerWarningLabel())
+
+    private fun addExecutableSection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addLabeledComponent("claude executable path:", claudePathField)
+        .addLabeledComponent("node executable path:", nodePathField)
+        .addLabeledComponent("Source script:", sourceScriptField)
+        .addComponent(sourceScriptWarningLabel())
+        .addComponent(sectionLabel("Environment variables (KEY=VALUE per line)"))
+        .addComponent(JBScrollPane(envVarsArea))
+        .addComponent(envVarsWarningLabel())
+
+    private fun addToolsSection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addComponent(sectionLabel("Setting sources (none = don't pass --setting-sources)"))
+        .addComponent(settingSourcesGroup.component)
+        .addComponent(sectionLabel("Allowed tools (none = all tools allowed)"))
+        .addComponent(allowedToolsGroup.component)
+        .addComponent(sectionLabel("Disallowed tools (none = nothing blocked)"))
+        .addComponent(disallowedToolsGroup.component)
+        .addComponent(sectionLabel("Always-allowed tools"))
+        .addComponent(alwaysAllowedWarningLabel())
+        .addComponent(alwaysAllowedComponent())
+
+    private fun addMcpSection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addComponent(sectionLabel("JetBrains MCP server (opt-in) — requires the MCP Server plugin enabled"))
+        .addComponent(ideMcpCheck)
+        .addLabeledComponent("Transport:", ideMcpTransportCombo)
+        .addLabeledComponent("Port:", ideMcpPortSpinner)
+        .addComponent(jetbrainsMcpWarningLabel())
+        .addSeparator()
+        .addComponent(sectionLabel("Custom MCP servers (advanced) — add any number"))
+        .addComponent(JBScrollPane(customMcpArea))
+        .addComponent(customMcpWarningLabel())
+        .addComponent(strictMcpCheck)
+
+    private fun addAdvancedSection(form: FormBuilder): FormBuilder = form
+        .addSeparator()
+        .addComponent(sectionLabel("Advanced launch (0 / blank = flag omitted)"))
+        .addLabeledComponent("Max turns:", maxTurnsSpinner)
+        .addLabeledComponent("Max budget (USD):", maxBudgetSpinner)
+        .addLabeledComponent("Fallback model:", fallbackModelField)
+        .addComponent(sectionLabel("Additional directories (one path per line)"))
+        .addComponent(JBScrollPane(addDirsArea))
+        .addLabeledComponent("Betas:", betasField)
+
+    /**
+     * One entry per setting: does the form differ from what is saved?
+     *
+     * A list rather than a 30-term `||` chain. Each entry is still a plain typed comparison, so the compiler
+     * keeps checking that both sides are the same type — which a `List<Pair<Any?, Any?>>` would have thrown
+     * away, and which is exactly the mistake that makes a field silently never register as modified.
+     */
+    private fun changedFields(): List<Boolean> {
         val s = settings.state
-        return modelText() != s.model ||
-            effortText() != s.effort ||
-            modeText() != s.permissionMode ||
-            thinkingCheck.isSelected != (s.thinkingTokens > 0) ||
-            partialCheck.isSelected != s.includePartialMessages ||
-            restoreChatsCheck.isSelected != s.restoreOpenChatsOnStartup ||
-            blockCredentialsCheck.isSelected != s.securityBlockCredentials ||
-            blockDangerousCommandsCheck.isSelected != s.securityBlockDangerousCommands ||
-            blockForeignOtherUserHomeCheck.isSelected != s.securityBlockForeignOtherUserHome ||
-            blockForeignNetworkMountsCheck.isSelected != s.securityBlockForeignNetworkMounts ||
-            blockForeignWslMountsCheck.isSelected != s.securityBlockForeignWslMounts ||
-            csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources) ||
-            csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools) ||
-            csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools) ||
-            selectedProvider().id != s.provider ||
-            (selectedProvider().requiresApiKey &&
-                String(apiKeyField.password).trim() != settings.getProviderApiKey(selectedProvider())) ||
-            claudePathField.text.trim() != s.claudePath ||
-            nodePathField.text.trim() != s.nodePath ||
-            sourceScriptField.text.trim() != s.sourceScript ||
-            envVarsArea.text != s.envVars ||
-            ideMcpCheck.isSelected != s.ideMcpEnabled ||
-            mcpTransportText() != s.ideMcpTransport ||
-            mcpPortValue() != s.ideMcpPort ||
-            customMcpArea.text.trim() != s.customMcpServers ||
-            maxTurnsValue() != s.maxTurns ||
-            maxBudgetValue() != s.maxBudgetUsd ||
-            fallbackModelField.text.trim() != s.fallbackModel ||
-            addDirsArea.text != s.addDirs ||
-            betasField.text.trim() != s.betas ||
-            strictMcpCheck.isSelected != s.strictMcpConfig ||
-            alwaysAllowModel.items != settings.alwaysAllowedTools()
+        val provider = selectedProvider()
+        // The key only participates when the provider actually has one; otherwise it is not a difference.
+        val apiKeyChanged = provider.requiresApiKey &&
+            String(apiKeyField.password).trim() != settings.getProviderApiKey(provider)
+        return listOf(
+            modelText() != s.model,
+            effortText() != s.effort,
+            modeText() != s.permissionMode,
+            thinkingCheck.isSelected != (s.thinkingTokens > 0),
+            partialCheck.isSelected != s.includePartialMessages,
+            restoreChatsCheck.isSelected != s.restoreOpenChatsOnStartup,
+            reduceMotionCheck.isSelected != s.reduceMotion,
+            blockCredentialsCheck.isSelected != s.securityBlockCredentials,
+            blockDangerousCommandsCheck.isSelected != s.securityBlockDangerousCommands,
+            blockForeignOtherUserHomeCheck.isSelected != s.securityBlockForeignOtherUserHome,
+            blockForeignNetworkMountsCheck.isSelected != s.securityBlockForeignNetworkMounts,
+            blockForeignWslMountsCheck.isSelected != s.securityBlockForeignWslMounts,
+            csvSet(settingSourcesGroup.text()) != csvSet(s.settingSources),
+            csvSet(allowedToolsGroup.text()) != csvSet(s.allowedTools),
+            csvSet(disallowedToolsGroup.text()) != csvSet(s.disallowedTools),
+            provider.id != s.provider,
+            apiKeyChanged,
+            claudePathField.text.trim() != s.claudePath,
+            nodePathField.text.trim() != s.nodePath,
+            sourceScriptField.text.trim() != s.sourceScript,
+            envVarsArea.text != s.envVars,
+            ideMcpCheck.isSelected != s.ideMcpEnabled,
+            mcpTransportText() != s.ideMcpTransport,
+            mcpPortValue() != s.ideMcpPort,
+            customMcpArea.text.trim() != s.customMcpServers,
+            maxTurnsValue() != s.maxTurns,
+            maxBudgetValue() != s.maxBudgetUsd,
+            fallbackModelField.text.trim() != s.fallbackModel,
+            addDirsArea.text != s.addDirs,
+            betasField.text.trim() != s.betas,
+            strictMcpCheck.isSelected != s.strictMcpConfig,
+            alwaysAllowModel.items != settings.alwaysAllowedTools(),
+        )
     }
+
+    override fun isModified(): Boolean = changedFields().any { it }
 
     override fun apply() {
         if (!ClaudeSession.isValidMcpConfig(customMcpArea.text.trim())) {
@@ -279,13 +335,13 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         // key: your Anthropic credentials are never used for another provider.
         if (provider.requiresApiKey && apiKey.isEmpty()) {
             throw ConfigurationException(
-                "${provider.label} requires its own API key. Enter the key, or switch the provider back to Anthropic."
+                "${provider.label} requires its own API key. Enter the key, or switch the provider back to Anthropic.",
             )
         }
         if (provider.requiresApiKey && Provider.looksLikeAnthropicKey(apiKey)) {
             throw ConfigurationException(
                 "That looks like an Anthropic key (sk-ant-…). ${provider.label} needs a ${provider.label}-issued key — " +
-                    "your Anthropic credentials are never used for another provider."
+                    "your Anthropic credentials are never used for another provider.",
             )
         }
         val s = settings.state
@@ -298,6 +354,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.thinkingTokens = if (thinkingCheck.isSelected) ClaudeSession.THINKING_ON else 0
         s.includePartialMessages = partialCheck.isSelected
         s.restoreOpenChatsOnStartup = restoreChatsCheck.isSelected
+        s.reduceMotion = reduceMotionCheck.isSelected
         s.securityBlockCredentials = blockCredentialsCheck.isSelected
         s.securityBlockDangerousCommands = blockDangerousCommandsCheck.isSelected
         s.securityBlockForeignOtherUserHome = blockForeignOtherUserHomeCheck.isSelected
@@ -336,6 +393,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         thinkingCheck.isSelected = s.thinkingTokens > 0
         partialCheck.isSelected = s.includePartialMessages
         restoreChatsCheck.isSelected = s.restoreOpenChatsOnStartup
+        reduceMotionCheck.isSelected = s.reduceMotion
         blockCredentialsCheck.isSelected = s.securityBlockCredentials
         blockDangerousCommandsCheck.isSelected = s.securityBlockDangerousCommands
         blockForeignOtherUserHomeCheck.isSelected = s.securityBlockForeignOtherUserHome
@@ -430,50 +488,50 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
      * the whole monitor (the Settings dialog opened enormous). [bodyHtml] is the inner markup (no <html>/<body>).
      */
     private fun noteLabel(bodyHtml: String) = JBLabel(
-        "<html><body style='width:${FORM_WIDTH}px'>$bodyHtml</body></html>"
+        "<html><body style='width:${FORM_WIDTH}px'>$bodyHtml</body></html>",
     ).apply { font = JBFont.small() }
 
     private fun securityWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> all five are <b>ON by default</b> and reproduce the plugin's original lock exactly. " +
-        "Turning one OFF never allows a matching call silently — it only downgrades an automatic block to a " +
-        "<b>permission card</b>, shown every time, for every caller (including MCP servers and Skills), so you " +
-        "still decide case by case. Only disable a rule you understand and specifically need — a project on a " +
-        "corporate network share, for example, needs the network-mount rule off, not the whole lock."
+            "Turning one OFF never allows a matching call silently — it only downgrades an automatic block to a " +
+            "<b>permission card</b>, shown every time, for every caller (including MCP servers and Skills), so you " +
+            "still decide case by case. Only disable a rule you understand and specifically need — a project on a " +
+            "corporate network share, for example, needs the network-mount rule off, not the whole lock.",
     )
 
     private fun providerWarningLabel() = noteLabel(
         "<b>Anthropic</b> uses the <code>claude</code> binary's own login (subscription/OAuth). A non-Anthropic " +
-        "provider (e.g. <b>DeepSeek</b>) routes to its Anthropic-compatible endpoint and <b>requires its own " +
-        "issued key</b> — your Anthropic credentials are <b>never</b> reused for another provider. The key is " +
-        "stored in the IDE <b>password safe</b> (not in <code>claude-code.xml</code>). Changing the provider " +
-        "restarts the session."
+            "provider (e.g. <b>DeepSeek</b>) routes to its Anthropic-compatible endpoint and <b>requires its own " +
+            "issued key</b> — your Anthropic credentials are <b>never</b> reused for another provider. The key is " +
+            "stored in the IDE <b>password safe</b> (not in <code>claude-code.xml</code>). Changing the provider " +
+            "restarts the session.",
     )
 
     private fun envVarsWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> these variables are stored <b>in plain text</b> in <code>claude-code.xml</code> " +
-        "(may be committed to a repo or end up in backups). <b>Do not put secrets here</b> (API keys, tokens) — " +
-        "use the source script above or the <code>claude</code> binary's native authentication instead."
+            "(may be committed to a repo or end up in backups). <b>Do not put secrets here</b> (API keys, tokens) — " +
+            "use the source script above or the <code>claude</code> binary's native authentication instead.",
     )
 
     private fun sourceScriptWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> this script is <b>executed</b> when the session starts. Only point it at a script " +
-        "you trust — do not run scripts that arrive with an untrusted project/repo."
+            "you trust — do not run scripts that arrive with an untrusted project/repo.",
     )
 
     private fun jetbrainsMcpWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> requires JetBrains' MCP Server plugin enabled. sse / streamable-http expose a " +
-        "localhost port any local process can reach; stdio launches a helper from the IDE (no port). Enable only " +
-        "on a machine you trust. Tool calls are still gated by the permission prompt."
+            "localhost port any local process can reach; stdio launches a helper from the IDE (no port). Enable only " +
+            "on a machine you trust. Tool calls are still gated by the permission prompt.",
     )
 
     private fun customMcpWarningLabel() = noteLabel(
         "Format: <code>{ \"server-name\": { \"type\": \"…\", … }, … }</code>. " +
-        "⚠ third-party servers run with your privileges and can read what you share — add only ones you trust."
+            "⚠ third-party servers run with your privileges and can read what you share — add only ones you trust.",
     )
 
     private fun alwaysAllowedWarningLabel() = noteLabel(
         "⚠ <b>Security:</b> listed tools are auto-approved for this project without a prompt " +
-        "(writes still stay within the project root). Select an entry and click <b>Remove</b> to revoke it."
+            "(writes still stay within the project root). Select an entry and click <b>Remove</b> to revoke it.",
     )
 
     /** Editable list of remembered "Always allow" tool names with a Remove action (revoke). */
@@ -505,5 +563,18 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         /** Fixed content width (CSS px) the form and its wrapping HTML notes are bounded to, so a wide monitor
          *  doesn't stretch the page edge-to-edge. */
         const val FORM_WIDTH = 600
+
+        /** TCP port bounds for the JetBrains MCP server spinner (0 is not a listenable port). */
+        const val MIN_PORT = 1
+        const val MAX_PORT = 65_535
+
+        /** Upper bound of the per-turn budget spinner, in USD, and the step it moves in. */
+        const val MAX_BUDGET_USD = 10_000.0
+        const val BUDGET_STEP_USD = 0.5
+
+        /** Visible rows of the free-text areas / combo popups, i.e. how tall they are before scrolling. */
+        const val ENV_VARS_ROWS = 4
+        const val CUSTOM_MCP_ROWS = 7
+        const val COMBO_VISIBLE_ROWS = 4
     }
 }

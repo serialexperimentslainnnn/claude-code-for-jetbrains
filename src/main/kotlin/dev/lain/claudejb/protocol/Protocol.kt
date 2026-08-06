@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /**
@@ -135,7 +136,7 @@ fun parseAskQuestions(input: kotlinx.serialization.json.JsonObject): List<AskQue
 data class ElicitationRequest(
     @SerialName("mcp_server_name") val mcpServerName: String = "",
     val message: String = "",
-    val mode: String? = null,                          // "form" | "url" | null
+    val mode: String? = null, // "form" | "url" | null
     val url: String? = null,
     @SerialName("elicitation_id") val elicitationId: String? = null,
     @SerialName("requested_schema") val requestedSchema: JsonObject? = null,
@@ -147,7 +148,7 @@ data class ElicitationRequest(
 /** One primitive input field extracted from an elicitation's requested_schema. */
 data class ElicitField(
     val name: String,
-    val type: String,                                  // string | number | integer | boolean
+    val type: String, // string | number | integer | boolean
     val title: String?,
     val required: Boolean,
 )
@@ -273,12 +274,17 @@ data class SessionCostUsage(
 
 @Serializable
 data class RateLimitInfo(
-    val status: String = "allowed",            // allowed | allowed_warning | rejected
-    val resetsAt: Long? = null,                // epoch seconds when this window resets
-    val rateLimitType: String? = null,         // five_hour | seven_day | seven_day_opus/sonnet | overage
-    val utilization: Double? = null,           // % of quota used (0..100, sometimes 0..1)
+    val status: String = "allowed", // allowed | allowed_warning | rejected
+    val resetsAt: Long? = null, // epoch seconds when this window resets
+    val rateLimitType: String? = null, // five_hour | seven_day | seven_day_opus/sonnet | overage
+    val utilization: Double? = null, // % of quota used (0..100, sometimes 0..1)
     val overageStatus: String? = null,
     val isUsingOverage: Boolean = false,
+    // Both of these ARE on the wire and were previously dropped — confirmed by capturing a live
+    // rate_limit_event, which carried `overageResetsAt` and `overageInUse` alongside the fields above.
+    // `overageResetsAt` is the only way to tell the user when overage billing rolls over.
+    val overageResetsAt: Long? = null,
+    val overageInUse: Boolean = false,
     val surpassedThreshold: Double? = null,
 ) {
     /** Normalized 0..100 percent, or null if the binary didn't report utilization. */
@@ -289,7 +295,10 @@ data class RateLimitInfo(
     val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
     val isExhausted: Boolean get() = status == "rejected"
 
-    /** Short window label for the UI (e.g. "5h", "7d"). */
+    /**
+     * SHORT window label for the composer's quota pill (e.g. "5h", "7d"), where there is room for a few
+     * characters and no more. The dashboard wants a sentence instead — see [windowTitleFor].
+     */
     fun windowLabel(): String = when (rateLimitType) {
         "five_hour" -> "5h"
         "seven_day" -> "7d"
@@ -298,7 +307,112 @@ data class RateLimitInfo(
         "overage" -> "overage"
         else -> "quota"
     }
+
+    companion object {
+        /**
+         * DESCRIPTIVE label for a window, for the usage panel — where each bar needs to say what it measures.
+         * Deliberately separate from [windowLabel]: the pill is space-constrained and the panel is not, and
+         * collapsing the two is what broke the pill the first time this was written.
+         *
+         * Unknown keys are title-cased rather than dropped. The binary keeps adding windows
+         * (`seven_day_cowork`, `seven_day_omelette`, and several codenamed ones), and a window we cannot label
+         * is still a window the user is being limited by — showing it as-is beats hiding it.
+         */
+        fun windowTitleFor(type: String?): String = when (type) {
+            "five_hour" -> "Current session"
+            "seven_day" -> "All models"
+            "seven_day_opus" -> "Opus"
+            "seven_day_sonnet" -> "Sonnet"
+            "seven_day_oauth_apps" -> "OAuth apps"
+            "overage" -> "Overage"
+            null, "" -> "Quota"
+            else -> type.removePrefix("seven_day_").replace('_', ' ').replaceFirstChar { it.uppercase() }
+        }
+    }
 }
+
+/**
+ * One usage window from the `get_usage` control reply, e.g. `rate_limits.five_hour`.
+ *
+ * Note the shape difference from [RateLimitInfo], which models the *event*: here `resets_at` is an ISO-8601
+ * string, not epoch seconds, and the dollar fields exist for plans that are billed rather than throttled.
+ */
+@Serializable
+data class UsageWindow(
+    val utilization: Double? = null,
+    @SerialName("resets_at") val resetsAt: String? = null,
+    @SerialName("limit_dollars") val limitDollars: Double? = null,
+    @SerialName("used_dollars") val usedDollars: Double? = null,
+    @SerialName("remaining_dollars") val remainingDollars: Double? = null,
+)
+
+/** `rate_limits.extra_usage` — the pay-as-you-go credit balance shown once the plan's windows are spent. */
+@Serializable
+data class ExtraUsage(
+    @SerialName("is_enabled") val isEnabled: Boolean = false,
+    @SerialName("monthly_limit") val monthlyLimit: Double? = null,
+    @SerialName("used_credits") val usedCredits: Double? = null,
+    val utilization: Double? = null,
+    val currency: String? = null,
+    @SerialName("decimal_places") val decimalPlaces: Int = 2,
+    @SerialName("spend_limit_reached") val spendLimitReached: Boolean = false,
+    @SerialName("user_disabled") val userDisabled: Boolean = false,
+)
+
+/**
+ * The `get_usage` control reply, flattened into what a UI actually needs.
+ *
+ * [windows] is a LIST, not a map, because order is meaning here: the session window first, then the weekly
+ * all-models one, then the per-model buckets. Windows the binary reports as `null` (a limit that exists but
+ * has not been touched) are dropped rather than rendered as 0% — "untouched" and "zero used" look identical
+ * on a progress bar and are not the same claim.
+ */
+data class UsageReport(
+    val subscriptionType: String? = null,
+    val available: Boolean = false,
+    val windows: List<Pair<String, UsageWindow>> = emptyList(),
+    val extra: ExtraUsage? = null,
+) {
+    val isEmpty: Boolean get() = windows.isEmpty() && extra == null
+}
+
+/** Windows first in this order; anything the binary adds later sorts after, in the order it sent them. */
+private val USAGE_WINDOW_ORDER = listOf("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")
+
+/**
+ * Parses a `get_usage` reply. Returns null when the payload is absent or carries nothing worth showing.
+ *
+ * `rate_limits` is a heterogeneous object — window entries, explicit nulls for untouched windows, and
+ * `extra_usage` with an entirely different shape — so it is walked by hand rather than deserialized whole. A
+ * window that fails to decode is skipped, never thrown on: this feeds a dashboard, and one unrecognised key
+ * from a newer binary must not blank the whole panel.
+ */
+fun parseUsageReport(payload: JsonObject?): UsageReport? {
+    payload ?: return null
+    val limits = payload["rate_limits"] as? JsonObject
+    val extra = (limits?.get("extra_usage") as? JsonObject)?.let {
+        runCatching { ClaudeJson.decodeFromJsonElement(ExtraUsage.serializer(), it) }.getOrNull()
+    }
+    val windows = limits.orEmpty().mapNotNull { (key, value) ->
+        if (key == "extra_usage") return@mapNotNull null
+        val obj = value as? JsonObject ?: return@mapNotNull null // null = window exists but untouched
+        runCatching { ClaudeJson.decodeFromJsonElement(UsageWindow.serializer(), obj) }
+            .getOrNull()
+            ?.takeIf { it.utilization != null || it.usedDollars != null }
+            ?.let { key to it }
+    }.sortedBy { (key, _) ->
+        USAGE_WINDOW_ORDER.indexOf(key).takeIf { it >= 0 } ?: USAGE_WINDOW_ORDER.size
+    }
+    val report = UsageReport(
+        subscriptionType = payload.str("subscription_type"),
+        available = (payload["rate_limits_available"] as? JsonPrimitive)?.booleanOrNull ?: false,
+        windows = windows,
+        extra = extra?.takeIf { it.isEnabled },
+    )
+    return report.takeUnless { it.isEmpty }
+}
+
+private fun JsonObject?.orEmpty(): Map<String, kotlinx.serialization.json.JsonElement> = this ?: emptyMap()
 
 // ---------------------------------------------------------------------------
 // Additional system/* and stream events (E1). Verified against sdk.d.ts
@@ -331,7 +445,7 @@ data class TaskProgressInfo(
     @SerialName("last_tool_name") val lastToolName: String? = null,
     val summary: String? = null,
     // Mutable lifecycle fields a `task_updated` patch can flip (running → paused/failed/…); surfaced by the UI.
-    val status: String? = null,                    // pending | running | completed | failed | killed | paused
+    val status: String? = null, // pending | running | completed | failed | killed | paused
     val error: String? = null,
 )
 
@@ -354,7 +468,7 @@ data class TaskStartedInfo(
 data class TaskNotificationInfo(
     @SerialName("task_id") val taskId: String = "",
     @SerialName("tool_use_id") val toolUseId: String? = null,
-    val status: String = "",                       // completed | failed | stopped
+    val status: String = "", // completed | failed | stopped
     @SerialName("output_file") val outputFile: String = "",
     val summary: String = "",
     val usage: TaskUsage? = null,
@@ -370,7 +484,7 @@ data class TaskUpdatedInfo(
 
 @Serializable
 data class TaskPatch(
-    val status: String? = null,                    // pending | running | completed | failed | killed | paused
+    val status: String? = null, // pending | running | completed | failed | killed | paused
     val description: String? = null,
     @SerialName("end_time") val endTime: Long? = null,
     @SerialName("total_paused_ms") val totalPausedMs: Long? = null,
@@ -407,7 +521,7 @@ data class ThinkingTokensInfo(
 data class NotificationInfo(
     val key: String = "",
     val text: String = "",
-    val priority: String = "low",                  // low | medium | high | immediate
+    val priority: String = "low", // low | medium | high | immediate
     val color: String? = null,
     @SerialName("timeout_ms") val timeoutMs: Long? = null,
 )
@@ -426,7 +540,7 @@ data class PermissionDeniedInfo(
 /** `system/session_state_changed` — authoritative turn-state signal (idle/running/requires_action). */
 @Serializable
 data class SessionStateInfo(
-    val state: String = "",                        // idle | running | requires_action
+    val state: String = "", // idle | running | requires_action
 )
 
 /** `auth_status` — top-level type (not system). Auth backend (re)authenticating. */
@@ -456,14 +570,14 @@ data class CommandsChangedInfo(
 /** `system/memory_recall` — memories surfaced into the turn. */
 @Serializable
 data class MemoryRecallInfo(
-    val mode: String = "",                         // select | synthesize
+    val mode: String = "", // select | synthesize
     val memories: List<RecalledMemory> = emptyList(),
 )
 
 @Serializable
 data class RecalledMemory(
     val path: String = "",
-    val scope: String = "",                        // personal | team | organization
+    val scope: String = "", // personal | team | organization
     val content: String? = null,
 )
 
@@ -496,7 +610,7 @@ data class PromptSuggestionInfo(
 /** `system/plugin_install` — headless plugin install progress. */
 @Serializable
 data class PluginInstallInfo(
-    val status: String = "",                       // started | installed | failed | completed
+    val status: String = "", // started | installed | failed | completed
     val name: String? = null,
     val error: String? = null,
 )
@@ -530,7 +644,7 @@ data class HookResponseInfo(
     val stdout: String = "",
     val stderr: String = "",
     @SerialName("exit_code") val exitCode: Int? = null,
-    val outcome: String = "",                       // success | error | cancelled
+    val outcome: String = "", // success | error | cancelled
 )
 
 /** `system/mirror_error` — the binary's transcript-mirror batch was dropped after retries (data loss). */
@@ -557,7 +671,7 @@ data class MirrorErrorKey(
 @Serializable
 data class ModelRefusalFallbackInfo(
     val trigger: String = "refusal",
-    val direction: String = "retry",               // retry | revert | sticky (only "retry" is emitted now)
+    val direction: String = "retry", // retry | revert | sticky (only "retry" is emitted now)
     @SerialName("original_model") val originalModel: String = "",
     @SerialName("fallback_model") val fallbackModel: String = "",
     @SerialName("request_id") val requestId: String? = null,
@@ -575,7 +689,7 @@ data class ModelRefusalFallbackInfo(
 @Serializable
 data class InformationalInfo(
     val content: String = "",
-    val level: String = "info",                    // info | notice | suggestion | warning
+    val level: String = "info", // info | notice | suggestion | warning
     @SerialName("tool_use_id") val toolUseId: String? = null,
     @SerialName("prevent_continuation") val preventContinuation: Boolean = false,
 )
@@ -636,7 +750,7 @@ data class BackgroundTasksChangedInfo(
 @Serializable
 data class ControlRequestProgressInfo(
     @SerialName("request_id") val requestId: String = "",
-    val status: String = "",                       // started | api_retry
+    val status: String = "", // started | api_retry
     val attempt: Int? = null,
     @SerialName("max_retries") val maxRetries: Int? = null,
     @SerialName("retry_delay_ms") val retryDelayMs: Long? = null,

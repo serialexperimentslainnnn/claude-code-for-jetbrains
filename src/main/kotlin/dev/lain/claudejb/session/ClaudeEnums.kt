@@ -15,7 +15,8 @@ enum class PermissionMode(val wire: String, val label: String) {
     PLAN("plan", "Plan"),
     BYPASS("bypassPermissions", "Bypass permissions"),
     DONT_ASK("dontAsk", "Don't ask"),
-    AUTO("auto", "Auto");
+    AUTO("auto", "Auto"),
+    ;
 
     companion object {
         fun from(wire: String?): PermissionMode? = entries.firstOrNull { it.wire == wire }
@@ -33,7 +34,8 @@ enum class EffortLevel(val wire: String) {
     MEDIUM("medium"),
     HIGH("high"),
     XHIGH("xhigh"),
-    MAX("max");
+    MAX("max"),
+    ;
 
     companion object {
         fun from(wire: String?): EffortLevel? = entries.firstOrNull { it.wire == wire }
@@ -43,7 +45,8 @@ enum class EffortLevel(val wire: String) {
 enum class McpTransport(val wire: String) {
     SSE("sse"),
     STREAMABLE_HTTP("streamable-http"),
-    STDIO("stdio");
+    STDIO("stdio"),
+    ;
 
     companion object {
         fun from(wire: String?): McpTransport? = entries.firstOrNull { it.wire == wire }

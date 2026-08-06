@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Generate the CI-only GPG key that signs release artifacts in GitHub Actions.
+#
+# WHY THIS KEY IS SEPARATE FROM THE MAINTAINER KEY, AND MUST STAY SEPARATE
+# ----------------------------------------------------------------------
+# The maintainer key (6CD3…435A) lives on a YubiKey. It cannot be exported — that is the point of it — so
+# it cannot sign inside a runner. Automating artifact signatures therefore requires a SOFTWARE key whose
+# private material sits in a GitHub secret, readable by the job that references it and by anything that
+# compromises the runner.
+#
+# That is a real, accepted trade-off, and the mitigation is that the two keys must never be confusable:
+#
+#   * the MAINTAINER key signs COMMITS and TAGS. That signature means "a person chose to release this."
+#   * this CI key signs RELEASE ARTIFACTS. That signature means "this workflow produced these bytes."
+#
+# If both signatures looked alike, a leaked CI key would impersonate the maintainer. So this key carries a
+# uid that says what it is out loud, and it EXPIRES — a leaked key that expires stops being useful on its
+# own, without anyone having to notice the leak first.
+#
+# This script never touches your real keyring: it works in a throwaway GNUPGHOME under a temp directory,
+# emits what you need, and deletes it.
+#
+#   ./scripts/gen-ci-signing-key.sh                 # print everything (manual setup / rotation)
+#   ./scripts/gen-ci-signing-key.sh --outdir DIR    # write private.asc, public.asc, passphrase into DIR
+#
+# --outdir exists so scripts/bootstrap-ci.sh can pipe the private key straight into `gh secret set`
+# without it ever crossing a terminal, a scrollback buffer, or a shell history.
+set -euo pipefail
+
+command -v gpg >/dev/null || { echo "gpg is required" >&2; exit 1; }
+
+outdir=""
+if [ "${1:-}" = "--outdir" ]; then
+  outdir="${2:?--outdir needs a directory}"
+  mkdir -p "$outdir"
+  chmod 700 "$outdir"
+fi
+
+NAME="Claude Code Native CI (release artifacts only — NOT the maintainer key)"
+EXPIRY="1y"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+chmod 700 "$tmp"
+export GNUPGHOME="$tmp/gnupg"
+mkdir -p "$GNUPGHOME"
+chmod 700 "$GNUPGHOME"
+
+passphrase=$(gpg --gen-random --armor 2 32)
+
+cat > "$tmp/params" <<EOF
+%echo Generating CI signing key…
+Key-Type: EDDSA
+Key-Curve: ed25519
+Key-Usage: sign
+Name-Real: $NAME
+Expire-Date: $EXPIRY
+Passphrase: $passphrase
+%commit
+%echo done
+EOF
+
+gpg --batch --gen-key "$tmp/params" 2>/dev/null
+fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+
+gpg --batch --pinentry-mode loopback --passphrase "$passphrase" \
+    --armor --export-secret-keys "$fpr" > "$tmp/private.asc"
+gpg --armor --export "$fpr" > "$tmp/public.asc"
+
+if [ -n "$outdir" ]; then
+  umask 077
+  cp "$tmp/private.asc" "$outdir/private.asc"
+  cp "$tmp/public.asc"  "$outdir/public.asc"
+  printf '%s' "$passphrase" > "$outdir/passphrase"
+  printf '%s' "$fpr"        > "$outdir/fingerprint"
+  echo "wrote private.asc, public.asc, passphrase, fingerprint to $outdir" >&2
+  exit 0
+fi
+
+cat <<EOF
+
+================================================================================
+CI signing key generated.
+
+  Fingerprint : $fpr
+  Expires     : in $EXPIRY (renew or replace before then — see SECURITY.md)
+  Identity    : $NAME
+
+--------------------------------------------------------------------------------
+1) Add TWO secrets to the 'marketplace' environment
+   (Settings > Environments > marketplace > Add environment secret).
+
+   They go in the ENVIRONMENT, not in repository secrets: environment secrets do
+   not exist for any other job, and this environment requires your approval — so
+   the key is only ever in scope after a human said yes.
+
+   GPG_SIGNING_KEY        <- the block printed below
+   GPG_SIGNING_PASSPHRASE <- $passphrase
+
+--------------------------------------------------------------------------------
+2) Publish the PUBLIC key so users can verify a release. Commit it as
+   docs/ci-signing-key.asc and note the fingerprint in SECURITY.md.
+
+--------------------------------------------------------------------------------
+3) Certify it with your hardware key, so the CI key is ENDORSED rather than
+   merely asserted by a file in the same repo an attacker would edit — and so
+   the endorsement can be revoked from hardware if the key ever leaks:
+
+     gpg --import public.asc                       # PUBLIC half only
+     gpg --local-user <YOUR_FPR> --quick-sign-key $fpr
+     gpg --armor --export $fpr > docs/ci-signing-key.asc
+
+--------------------------------------------------------------------------------
+4) Never import the PRIVATE half into your keyring. It belongs in exactly one
+   place — the GitHub environment secret. Keeping it out of your keyring is what
+   stops it quietly becoming a second maintainer identity.
+================================================================================
+
+----- GPG_SIGNING_KEY (paste everything between the markers) -----
+EOF
+cat "$tmp/private.asc"
+cat <<'EOF'
+----- end GPG_SIGNING_KEY -----
+
+----- public key: save as docs/ci-signing-key.asc -----
+EOF
+cat "$tmp/public.asc"
+echo "----- end public key -----"

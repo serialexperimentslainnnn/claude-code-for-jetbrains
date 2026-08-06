@@ -1,0 +1,32 @@
+# Build context filter for .github/ci-image/Dockerfile.
+#
+# The `verify` stage does a `COPY . .` because `verifyPlugin` needs the real sources to resolve which IDEs
+# to download. Without this file that COPY was a 2.09 GB layer: it swept in node_modules, build/ and .git,
+# none of which the warm-up reads, and all of which stay in the image forever — a later `rm -rf` adds a
+# layer, it never reclaims one.
+#
+# Anything the Gradle build genuinely needs must NOT be listed here. When in doubt, leave it in: a missing
+# source file makes the warm-up silently resolve a different IDE set, which is the failure mode that looks
+# like the cache "just not working".
+
+# Reproduced from the lockfile by `npm ci` inside the image, and it MUST match the lockfile of whatever
+# commit CI checks out rather than the one current when the image was cut.
+node_modules/
+
+# Outputs, not inputs.
+build/
+out/
+.gradle/
+
+# History is not a build input, and it is the single largest thing here after node_modules.
+.git/
+.github/ci-image/
+
+# Local IDE and editor state.
+.idea/
+*.iml
+
+# Never let a local secret or env file reach a layer.
+.env
+.env.*
+*.log

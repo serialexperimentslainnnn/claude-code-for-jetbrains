@@ -1,7 +1,10 @@
 <idea-plugin>
     <id>dev.lain.claude-code-for-jetbrains</id>
     <name>Claude Code Native</name>
-    <vendor email="lain.agent604@passmail.com" url="https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains">lain</vendor>
+    <!-- `email` is an optional attribute and is deliberately omitted: a plugin descriptor is a public
+         document, and an address published there is scraped, not contacted. Support and vulnerability
+         reports both route through the repository (issues / private security advisories). -->
+    <vendor url="https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains">lain</vendor>
 
     <description><![CDATA[
         <p>Claude Code in your IDE, with a real GUI — an AI coding agent for JetBrains, not a terminal
@@ -150,6 +153,13 @@
                 displayName="Claude Code"
                 nonDefaultProject="false"/>
     </extensions>
+
+    <applicationListeners>
+        <!-- Our diff tabs are mock:// in-memory previews the IDE can never restore; drop them before the
+             workspace state is written. ProjectCloseListener is an APPLICATION-bus topic. See DiffTabCleanup. -->
+        <listener class="dev.lain.claudejb.diff.DiffTabCleanup"
+                  topic="com.intellij.openapi.project.ProjectCloseListener"/>
+    </applicationListeners>
 
     <actions>
         <action id="dev.lain.claudejb.ExplainSelection"

@@ -1,0 +1,74 @@
+{
+  "name": "protect-develop",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/develop"
+      ],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_signatures"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "_comment": [
+          "0, not 1 \u2014 see the long note in main.json. GitHub does not let an author approve their own",
+          "pull request, so on a single-maintainer repository requiring an approval makes the branch",
+          "unmergeable rather than well-guarded. Raise it to 1 when a second maintainer exists."
+        ],
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "allowed_merge_methods": [
+          "squash",
+          "merge"
+        ]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "_comment": [
+          "CodeQL gates develop as well as main. It is affordable here in a way the other main-only",
+          "checks are not: codeql.yml already triggers on every pull request into develop, so the run",
+          "happens either way — requiring it only decides whether anyone has to look at the result.",
+          "A SAST finding is also the class of defect worth catching before it is merged rather than",
+          "at the release door, because by then it is mixed in with everything else on the branch.",
+          "The contexts are the jobs' DISPLAY names. Renaming a job in codeql.yml does not fail this",
+          "gate — it silently stops applying it."
+        ],
+        "required_status_checks": [
+          {
+            "context": "JVM tests"
+          },
+          {
+            "context": "Frontend tests"
+          },
+          {
+            "context": "CodeQL (java-kotlin)"
+          },
+          {
+            "context": "CodeQL (javascript-typescript)"
+          }
+        ]
+      }
+    }
+  ]
+}

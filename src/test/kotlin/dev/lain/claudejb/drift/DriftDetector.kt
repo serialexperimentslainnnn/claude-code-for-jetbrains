@@ -86,7 +86,11 @@ data class DriftReport(
                 appendLine("✅ **Versions advanced, but the protocol surface is fully covered.**")
                 appendLine()
                 appendLine("Action: bump the recorded baseline only —")
-                if (sdkVersionChanged) appendLine("- `package.json` / `node_modules` SDK → `$sdkLatestVersion` (done by `npm update`); `KNOWN_*` unchanged.")
+                if (sdkVersionChanged) {
+                    appendLine(
+                        "- `package.json` / `node_modules` SDK → `$sdkLatestVersion` (done by `npm update`); `KNOWN_*` unchanged.",
+                    )
+                }
                 if (binaryVersionChanged) appendLine("- `scripts/drift-baseline.properties` `binary` → `$binaryInstalledVersion`.")
             } else {
                 appendLine("✅ **No drift.** Versions and protocol surface are unchanged.")
@@ -97,20 +101,24 @@ data class DriftReport(
         appendLine("⚠️ **Drift detected — protocol code changes needed.**")
         appendLine()
         section(
-            "SDK — `subtype`s not modeled by the parser", sdk.unmodeledSubtypes,
+            "SDK — `subtype`s not modeled by the parser",
+            sdk.unmodeledSubtypes,
             "→ add a typed branch + serializer in `protocol/ClaudeEvent.kt` (system subtype) or " +
                 "`protocol/ControlProtocol.kt` (control kind), then add it to `KNOWN_SUBTYPES`.",
         )
         section(
-            "Binary — UNKNOWN top-level `type`s (hard: bucketed as Other)", binary.unknownEventTypes,
+            "Binary — UNKNOWN top-level `type`s (hard: bucketed as Other)",
+            binary.unknownEventTypes,
             "→ add a `when (type)` branch in `protocol/ClaudeEvent.kt`, then add it to `KNOWN_EVENT_TYPES`.",
         )
         section(
-            "Binary — runtime `subtype`s not yet typed (soft)", binary.unmodeledSubtypes,
+            "Binary — runtime `subtype`s not yet typed (soft)",
+            binary.unmodeledSubtypes,
             "→ absorbed as `Other`/`UnsupportedControlRequest` today; model + add to `KNOWN_SUBTYPES` if useful.",
         )
         section(
-            "SDK — `subtype`s the parser models but the SDK dropped (informational)", sdk.staleSubtypes,
+            "SDK — `subtype`s the parser models but the SDK dropped (informational)",
+            sdk.staleSubtypes,
             "→ verify we don't still send/expect these; prune `KNOWN_SUBTYPES` if truly gone.",
         )
         appendLine("Then bump the baseline versions and re-run `./gradlew checkDrift` to confirm green.")

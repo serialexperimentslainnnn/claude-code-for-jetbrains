@@ -23,8 +23,16 @@ class InfoDialogsTest {
     fun `parses servers under mcp_servers with status and enabled`() {
         val payload = buildJsonObject {
             putJsonArray("mcp_servers") {
-                addJsonObject { put("name", "jetbrains"); put("status", "connected"); put("enabled", true) }
-                addJsonObject { put("name", "ctx7"); put("status", "failed"); put("enabled", false) }
+                addJsonObject {
+                    put("name", "jetbrains")
+                    put("status", "connected")
+                    put("enabled", true)
+                }
+                addJsonObject {
+                    put("name", "ctx7")
+                    put("status", "failed")
+                    put("enabled", false)
+                }
             }
         }
         val rows = InfoDialogs.parseMcpServers(payload)
@@ -37,7 +45,10 @@ class InfoDialogsTest {
     fun `falls back to the servers key and the state field`() {
         val payload = buildJsonObject {
             putJsonArray("servers") {
-                addJsonObject { put("name", "alpha"); put("state", "running") }
+                addJsonObject {
+                    put("name", "alpha")
+                    put("state", "running")
+                }
             }
         }
         val rows = InfoDialogs.parseMcpServers(payload)
@@ -57,7 +68,10 @@ class InfoDialogsTest {
         val payload = buildJsonObject {
             putJsonArray("mcp_servers") {
                 addJsonObject { put("status", "connected") } // no name → dropped
-                addJsonObject { put("name", "  "); put("status", "x") } // blank name → dropped
+                addJsonObject {
+                    put("name", "  ")
+                    put("status", "x")
+                } // blank name → dropped
                 add("garbage") // non-object → dropped
                 addJsonObject { put("name", "keep") }
             }

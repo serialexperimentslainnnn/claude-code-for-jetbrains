@@ -10,11 +10,30 @@ const { JCEF, appJsFiles } = require('./helpers/load');
 // Classes emitted by the JS that intentionally have no dedicated `.<class>{...}` rule today. A NEW class not in
 // this set and not in app.css fails the test.
 const GRANDFATHERED = new Set([
-  'dash-empty', 'elicit-desc', 'elicit-extra', 'elicit-field-label', 'fold-label',
-  'legend-item', 'legend-name', 'legend-swatch', 'legend-tokens', 'menu-item-label',
-  'palette-list', 'perm-always', 'perm-blocked', 'perm-desc', 'perm-reason', 'perm-summary',
-  'pill-vibe', 'q-block', 'q-header', 'queue-text', 'subagent-desc', 'subagent-main',
-  'subagent-meta', 'tool-output',
+  'dash-empty',
+  'elicit-desc',
+  'elicit-extra',
+  'elicit-field-label',
+  'fold-label',
+  'legend-item',
+  'legend-name',
+  'legend-swatch',
+  'legend-tokens',
+  'menu-item-label',
+  'palette-list',
+  'perm-always',
+  'perm-blocked',
+  'perm-desc',
+  'perm-reason',
+  'perm-summary',
+  'pill-vibe',
+  'q-block',
+  'q-header',
+  'queue-text',
+  'subagent-desc',
+  'subagent-main',
+  'subagent-meta',
+  'tool-output',
 ]);
 
 function cssClassNames() {

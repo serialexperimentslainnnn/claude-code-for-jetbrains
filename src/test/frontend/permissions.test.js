@@ -3,8 +3,14 @@
 const { loadFrontend } = require('./helpers/load');
 
 const editCard = (id, diff) => ({
-  id, tool: 'Edit', title: 'Edit', summary: `Edit on ${id}.txt`, headline: `Edit ${id}`,
-  reviewable: true, isPlan: false, diff,
+  id,
+  tool: 'Edit',
+  title: 'Edit',
+  summary: `Edit on ${id}.txt`,
+  headline: `Edit ${id}`,
+  reviewable: true,
+  isPlan: false,
+  diff,
 });
 
 describe('permission card — read-only diff, no per-line checkboxes', () => {

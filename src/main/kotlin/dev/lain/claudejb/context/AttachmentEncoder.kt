@@ -27,13 +27,31 @@ object AttachmentEncoder {
         return Attachment.Image(display, mediaType, Base64.getEncoder().encodeToString(bytes))
     }
 
+    /** Decodes a signature written the way format specs and `file(1)` magic databases write one: as hex. */
+    private fun signature(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    // Leading magic bytes of each accepted format. Sniffing beats trusting the name: the composer also takes
+    // clipboard payloads, which arrive with no filename at all.
+    private val PNG_SIGNATURE = signature("89504E470D0A1A0A")
+    private val JPEG_SIGNATURE = signature("FFD8FF")
+    private val GIF_SIGNATURE = "GIF".toByteArray(Charsets.US_ASCII)
+
+    // WEBP is a RIFF container, so "RIFF" alone identifies nothing (WAV and AVI share it). What names the
+    // format is the four-byte FORM TYPE that follows the header and its 4-byte payload length.
+    private val RIFF_SIGNATURE = "RIFF".toByteArray(Charsets.US_ASCII)
+    private val WEBP_FORM_TYPE = "WEBP".toByteArray(Charsets.US_ASCII)
+    private const val RIFF_FORM_TYPE_OFFSET = 8
+
+    /** True when this array carries [signature] at [offset], bounds-checked. */
+    private fun ByteArray.hasSignature(signature: ByteArray, offset: Int = 0): Boolean =
+        size >= offset + signature.size && signature.indices.all { this[offset + it] == signature[it] }
+
     /** Detects the image type from the leading magic bytes; null when unrecognized. */
     fun sniffMediaType(b: ByteArray): String? = when {
-        b.size >= 8 && b[0] == 0x89.toByte() && b[1] == 0x50.toByte() && b[2] == 0x4E.toByte() && b[3] == 0x47.toByte() -> "image/png"
-        b.size >= 3 && b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() && b[2] == 0xFF.toByte() -> "image/jpeg"
-        b.size >= 6 && b[0] == 'G'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() -> "image/gif"
-        b.size >= 12 && b[0] == 'R'.code.toByte() && b[1] == 'I'.code.toByte() && b[2] == 'F'.code.toByte() &&
-            b[8] == 'W'.code.toByte() && b[9] == 'E'.code.toByte() && b[10] == 'B'.code.toByte() && b[11] == 'P'.code.toByte() -> "image/webp"
+        b.hasSignature(PNG_SIGNATURE) -> "image/png"
+        b.hasSignature(JPEG_SIGNATURE) -> "image/jpeg"
+        b.hasSignature(GIF_SIGNATURE) -> "image/gif"
+        b.hasSignature(RIFF_SIGNATURE) && b.hasSignature(WEBP_FORM_TYPE, RIFF_FORM_TYPE_OFFSET) -> "image/webp"
         else -> null
     }
 

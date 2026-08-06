@@ -68,6 +68,8 @@ object SessionLauncher {
      * [ClaudeSession.buildArgs].
      */
     fun buildArgs(opts: LaunchOptions, resume: Boolean, mcpConfig: String?): List<String> {
+        // Concatenation order IS the argument order, and the argument order is load-bearing — so the groups are
+        // spliced in exactly the sequence they were emitted in before.
         val args = mutableListOf(
             "--print",
             "--output-format", "stream-json",
@@ -76,25 +78,41 @@ object SessionLauncher {
             "--permission-prompt-tool", "stdio",
             "--permission-mode", binaryPermissionMode(opts.permissionMode),
         )
-        if (opts.includePartialMessages) args += "--include-partial-messages"
-        if (opts.settingSources.isNotBlank()) args += listOf("--setting-sources", opts.settingSources)
-        opts.model?.let { args += listOf("--model", it) }
-        opts.effort?.let { args += listOf("--effort", it) }
-        // Extended thinking (adaptive): a launch flag on current models. `--thinking-display summarized` is what
-        // actually streams the reasoning blocks; without it no "Thought process" appears. Any non-null budget = on.
-        if (opts.thinkingTokens != null) args += listOf("--thinking", "adaptive", "--thinking-display", "summarized")
-        opts.allowedTools.trim().ifBlank { null }?.let { args += listOf("--allowedTools", it) }
-        opts.disallowedTools.trim().ifBlank { null }?.let { args += listOf("--disallowedTools", it) }
-        // Advanced launch options: each emitted only when it carries a value (neutral default → omitted).
-        opts.maxTurns?.let { args += listOf("--max-turns", it.toString()) }
-        opts.maxBudgetUsd?.let { args += listOf("--max-budget-usd", it.toString()) }
-        opts.fallbackModel?.trim()?.ifBlank { null }?.let { args += listOf("--fallback-model", it) }
-        for (dir in opts.addDirs) dir.trim().ifBlank { null }?.let { args += listOf("--add-dir", it) }
-        opts.betas?.trim()?.ifBlank { null }?.let { args += listOf("--betas", it) }
-        if (opts.strictMcpConfig) args += "--strict-mcp-config"
+        args += transportFlags(opts)
+        args += modelFlags(opts)
+        args += toolFilterFlags(opts)
+        args += advancedFlags(opts)
         mcpConfig?.let { args += listOf("--mcp-config", it) }
         if (resume) opts.sessionId?.let { args += listOf("--resume", it) }
         return args
+    }
+
+    private fun transportFlags(opts: LaunchOptions): List<String> = buildList {
+        if (opts.includePartialMessages) add("--include-partial-messages")
+        if (opts.settingSources.isNotBlank()) addAll(listOf("--setting-sources", opts.settingSources))
+    }
+
+    private fun modelFlags(opts: LaunchOptions): List<String> = buildList {
+        opts.model?.let { addAll(listOf("--model", it)) }
+        opts.effort?.let { addAll(listOf("--effort", it)) }
+        // Extended thinking (adaptive): a launch flag on current models. `--thinking-display summarized` is what
+        // actually streams the reasoning blocks; without it no "Thought process" appears. Any non-null budget = on.
+        if (opts.thinkingTokens != null) addAll(listOf("--thinking", "adaptive", "--thinking-display", "summarized"))
+    }
+
+    private fun toolFilterFlags(opts: LaunchOptions): List<String> = buildList {
+        opts.allowedTools.trim().ifBlank { null }?.let { addAll(listOf("--allowedTools", it)) }
+        opts.disallowedTools.trim().ifBlank { null }?.let { addAll(listOf("--disallowedTools", it)) }
+    }
+
+    /** Advanced launch options: each emitted only when it carries a value (neutral default → omitted). */
+    private fun advancedFlags(opts: LaunchOptions): List<String> = buildList {
+        opts.maxTurns?.let { addAll(listOf("--max-turns", it.toString())) }
+        opts.maxBudgetUsd?.let { addAll(listOf("--max-budget-usd", it.toString())) }
+        opts.fallbackModel?.trim()?.ifBlank { null }?.let { addAll(listOf("--fallback-model", it)) }
+        for (dir in opts.addDirs) dir.trim().ifBlank { null }?.let { addAll(listOf("--add-dir", it)) }
+        opts.betas?.trim()?.ifBlank { null }?.let { addAll(listOf("--betas", it)) }
+        if (opts.strictMcpConfig) add("--strict-mcp-config")
     }
 
     /**
@@ -136,9 +154,11 @@ object SessionLauncher {
             runCatching { java.nio.file.Paths.get(PathManager.getPluginsPath()) }.getOrNull(),
             runCatching { java.nio.file.Paths.get(PathManager.getPreInstalledPluginsPath()) }.getOrNull(),
         )
-        for (root in roots) for (name in names) {
-            val lib = root.resolve(name).resolve("lib")
-            if (java.nio.file.Files.isDirectory(lib)) return lib.toFile()
+        for (root in roots) {
+            for (name in names) {
+                val lib = root.resolve(name).resolve("lib")
+                if (java.nio.file.Files.isDirectory(lib)) return lib.toFile()
+            }
         }
         return null
     }

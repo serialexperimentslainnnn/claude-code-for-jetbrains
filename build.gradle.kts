@@ -1,18 +1,34 @@
 import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
-import org.jetbrains.intellij.platform.gradle.models.ProductRelease
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
+import org.jetbrains.intellij.platform.gradle.models.ProductRelease
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 
 plugins {
     kotlin("jvm") version "2.1.20"
     kotlin("plugin.serialization") version "2.1.20"
+    // PINNED AT 2.16.0 DELIBERATELY. 2.18.1 exists and the build warns about it on every run, but bumping it
+    // hangs the headless suite: `ChatSessionManagerHeadlessTest` never starts, because
+    // BasePlatformTestCase.setUp → LightPlatformTestCase.doSetup → IndexingTestUtil.waitUntilIndexesAreReady
+    // waits forever (confirmed by thread dump — the EDT sits in that frame; our code is never reached). The
+    // bump changes which platform test-framework is resolved, so this is a fixture-level regression, not ours
+    // to fix from here. Re-attempt as its own change, with the headless suite as the acceptance test — NOT as
+    // a drive-by inside a release branch, which is exactly how it got in and straight back out.
     id("org.jetbrains.intellij.platform") version "2.16.0"
-    // Coverage report so we can hit the ≥90% target on src/main/ documented in docs/RELEASE_CHECKLIST.md.
+    // Coverage, gated per package — see the `kover { }` block near the bottom for the thresholds and why they
+    // differ by package. (Until 5.0.0 this comment claimed a "≥90% target documented in
+    // docs/RELEASE_CHECKLIST.md". That document says nothing about coverage, and the real figure was 53%. A
+    // number nobody measured, pointing at a requirement that did not exist.)
     id("org.jetbrains.kotlinx.kover") version "0.9.2"
+    // Static analysis (detekt) and formatting (ktlint via Spotless). Added in 5.0.0: until then the whole
+    // quality bar rested on review, which is exactly the thing the standards say to mechanise — "if format
+    // is being discussed in a review, a formatter is missing".
+    id("io.gitlab.arturbosch.detekt") version "1.23.8"
+    id("com.diffplug.spotless") version "8.9.0"
 }
 
 group = "dev.lain"
-version = "4.4.1"
+version = "5.0.0"
 
 repositories {
     mavenCentral()
@@ -42,7 +58,7 @@ sourceSets {
 
 configurations {
     named("uiTestImplementation") { extendsFrom(configurations.testImplementation.get()) }
-    named("uiTestRuntimeOnly")    { extendsFrom(configurations.testRuntimeOnly.get()) }
+    named("uiTestRuntimeOnly") { extendsFrom(configurations.testRuntimeOnly.get()) }
 }
 
 dependencies {
@@ -61,7 +77,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     // Unit tests (pure JVM: protocol parsing/building, no IntelliJ Platform fixtures needed).
-    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     // JUnit4/3 on the COMPILE classpath: the plugin's test executor references JUnit4 API, and
@@ -77,7 +93,7 @@ dependencies {
     }
 
     // --- uiTest: RemoteRobot end-to-end (Layer D), gated by -PuiTest.enabled=true ---
-    "uiTestImplementation"(platform("org.junit:junit-bom:5.11.4"))
+    "uiTestImplementation"(platform("org.junit:junit-bom:6.1.2"))
     "uiTestImplementation"("org.junit.jupiter:junit-jupiter")
     "uiTestRuntimeOnly"("org.junit.platform:junit-platform-launcher")
     "uiTestImplementation"("com.intellij.remoterobot:remote-robot:0.11.23")
@@ -94,6 +110,22 @@ configurations.named("runtimeClasspath") {
 }
 
 tasks {
+    // Attribution travels INSIDE the artifact (opensource-licensing-standards §5.4).
+    //
+    // The published zip redistributes third-party code: marked, DOMPurify and highlight.js are vendored into
+    // the plugin jar under `jcef/`, and kotlinx.serialization ships as its own jars. MIT, BSD-3-Clause and
+    // Apache-2.0 all require the copyright notice and licence text to be preserved *on redistribution* — and a
+    // file sitting in the Git repository does not accompany the binary a user installs from the Marketplace.
+    // Copying them into the jar's resources is what actually discharges the obligation.
+    //
+    // Kept as a build step rather than a checked-in copy under `src/main/resources/`, so the notices cannot
+    // drift out of sync with the files they describe: one source of truth at the repository root, packaged at
+    // build time. `THIRD-PARTY-NOTICES.md` is surfaced to the user by the About dialog (see InfoDialogs).
+    processResources {
+        from(rootProject.file("THIRD-PARTY-NOTICES.md")) { into("META-INF") }
+        from(rootProject.file("LICENSE")) { into("META-INF") }
+        from(rootProject.file("LICENSES")) { into("META-INF/licenses") }
+    }
     runIde {
         jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
     }
@@ -120,19 +152,29 @@ tasks {
         // Only the jupiter engine: the vintage engine would try to DISCOVER (instantiate) the JUnit3
         // headless BasePlatformTestCase classes, which aren't on this task's classpath (only the plugin's
         // own `test` task gets the platform runtime) — that fails before tag filtering even applies.
-        useJUnitPlatform { includeTags("driftLive"); includeEngines("junit-jupiter") }
+        useJUnitPlatform {
+            includeTags("driftLive")
+            includeEngines("junit-jupiter")
+        }
         // Belt-and-suspenders: restrict discovery to the drift package.
         filter { includeTestsMatching("dev.lain.claudejb.drift.*") }
-        testClassesDirs = sourceSets.test.get().output.classesDirs
+        testClassesDirs =
+            sourceSets.test
+                .get()
+                .output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         // Always re-run (it polls the network + binary); never serve a cached result.
         outputs.upToDateWhen { false }
-        val binaryPath = (providers.gradleProperty("claudeBinary").orNull
-            ?: providers.environmentVariable("CLAUDE_BINARY").orNull
-            ?: "${System.getProperty("user.home")}/.local/bin/claude")
+        val binaryPath = (
+            providers.gradleProperty("claudeBinary").orNull
+                ?: providers.environmentVariable("CLAUDE_BINARY").orNull
+                ?: "${System.getProperty("user.home")}/.local/bin/claude"
+        )
         systemProperty("claudejb.drift.projectDir", rootProject.projectDir.absolutePath)
-        systemProperty("claudejb.drift.sdkDir",
-            rootProject.file("node_modules/@anthropic-ai/claude-agent-sdk").absolutePath)
+        systemProperty(
+            "claudejb.drift.sdkDir",
+            rootProject.file("node_modules/@anthropic-ai/claude-agent-sdk").absolutePath,
+        )
         systemProperty("claudejb.drift.binary", binaryPath)
         systemProperty("claudejb.drift.baseline", rootProject.file("scripts/drift-baseline.properties").absolutePath)
         // Surface the report (println from the test) on the console.
@@ -270,6 +312,27 @@ intellijPlatform {
         // 'JetBrains' in the plugin name is a Marketplace naming lint, not an API problem; muting it lets
         // the verifier proceed to the actual binary-compatibility / internal-API checks we care about.
         freeArgs = listOf("-mute", "TemplateWordInPluginName")
+
+        // The "zero deprecations" rule, ENFORCED rather than merely written down.
+        //
+        // The plugin's default failure level is COMPATIBILITY_PROBLEMS + INTERNAL_API_USAGES +
+        // OVERRIDE_ONLY_API_USAGES — deprecated usages are only REPORTED. So this repo's stated policy
+        // ("never ship a deprecated or scheduled-for-removal API — treat it as a blocker, not a warning")
+        // was a promise a human had to keep by reading logs, and a rule that lives only in prose is not a
+        // rule. Adding DEPRECATED_API_USAGES is what makes the sentence true.
+        //
+        // EXPERIMENTAL_API_USAGES is deliberately NOT here, and that is a decision rather than an oversight:
+        // `DiffTabCleanup` uses `ProjectCloseListener.projectClosingBeforeSave` knowingly, because it is the
+        // only hook that runs BEFORE the workspace state is written — which is the whole point of it. An
+        // experimental API is acceptable with a reason; a deprecated one is not acceptable at all, because
+        // it has an announced removal date and the plugin has to keep working across the IDE range.
+        failureLevel =
+            listOf(
+                VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
+                VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
+                VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
+                VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
+            )
         ides {
             // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
             // downloads, via -PlocalIdePath=<dir>[,<dir>…] or the LOCAL_IDE_PATH env var (comma-separated). This is
@@ -279,28 +342,37 @@ intellijPlatform {
             // compiles fine and then dies with NoSuchFieldError on 242–251).
             // When unset/missing (or on CI), fall back to recommended() — which spans the plugin's whole declared
             // range including the since-build FLOOR, the gate that catches a too-new API.
-            val localIdes = (providers.gradleProperty("localIdePath").orNull
-                ?: providers.environmentVariable("LOCAL_IDE_PATH").orNull)
-                ?.split(',')
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                ?.map { file(it) }
-                ?.filter { it.exists() }
-                .orEmpty()
-            if (localIdes.isNotEmpty() && !providers.environmentVariable("CI").isPresent) {
+            val localIdes =
+                (
+                    providers.gradleProperty("localIdePath").orNull
+                        ?: providers.environmentVariable("LOCAL_IDE_PATH").orNull
+                )?.split(',')
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    ?.map { file(it) }
+                    ?.filter { it.exists() }
+                    .orEmpty()
+            val offline = localIdes.isNotEmpty() && !providers.environmentVariable("CI").isPresent
+            if (offline) {
+                // OFFLINE mode: the given installs are the ENTIRE set to verify against. Neither recommended()
+                // nor select() may run here — both resolve through download.jetbrains.com, so leaving either in
+                // made `-PlocalIdePath` a lie: it added local IDEs but still downloaded, and on a network that
+                // truncates a 1.6 GB transfer the task failed before verifying anything. The flag's whole
+                // purpose is verification WITHOUT the CDN, so in this mode there is nothing to download.
                 localIdes.forEach { local(it) }
             } else {
+                // Online (CI, or no local installs): recommended() spans the plugin's whole declared range
+                // including the since-build FLOOR — the gate that catches a too-new API — and select() adds the
+                // NEWEST EAP/RC. The range upper bound (263.*) matches the declared untilBuild, widened
+                // preemptively because the API is clean across 251→262; until a 2026.3/263 EAP ships this
+                // resolves to the latest 262 build, and picks up a real 263 automatically once one exists.
                 recommended()
-            }
-            // Always validate against the NEWEST EAP/RC available. The range upper bound (263.*) matches the
-            // plugin's declared untilBuild, which was widened to 263.* preemptively (the API is clean across
-            // 251→262); until a 2026.3/263 EAP ships this resolves to the latest 262 build, and it will verify
-            // against a real 263 automatically the moment one is published.
-            select {
-                types = listOf(IntelliJPlatformType.IntellijIdeaCommunity)
-                channels = listOf(ProductRelease.Channel.EAP, ProductRelease.Channel.RC)
-                sinceBuild = "262"
-                untilBuild = "263.*"
+                select {
+                    types = listOf(IntelliJPlatformType.IntellijIdeaCommunity)
+                    channels = listOf(ProductRelease.Channel.EAP, ProductRelease.Channel.RC)
+                    sinceBuild = "262"
+                    untilBuild = "263.*"
+                }
             }
         }
     }
@@ -313,6 +385,153 @@ kotlin {
     }
 }
 
+// --- Static analysis and formatting --------------------------------------------------------------------
+// Two tools because they answer different questions, and conflating them is how projects end up arguing
+// about braces in code review: Spotless/ktlint decides how the code LOOKS (mechanical, never a judgement
+// call), detekt decides whether it is likely WRONG (complexity, swallowed errors, suspicious constructs).
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(files("config/detekt/detekt.yml"))
+    // Set unconditionally: `detektBaseline` needs the path as an OUTPUT (it is the file it writes), so making
+    // it conditional on the file already existing makes generating it for the first time impossible. The
+    // `detekt` task tolerates the file being absent.
+    baseline = file("config/detekt/baseline.xml")
+    // Analyse main and test alike. A test that swallows an exception hides a defect just as effectively as
+    // production code doing it — arguably more so, because it does it while claiming to prove correctness.
+    source.setFrom(files("src/main/kotlin", "src/test/kotlin"))
+    parallel = true
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    jvmTarget = "21"
+    reports {
+        html.required.set(true)
+        sarif.required.set(true) // consumable by GitHub code scanning if we ever want the findings inline
+        xml.required.set(false)
+        txt.required.set(false)
+        md.required.set(false)
+    }
+}
+tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configureEach {
+    jvmTarget = "21"
+}
+
+// ---------------------------------------------------------------------------
+// Coverage gates — per package, because one global number would be a lie either way.
+//
+// The honest shape of this codebase is that its risk is NOT evenly distributed. `permission/` decides whether
+// the agent may read your SSH key; `ui/` paints a browser. A single global threshold either sets the bar so low
+// that the guard could rot unnoticed, or so high that it can only be met by writing tests against Swing and
+// JCEF that assert nothing anyone cares about. So the bar is per package, and it is set slightly BELOW what
+// each package measures today: a gate that catches regression, not a target that invites test-padding.
+//
+// `ui`/`ui.jcef` are excluded rather than gated at a token value. They need a live IDE and a live Chromium, and
+// they are covered by a different layer entirely: 54 vitest tests drive the real shipped JS, and the release
+// checklist requires a manual pass through the UI. Excluding them says that out loud; gating them at 20% would
+// dress the same fact up as a passing check.
+//
+// Measured 2026-08-05 (line coverage): permission 98.1 · protocol 87.3 · settings 86.1 · diff 72.8 ·
+// session 67.3 · context 42.1 · process 37.9 · ui.jcef 31.2 · ui 24.6 · TOTAL 53.3.
+// `context`/`process` are ungated for now: they wrap the OS (clipboard, process spawn, shell env) and most of
+// what is uncovered there cannot run in CI. That is a known gap, not an endorsement.
+// ---------------------------------------------------------------------------
+kover {
+    // `checkDrift` must NOT be dragged into the coverage graph.
+    //
+    // Kover instruments and aggregates EVERY `Test` task in the project, and `checkDrift` is registered as one.
+    // That silently made it a dependency of `koverVerify`, so the `Static analysis` CI job ran the on-demand
+    // drift check — which downloads the latest SDK and probes a LOCALLY INSTALLED `claude` binary. There is no
+    // such binary on a runner, so it died with an IOException and failed the job.
+    //
+    // It passed locally, which is the whole lesson: the maintainer's machine has the binary, so the difference
+    // between "this task is on-demand" and "this task is wired into check" was invisible until CI ran it. The
+    // task's own KDoc already said "NOT wired into `check`" — it just was not true of the coverage graph.
+    currentProject {
+        instrumentation {
+            disabledForTestTasks.add("checkDrift")
+        }
+    }
+    reports {
+        filters {
+            excludes {
+                // Need a live IDE / live Chromium to execute at all. Covered instead by the 54 vitest tests
+                // that drive the REAL shipped JS, and by the manual UI pass the release checklist requires.
+                classes("dev.lain.claudejb.ui.*")
+                // Thin IDE-action shells: their bodies are one delegate call each, and exercising them means
+                // booting an IDE to assert that a menu item calls a method.
+                classes("dev.lain.claudejb.actions.*")
+                // Wrappers over the OS — system clipboard, process spawn, shell environment. Most of what is
+                // uncovered here cannot run on a CI box at all. A KNOWN GAP, listed so it is not mistaken for
+                // coverage; the parts that are pure (AttachmentEncoder, EnvScriptLoader.parse) are tested.
+                classes("dev.lain.claudejb.context.*", "dev.lain.claudejb.process.*")
+                // A single line delegating to PluginManager.isPluginInstalled. It exists precisely BECAUSE it
+                // must run against a real platform (PluginId is a Kotlin class since 2025.2, so the naive call
+                // dies with NoSuchFieldError below 252) — which is also why a unit test cannot exercise it.
+                classes("dev.lain.claudejb.util.*")
+            }
+        }
+        verify {
+            // NB: Kover 0.9.2's KoverVerifyRule has no per-rule `filters` (verified against the plugin jar), so
+            // the per-package thresholds this project wants — permission ≥95, protocol ≥80, session ≥65 — are
+            // not expressible one-by-one. What IS expressible is a FLOOR applied to every package
+            // individually, plus an aggregate. Both are real gates: the floor catches any single package
+            // collapsing, the aggregate catches death by a thousand cuts. The tighter per-package bars remain
+            // the intent; see docs/RELEASE_CHECKLIST.md.
+            rule("every gated package holds its floor") {
+                groupBy = kotlinx.kover.gradle.plugin.dsl.GroupingEntityType.PACKAGE
+                minBound(65)
+            }
+            rule("gated code as a whole") {
+                minBound(75)
+            }
+        }
+    }
+}
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        ktlint("1.8.0").editorConfigOverride(
+            mapOf(
+                // The codebase reads at ~120 columns and has done for its whole life; reflowing 13k lines to
+                // ktlint's default would be a huge diff that buys nothing.
+                "max_line_length" to "140",
+                // Trailing commas stay: they are why adding a parameter touches one line instead of two.
+                "ij_kotlin_allow_trailing_comma" to "true",
+                "ij_kotlin_allow_trailing_comma_on_call_site" to "true",
+                // function-signature off. Its only effect here was to COLLAPSE multi-line parameter lists back
+                // onto one line because they now fit in 140 columns — which trades away the thing the
+                // multi-line + trailing-comma style buys: adding a parameter is a one-line diff, not a reflow
+                // of the whole signature. The Kotlin conventions endorse trailing commas for exactly that
+                // reason and do not require collapsing a signature that happens to fit.
+                "ktlint_standard_function-signature" to "disabled",
+                "ktlint_standard_class-signature" to "disabled",
+                "ktlint_standard_function-expression-body" to "disabled",
+                // ── One owner per rule ──────────────────────────────────────────────────────────────────
+                // Below, ktlint duplicates a rule detekt also enforces, and only detekt can scope itself to a
+                // source set. Running both means the stricter-but-blinder one decides, which is how you end up
+                // reformatting test fixtures to satisfy a tool that cannot be told they are fixtures. So each
+                // of these has exactly one owner, and it is the one that can express the exception:
+                //
+                // max-line-length → detekt MaxLineLength (excludes the test tree: single-line raw-string
+                //   protocol fixtures, one NDJSON frame each, exactly as the binary emits them).
+                // function-naming → detekt FunctionNaming (excludes the test tree: test methods are
+                //   backtick-quoted sentences, which is why a failure report reads like a sentence).
+                //
+                // Production code is still covered for both — by detekt, at the same strictness as before.
+                "ktlint_standard_max-line-length" to "disabled",
+                "ktlint_standard_function-naming" to "disabled",
+            ),
+        )
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktlint("1.8.0")
+    }
+}
+
 /** Extracts the top (latest) `## vX.Y.Z` section of RELEASE_NOTES.md and renders it as the HTML subset
  *  the Marketplace accepts for change notes. Falls back to a generic line if the file is missing. */
 fun latestReleaseNotesHtml(): String {
@@ -321,29 +540,51 @@ fun latestReleaseNotesHtml(): String {
     val lines = notes.readLines()
     val start = lines.indexOfFirst { it.startsWith("## v") }
     if (start < 0) return "See RELEASE_NOTES.md."
-    val end = lines.drop(start + 1).indexOfFirst { it.startsWith("## v") }.let {
-        if (it < 0) lines.size else start + 1 + it
-    }
+    val end =
+        lines.drop(start + 1).indexOfFirst { it.startsWith("## v") }.let {
+            if (it < 0) lines.size else start + 1 + it
+        }
 
-    fun inline(s: String): String = s
-        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        .replace(Regex("\\*\\*(.+?)\\*\\*"), "<b>$1</b>")
-        .replace(Regex("`(.+?)`"), "<code>$1</code>")
+    fun inline(s: String): String =
+        s
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace(Regex("\\*\\*(.+?)\\*\\*"), "<b>$1</b>")
+            .replace(Regex("`(.+?)`"), "<code>$1</code>")
 
     val html = StringBuilder()
     var inList = false
-    fun closeList() { if (inList) { html.append("</ul>"); inList = false } }
+
+    fun closeList() {
+        if (!inList) return
+        html.append("</ul>")
+        inList = false
+    }
 
     for (raw in lines.subList(start, end)) {
         val line = raw.trim()
         when {
-            line.startsWith("## v") -> html.append("<p><b>").append(inline(line.removePrefix("## ").trim())).append("</b></p>")
-            line == "---" || line.isEmpty() -> closeList()
+            line.startsWith("## v") -> {
+                html.append("<p><b>").append(inline(line.removePrefix("## ").trim())).append("</b></p>")
+            }
+
+            line == "---" || line.isEmpty() -> {
+                closeList()
+            }
+
             line.startsWith("- ") -> {
-                if (!inList) { html.append("<ul>"); inList = true }
+                if (!inList) {
+                    html.append("<ul>")
+                    inList = true
+                }
                 html.append("<li>").append(inline(line.removePrefix("- ").trim())).append("</li>")
             }
-            else -> { closeList(); html.append("<p>").append(inline(line)).append("</p>") }
+
+            else -> {
+                closeList()
+                html.append("<p>").append(inline(line)).append("</p>")
+            }
         }
     }
     closeList()

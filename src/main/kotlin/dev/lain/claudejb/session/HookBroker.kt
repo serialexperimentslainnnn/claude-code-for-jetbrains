@@ -91,12 +91,14 @@ class HookBroker(
                 is HookDecision.Continue -> {
                     put("continue", true)
                 }
+
                 is HookDecision.Block -> when (hookEventName) {
                     "PreToolUse" -> putJsonObject("hookSpecificOutput") {
                         put("hookEventName", "PreToolUse")
                         put("permissionDecision", "deny")
                         put("permissionDecisionReason", decision.reason)
                     }
+
                     "PermissionRequest" -> putJsonObject("hookSpecificOutput") {
                         put("hookEventName", "PermissionRequest")
                         putJsonObject("decision") {
@@ -104,17 +106,20 @@ class HookBroker(
                             put("message", decision.reason)
                         }
                     }
+
                     else -> {
                         put("decision", "block")
                         put("reason", decision.reason)
                     }
                 }
+
                 is HookDecision.Modify -> when (hookEventName) {
                     "PreToolUse" -> putJsonObject("hookSpecificOutput") {
                         put("hookEventName", "PreToolUse")
                         put("permissionDecision", "allow")
                         put("updatedInput", decision.updatedInput)
                     }
+
                     "PermissionRequest" -> putJsonObject("hookSpecificOutput") {
                         put("hookEventName", "PermissionRequest")
                         putJsonObject("decision") {
@@ -122,11 +127,13 @@ class HookBroker(
                             put("updatedInput", decision.updatedInput)
                         }
                     }
+
                     else -> {
                         // Generic events cannot rewrite input; degrade to continue.
                         put("continue", true)
                     }
                 }
+
                 is HookDecision.Annotate -> {
                     put("systemMessage", decision.systemMessage)
                     // The events whose specific output carries additionalContext get it there too, so the
@@ -152,15 +159,19 @@ class HookBroker(
             "Notification" -> ctx.message?.takeIf { it.isNotBlank() }?.let {
                 effects += HookSideEffect.NotifyUser(it, ctx.title)
             }
+
             "FileChanged" -> ctx.filePath?.takeIf { it.isNotBlank() }?.let {
                 effects += HookSideEffect.RefreshFile(it, ctx.fileEvent)
             }
+
             "SessionStart", "SessionEnd", "Stop" ->
                 effects += HookSideEffect.Marker(ctx.hookEventName, ctx.source ?: ctx.reason)
+
             "PreCompact" ->
                 effects += HookSideEffect.TranscriptNote(
                     "Compacting conversation" + (ctx.trigger?.let { " ($it)" } ?: "") + "…",
                 )
+
             "PostCompact" ->
                 effects += HookSideEffect.TranscriptNote("Conversation compacted.")
         }
@@ -176,8 +187,13 @@ class HookBroker(
     companion object {
         /** Events whose `*HookSpecificOutput` exposes `additionalContext` (so an annotation reaches the model). */
         private val ANNOTATABLE_EVENTS = setOf(
-            "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
-            "UserPromptSubmit", "SessionStart", "Notification",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "UserPromptSubmit",
+            "SessionStart",
+            "Notification",
         )
 
         /**

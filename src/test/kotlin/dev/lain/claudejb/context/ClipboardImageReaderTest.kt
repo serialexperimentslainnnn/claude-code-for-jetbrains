@@ -41,7 +41,10 @@ class ClipboardImageReaderTest {
 
     @Test
     fun `file-list with an image file returns its bytes and name`() {
-        val tmp = File.createTempFile("clip", ".png").apply { writeBytes(pngBytes); deleteOnExit() }
+        val tmp = File.createTempFile("clip", ".png").apply {
+            writeBytes(pngBytes)
+            deleteOnExit()
+        }
         val t = SingleFlavor(DataFlavor.javaFileListFlavor) { listOf(tmp) }
 
         val result = ClipboardImageReader.readImageBytes(t)

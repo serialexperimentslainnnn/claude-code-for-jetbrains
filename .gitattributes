@@ -1,0 +1,51 @@
+# Line endings and binary handling (git-workflow-standards §5.2, §5.3).
+#
+# This repository is developed on Linux but SHIPS AND IS TESTED ON WINDOWS (ClaudeBinaryLocator resolves npm,
+# scoop, volta and chocolatey install paths; TerminalLauncher emits a PowerShell call operator). Without an
+# explicit policy, a contributor cloning on Windows with core.autocrlf=true rewrites every checked-in file's
+# line endings, which turns a one-line change into a whole-file diff and silently breaks anything that is
+# byte-sensitive. Normalisation is declared here so it does not depend on each developer's local git config.
+
+# Default: let Git decide what is text, and store text as LF in the repository.
+* text=auto eol=lf
+
+# --- Scripts whose line endings are load-bearing -----------------------------------------------------------
+# A shell script or the Gradle wrapper with CRLF fails at exec time with a confusing "bad interpreter" error.
+*.sh            text eol=lf
+gradlew         text eol=lf
+bin/fake-claude text eol=lf
+
+# Windows-native scripts must keep CRLF or cmd.exe/PowerShell can misparse them.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# --- Binary: never diffed, never line-ending-converted ------------------------------------------------------
+# Plugin distribution artifacts and their detached signatures: a single byte of mangling invalidates the
+# GPG signature and the SHA-256 the release publishes.
+*.zip           binary
+*.jar           binary
+*.asc           binary
+*.gpg           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.svg           text eol=lf
+*.woff          binary
+*.woff2         binary
+
+# --- Diff readability --------------------------------------------------------------------------------------
+# Vendored frontend libraries (marked, DOMPurify, highlight.js) are minified single-line bundles. Marking them
+# linguist-vendored keeps them out of the language stats, and -diff stops a bundle bump from rendering as an
+# unreadable multi-thousand-column diff nobody can review.
+src/main/resources/jcef/marked.min.js       linguist-vendored -diff
+src/main/resources/jcef/purify.min.js       linguist-vendored -diff
+src/main/resources/jcef/highlight.min.js    linguist-vendored -diff
+
+# Lockfiles are generated: reviewers should read the manifest change, not the lockfile churn.
+package-lock.json  -diff linguist-generated
+
+# The SDK reference is protocol documentation we vendor but do not author or ship.
+node_modules/**    linguist-vendored

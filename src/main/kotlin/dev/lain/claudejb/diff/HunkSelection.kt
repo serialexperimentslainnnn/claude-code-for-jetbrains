@@ -79,12 +79,14 @@ object HunkSelection {
             originalInput.forEach { (key, value) -> put(key, value) }
             put("content", selectedText)
         }
+
         "Edit" -> buildJsonObject {
             DiffPresenter.filePathOf(originalInput)?.let { put("file_path", it) }
             put("old_string", currentText)
             put("new_string", selectedText)
             put("replace_all", false)
         }
+
         "MultiEdit" -> buildJsonObject {
             DiffPresenter.filePathOf(originalInput)?.let { put("file_path", it) }
             putJsonArray("edits") {
@@ -94,6 +96,7 @@ object HunkSelection {
                 }
             }
         }
+
         else -> originalInput
     }
 }

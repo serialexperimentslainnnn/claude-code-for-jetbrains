@@ -1,0 +1,89 @@
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/main"
+      ],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_signatures"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "_comment": [
+          "required_approving_review_count is 0 ON PURPOSE, and it is not a weakened gate \u2014 it is the",
+          "only value that is not a deadlock. GitHub does not let an author approve their own pull",
+          "request, so on a single-maintainer repository 'require 1 approval' with no bypass actors means",
+          "NOTHING can ever be merged: no direct push, no approval available, no way around it.",
+          "",
+          "What still holds, and is what the gate is actually made of here: a pull request is required, it",
+          "must be up to date, and every status check must pass. Those are mechanical and cannot be",
+          "talked out of. A human approval is a real control when there IS a second human; requiring one",
+          "that cannot exist is theatre that locks the door from the inside.",
+          "",
+          "RAISE THIS TO 1 the moment a second maintainer has write access \u2014 and re-enable",
+          "require_code_owner_review and require_last_push_approval at the same time, both of which are",
+          "off for the same reason."
+        ],
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "allowed_merge_methods": [
+          "merge"
+        ]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "JVM tests"
+          },
+          {
+            "context": "Static analysis"
+          },
+          {
+            "context": "Frontend tests"
+          },
+          {
+            "context": "Dependency audit"
+          },
+          {
+            "context": "CodeQL (java-kotlin)"
+          },
+          {
+            "context": "CodeQL (javascript-typescript)"
+          },
+          {
+            "context": "Plugin verifier"
+          },
+          {
+            "context": "Build plugin"
+          },
+          {
+            "context": "No bot PRs pending on develop"
+          }
+        ]
+      }
+    }
+  ]
+}
