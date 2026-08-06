@@ -72,6 +72,12 @@
           },
           {
             "context": "CodeQL (javascript-typescript)"
+          },
+          {
+            "context": "Plugin verifier"
+          },
+          {
+            "context": "Build plugin"
           }
         ]
       }

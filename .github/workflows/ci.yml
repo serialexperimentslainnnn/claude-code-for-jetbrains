@@ -231,9 +231,16 @@ jobs:
     # was re-verifying a commit nobody was about to merge. The gate is unchanged: it is still a required check
     # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
     # is a real cost and the reason it ran everywhere until now.
+    # Where the exhaustive check belongs: the develop -> main door, plus the protected branches themselves.
+    #
+    # NOT on topic branches and NOT on pull requests into develop — those iterate constantly and this job is
+    # ~10 minutes and 1.25 GB of IDE downloads. It DOES run on any pull request targeting main, because that
+    # is the merge that publishes, and it is the only gate that catches a BINARY incompatibility across the
+    # 251 -> 262 range (compiling against 252 proves nothing about 262 — see the 4.4.1 /login regression).
     if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
