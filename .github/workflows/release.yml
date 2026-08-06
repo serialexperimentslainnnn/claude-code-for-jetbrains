@@ -7,9 +7,12 @@
 #   PR develop -> main  ->  tests  ->  merge  ->  tag + GitHub Release  ->  Marketplace, FROM that tag
 #
 # The tag is cut before the artifact is built, and the build then runs from the tag rather than from
-# `main`. That ordering is the point: the tag is the identity of the release (ADR 0001 §3), and `main`
-# is a moving ref — a merge landing between `guard` and `publish` would otherwise be silently included
-# in a release named after a different tree.
+# `main`. That ordering is the point: the tag is the identity of the release (ADR 0001 §3), so the
+# artifact is produced from the ref that names it rather than being stamped afterwards.
+#
+# (An earlier version of this note claimed `main` is a moving ref that a later merge could slip into the
+# release. That was wrong: `actions/checkout` defaults to `github.sha`, so every job here was already
+# pinned to the triggering commit. Checking the tag out is a provenance statement, not a race fix.)
 #
 # It is NOT two workflows chained by the tag push, and that is a constraint rather than a preference:
 # a tag pushed with the GITHUB_TOKEN does not create a workflow run
@@ -194,9 +197,10 @@ jobs:
       # This is safe to do this early ONLY because the whole job is behind the `marketplace` environment:
       # nothing here runs until a human approves, so a tag can no longer appear for a release nobody
       # authorised. What it can still do is outlive a FAILED publish, and published tags are immutable
-      # here. That is deliberate and the recovery is to re-run this job on the existing tag: the tag step
-      # is a no-op when the ref already exists, and `guard` only blocks a *new* run for an
-      # already-released version.
+      # here. That is deliberate, and the recovery is to re-run THIS JOB on the existing tag — the tag
+      # step below detects the ref and skips re-cutting it. Note it has to be a JOB re-run and not a
+      # workflow re-run: `guard` would see the tag on the remote and correctly report the version as
+      # already released.
       - name: Import the CI signing key
         run: |
           printf '%s' "${{ secrets.GPG_SIGNING_KEY }}" | gpg --batch --import
@@ -229,9 +233,22 @@ jobs:
           git config gpg.program /tmp/gpg-loopback
           git config user.signingkey "$GPG_FPR"
 
-          git tag -s "$TAG" -m "Release $TAG — published by the release workflow from $GITHUB_SHA"
-          git verify-tag "$TAG"   # never push a signature we have not checked ourselves
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          # Idempotent, and this is the ONLY thing that makes the documented recovery real.
+          #
+          # If the publish fails after the tag is cut, the recovery is to re-run THIS JOB — re-running the
+          # whole workflow cannot work, because `guard` would now see the tag on the remote and correctly
+          # decide the version is already released. A job re-run reuses guard's output and lands here with
+          # the tag already present: `fetch-depth: 0` fetches tags, so a bare `git tag -s` exits non-zero,
+          # the job dies before `gh release upload --clobber`, and the release is stuck needing a human to
+          # delete an immutable tag. Which is the exact situation immutability exists to prevent.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::notice::$TAG already exists — re-running on an existing tag, not re-cutting it."
+            git verify-tag "$TAG"
+          else
+            git tag -s "$TAG" -m "Release $TAG — published by the release workflow from $GITHUB_SHA"
+            git verify-tag "$TAG"   # never push a signature we have not checked ourselves
+            git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          fi
 
       # Build from the TAG, not from whatever `main` happens to be. On this workflow's primary path the two
       # are the same commit, and checking the tag out anyway is what makes that a fact rather than a race:
