@@ -59,7 +59,17 @@ jobs:
     name: JVM tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     env:
       # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
@@ -111,7 +121,17 @@ jobs:
     name: Static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     env:
       # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
@@ -175,7 +195,17 @@ jobs:
     name: Frontend tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     env:
       # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
@@ -211,7 +241,17 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     env:
       # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
@@ -244,7 +284,17 @@ jobs:
     name: Plugin verifier
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     env:
       # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
