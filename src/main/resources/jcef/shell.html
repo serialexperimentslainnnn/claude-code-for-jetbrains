@@ -90,24 +90,45 @@
           <div class="boot-mark" aria-hidden="true">✶</div>
           <div class="auth-title">Sign in to Claude</div>
 
+          <!-- Two sign-ins, both a BUTTON. The Console one is what an organisation needs: its OAuth consent
+             includes `org:create_api_key`, so the binary provisions a key for Claude Code itself — nobody
+             pastes a credential and nobody has to distribute one. Typing a key by hand is therefore the
+             exception now, not the second option, and lives behind the disclosure below. -->
           <div class="auth-step" data-step="idle">
             <button id="auth-sub" type="button" class="btn primary auth-primary">
               Sign in with your Claude subscription
             </button>
-            <div class="auth-hint">Opens your browser; the whole flow stays in this card.</div>
-            <div class="auth-divider" aria-hidden="true">or</div>
-            <label class="auth-label" for="auth-key">Use an Anthropic API key</label>
-            <div class="auth-row">
-              <input
-                id="auth-key"
-                type="password"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="sk-ant-…"
-              />
-              <button id="auth-key-use" type="button" class="btn">Use API key</button>
+            <button id="auth-console" type="button" class="btn auth-primary">
+              Sign in with Anthropic Console
+            </button>
+            <div class="auth-hint">
+              Opens your browser; the whole flow stays in this card. Console signs in against your
+              organization and bills API usage.
             </div>
-            <div class="auth-hint">Stored in the IDE's password safe — never in a project file.</div>
+            <div class="auth-divider" aria-hidden="true">or</div>
+            <button
+              id="auth-key-toggle"
+              type="button"
+              class="auth-quiet"
+              aria-expanded="false"
+              aria-controls="auth-key-fields"
+            >
+              Use an API key instead
+            </button>
+            <div id="auth-key-fields" hidden>
+              <label class="auth-label" for="auth-key">Anthropic API key</label>
+              <div class="auth-row">
+                <input
+                  id="auth-key"
+                  type="password"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="sk-ant-…"
+                />
+                <button id="auth-key-use" type="button" class="btn">Use API key</button>
+              </div>
+              <div class="auth-hint">Stored in the IDE's password safe — never in a project file.</div>
+            </div>
             <button id="auth-dismiss" type="button" class="auth-quiet">Skip for now</button>
           </div>
 

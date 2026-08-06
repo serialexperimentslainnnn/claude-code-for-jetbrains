@@ -246,6 +246,13 @@ object JcefBridge {
         // (UseApiKey, SubmitLoginCode) carry SECRETS: they cross the in-memory JCEF bridge only, and their
         // values must never be logged, echoed into state pushes, or appear in any error text.
         object LoginSubscription : SessionControl
+
+        /**
+         * Sign in against Anthropic Console (API-usage billing) rather than a personal subscription — the
+         * route organisations need: the consent includes `org:create_api_key`, so a corporate account is
+         * provisioned by signing in instead of by distributing a pasted key.
+         */
+        object LoginConsole : SessionControl
         data class UseApiKey(val key: String) : SessionControl
         data class SubmitLoginCode(val code: String) : SessionControl
         object CancelLogin : SessionControl
@@ -370,19 +377,18 @@ object JcefBridge {
 
         "recheckBinary" -> Msg.RecheckBinary
 
-        // The sign-in card and the dashboard account button.
+        else -> parseAuthControls(type, f)
+    }
+
+    /** The sign-in card and the account buttons. Split out of [parseSessionControls] for complexity only. */
+    private fun parseAuthControls(type: String, f: Fields): Msg? = when (type) {
         "loginSubscription" -> Msg.LoginSubscription
-
+        "loginConsole" -> Msg.LoginConsole
         "useApiKey" -> Msg.UseApiKey(f.text("key"))
-
         "submitLoginCode" -> Msg.SubmitLoginCode(f.text("code"))
-
         "cancelLogin" -> Msg.CancelLogin
-
         "dismissAuth" -> Msg.DismissAuth
-
         "logout" -> Msg.Logout
-
         else -> null
     }
 

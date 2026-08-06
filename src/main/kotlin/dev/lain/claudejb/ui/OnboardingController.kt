@@ -4,6 +4,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import dev.lain.claudejb.process.AccountProfile
 import dev.lain.claudejb.process.ApiKeyApproval
 import dev.lain.claudejb.process.AuthCli
 import dev.lain.claudejb.process.BinaryInstall
@@ -80,7 +81,12 @@ internal class OnboardingController(
 
             JcefBridge.Msg.LoginSubscription -> {
                 pushAuthState("waiting")
-                session.startLogin()
+                session.startLogin(LoginCoordinator.Mode.SUBSCRIPTION)
+            }
+
+            JcefBridge.Msg.LoginConsole -> {
+                pushAuthState("waiting")
+                session.startLogin(LoginCoordinator.Mode.CONSOLE)
             }
 
             is JcefBridge.Msg.UseApiKey -> useApiKey(m.key)
@@ -215,6 +221,7 @@ internal class OnboardingController(
                 // Its own provider slot — the same one Settings ▸ Provider uses, so the card and that field
                 // are two doors onto one credential. A DeepSeek key lives under its own id and is untouched.
                 ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, trimmed)
+                ClaudeSettings.getInstance(project).state.signedOut = false
                 session.dismissLoginCard()
                 session.restart()
             }
@@ -230,17 +237,22 @@ internal class OnboardingController(
      * the binary would additionally destroy whatever the user's own terminal CLI had, which is not this
      * button's business. Off-EDT for the file work; the restart's probe raises the sign-in card again.
      */
-    private fun logout() {
+    internal fun logout() {
         // STOP FIRST, and this order is the whole correctness of the button.
         //
         // The running binary holds the old identity, so leaving it alive means "signed out" while the very
         // next turn still works. Worse, `stop()` harvests the credentials file back into the safe — so
         // clearing first and stopping afterwards could put the credential straight back and silently undo
         // the logout. Stop, then clear, then start into a session that has nothing to run as.
+        //
+        // The flag goes first and synchronously: the boot watcher ticks every few seconds and would happily
+        // relaunch the session in the window between stopping it and the credential actually being cleared.
+        ClaudeSettings.getInstance(project).state.signedOut = true
         session.stop()
         ApplicationManager.getApplication().executeOnPooledThread {
             SecretStore.clearAll()
             CredentialsVault.clear()
+            AccountProfile.invalidate()
             // The Anthropic key too — it is one of this plugin's identities. Other providers' keys are NOT
             // cleared: signing out of Claude is not a reason to lose an unrelated DeepSeek credential.
             ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, "")

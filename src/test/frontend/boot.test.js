@@ -200,6 +200,34 @@ describe('sign-in card', () => {
     expect(step('idle').hidden).toBe(true);
   });
 
+  it('Console click starts the org sign-in — the route that mints its own API key', () => {
+    win.cc.state({ running: false, needsLogin: true });
+    win.document.getElementById('auth-console').click();
+    expect(sent).toContainEqual({ type: 'loginConsole' });
+    expect(step('waiting').hidden).toBe(false);
+  });
+
+  it('the API key field is collapsed behind a disclosure — a button is the primary route now', () => {
+    win.cc.state({ running: false, needsLogin: true });
+    const fields = win.document.getElementById('auth-key-fields');
+    const toggle = win.document.getElementById('auth-key-toggle');
+    expect(fields.hidden).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    toggle.click();
+    expect(fields.hidden).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    // Still fully wired once revealed: the key route must not become second-class by being hidden.
+    const input = win.document.getElementById('auth-key');
+    input.value = 'sk-ant-secret';
+    win.document.getElementById('auth-key-use').click();
+    expect(sent).toContainEqual({ type: 'useApiKey', key: 'sk-ant-secret' });
+    expect(input.value).toBe('');
+
+    toggle.click();
+    expect(fields.hidden).toBe(true);
+  });
+
   it('url and code events both land on the ONE browser step — the code is optional, not a stage', () => {
     win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });

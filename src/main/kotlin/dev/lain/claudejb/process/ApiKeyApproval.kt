@@ -65,7 +65,7 @@ object ApiKeyApproval {
      * @return true when the file now records the approval.
      */
     fun approve(key: String): Boolean {
-        if (homeOverride == null && ApplicationManager.getApplication()?.isUnitTestMode != false) return false
+        if (inert()) return false
         val suffix = suffixOf(key).takeIf { it.isNotBlank() } ?: return false
         val file = configFile()
         val root = readConfig(file) ?: return false
@@ -107,6 +107,29 @@ object ApiKeyApproval {
                 },
             )
         }
+
+    /**
+     * Refuses to touch the developer's real `~/.claude.json` from a test JVM — the same rule, and the same
+     * hard-won reason, as [CredentialsVault.inertHere]: this file is the user's live CLI config.
+     */
+    internal fun inert(): Boolean =
+        homeOverride == null && ApplicationManager.getApplication()?.isUnitTestMode != false
+
+    /**
+     * `~/.claude.json` parsed, or null when it is absent or not readable JSON. Shared with [ConsoleApiKey],
+     * which amends the same file: a corrupt read must never become a corrupt write, and that rule is worth
+     * having in exactly one place.
+     */
+    internal fun readConfig(): JsonObject? = readConfig(configFile())
+
+    /** Writes [root] back over `~/.claude.json`, pretty-printed like the CLI does. */
+    internal fun writeConfig(root: JsonObject): Boolean = runCatching {
+        configFile().writeText(writer.encodeToString(JsonObject.serializer(), root))
+        true
+    }.getOrElse {
+        log.warn("could not write ~/.claude.json", it)
+        false
+    }
 
     private fun readConfig(file: File): JsonObject? {
         if (!file.isFile) return null

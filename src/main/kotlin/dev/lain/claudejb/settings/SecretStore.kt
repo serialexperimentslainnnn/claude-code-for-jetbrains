@@ -41,7 +41,18 @@ object SecretStore {
      */
     const val CREDENTIALS_JSON = "CLAUDE_CREDENTIALS_JSON"
 
-    private val NAMES = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
+    /**
+     * The signed-in account (email, organization) — NOT a credential and NOT an auth mode, which is exactly
+     * why it is kept out of [EXCLUSIVE]: storing it must never evict the credential beside it. Held here
+     * rather than re-read from `~/.claude.json` each time so the dashboard can name the account even once
+     * that file is gone.
+     */
+    const val ACCOUNT_PROFILE = "CLAUDE_ACCOUNT_PROFILE"
+
+    /** Auth modes: mutually exclusive by construction — setting one clears the others. */
+    private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
+
+    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE
 
     /** The subset that is injected into the child environment — [CREDENTIALS_JSON] is file-shaped, not env. */
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
@@ -60,7 +71,9 @@ object SecretStore {
     fun set(name: String, value: String) {
         require(name in NAMES) { "unknown secret: $name" }
         PasswordSafe.instance.set(attributes(name), Credentials(name, value))
-        NAMES.filter { it != name }.forEach { clear(it) }
+        // Only an auth mode evicts the other auth modes. The account profile sits alongside whichever one
+        // is in use — clearing the credential every time we learned the user's email would be absurd.
+        if (name in EXCLUSIVE) EXCLUSIVE.filter { it != name }.forEach { clear(it) }
     }
 
     fun clear(name: String) {

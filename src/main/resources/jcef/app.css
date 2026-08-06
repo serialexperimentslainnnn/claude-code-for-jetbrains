@@ -2635,6 +2635,17 @@ body.reduced-motion .boot-dots::after {
 .auth-primary {
   font-weight: 600;
 }
+/* The collapsed API-key route. It needs its own display rule (and the [hidden] override that always goes
+   with one) because .auth-step is a flex column and this is a nested group inside it. */
+#auth-key-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+#auth-key-fields[hidden] {
+  display: none;
+}
 .auth-hint {
   font-size: 11px;
   color: var(--dim);

@@ -60,6 +60,37 @@ class LoginOutputParserTest {
         )
     }
 
+    // ── the frames the login TUI renders before exiting ──────────────────────────────────────────────────
+
+    /** The frame the binary renders on success under a PTY, right before it exits 0. */
+    private val successScreen =
+        "${esc}[2mLogged in as dev@example.com${esc}[0m\r\n" +
+            "${esc}[32mLogin successful. Press ${esc}[1mEnter${esc}[0m${esc}[32m to continue…${esc}[0m"
+
+    @Test
+    fun `surfaces the binary's own wording for a failed OAuth exchange`() {
+        val screen = "${esc}[31mOAuth error: invalid_grant$esc[0m\r\nPress Enter to retry."
+        assertTrue(LoginOutputParser.looksLikeFailure(screen))
+        assertEquals("OAuth error: invalid_grant", LoginOutputParser.resultMessage(screen, success = false))
+    }
+
+    @Test
+    fun `result message drops the terminal-only keypress instruction`() {
+        assertEquals(
+            "Login successful.",
+            LoginOutputParser.resultMessage(successScreen, success = true),
+        )
+    }
+
+    @Test
+    fun `redactSecrets strips ANSI and masks tokens`() {
+        val token = "sk-ant-oat01-" + "c".repeat(40)
+        val out = LoginOutputParser.redactSecrets("$esc[32mtoken: $token$esc[0m")
+        assertFalse(out.contains(token))
+        assertFalse(out.contains(esc))
+        assertTrue(out.contains("sk-ant-…"))
+    }
+
     @Test
     fun `result falls back to generic wording when no marker line is present`() {
         assertEquals("You're signed in.", LoginOutputParser.resultMessage("(some unrelated frame)", success = true))

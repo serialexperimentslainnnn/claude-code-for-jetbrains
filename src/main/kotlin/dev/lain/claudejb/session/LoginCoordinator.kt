@@ -3,9 +3,11 @@ package dev.lain.claudejb.session
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import dev.lain.claudejb.process.AuthCli
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.process.ClaudeLoginFlow
 import dev.lain.claudejb.process.TerminalLauncher
@@ -104,6 +106,9 @@ class LoginCoordinator(
      */
     @Volatile private var signingIn = false
 
+    /** The sign-in the user asked for; read when the flow is actually spawned. */
+    @Volatile private var loginMode = Mode.SUBSCRIPTION
+
     /**
      * Feeds the card-entered authorization code to the running flow, with a WATCHDOG: if the flow gives no
      * verdict within [VERIFY_TIMEOUT_MS], it is cancelled and the card told so. A submit that hangs must
@@ -165,8 +170,23 @@ class LoginCoordinator(
             .notify(project)
     }
 
-    /** Runs the OAuth login through the three paths documented on this class. Also the target of a typed `/login`. */
-    fun start() {
+    /**
+     * Which sign-in to run. Both are `claude auth login`; the flag decides what the OAuth grant is for.
+     *
+     * [CONSOLE] is the one organisations need: it signs in against Anthropic Console with API-usage
+     * billing rather than a personal Claude subscription, and the consent it requests includes
+     * `org:create_api_key` — so a corporate account is provisioned by signing in, with no key pasted by
+     * hand and none to distribute. [SSO] forces the SSO leg for org accounts that require it.
+     */
+    enum class Mode(val args: List<String>) {
+        SUBSCRIPTION(listOf("auth", "login")),
+        CONSOLE(listOf("auth", "login", "--console")),
+        SSO(listOf("auth", "login", "--sso")),
+    }
+
+    /** Runs the OAuth login through the three paths documented on this class; also a typed `/login`. */
+    fun start(mode: Mode = Mode.SUBSCRIPTION) {
+        loginMode = mode
         val settings = ClaudeSettings.getInstance(project)
         // /login is the Anthropic OAuth flow — only meaningful for the official Anthropic provider. For a
         // third-party provider, auth is its own API key (configured in Settings), not an OAuth login.
@@ -195,7 +215,7 @@ class LoginCoordinator(
             }
             notifyError(
                 "Couldn't start the sign-in flow. Run this in a terminal, then restart the chat:\n" +
-                    TerminalLauncher.loginCommand(binary.absolutePath),
+                    TerminalLauncher.loginCommand(binary.absolutePath, loginMode.args),
             )
         }
     }
@@ -221,7 +241,7 @@ class LoginCoordinator(
         // credentials file — `auth login` finishes by writing it, and taking it away mid-flow is what broke
         // the browser leg and left code-paste as the only route that worked.
         signingIn = true
-        val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env, args = listOf("auth", "login"))
+        val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env, args = loginMode.args)
         val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
             override fun onAuthUrl(url: String) {
                 authUrl = url
@@ -251,23 +271,10 @@ class LoginCoordinator(
                 flow = null
                 authUrl = null
                 if (success) {
-                    // `auth login` wrote its credentials to ~/.claude/.credentials.json — plaintext on
-                    // Linux and readable by anything running as the user. Take it into the IDE's encrypted
-                    // safe and delete it immediately; the launch path writes it back 0600 for the session
-                    // and harvests it again at teardown, so it is on disk only while a session runs.
-                    // OUR harvest, while the guard still holds — so the credential lands in the safe here
-                    // rather than being raced for by the watcher.
-                    val vaulted = dev.lain.claudejb.process.CredentialsVault.harvest()
-                    signingIn = false
-                    cardUi.onLoginResult(true, message)
-                    notifyInfo(
-                        if (vaulted) {
-                            "Signed in. Your credentials were moved into the IDE's password safe."
-                        } else {
-                            "Signed in to Claude."
-                        },
-                    )
-                    restartSession() // relaunch on the fresh credentials
+                    completeSignIn(binary) { ok, text ->
+                        cardUi.onLoginResult(ok, if (ok) message else text)
+                        if (ok) notifyInfo(text) else notifyError(text)
+                    }
                 } else {
                     signingIn = false
                     cardUi.onLoginResult(false, message)
@@ -288,7 +295,7 @@ class LoginCoordinator(
     private fun openTerminal(binary: File): Boolean {
         val opened = TerminalLauncher.openAndRunCommand(
             project,
-            TerminalLauncher.loginArgv(binary.absolutePath),
+            listOf(binary.absolutePath) + loginMode.args,
             "claude login",
         )
         if (opened) {
@@ -319,7 +326,7 @@ class LoginCoordinator(
         // extras on top), so the base environment has to be merged in here or the binary loses PATH/HOME entirely.
         val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
         signingIn = true // same guard as the card flow, raised before the spawn
-        val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
+        val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env, args = loginMode.args)
         val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
             override fun onAuthUrl(url: String) {
                 // Same as the card flow: the binary's own tab is the one that completes the sign-in, so we
@@ -333,11 +340,7 @@ class LoginCoordinator(
                 flow = null
                 authUrl = null
                 if (success) {
-                    // Harvest under the guard, then lower it — same ordering as the card flow.
-                    dev.lain.claudejb.process.CredentialsVault.harvest()
-                    signingIn = false
-                    notifyInfo(message)
-                    restartSession() // pick up the new credentials
+                    completeSignIn(binary) { ok, text -> if (ok) notifyInfo(text) else notifyError(text) }
                 } else {
                     signingIn = false
                     notifyError(message)
@@ -346,6 +349,71 @@ class LoginCoordinator(
         })
         if (started) flow = ptyFlow else signingIn = false
         return started
+    }
+
+    /**
+     * Everything that happens **after** `claude auth login` exits 0, in the order it has to happen in:
+     *
+     *  1. **verify** — `claude auth status` (also exit-0/`loggedIn`), because "the login command succeeded" and
+     *     "this machine now has a login" are two different claims and only the second one is worth acting on.
+     *     A rc-0 login with no identity behind it would otherwise be banked as one, and the failure would only
+     *     surface later as a session that dies on its first turn;
+     *  2. **take custody** — the credential the binary just wrote goes into the IDE's encrypted safe and is
+     *     deleted from disk ([takeCustodyOfCredential]), with the account banked while the config is freshest;
+     *  3. **launch** — the session starts normally, on what we now hold.
+     *
+     * Steps 1–2 spawn a process and touch files, so they run off the EDT; [done] is invoked back on the EDT
+     * with the outcome and the line to show. The [signingIn] guard is only lowered once all of it is over —
+     * the boot watcher must not go looking for that credentials file while we are still moving it.
+     */
+    private fun completeSignIn(binary: File, done: (Boolean, String) -> Unit) {
+        val env = ClaudeSettings.getInstance(project).resolveEnv()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val verified = AuthCli.status(binary, env)?.loggedIn == true
+            val vaulted = if (verified) {
+                dev.lain.claudejb.process.AccountProfile.capture()
+                ClaudeSettings.getInstance(project).state.signedOut = false
+                takeCustodyOfCredential()
+            } else {
+                log.warn("'auth login' exited 0 but 'auth status' reports no login — not banking a credential")
+                false
+            }
+            edt {
+                signingIn = false
+                done(
+                    verified,
+                    when {
+                        !verified -> "Signed in, but Claude Code still reports no account. Please try again."
+                        vaulted -> "Signed in. Your credentials were moved into the IDE's password safe."
+                        else -> "Signed in to Claude."
+                    },
+                )
+                if (verified) restartSession() // launch on what we now hold
+            }
+        }
+    }
+
+    /**
+     * Moves whatever credential the completed sign-in left on disk into the IDE's encrypted storage, and
+     * deletes the on-disk copy. One place for both sign-in modes, because they leave DIFFERENT things behind:
+     *
+     *  - **subscription** → OAuth tokens in `~/.claude/.credentials.json` → [CredentialsVault];
+     *  - **Console** → a freshly minted API key as `primaryApiKey` in `~/.claude.json` → [ConsoleApiKey],
+     *    filed in the Anthropic provider slot (the same one Settings ▸ Provider and the card's API-key field
+     *    use, so there is one credential and three doors onto it) and approved for non-interactive use, since
+     *    an unapproved key is refused under `--print` — see [ApiKeyApproval].
+     *
+     * Both are attempted regardless of the requested mode: `--sso` can land on either, and a mode that left
+     * nothing behind simply finds nothing.
+     *
+     * @return true when something was taken into the safe.
+     */
+    private fun takeCustodyOfCredential(): Boolean {
+        val vaulted = dev.lain.claudejb.process.CredentialsVault.harvest()
+        val consoleKey = dev.lain.claudejb.process.ConsoleApiKey.harvest() ?: return vaulted
+        dev.lain.claudejb.process.ApiKeyApproval.approve(consoleKey)
+        ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, consoleKey)
+        return true
     }
 
     /** EDT-only. Asks for the authorization code and feeds it to the running [ClaudeLoginFlow] (or cancels it). */

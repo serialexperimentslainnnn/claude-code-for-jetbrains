@@ -600,6 +600,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private var configDir: File? = null
 
     /**
+     * Whether the live process was launched with `--resume`. Read in [onTerminated]: a resumed launch that
+     * dies before the handshake is a conversation the binary cannot find, which is a recoverable condition
+     * (drop the id, open a fresh one) and not the generic "it exited" failure.
+     */
+    @Volatile
+    private var resumedLaunch = false
+
+    /**
      * Whether this session has an identity to run as — checked BEFORE spawning anything, since that is a
      * question about what we hold, not about what the binary can do.
      *
@@ -614,8 +622,44 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
         if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
         val explicit = settings.resolveEnv()
-        return SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit
+        if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return true
+        // An explicit Log out outranks the binary's own login: otherwise clearing our safe changes nothing
+        // the user can see, because the binary still holds one and the session starts straight back up.
+        if (settings.state.signedOut) return false
+        return binaryHoldsOwnLogin(settings)
     }
+
+    /**
+     * Last resort: does the BINARY hold a login of its own?
+     *
+     * This is what makes the plugin work off Linux. The vault only ever engages when there is a plaintext
+     * `~/.claude/.credentials.json` to take custody of — which is the Linux situation. On macOS the binary
+     * keeps its credentials in the **Keychain** and writes no such file, so a vault-only view of the world
+     * concludes "signed out" no matter how many times the user signs in: the login card would reappear
+     * immediately after every successful sign-in, forever. Windows behaves the same wherever the binary uses
+     * a store rather than a file.
+     *
+     * So when we hold nothing, we ask instead of assuming. A binary with its own valid login is simply left
+     * to use it: no vault, no config dir, no environment token — and, because it authenticates from its own
+     * store, the dashboard gets the complete account and plan picture there too.
+     *
+     * Throttled hard ([OWN_LOGIN_TTL_MS]): this spawns a process, and the caller polls every few seconds.
+     */
+    private fun binaryHoldsOwnLogin(settings: ClaudeSettings): Boolean {
+        val now = System.currentTimeMillis()
+        ownLoginCheckedAt.takeIf { now - it < OWN_LOGIN_TTL_MS }?.let { return binaryOwnLogin }
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return false
+        // The RAW settings env, deliberately: overlaying our own credentials would be asking the binary
+        // whether IT is signed in while handing it ours.
+        val status = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
+        binaryOwnLogin = status?.loggedIn == true
+        ownLoginCheckedAt = now
+        return binaryOwnLogin
+    }
+
+    @Volatile private var binaryOwnLogin = false
+
+    @Volatile private var ownLoginCheckedAt = 0L
 
     /**
      * Re-evaluates which screen this tab should be showing, from scratch. Called periodically while no
@@ -796,6 +840,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
         // launch is stale — don't spawn an orphan process nothing will ever tear down.
         if (launchGen != generation) return
+        resumedLaunch = resume
         val opts = launchOptions()
         val proc = ClaudeProcess(
             binary = binary,
@@ -2190,6 +2235,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // callback belongs to the old process and must NOT tear down the freshly-started session (which would
         // null `ready`, failAll the new initialize, and print "Session ended"). The current generation wins.
         if (gen != generation) return
+        // Read BEFORE the teardown below clears it: a resume that failed is one that died without ever
+        // answering the handshake. A process that was up and working and then crashed is an ordinary failure,
+        // and its session id is still good.
+        val staleResume = resumedLaunch && !initialized
         // Flush any buffered streaming deltas (reader thread) before tearing down so trailing text isn't dropped.
         flushDeltas()
         // The process is gone: release any in-flight control callbacks so their dialogs don't hang.
@@ -2204,6 +2253,23 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             cards.clear()
             taskTracker.clear()
             hookNarrator.clear()
+            if (exitCode != 0 && staleResume) {
+                // `--resume <id>` on a conversation the binary doesn't have: it prints "No conversation found
+                // with session ID: …" and exits 1, immediately, every time (verified against 2.1.223). The boot
+                // watcher then relaunches every few seconds, so this is not one failure but an endless loop of
+                // them — a tab stuck on "Loading Claude Code…" behind a stack of identical error toasts.
+                //
+                // The id is simply stale (a session that never got a turn written, a transcript deleted
+                // elsewhere), so it is DROPPED and the tab continues as a new conversation. Restoring history
+                // is best-effort; refusing to open a chat over it is not a trade worth making.
+                log.info("resume of session $sessionId failed (exit $exitCode) — continuing as a new conversation")
+                sessionId = null
+                resumedLaunch = false
+                systemNotice("That conversation is no longer available — started a new one.")
+                fireState()
+                start(resume = false)
+                return@edt
+            }
             if (exitCode != 0) {
                 transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
                 // The user may not have this tab focused; also raise a notification so the failure isn't missed.
@@ -2304,7 +2370,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /** Runs the OAuth sign-in. Delegates to [login]; public so the composer can route a typed `/login` here. */
-    fun startLogin() = login.start()
+    fun startLogin(mode: LoginCoordinator.Mode = LoginCoordinator.Mode.SUBSCRIPTION) = login.start(mode)
 
     // The sign-in card's plumbing, one delegate each — the card lives in the panel, the flow in the
     // coordinator, and the session stays the thin orchestrator between them.
@@ -2399,6 +2465,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          *  At 60s the context meter and cost sat visibly frozen through a whole turn and only told the truth
          *  after it ended, which reads as a broken meter exactly while the user is watching it. */
         const val QUOTA_POLL_MS = 1_000
+
+        /** How long a "the binary has its own login" answer is trusted. It costs a process spawn to get. */
+        private const val OWN_LOGIN_TTL_MS = 30_000L
 
         /**
          * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating

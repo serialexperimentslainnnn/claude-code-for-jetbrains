@@ -60,6 +60,16 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
 
         @JvmField var customMcpServers: String = ""
 
+        /**
+         * The user pressed Log out and has not signed in since.
+         *
+         * Needed because the plugin will otherwise ride the binary's OWN login when it holds no credential
+         * of its own — which is what makes it work on macOS, and what would otherwise make Log out look
+         * broken: the safe is cleared, the binary's store is not, and the session simply starts again.
+         * Cleared by any successful sign-in.
+         */
+        @JvmField var signedOut: Boolean = false
+
         @JvmField var claudePath: String = ""
 
         @JvmField var nodePath: String = ""

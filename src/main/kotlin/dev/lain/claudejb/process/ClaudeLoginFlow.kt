@@ -96,7 +96,15 @@ class ClaudeLoginFlow(
         return true
     }
 
-    /** Reads the PTY until EOF, firing URL/prompt signals, then resolves the result from the exit code. */
+    /**
+     * Reads the PTY until EOF, firing URL/prompt signals, then resolves the result from the **exit code**.
+     *
+     * `claude auth login` is a one-shot command: it prints "Login successful." and EXITS 0 on its own (checked
+     * against 2.1.223, both `--claudeai` and `--console`). So there is nothing to answer and nothing to kill —
+     * the process ending IS the signal, and its status IS the verdict. Anything this reader writes into that
+     * PTY, or any kill it issues to hurry the process along, can only turn a clean 0 into something else and
+     * make a login that worked look like one that failed.
+     */
     private fun pump(proc: PtyProcess, listener: Listener) {
         val acc = StringBuilder()
         val buf = ByteArray(READ_BUFFER_BYTES)
@@ -128,6 +136,9 @@ class ClaudeLoginFlow(
 
         val exit = runCatching { proc.waitFor() }.getOrDefault(-1)
         val out = acc.toString()
+        // The whole PTY transcript, ANSI stripped and tokens masked — without it a login regression leaves
+        // nothing behind but an exit code, which is how this one stayed invisible.
+        log.debug("claude login finished (exit=$exit):\n${LoginOutputParser.redactSecrets(out)}")
         val success = exit == 0 && !LoginOutputParser.looksLikeFailure(out)
         finish(listener, success, LoginOutputParser.resultMessage(out, success))
     }

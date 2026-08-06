@@ -1040,6 +1040,9 @@
         )
       );
     }
+    // NB no sign-out control here. The readout is a wrapping flex row of metrics, so a button pushed to its
+    // far end drops onto a second line the moment the numbers fill the width. Log out lives in the tool
+    // window's title bar (ClaudeToolWindowFactory.SignOutAction) and on the dashboard's account row.
     ro.removeAttribute('hidden');
     if (running && s.thinkingStatus) ro.classList.add('thinking');
     else ro.classList.remove('thinking');
@@ -1419,6 +1422,27 @@
     on('auth-sub', function () {
       setAuthStep('waiting');
       CC.send({ type: 'loginSubscription' });
+    });
+    // The organisation route: same OAuth dance, same card, but the consent grants org:create_api_key and the
+    // binary mints the key itself — nothing to paste, nothing to hand around.
+    on('auth-console', function () {
+      setAuthStep('waiting');
+      CC.send({ type: 'loginConsole' });
+    });
+    // Typing a key by hand is the exception now, so it starts collapsed. Kept rather than removed: someone
+    // holding only a bare API key must not be sent to Settings to get started.
+    on('auth-key-toggle', function (e) {
+      var fields = document.getElementById('auth-key-fields');
+      if (!fields) return;
+      var open = fields.hidden;
+      fields.hidden = !open;
+      var btn = e.currentTarget;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = open ? 'Hide the API key field' : 'Use an API key instead';
+      if (open) {
+        var input = document.getElementById('auth-key');
+        if (input) input.focus();
+      }
     });
     on('auth-key-use', function () {
       var input = document.getElementById('auth-key');

@@ -827,6 +827,13 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     fun showCommandPalette() = host.exec("window.cc.openPalette && window.cc.openPalette()")
 
+    /**
+     * Signs out — the same route the dashboard's account row takes, so there is exactly ONE logout sequence.
+     * It is delicate (stop the process first, then clear, then start into a session with no identity) and
+     * lives commented in [OnboardingController.logout]; this is a delegate, never a second copy of it.
+     */
+    fun requestLogout() = onboarding.logout()
+
     /** Pins the current editor file as a removable attachment chip (editor "Add … to Claude Context"). */
     fun mentionCurrentFile() {
         val path = EditorContextProvider.currentFilePath(project) ?: return

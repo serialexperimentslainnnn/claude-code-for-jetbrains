@@ -42,38 +42,21 @@ object RuntimeConfigDir {
 
     private const val CREDENTIALS = ".credentials.json"
 
-    /** tmpfs mounts, in preference order. Everything here is RAM-backed and gone at reboot. */
-    private val RAM_ROOTS = listOf("/dev/shm", "/run/user/${runCatching { osUid() }.getOrDefault("")}")
-
-    private fun osUid(): String = runCatching {
-        com.sun.security.auth.module.UnixSystem().uid.toString()
-    }.getOrDefault("")
-
-    /**
-     * The RAM root to build under, or null when this platform has none.
-     *
-     * Deliberately null rather than "fall back to a temp directory": a temp directory is ordinary disk, and
-     * silently writing the credential there would be exactly the thing this avoids, while looking like it
-     * had not happened. Callers fall back to the env token — reduced dashboard, nothing on disk.
-     */
-    private fun ramRoot(): File? =
-        RAM_ROOTS.asSequence().map(::File).firstOrNull { it.isDirectory && it.canWrite() }
-
-    /** True when a RAM-backed config dir is possible here at all. */
-    fun isAvailable(): Boolean = !SystemInfo.isWindows && ramRoot() != null
-
     /**
      * Builds the directory and returns it, or null when it cannot be built or the safe holds no credential.
+     *
+     * A per-session temporary directory, owner-only, deleted at teardown — the same on every platform. It
+     * was briefly special-cased onto `/dev/shm`, which bought a marginally shorter-lived file on ONE
+     * operating system in exchange for the plugin behaving differently on the two most people use. The
+     * persistent memory for all of this is the encrypted safe; what lands here is a disposable projection of
+     * it that exists only while the session runs.
      *
      * @param home the real `~` (overridable for tests, like [CredentialsVault.homeOverride]).
      */
     fun prepare(home: File = defaultHome()): File? {
         val blob = SecretStore.get(SecretStore.CREDENTIALS_JSON) ?: return null
-        val root = ramRoot() ?: return null
-        val dir = File(root, "claude-code-jb-${ProcessHandle.current().pid()}")
         return runCatching {
-            dir.deleteRecursively()
-            dir.mkdirs()
+            val dir = Files.createTempDirectory("claude-code-jb-").toFile()
             restrict(dir, owner = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE))
             linkRealConfig(home, dir)
             val creds = File(dir, CREDENTIALS)
@@ -81,8 +64,7 @@ object RuntimeConfigDir {
             restrict(creds, owner = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
             dir
         }.getOrElse {
-            log.warn("could not build the RAM config dir; falling back to the env token", it)
-            dir.deleteRecursively()
+            log.warn("could not build the session config dir; falling back to the env token", it)
             null
         }
     }
@@ -99,9 +81,21 @@ object RuntimeConfigDir {
             runCatching { Files.createSymbolicLink(File(dir, entry.name).toPath(), entry.toPath()) }
         }
         // The account profile (email, organization) and the API-key approvals live here, NOT under ~/.claude.
+        // Symlinked when it exists, so the user's own approvals and settings come along.
         val profile = File(home, ".claude.json")
         if (profile.exists()) {
             runCatching { Files.createSymbolicLink(File(dir, ".claude.json").toPath(), profile.toPath()) }
+            return
+        }
+        // No file — a fresh machine, or one where the plugin is the only thing that ever signed in. The
+        // account we banked in the safe at sign-in is written back out, so the binary still knows who it is
+        // and the dashboard names the account. The SAFE is the persistent memory for this; the file is a
+        // disposable projection of it.
+        AccountProfile.storedAccountJson()?.let { account ->
+            runCatching {
+                File(dir, ".claude.json").writeText("""{"oauthAccount":$account}""")
+                restrict(File(dir, ".claude.json"), setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
+            }
         }
     }
 
