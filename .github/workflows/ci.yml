@@ -105,6 +105,14 @@ jobs:
     name: Static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Same door as the verifier: pull requests into main, and the protected branches themselves.
+    # A branch iterating towards develop runs only the two test suites; formatting, lint and coverage are
+    # settled before anything is promoted. The cost is real and worth naming — a formatting or detekt
+    # failure now lands ON develop and is fixed by a follow-up commit, instead of being caught in the PR.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -200,6 +208,13 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
+    # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
+    # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

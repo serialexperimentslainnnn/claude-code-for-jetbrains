@@ -50,13 +50,7 @@
             "context": "JVM tests"
           },
           {
-            "context": "Static analysis"
-          },
-          {
             "context": "Frontend tests"
-          },
-          {
-            "context": "Dependency audit"
           }
         ]
       }
