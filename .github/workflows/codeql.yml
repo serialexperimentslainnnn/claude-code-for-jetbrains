@@ -70,6 +70,44 @@ jobs:
           # users, and the extra precision cost is a few minutes on a free runner.
           queries: security-extended
 
+      # Give CodeQL's build tracer the filename Fedora's loader asks for.
+      #
+      # `Initialize CodeQL` exports
+      #   LD_PRELOAD=<bundle>/tools/linux64/${LIB}_${PLATFORM}_trace.so
+      # where `$LIB` and `$PLATFORM` are glibc dynamic string tokens that ld.so expands at load time — one
+      # variable covering several ABIs. Measured locally: Fedora 44's loader expands them to
+      # `lib64_x86_64`, and Ubuntu 24.04's does not resolve that form at all. CodeQL is built and tested on
+      # Ubuntu runners, so the shipped filename matches Ubuntu's expansion and Fedora asks for a name that
+      # is not in the bundle. The result is the (misleadingly calm) line
+      #
+      #   ERROR: ld.so: object '.../${LIB}_${PLATFORM}_trace.so' from LD_PRELOAD
+      #          cannot be preloaded (cannot open shared object file): ignored
+      #
+      # on every run since this job moved into a container. Compare github/codeql-action#1113, where the
+      # same message was noise and the real failure was elsewhere — which is exactly why it is worth
+      # removing rather than tolerating: a permanent ERROR in a security gate's log trains you to skim past
+      # the one that matters.
+      #
+      # The `ls` is not decoration. It is the evidence that the bundle still has the layout this assumes;
+      # deliberately not guarded with `|| true`, so a future CodeQL release that moves these files fails
+      # here loudly instead of silently going back to the old behaviour.
+      - name: Give CodeQL's tracer the name Fedora's loader expands to
+        run: |
+          set -euo pipefail
+          dir=$(ls -d /__t/CodeQL/*/x64/codeql/tools/linux64)
+          echo "tracers shipped in the bundle:"
+          ls -la "$dir"/*_trace.so
+
+          want="$dir/lib64_x86_64_trace.so"
+          if [ -e "$want" ]; then
+            echo "$want already exists — nothing to do."
+          else
+            # The 64-bit tracer, whatever it is called: everything that is not the 32-bit one.
+            src=$(ls "$dir"/*_trace.so | grep -v -- '_i386_' | head -1)
+            [ -n "$src" ] || { echo "::error::no 64-bit tracer found in $dir"; exit 1; }
+            ln -sv "$src" "$want"
+          fi
+
       # Manual build rather than autobuild: autobuild guesses, and this project's build resolves the
       # whole IntelliJ Platform. `classes` compiles main + resources without running tests twice.
       - name: Build (Kotlin)
