@@ -59,18 +59,16 @@ jobs:
     name: JVM tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          # Temurin, not the JetBrains Runtime: the JBR matters for *running* an IDE, not for compiling
-          # against the platform. The toolchain is pinned to 21 in build.gradle.kts either way.
-          distribution: temurin
-          java-version: '21'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
@@ -113,6 +111,11 @@ jobs:
     name: Static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
     # Same door as the verifier: pull requests into main, and the protected branches themselves.
     # A branch iterating towards develop runs only the two test suites; formatting, lint and coverage are
     # settled before anything is promoted. The cost is real and worth naming — a formatting or detekt
@@ -126,19 +129,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '21'
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: npm
 
       - run: npm ci
 
@@ -180,16 +175,16 @@ jobs:
     name: Frontend tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: npm
 
       # `npm ci` (not `install`): it installs exactly the committed lockfile and fails if package.json
       # and the lockfile disagree, which is the only way CI tests the dependency tree that was reviewed.
@@ -216,6 +211,11 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
     # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
     # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
     # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
@@ -228,10 +228,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: npm
 
       - run: npm ci
 
@@ -248,6 +244,11 @@ jobs:
     name: Plugin verifier
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    container: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and every run silently re-downloads what the image already has.
+      GRADLE_USER_HOME: /opt/gradle-home
     needs: [test, frontend-test]
     # The expensive one: ~10 minutes and 1.25 GB of IDE downloads. It runs where the answer is load-bearing —
     # on every pull request, and on the protected branches — and NOT on each push to a topic branch, where it
@@ -269,10 +270,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '21'
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
