@@ -78,6 +78,9 @@
           },
           {
             "context": "Build plugin"
+          },
+          {
+            "context": "No bot PRs pending on develop"
           }
         ]
       }

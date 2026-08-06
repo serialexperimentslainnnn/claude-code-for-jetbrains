@@ -276,6 +276,63 @@ jobs:
       - name: Audit the full tree (informational)
         run: npm audit || true
 
+  # Release readiness: refuse to promote develop -> main while a bot still has work in flight.
+  #
+  # A release is a claim that `develop` is a finished state. An open pull request from Claude or from
+  # Dependabot is the opposite of that claim: it is a change someone intended to be in this release,
+  # sitting one click away from being in it. Merging past it does not lose the work, it does something
+  # worse — it ships a version whose CHANGELOG was written as if that work had landed. For Dependabot
+  # specifically it also means shipping with a known dependency update sitting unmerged, which is the
+  # one class of pending change a security advisory can be written about.
+  #
+  # This is a status check and NOT a ruleset entry because it cannot be one: a GitHub ruleset can require
+  # a check, a signature or an approval, and has no vocabulary for "no other pull request exists". The
+  # gate is therefore this job, and `.github/rulesets/main.json` requires it by DISPLAY name.
+  #
+  # THE COST, stated rather than discovered: Dependabot's resting state is "has something open" — this
+  # repository's history shows long runs of them. So this gate will block releases until that queue is
+  # drained, and draining it becomes a release step. That is the intended trade (nothing ships alongside
+  # an un-merged dependency bump), but it is the kind of gate that gets bypassed if the queue is ignored
+  # for weeks. If it starts being routinely in the way, the fix is to merge Dependabot more often — not
+  # to widen the filter.
+  bot-work-in-flight:
+    name: No bot PRs pending on develop
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Not in the CI image on purpose: this job needs `gh`, which the image does not install, and needs
+    # nothing the image does provide. A bare runner ships `gh` and starts instantly.
+    permissions:
+      contents: read
+      pull-requests: read
+    # Only at the release door. On a pull request into develop this would be self-referential.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - name: Fail if Claude or Dependabot has open pull requests into develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The login is matched by PATTERN because the exact one depends on how each integration is
+          # installed: the REST API renders an app author as `app/<slug>` (`app/dependabot` is what this
+          # repository's history shows), while a bot user appears as `<name>[bot]`. Anchored rather than
+          # a bare substring, so a human whose username merely contains "claude" or "dependabot" is not
+          # caught by a release gate.
+          pending=$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --state open \
+                      --json number,title,url,author \
+                      --jq '[.[] | select(.author.login
+                                          | ascii_downcase
+                                          | test("^app/(claude|dependabot)$|^(claude|dependabot)(\\[bot\\])?$"))]')
+
+          count=$(printf '%s' "$pending" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "no bot pull requests open against develop — clear to promote."
+            exit 0
+          fi
+
+          echo "::error::$count bot pull request(s) still open against develop. Merge or close them before releasing."
+          printf '%s' "$pending" | jq -r '.[] | "  #\(.number)  \(.author.login)  \(.title)\n      \(.url)"'
+          exit 1
+
   # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
   # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
   # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
