@@ -69,7 +69,7 @@ jobs:
     # the trade is explicit: refreshing what CI has cached now means rebuilding and pushing the image,
     # which is a deliberate act rather than something that drifts between runs.
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. This requires the package to have been granted Read access to
       # THIS repository (package settings -> Manage Actions access): `packages: read` widens what the token
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -284,7 +284,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
+      # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
+      # on its own runner, to save ten minutes on the one job that runs least often.
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -360,7 +363,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

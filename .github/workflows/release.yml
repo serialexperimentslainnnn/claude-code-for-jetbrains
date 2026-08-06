@@ -107,7 +107,7 @@ jobs:
     # the branch was green on. Provisioning the JDK and Node here from separate actions meant the release
     # gate could pass or fail on a toolchain the pull request never saw.
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
