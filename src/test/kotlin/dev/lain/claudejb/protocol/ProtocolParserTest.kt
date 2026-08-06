@@ -335,7 +335,8 @@ class ProtocolParserTest {
 
     @Test
     fun `rate_limit_event becomes RateLimit`() {
-        val line = """{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","utilization":92}}"""
+        // 0.92, not 92: the event's scale is a fraction — see RateLimitInfo.utilizationPercent.
+        val line = """{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","utilization":0.92}}"""
         val event = parseOne<ClaudeEvent.RateLimit>(line)
         assertTrue(event.info.isWarning)
         assertEquals("5h", event.info.windowLabel())

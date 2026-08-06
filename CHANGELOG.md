@@ -6,10 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [5.0.0] — 2026-08-05
 
-The standards-compliance major. Not a feature release: the repository was taken through the standards
-catalogue domain by domain, and the major number reflects that the **code** changed to comply, not only the
-documentation. The break this major records is one of *process and packaging*, and it is stated plainly rather
-than hidden in a patch.
+The standards-compliance major. The repository was taken through the standards catalogue domain by domain —
+application security, licensing, accessibility, supply chain, release engineering, testing and static
+analysis — and the major number reflects that the **code** changed to comply, not only the documentation:
+**108 files, +9 699 / −3 431 lines**, of which roughly 4 100 are the JCEF front end.
+
+Compliance here is mechanised rather than asserted. Every claim this release makes is enforced by something
+that fails a build: detekt and ktlint on Kotlin, ESLint and Prettier on the shipped JavaScript, per-package
+coverage floors, a distributed-scope dependency audit, CodeQL on both languages, the plugin verifier across
+the whole supported range with deprecated-API usage as a failure level, and artifact assertions that check
+the published zip contains no npm code and does carry its third-party notices.
 
 It did not stay purely that, and saying so is cheaper than letting a reader discover it: the release also
 carries the **plan-limits panel** and a run of user-facing fixes (below). Nothing is removed or behaves
@@ -73,6 +79,41 @@ card would be the kind of small untruth that makes the rest of the document unus
 - **`ToolSearch` was missing from the `SensitiveGuard` trust allowlist**, along with `AskUserQuestion`, `Mcp` and `FileRead`/`FileEdit`/`FileWrite`. `ToolSearch` is the one that mattered: it loads the schema of every *deferred* tool, so on a session that defers them, the call that unlocks all the others was the one landing in the third-party branch. Entries are only ever **added** to that list — it is a trust allowlist, not an inventory, and a missing first-party name is precisely the 4.4.0 hard-DENY incident. Found by diffing it against a live session's real tool inventory rather than against the SDK's type names, which are *not* the runtime registry (the SDK calls them `FileRead`/`FileEdit`/`FileWrite`; the tools are `Read`/`Edit`/`Write`).
 - **A Markdown link whose href is a path did nothing when clicked.** The host handled `https://` and `jb://open` and dropped everything else without a sound — so `[BACKLOG](docs/BACKLOG.md)` was inert while bare paths written in prose worked, making the more deliberate link the one that failed. Both routes now go through a single authorising gate (`LinkResolver.isOpenable`). The scheme test requires **two or more** characters before the colon, so a Windows drive (`C:\src\main.kt`) stays a path rather than being mistaken for a URI scheme.
 - **Copy on a message copied and said nothing.** Message-level buttons carry their own click handler and never reached the delegated code-block path that flashes "Copied", which reads as a broken button — and was reported as one. The flash helper is now exported and shared rather than reimplemented, so wording and duration cannot drift. The `.copied` class had been applied by the JS since 4.0.4 and **had no CSS rule at all**; it now has one.
+
+### Interface
+
+- **Onboarding: the plugin now installs and signs in Claude Code from inside the IDE.** A tab opened without the `claude` binary shows an install card instead of a loading screen that faded into an empty tab: one button per **official** install route for the current OS (Linux: install script, plus apt/dnf/apk when the distro is recognised; macOS: script and Homebrew; Windows: PowerShell, winget and cmd), each with the exact command it runs shown beside it, copyable — on a network that blocks one route, the command itself is the fallback. Commands run visibly in the IDE terminal; a manual path entry accepts a file or an install directory and is validated by running `--version` and requiring the answer to name Claude Code. Once the binary appears — by any route — the session starts on its own.
+- **Sign-in lives in a card, not a command — and the credential does not live on your disk.** Signed out, the card is the first thing a tab shows, before a turn can fail on it. The subscription flow is fully native and requests the **full OAuth consent** — the reduced `setup-token` grant drops scopes Claude Code exercises, file upload among them, which is what a pasted attachment travels on: the binary's browser flow runs under a hidden PTY, the card shows the URL (copyable) and completes on its own when the browser finishes, so pasting the code is an optional fallback on the same screen rather than a step of its own.
+  That login normally leaves its credentials in `~/.claude/.credentials.json` — plaintext on Linux, readable by every process running as you, and shared with the terminal CLI. The plugin does not leave them there: they are moved into the **IDE's password safe** (OS keychain / KWallet / DPAPI) and the file is overwritten and deleted, a login made in your own terminal included. **Nothing ever writes that file back.** The credential reaches the binary through the process environment instead, which is narrower (`/proc/<pid>/environ` is owner-only where the file was readable by anything running as you) and leaves nothing behind when the process exits. An orphan left by a hard IDE kill is folded back into the safe at the next launch.
+
+  The binary keeps running against your own `~/.claude`, untouched, and it is handed the **whole** credential through the environment — access token, refresh token, **OAuth scopes**, subscription type, rate-limit tier and the account — not just the token. The scopes are the load-bearing part: the plan-limit windows come from an endpoint the binary only calls when the credential grants `user:profile`, so handing over a bare token left every session meter dark. That was misread during development as "the binary only reports this from its own configuration directory", and the fix attempted from that premise — a private configuration directory with your real configuration symlinked into it — **deleted the contents of the directories it linked to** when the session ended, session history included. That directory is gone, along with the recursive delete at its heart; the plugin now deletes exactly one file, ever: the plaintext credential it moves into the safe. A source-level contract test fails the build if any other deletion appears.
+
+  An API key entered in the card goes to the same per-provider slot Settings uses, so the card and Settings ▸ Provider are one credential rather than two that disagree — and no provider's key can overwrite another's. A **valid key that the binary rejected** is fixed too: it requires each key to be approved once, and a `--print` session has nobody to ask, so the approval is recorded when you enter the key, and the key is verified before being stored at all. `claude auth status` validates whichever identity is effective and enriches the dashboard's account card, whose row always shows **Sign in** or **Log out** — and Log out stops the session first, then clears the IDE's copies, without touching your own terminal login. `/login` is no longer advertised in the palette — typed, it still works.
+
+  Sign-in comes **before** the loading screen: verifying credentials needs no session, so an unauthenticated tab shows the card rather than launching a process to discover what it already knew. And all of it is re-checked continuously — installing the binary or signing in from elsewhere takes effect within seconds, with no tab to close and reopen.
+
+- **Plan-limit bars** in the session dashboard and a matching dot in the composer readout: every rate-limit window plus the extra-credit balance, colour-graded by severity, animating to their value so the number and the bar settle together. Each source is read on the scale it actually uses — the live events carry a `0..1` fraction, the on-demand usage reply `0..100`.
+
+- **The chat is reachable only while Claude Code is running.** Install → sign in → loading → chat, and any step backwards — the binary uninstalled, the credential gone, the process exited — stops the session and returns to the matching screen. The loading screen waits for the binary to answer rather than merely to start, so the first frame is drawn with the command list, model catalogue and account already in hand.
+- **A unified entrance for every transcript row.** Messages, tool cards, thinking folds, recalled-memory folds, elicitation cards and notices all rise into place on the same curve; a completed tool call resolves with a single 1.5% beat, sized to register at the edge of vision rather than to be watched.
+- **A boot overlay** covering the interval between launching the binary and the session being ready, with a distinct state for a launch that failed.
+- **Reduced motion is driven by the IDE**, not by the browser's own media query, so it follows the setting the user actually changed. Its handling is explicit rather than a blanket freeze: looping indicators keep a legible resting state instead of stopping on their first frame.
+- Failed tool output wraps instead of scrolling sideways; Copy affordances share one confirmation state; the loading indicator and empty state use the same Claude glyph, drawn as a character rather than an asset so the hash-pinned CSP is unaffected.
+
+### Release integrity
+
+- **Release tags are cryptographically verifiable.** The CI signing key carries an email identity, is registered on the publishing account, and is certified by the maintainer's hardware key; the workflow derives the tagger address from the key it signs with, so key rotation is self-contained and the two cannot fall out of step. The address is never written into a committed file. A key without an email identity now aborts the release.
+- **The tag precedes the artifact.** `publish` cuts and signs the tag, checks it out, and builds from that ref, so the published bytes correspond to the ref that names them. Re-running the job on an existing tag is idempotent and replaces the assets in place, which makes recovery from a failed publish a re-run rather than a manual intervention against an immutable tag.
+- **Publication is a single reviewed act.** Merging the release pull request into `main` publishes; credentials remain scoped to the `marketplace` environment and unreachable from any other job. `scripts/bootstrap-ci.sh` provisions the environment, both deployment refs, all six secrets, the signing key and its account registration in one idempotent run.
+- **The GitHub Release carries `CHANGELOG.md`**; the Marketplace "What's New" panel continues to carry `RELEASE_NOTES.md`. An empty extraction fails the release.
+
+### Continuous integration
+
+- **Segmented CI images**: `node-test` (462 MB) for the npm jobs, `jvm-test` (8.08 GB) for the Gradle jobs, with the artifact-assertion and release-readiness jobs on bare runners. Container startup for the frontend suite is **10 s**, from 5m37s. The plugin verifier's IDEs are resolved at run time rather than baked, keeping them current with the EAP/RC channels they come from.
+- **The Gradle cache in the image is genuinely warm**: the IntelliJ Platform is extracted at image-build time and the build is verified to compile **offline** from it. A warm-up failure fails the image build.
+- **CodeQL is a required check on `develop` as well as `main`**, with the `java-kotlin` analysis running on the same JDK and warm cache as the rest of the pipeline.
+- **A release-readiness gate** blocks `develop → main` while an automated pull request is open against `develop`, so a release cannot ship alongside an unmerged dependency update.
+- Branch protection, deployment policy and required checks are versioned and applied by script.
 
 ## [4.4.1] — 2026-07-29
 

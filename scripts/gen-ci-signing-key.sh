@@ -39,6 +39,39 @@ fi
 NAME="Claude Code Native CI (release artifacts only — NOT the maintainer key)"
 EXPIRY="1y"
 
+# The key MUST carry an email, and it must be the maintainer's verified GitHub address.
+#
+# The first version of this script set only Name-Real, so the key was generated with no email in its uid
+# at all. Everything still worked — artifacts were signed, `gpg --verify` passed — except the one thing
+# that is visible to everyone: GitHub never showed the release tag as Verified, and could not, because
+# marking a signature Verified requires THREE things to agree (docs: "Associating an email with your GPG
+# key"): the tagger's email, an email in a uid of the registered key, and a verified email on the account.
+# A key with no email fails the second forever. GitHub's own API reported the key as `emails=` — empty.
+#
+# Using the maintainer's address here does blunt one edge of the separation this file argues for, so state
+# what actually keeps the two keys distinguishable now: the uid NAME says out loud that this is a CI key,
+# the key EXPIRES after a year, and it is certified by the hardware key rather than merely asserted. What
+# it no longer provides is separation by address — and it never could, because GitHub offers no way to
+# verify a tag signed by a key bearing an address that is not yours.
+#
+# READ from the maintainer key, never written here. The project publishes no contact address anywhere (see
+# CHANGELOG 5.0.0), and a committed script is published: hardcoding it would put the address into the
+# repository, into every clone, and into the search index — undoing that decision to save one lookup.
+# It also cannot drift, since the address that must match is by definition the one on the key.
+maintainer_fpr="${CI_KEY_FROM:-$(git config --get user.signingkey || true)}"
+[ -n "$maintainer_fpr" ] || {
+  echo "error: git config user.signingkey is unset, so the maintainer key is unknown." >&2
+  echo "       Set it, or pass the address explicitly:  CI_KEY_EMAIL=you@example.com $0" >&2
+  exit 1
+}
+EMAIL="${CI_KEY_EMAIL:-$(gpg --list-keys --with-colons "$maintainer_fpr" 2>/dev/null \
+  | awk -F: '/^uid:/ {print $10; exit}' | sed -n 's/.*<\(.*\)>.*/\1/p')}"
+[ -n "$EMAIL" ] || {
+  echo "error: could not read an email from the maintainer key $maintainer_fpr." >&2
+  echo "       A CI key without an email can never produce a verified tag — that is what this fixes." >&2
+  exit 1
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 chmod 700 "$tmp"
@@ -54,6 +87,7 @@ Key-Type: EDDSA
 Key-Curve: ed25519
 Key-Usage: sign
 Name-Real: $NAME
+Name-Email: $EMAIL
 Expire-Date: $EXPIRY
 Passphrase: $passphrase
 %commit
@@ -84,7 +118,7 @@ CI signing key generated.
 
   Fingerprint : $fpr
   Expires     : in $EXPIRY (renew or replace before then — see SECURITY.md)
-  Identity    : $NAME
+  Identity    : $NAME <$EMAIL>
 
 --------------------------------------------------------------------------------
 1) Add TWO secrets to the 'marketplace' environment
@@ -111,7 +145,19 @@ CI signing key generated.
      gpg --armor --export $fpr > docs/ci-signing-key.asc
 
 --------------------------------------------------------------------------------
-4) Never import the PRIVATE half into your keyring. It belongs in exactly one
+4) Register the PUBLIC key on your GitHub ACCOUNT, or the release tag will never
+   show as Verified. This step was missing from earlier versions of this script,
+   which is exactly how a release shipped with an unverified tag.
+
+     gh auth refresh -s write:gpg_key    # one-off, interactive
+     gh gpg-key add docs/ci-signing-key.asc
+     gh api user/gpg_keys --jq '.[]|"\(.key_id) \(([.emails[]?.email]|join(",")))"'
+
+   The last command is the check that matters: if the key lists NO emails, the
+   tag cannot be verified no matter what else is correct.
+
+--------------------------------------------------------------------------------
+5) Never import the PRIVATE half into your keyring. It belongs in exactly one
    place — the GitHub environment secret. Keeping it out of your keyring is what
    stops it quietly becoming a second maintainer identity.
 ================================================================================

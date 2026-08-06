@@ -1,5 +1,6 @@
 package dev.lain.claudejb.session
 
+import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.concurrency.AppExecutorUtil
 import dev.lain.claudejb.protocol.ClaudeEvent
 import kotlinx.serialization.json.JsonObject
@@ -62,6 +63,17 @@ class SessionControlClient(
     /** In-flight control requests, keyed by request id; the value resolves the awaiting caller. */
     private val pending = ConcurrentHashMap<String, (ClaudeEvent.ControlResult) -> Unit>()
 
+    private val log = thisLogger()
+
+    private companion object {
+        /** Trace truncation — enough to see every window/account field, not enough to flood idea.log. */
+        const val TRACE_MAX = 2000
+    }
+
+    /** Best-effort subtype extraction from the request line, for the trace only. */
+    private fun requestSubtype(line: String): String =
+        Regex("\"subtype\"\\s*:\\s*\"([a-z_]+)\"").find(line)?.groupValues?.get(1) ?: "?"
+
     /**
      * Shared plumbing: register a pending handler keyed by a fresh id, arm the watchdog, send the request line,
      * and map the payload to [T] when the reply arrives. [decode] turns the (nullable) `response` payload into the
@@ -83,11 +95,21 @@ class SessionControlClient(
                 ClaudeEvent.ControlResult(requestId = id, success = false, payload = null, error = "control request timed out"),
             )
         }
+        val requestLine = buildRequest(id)
         pending[id] = { res ->
             watchdog.cancel()
-            onResult(decode(res.payload))
+            val decoded = decode(res.payload)
+            // The data-flow trace: what the binary ANSWERED and what our decode made of it. When a panel is
+            // empty, this line is the split between "the binary never sent it" and "we dropped it".
+            log.debug(
+                "CC-TRACE control reply ${requestSubtype(requestLine)} id=$id success=${res.success}" +
+                    " err=${res.error ?: "-"} payload=${res.payload?.toString()?.take(TRACE_MAX) ?: "null"}" +
+                    " -> decoded=${decoded?.toString()?.take(TRACE_MAX) ?: "null"}",
+            )
+            onResult(decoded)
         }
-        write(buildRequest(id))
+        log.debug("CC-TRACE control send ${requestSubtype(requestLine)} id=$id")
+        write(requestLine)
     }
 
     /** Resolves the pending handler correlated by [event].requestId. Unknown ids are ignored (watchdog may have won). */

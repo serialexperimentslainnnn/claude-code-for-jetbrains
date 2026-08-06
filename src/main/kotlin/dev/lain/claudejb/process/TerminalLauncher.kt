@@ -34,26 +34,27 @@ object TerminalLauncher {
      * path** (double-quoted for spaces). Using the full path — not the bare name — means a GUI IDE that didn't
      * inherit the user's login `$PATH` still launches the right binary in the terminal.
      *
-     * The subcommand is `auth login` (verified against the binary's `--help`): there is NO top-level `claude
-     * login`, so sending `claude login` would treat "login" as a *prompt* and start an interactive session
-     * instead of the OAuth flow.
+     * [args] is the sign-in's own subcommand, supplied by the caller (`auth login`, plus `--console`/`--sso`
+     * for the Console and SSO routes — see `LoginCoordinator.Mode`). It defaults to the plain subscription
+     * login. Note there is NO top-level `claude login` (verified against the binary's `--help`): sending that
+     * would treat "login" as a *prompt* and start an interactive session instead of the OAuth flow.
      *
      * Shell quoting: on **Windows** the IDE terminal is PowerShell, which needs the call operator `&` to execute
      * a quoted path — without it `"C:\...\claude.exe" auth login` is parsed as a string literal and just echoed.
      * POSIX shells (bash/zsh) run a quoted path directly, and a leading `&` would background it, so only Windows
      * gets the prefix. Pure → unit-testable.
+     *
+     * This is the LAST-RESORT form: it is text for the user to run by hand. The terminal tab itself is handed
+     * an argv list ([openAndRunCommand]), which has no quoting problem class at all.
      */
-    fun loginCommand(binaryPath: String, isWindows: Boolean = SystemInfo.isWindows): String {
-        val quoted = "\"$binaryPath\" auth login"
+    fun loginCommand(
+        binaryPath: String,
+        args: List<String> = listOf("auth", "login"),
+        isWindows: Boolean = SystemInfo.isWindows,
+    ): String {
+        val quoted = (listOf("\"$binaryPath\"") + args).joinToString(" ")
         return if (isWindows) "& $quoted" else quoted
     }
-
-    /**
-     * The login flow as an **argv list** — the form [openAndRunCommand] hands straight to the terminal as the tab's
-     * process. Passing argv instead of a shell string removes the entire quoting problem class ([loginCommand]'s
-     * PowerShell `&` prefix, paths with spaces) and the shell-startup race, because no shell parses it. Pure.
-     */
-    fun loginArgv(binaryPath: String): List<String> = listOf(binaryPath, "auth", "login")
 
     /**
      * Opens a terminal tab in the project root that **runs [argv] as the tab's own process**. Must be called on
@@ -75,7 +76,7 @@ object TerminalLauncher {
      * any deprecation churn and means a future rename degrades to the fallback instead of a `NoSuchMethodError`).
      *
      * Passing [argv] as the tab's `shellCommand` also removes two bug classes the old string-command path had:
-     * no shell parses it (so no quoting hazard — see [loginArgv] vs [loginCommand]), and there is no
+     * no shell parses it (so no quoting hazard — contrast [loginCommand], which must quote), and there is no
      * send-text-into-a-shell race to lose the command to.
      */
     fun openAndRunCommand(project: Project, argv: List<String>, tabName: String): Boolean {
