@@ -45,7 +45,7 @@
       "parameters": {
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
-        "_comment_codeql": [
+        "_comment": [
           "CodeQL gates develop as well as main. It is affordable here in a way the other main-only",
           "checks are not: codeql.yml already triggers on every pull request into develop, so the run",
           "happens either way — requiring it only decides whether anyone has to look at the result.",
