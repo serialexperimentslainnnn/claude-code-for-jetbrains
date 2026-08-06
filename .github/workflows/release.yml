@@ -208,6 +208,21 @@ jobs:
           [ -n "$fpr" ] || { echo "::error::GPG_SIGNING_KEY did not import — is it truncated?"; exit 1; }
           echo "GPG_FPR=$fpr" >> "$GITHUB_ENV"
 
+          # The tagger address is READ FROM THE KEY, never hardcoded. It is not a preference: GitHub marks
+          # a tag Verified only when the tagger email, an email on the registered key's uid, and a verified
+          # account email all agree, so the only address that can possibly work is the one this key carries.
+          # Deriving it also keeps the address out of the repository — the project deliberately publishes no
+          # contact email anywhere (CHANGELOG 5.0.0) — and makes rotating the key sufficient on its own.
+          email=$(gpg --list-keys --with-colons "$fpr" \
+            | awk -F: '/^uid:/ {print $10; exit}' | sed -n 's/.*<\(.*\)>.*/\1/p')
+          if [ -z "$email" ]; then
+            echo "::error::The CI signing key carries no email in its uid, so any tag signed with it will"
+            echo "::error::show as UNVERIFIED. This is exactly how v5.0.0 shipped. Regenerate the key with"
+            echo "::error::scripts/gen-ci-signing-key.sh and re-register it: scripts/bootstrap-ci.sh."
+            exit 1
+          fi
+          echo "GPG_EMAIL=$email" >> "$GITHUB_ENV"
+
       # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
       # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
       # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
@@ -226,10 +241,17 @@ jobs:
             > /tmp/gpg-loopback
           chmod +x /tmp/gpg-loopback
 
-          # A bot identity, not a person: this tag is not a human's assertion and must not look like one.
-          # The noreply address is required by git and is not anyone's mailbox.
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # The tagger email is NOT a stylistic choice — it is what decides whether GitHub will ever show
+          # this tag as Verified. Marking a signature verified requires three things to agree: the tagger
+          # email, an email in a uid of the registered key, and a verified email on the account. This used
+          # to tag as `github-actions[bot]@users.noreply.github.com`, an address that can never appear on
+          # anyone's key, so the signature was valid and the badge was impossible. v5.0.0 shipped that way.
+          #
+          # It therefore uses the address carried by the signing key itself, resolved in the import step
+          # above. The identity is still unmistakable, because the key's uid names itself as the CI key and
+          # the signature is made by the CI key, not the hardware one — SECURITY.md keeps that distinction.
+          git config user.name  'Claude Code Native CI'
+          git config user.email "$GPG_EMAIL"
           git config gpg.program /tmp/gpg-loopback
           git config user.signingkey "$GPG_FPR"
 
@@ -269,9 +291,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.guard.outputs.tag }}
         run: |
-          # The newest section of RELEASE_NOTES.md: from the first "## v" heading to the next one. Same
-          # source build.gradle.kts reads for the Marketplace "What's New" panel, so they cannot drift.
-          awk '/^## v/{if(seen)exit; seen=1} seen' RELEASE_NOTES.md > /tmp/notes.md
+          # The newest section of CHANGELOG.md — from the first "## [x.y.z]" heading to the next one.
+          #
+          # It used to read RELEASE_NOTES.md, which is the Marketplace copy: emoji-led, second person,
+          # "one more thing". That register belongs on a storefront page where someone is deciding whether
+          # to install; it is the wrong document to hand a person who arrived at a GitHub Release because
+          # something broke and they need to know what changed. Those are different readers, so they now
+          # get different documents: CHANGELOG.md here, RELEASE_NOTES.md on the Marketplace panel that
+          # build.gradle.kts still feeds.
+          #
+          # Sized before switching: the 5.0.0 section is ~27 KB against GitHub's 125 000-character limit.
+          awk '/^## \[/{if(seen)exit; seen=1} seen' CHANGELOG.md > /tmp/notes.md
+          [ -s /tmp/notes.md ] || {
+            echo "::error::No section found in CHANGELOG.md. The heading format is '## [x.y.z] — date';"
+            echo "::error::if that changed, this extraction changed with it and the release would go out"
+            echo "::error::with empty notes rather than fail — which is why this check exists."
+            exit 1
+          }
           # NB the heredoc body stays indented to this block's level: YAML strips the common indentation,
           # so the emitted markdown is flush-left. An unindented line here (a bare `---`, say) would end
           # the block scalar and be read as a YAML document separator.
