@@ -52,6 +52,10 @@
   var els = null; // { card, input, send, pills:{provider,model,mode,effort,thinking}, queue, ghost, readout, sendIcon }
   var lastState = null; // last cc.state payload
   var announcedBoot = false; // guards the boot screen's one-per-boot screen-reader announcement
+  var announcedMissing = false; // ditto for the "not found" card, which replaces the loading announcement
+  var installMethods = []; // from cc.meta: the OS's install routes for the not-found card
+  var installsBuilt = false; // the card's method rows are built once per methods payload
+  var installingId = null; // method id whose button shows "Installing…" (cleared on error/card teardown)
   var commands = []; // from cc.meta
   var hostClipboard = false; // from cc.meta: native-Wayland toolkit → route paste through the host (wl-paste)
   var ghostText = ''; // current ghost suggestion (empty field only)
@@ -1036,6 +1040,9 @@
         )
       );
     }
+    // NB no sign-out control here. The readout is a wrapping flex row of metrics, so a button pushed to its
+    // far end drops onto a second line the moment the numbers fill the width. Log out lives in the tool
+    // window's title bar (ClaudeToolWindowFactory.SignOutAction) and on the dashboard's account row.
     ro.removeAttribute('hidden');
     if (running && s.thinkingStatus) ro.classList.add('thinking');
     else ro.classList.remove('thinking');
@@ -1152,28 +1159,353 @@
     var boot = document.getElementById('boot');
     var app = document.getElementById('app');
     if (!boot) return;
-    var booting = !s.running && !!s.starting;
-    boot.hidden = !booting;
+    // ONE invariant, and everything else follows from it: **the chat is reachable only while the `claude`
+    // process is running.** Install -> sign in -> loading -> plugin, in that order, and any step backwards
+    // (the process exits, is restarted, the credential goes away) returns to the matching screen rather
+    // than leaving a chat on screen that has nothing behind it.
+    //
+    // This used to be `starting || binaryMissing`, so every OTHER not-running state — signed out, a dead
+    // process, a launch that failed — fell through to the chat UI, which then rendered its first frame with
+    // no session behind it and stayed half-empty.
+    // Exactly ONE screen at a time, in the order the flow runs: install -> sign in -> loading -> chat.
+    // `#boot` hosts the install card and the spinner; the sign-in card is its own layer, so the spinner
+    // must stand down while it is up or it would simply cover it (z-index 60 over 55).
+    var missing = !s.running && !!s.binaryMissing;
+    var awaitingAuth = !s.running && !missing && (!!s.needsLogin || authForced);
+    var booting = !s.running;
+    var showBoot = missing || (booting && !awaitingAuth);
+    boot.hidden = !showBoot;
+    boot.classList.toggle('missing', missing);
     // Announce the FIRST booting render, not just a transition into it. The screen is already on-screen when
     // the page loads, so the common case never transitions — and the element's own aria-live never fires
     // either, because static markup present at load is not a mutation. Once per boot: `announcedBoot` resets
     // when the screen comes down, so a later relaunch announces again.
-    if (booting && !announcedBoot) {
+    if (showBoot && !missing && !announcedBoot) {
       announcedBoot = true;
       CC.announce && CC.announce('Loading Claude Code');
     }
-    if (!booting) announcedBoot = false;
+    if (!showBoot) announcedBoot = false;
+    // `booting`, not `showBoot`: the chat stays inert for the sign-in screen too.
     if (app) app.classList.toggle('booting', booting);
-    if (!booting) return;
+    var card = document.getElementById('boot-missing');
+    if (card) card.hidden = !missing;
+    if (missing && !announcedMissing) {
+      announcedMissing = true;
+      CC.announce && CC.announce('Claude Code was not found. Install options are available.');
+    }
+    if (!missing) {
+      announcedMissing = false;
+      installingId = null; // a fresh boot resets any "Installing…" button
+      setBootError('');
+    }
+    if (!showBoot) return;
+    if (missing) {
+      renderInstallMethods();
+      return;
+    }
     var sub = document.getElementById('boot-sub');
     // Distinguish the two waits: a fresh launch versus resuming an existing session, which reads a transcript
     // back and is the slower of the two. Guessing "Starting" for both made the longer wait look like a hang.
     if (sub) sub.textContent = s.resuming ? 'Resuming your session' : 'Starting the agent';
   }
 
+  /**
+   * The not-found card's method rows: per install route, a button ("Install via X") and under it the exact
+   * command with a copy affordance ("or copy this command to bash: …"). The command text is the fallback
+   * that matters: the button runs it in the IDE terminal, and when a corporate network or a missing
+   * Terminal plugin breaks that, the user copies the same command and runs it anywhere.
+   */
+  function renderInstallMethods() {
+    var box = document.getElementById('boot-installs');
+    if (!box) return;
+    if (!installsBuilt) {
+      box.textContent = '';
+      installMethods.forEach(function (m) {
+        var row = document.createElement('div');
+        row.className = 'boot-install';
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn primary boot-install-btn';
+        btn.setAttribute('data-method', m.id);
+        btn.addEventListener('click', function () {
+          installingId = m.id;
+          setBootError('');
+          syncInstallButtons();
+          CC.announce && CC.announce('Installing Claude Code. Watch the IDE terminal for progress.');
+          CC.send({ type: 'installClaude', method: m.id });
+        });
+        row.appendChild(btn);
+
+        var hint = document.createElement('div');
+        hint.className = 'boot-install-hint';
+        var hintLabel = document.createElement('span');
+        hintLabel.className = 'boot-install-hint-label';
+        hintLabel.textContent = 'or copy this command to ' + (m.shell || 'a shell') + ':';
+        var code = document.createElement('code');
+        code.className = 'boot-install-cmd';
+        code.textContent = m.display;
+        var copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'btn ghost boot-install-copy';
+        copy.textContent = 'Copy';
+        copy.setAttribute('aria-label', 'Copy the ' + (m.label || 'install') + ' command');
+        copy.addEventListener('click', function (e) {
+          CC.send({ type: 'copy', text: m.display });
+          if (CC.flashCopied) CC.flashCopied(e.currentTarget || copy);
+        });
+        hint.appendChild(hintLabel);
+        hint.appendChild(code);
+        hint.appendChild(copy);
+        row.appendChild(hint);
+        box.appendChild(row);
+      });
+      installsBuilt = true;
+      wirePathRow();
+    }
+    syncInstallButtons();
+  }
+
+  /** Button labels track the one installing: "Installing…" on it, normal labels (enabled) on the rest, so a
+   *  visibly failed attempt in the terminal can be retried by another route without any reset step. */
+  function syncInstallButtons() {
+    var box = document.getElementById('boot-installs');
+    if (!box) return;
+    var btns = box.querySelectorAll('.boot-install-btn');
+    for (var i = 0; i < btns.length; i++) {
+      var b = btns[i];
+      var m = null;
+      for (var j = 0; j < installMethods.length; j++) {
+        if (installMethods[j].id === b.getAttribute('data-method')) m = installMethods[j];
+      }
+      if (!m) continue;
+      var busy = installingId === m.id;
+      b.textContent = busy ? 'Installing…' : m.label;
+      b.classList.toggle('installing', busy);
+      b.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+  }
+
+  function wirePathRow() {
+    var use = document.getElementById('boot-path-use');
+    var input = document.getElementById('boot-path');
+    if (!use || !input || use.__wired) return;
+    use.__wired = true;
+    var submit = function () {
+      setBootError('');
+      CC.send({ type: 'setBinaryPath', path: input.value || '' });
+    };
+    use.addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') submit();
+    });
+  }
+
+  function setBootError(msg) {
+    var el = document.getElementById('boot-path-err');
+    if (el) el.textContent = msg || '';
+  }
+
+  /** Host → card: a validation or install-launch failure, verbatim. Clears the "Installing…" state so the
+   *  buttons are usable again — the error IS the end of that attempt. */
+  cc.bootPathError = function (msg) {
+    installingId = null;
+    syncInstallButtons();
+    setBootError(String(msg == null ? '' : msg));
+  };
+
+  // ---- sign-in card ---------------------------------------------------------
+
+  var authForced = false; // raised by cc.showAuth() (fresh install) until dismissed or resolved
+  var authWired = false;
+  var announcedAuth = false;
+
+  /**
+   * The whole card is a function of one step name; every step's markup exists statically in the shell and
+   * exactly one is visible. Credential inputs are cleared the moment their value is sent — the DOM is a
+   * debug surface (DevTools, DOM dumps) and a secret must not linger in it.
+   */
+  function setAuthStep(step, url, message) {
+    var card = document.getElementById('auth-card');
+    if (!card) return;
+    // The host still speaks in flow events ('url' appeared / 'code' requested); both land on the ONE
+    // combined browser step — the callback path and the paste path are the same screen, with the code
+    // field merely emphasised once the binary explicitly asks for it.
+    var wire = step;
+    if (step === 'url' || step === 'code') step = 'browser';
+    var steps = card.querySelectorAll('.auth-step');
+    for (var i = 0; i < steps.length; i++) {
+      steps[i].hidden = steps[i].getAttribute('data-step') !== step;
+    }
+    // A restarted flow gets a fresh authorize URL; keeping the previous one would send the user to a
+    // consent page for an attempt that is already over.
+    if (step === 'idle' || step === 'waiting') card.__url = null;
+    if (wire === 'url' && url) card.__url = url;
+    // Both buttons act on a URL the host has to have handed us; until it does they are inert rather than
+    // silently no-op, so nobody clicks "Open your browser" and concludes the card is broken.
+    var hasUrl = !!card.__url;
+    var open = document.getElementById('auth-url-open');
+    var copy = document.getElementById('auth-url-copy');
+    if (open) open.disabled = !hasUrl;
+    if (copy) copy.disabled = !hasUrl;
+    if (wire === 'code') {
+      // The binary is now waiting for input — make the optional field the obvious next thing without
+      // hiding the "the browser can still finish this" framing.
+      var label = document.getElementById('auth-code-label');
+      if (label) label.textContent = 'Paste the authorization code from the browser (or just finish there)';
+      var c = document.getElementById('auth-code');
+      if (c) c.focus();
+    }
+    if (step === 'error') {
+      var e = document.getElementById('auth-error');
+      if (e) e.textContent = message || 'Sign-in failed. Please try again.';
+    }
+  }
+
+  cc.authState = function (s) {
+    if (!s || !s.step) return;
+    setAuthStep(String(s.step), s.url, s.message);
+  };
+
+  /** Host → card, proactively (a fresh install has no credentials): raise it without waiting for state. */
+  cc.showAuth = function () {
+    authForced = true;
+    setAuthStep('idle');
+    renderAuth(lastAuthState || {});
+  };
+
+  var lastAuthState = null;
+
+  function renderAuth(s) {
+    lastAuthState = s;
+    var card = document.getElementById('auth-card');
+    if (!card) return;
+    // Two gates, both from the same rule (install -> sign in -> loading -> chat): the install card wins,
+    // because signing in is meaningless without a binary; and a RUNNING session wins over both, so the
+    // card cannot linger over a live chat once the sign-in it was asking for has happened.
+    var visible = (!!s.needsLogin || authForced) && !s.binaryMissing && !s.running;
+    if (!visible && !card.hidden) {
+      authForced = false;
+      announcedAuth = false;
+      setAuthStep('idle');
+    }
+    if (visible && card.hidden) {
+      wireAuthCard();
+      if (!announcedAuth) {
+        announcedAuth = true;
+        CC.announce && CC.announce('Sign in to Claude. Options are available.');
+      }
+    }
+    card.hidden = !visible;
+    if (!s.needsLogin && !authForced) authForced = false;
+  }
+
+  function wireAuthCard() {
+    if (authWired) return;
+    authWired = true;
+    // Under the native-Wayland toolkit CEF's clipboard is isolated from the system one, so a plain
+    // paste into these fields yields nothing. Route it through the host, which reads the real
+    // clipboard — cc.insertText then lands it in whichever field has focus.
+    ['auth-key', 'auth-code'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('paste', function (e) {
+        if (!hostClipboard) return;
+        e.preventDefault();
+        CC.send({ type: 'pasteClipboard' });
+      });
+    });
+    var on = function (id, fn) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('click', fn);
+    };
+    on('auth-sub', function () {
+      setAuthStep('waiting');
+      CC.send({ type: 'loginSubscription' });
+    });
+    // The organisation route: same OAuth dance, same card, but the consent grants org:create_api_key and the
+    // binary mints the key itself — nothing to paste, nothing to hand around.
+    on('auth-console', function () {
+      setAuthStep('waiting');
+      CC.send({ type: 'loginConsole' });
+    });
+    // Typing a key by hand is the exception now, so it starts collapsed. Kept rather than removed: someone
+    // holding only a bare API key must not be sent to Settings to get started.
+    on('auth-key-toggle', function (e) {
+      var fields = document.getElementById('auth-key-fields');
+      if (!fields) return;
+      var open = fields.hidden;
+      fields.hidden = !open;
+      var btn = e.currentTarget;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = open ? 'Hide the API key field' : 'Use an API key instead';
+      if (open) {
+        var input = document.getElementById('auth-key');
+        if (input) input.focus();
+      }
+    });
+    on('auth-key-use', function () {
+      var input = document.getElementById('auth-key');
+      var key = input ? input.value : '';
+      if (input) input.value = ''; // never leave a credential sitting in the DOM
+      CC.send({ type: 'useApiKey', key: key });
+    });
+    on('auth-code-use', function () {
+      var input = document.getElementById('auth-code');
+      var code = input ? input.value : '';
+      if (input) input.value = '';
+      setAuthStep('verifying');
+      CC.send({ type: 'submitLoginCode', code: code });
+    });
+    var cancel = function () {
+      CC.send({ type: 'cancelLogin' });
+      setAuthStep('idle');
+    };
+    on('auth-cancel', cancel);
+    on('auth-cancel-waiting', cancel);
+    // Verifying has its own Cancel: a submit that never resolves must not strand the user on a spinner
+    // with no exit — observed live before the raw-TTY Enter fix, and worth an escape hatch regardless.
+    on('auth-cancel-verify', cancel);
+    on('auth-dismiss', function () {
+      authForced = false;
+      CC.send({ type: 'dismissAuth' });
+    });
+    on('auth-retry', function () {
+      setAuthStep('idle');
+    });
+    on('auth-url-copy', function (e) {
+      var card = document.getElementById('auth-card');
+      CC.send({ type: 'copy', text: (card && card.__url) || '' });
+      if (CC.flashCopied) CC.flashCopied(e.currentTarget);
+    });
+    on('auth-url-open', function () {
+      var card = document.getElementById('auth-card');
+      if (card && card.__url) CC.send({ type: 'open', url: card.__url });
+    });
+    var keyInput = document.getElementById('auth-key');
+    if (keyInput) {
+      keyInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          var btn = document.getElementById('auth-key-use');
+          if (btn) btn.click();
+        }
+      });
+    }
+    var codeInput = document.getElementById('auth-code');
+    if (codeInput) {
+      codeInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          var btn = document.getElementById('auth-code-use');
+          if (btn) btn.click();
+        }
+      });
+    }
+  }
+
   function renderState(s) {
     if (!s) return;
     announceTurnState(s);
+    renderAuth(s);
     renderSendMode(s);
     renderPills(s);
     renderQueue(s.queue);
@@ -1395,6 +1727,11 @@
   cc.meta = function (m) {
     commands = m && Array.isArray(m.commands) ? m.commands.slice() : [];
     if (m && typeof m.hostClipboard === 'boolean') hostClipboard = m.hostClipboard;
+    if (m && Array.isArray(m.installMethods)) {
+      installMethods = m.installMethods.slice();
+      installsBuilt = false; // rebuild the card's buttons if it is (or becomes) visible
+      renderInstallMethods();
+    }
     // refresh palette list if open
     var p = CC.els && CC.els.palette;
     if (p && p.__built && !p.hasAttribute('hidden')) {
@@ -1413,8 +1750,23 @@
   };
 
   // Host inserts clipboard text into the composer at the caret (Ctrl+V text path on Wayland).
+  /**
+   * Host → web paste. Targets the FOCUSED field, not the composer: on a native-Wayland toolkit every
+   * paste in the web view is routed through the host, so hardcoding the composer meant Ctrl+V did
+   * nothing at all in the sign-in card's API-key and code inputs — the field looked simply broken.
+   */
   cc.insertText = function (text) {
     if (text == null) return;
+    var focused = document.activeElement;
+    var editable =
+      focused &&
+      (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA') &&
+      !focused.disabled &&
+      !focused.readOnly;
+    if (editable) {
+      insertAtCursor(focused, String(text));
+      return;
+    }
     if (!ensureBuilt() || !els || !els.input) return;
     els.input.focus();
     insertAtCursor(els.input, String(text));

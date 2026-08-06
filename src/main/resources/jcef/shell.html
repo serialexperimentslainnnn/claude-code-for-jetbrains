@@ -47,6 +47,138 @@
           <div class="boot-mark" aria-hidden="true">✶</div>
           <div class="boot-title">Loading Claude Code<span class="boot-dots" aria-hidden="true"></span></div>
           <div class="boot-sub" id="boot-sub">Starting the agent</div>
+
+          <!-- The FOURTH boot state: no `claude` binary was found. Static like the rest of the shell (the
+             a11y lesson: markup that exists at load announces; markup created on first use does not), shown
+             by app-composer.js only when the host reports binaryMissing. Each install method renders as a
+             button plus the EXACT command it runs, copyable — corporate networks block individual
+             installers, and a command the user can read is a command they can take to whatever route their
+             machine allows. The path row is the manual escape hatch for an install that lives elsewhere. -->
+          <div id="boot-missing" hidden>
+            <div class="boot-missing-title">Claude Code was not found on this machine</div>
+            <div class="boot-missing-sub">
+              Install it with one of these — the command runs in the IDE terminal, or copy it and run it
+              yourself — and this tab starts on its own once the binary appears.
+            </div>
+            <div id="boot-installs"></div>
+            <div class="boot-path-row">
+              <label class="boot-path-label" for="boot-path"
+                >Already installed? Path to the claude binary</label
+              >
+              <div class="boot-path-controls">
+                <input
+                  id="boot-path"
+                  type="text"
+                  spellcheck="false"
+                  placeholder="/path/to/claude"
+                  autocomplete="off"
+                />
+                <button id="boot-path-use" type="button" class="btn">Use this binary</button>
+              </div>
+            </div>
+            <div id="boot-path-err" class="boot-path-err" role="alert"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sign-in card: raised whenever the plugin detects the binary is not authenticated (proactive
+         `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
+         session can lose its login too. Static markup for the same a11y reason as the boot screen; every
+         step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
+      <div id="auth-card" role="status" aria-live="polite" hidden>
+        <div class="auth-inner">
+          <div class="boot-mark" aria-hidden="true">✶</div>
+          <div class="auth-title">Sign in to Claude</div>
+
+          <!-- Two sign-ins, both a BUTTON. The Console one is what an organisation needs: its OAuth consent
+             includes `org:create_api_key`, so the binary provisions a key for Claude Code itself — nobody
+             pastes a credential and nobody has to distribute one. Typing a key by hand is therefore the
+             exception now, not the second option, and lives behind the disclosure below. -->
+          <div class="auth-step" data-step="idle">
+            <button id="auth-sub" type="button" class="btn primary auth-primary">
+              Sign in with your Claude subscription
+            </button>
+            <button id="auth-console" type="button" class="btn auth-primary">
+              Sign in with Anthropic Console
+            </button>
+            <div class="auth-hint">
+              Opens your browser; the whole flow stays in this card. Console signs in against your
+              organization and bills API usage.
+            </div>
+            <div class="auth-divider" aria-hidden="true">or</div>
+            <button
+              id="auth-key-toggle"
+              type="button"
+              class="auth-quiet"
+              aria-expanded="false"
+              aria-controls="auth-key-fields"
+            >
+              Use an API key instead
+            </button>
+            <div id="auth-key-fields" hidden>
+              <label class="auth-label" for="auth-key">Anthropic API key</label>
+              <div class="auth-row">
+                <input
+                  id="auth-key"
+                  type="password"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="sk-ant-…"
+                />
+                <button id="auth-key-use" type="button" class="btn">Use API key</button>
+              </div>
+              <div class="auth-hint">Stored in the IDE's password safe — never in a project file.</div>
+            </div>
+            <button id="auth-dismiss" type="button" class="auth-quiet">Skip for now</button>
+          </div>
+
+          <!-- Every non-idle step MUST offer a way back to idle. This one did not, and a login flow that
+             never reached the URL stage stranded the card here for good: no Sign in, no API key field,
+             no Cancel — the whole card looked dead. A step with no exit is a bug, not a spinner. -->
+          <div class="auth-step" data-step="waiting" hidden>
+            <div class="auth-wait">
+              Opening your browser<span class="boot-dots" aria-hidden="true"></span>
+            </div>
+            <button id="auth-cancel-waiting" type="button" class="auth-quiet">Cancel</button>
+          </div>
+
+          <!-- ONE step for the whole browser leg. The binary listens for the OAuth callback itself, so
+             completing the sign-in in the browser finishes this card with nothing to paste — the code
+             field is the OPTIONAL fallback for when the callback can't reach it, not a step of its own.
+             Splitting them (as this card originally did) jumped straight to a "paste the code" screen
+             and made the fallback look mandatory. -->
+          <div class="auth-step" data-step="browser" hidden>
+            <div class="auth-sub-wait">
+              Finish signing in in your browser<span class="boot-dots" aria-hidden="true"></span>
+            </div>
+            <div class="auth-hint">This card completes on its own. If the browser didn't open:</div>
+            <!-- Buttons, not the URL. An OAuth authorize URL is ~200 characters of query string: shown in
+                 full it swamps the card, and truncated it is worse than useless — it looks like something
+                 you could read or retype and it is neither. So the two things anyone actually does with
+                 it get a button each. -->
+            <div class="auth-row auth-url-actions">
+              <button id="auth-url-open" type="button" class="btn primary">Open your browser</button>
+              <button id="auth-url-copy" type="button" class="btn ghost">Copy link to your browser</button>
+            </div>
+            <label class="auth-label" for="auth-code" id="auth-code-label"
+              >Shown a code instead? Paste it here (optional)</label
+            >
+            <div class="auth-row">
+              <input id="auth-code" type="password" spellcheck="false" autocomplete="off" />
+              <button id="auth-code-use" type="button" class="btn">Submit</button>
+            </div>
+            <button id="auth-cancel" type="button" class="auth-quiet">Cancel</button>
+          </div>
+
+          <div class="auth-step" data-step="verifying" hidden>
+            <div class="auth-wait">Verifying<span class="boot-dots" aria-hidden="true"></span></div>
+            <button id="auth-cancel-verify" type="button" class="auth-quiet">Cancel</button>
+          </div>
+
+          <div class="auth-step" data-step="error" hidden>
+            <div id="auth-error" class="auth-error" role="alert"></div>
+            <button id="auth-retry" type="button" class="btn">Try again</button>
+          </div>
         </div>
       </div>
     </div>

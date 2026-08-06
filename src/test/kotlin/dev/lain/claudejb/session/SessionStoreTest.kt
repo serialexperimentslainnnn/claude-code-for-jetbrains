@@ -43,51 +43,27 @@ class SessionStoreTest {
     }
 
     @Test
-    fun `delete removes only the targeted UUID-named transcript and is confined to the projects tree`() {
+    fun `locate finds the transcript without removing anything`() {
+        // What used to be the `delete` tests. The capability is gone (see the class KDoc): the store reads,
+        // and this pins that a lookup leaves the whole tree exactly as it found it.
         val home = Files.createTempDirectory("claudejb-home")
         val originalHome = System.getProperty("user.home")
         try {
-            // Build ~/.claude/projects/<proj>/ with a session file and an unrelated sibling that must survive.
             val projectDir = home.resolve(".claude").resolve("projects").resolve("-tmp-proj")
             Files.createDirectories(projectDir)
             val id = "11111111-2222-3333-4444-555555555555"
             val target = projectDir.resolve("$id.jsonl").also { Files.writeString(it, "{}") }
             val sibling = projectDir.resolve("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl").also { Files.writeString(it, "{}") }
-            // A would-be victim outside the projects tree: a traversal must never reach it.
-            val outside = home.resolve("secret.jsonl").also { Files.writeString(it, "do not delete") }
 
-            // Point SessionStore at the temp home, then exercise delete.
             System.setProperty("user.home", home.toString())
 
-            // Traversal / non-UUID ids are rejected before any FS access — nothing is deleted.
-            assertFalse(SessionStore.delete("../../secret"), "traversal id must be rejected")
-            assertFalse(SessionStore.delete("$id.jsonl"), "id carrying a dot must be rejected")
-            assertTrue(Files.exists(outside), "file outside the projects tree must survive")
-
-            // A genuine delete removes exactly the target.
-            assertTrue(SessionStore.delete(id), "valid UUID delete should succeed")
-            assertFalse(Files.exists(target), "targeted transcript must be gone")
-            assertTrue(Files.exists(sibling), "unrelated session must survive")
-
-            // Deleting again (now absent) is a no-op false.
-            assertFalse(SessionStore.delete(id), "deleting an absent session returns false")
+            assertEquals(target, SessionStore.locate(id), "the targeted transcript must be found")
+            assertTrue(SessionStore.exists(id))
+            assertTrue(Files.exists(target), "locate must not remove the file it resolved")
+            assertTrue(Files.exists(sibling), "nor any sibling")
         } finally {
             System.setProperty("user.home", originalHome)
             Files.walk(home).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
-        }
-    }
-
-    @Test
-    fun `delete is a no-op when no projects tree exists`() {
-        // Sanity: with no projects tree present, even a well-formed id deletes nothing (locate short-circuits).
-        val home = Files.createTempDirectory("claudejb-empty-home")
-        val originalHome = System.getProperty("user.home")
-        try {
-            System.setProperty("user.home", home.toString())
-            assertFalse(SessionStore.delete("11111111-2222-3333-4444-555555555555"))
-        } finally {
-            System.setProperty("user.home", originalHome)
-            Files.deleteIfExists(home)
         }
     }
 }

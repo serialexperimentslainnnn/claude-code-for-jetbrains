@@ -72,37 +72,48 @@ echo "environment: $ENVIRONMENT"
 # --- 1. environment ------------------------------------------------------------------------------------
 say "1/6  Deployment environment"
 
-REVIEWER_ID=$(gh api user -q .id)
-REVIEWER_LOGIN=$(gh api user -q .login)
-info "required reviewer: $REVIEWER_LOGIN ($REVIEWER_ID)"
-
+# NO required reviewer, deliberately, and this reverses an earlier decision rather than overlooking one.
+#
+# The approval existed as the human gate on an irreversible publish. On a single-maintainer repository it
+# was not buying that: this account is the ONLY collaborator, `main` is protected and accepts nothing but
+# pull requests, and the merge of that pull request is already a deliberate human act. The approval added
+# a second click by the same person, moments later, over the same decision.
+#
+# What is genuinely lost is named rather than glossed: an automated publish now follows a merge without
+# anyone confirming which VERSION is about to go out. The remaining guards are the reviewed pull request
+# into main, the lineage assertion in release.yml's `guard` job, and the fact that `guard` refuses to
+# publish a version whose tag already exists.
+#
 # The body is built with jq and piped in, rather than assembled from -f/-F flags. Two reasons, both
 # learned the hard way: gh's `-f` sends STRINGS (so `-f wait_timer=0` is rejected as `"0"` is not an
-# integer) while `-F` guesses the type, and the bracket syntax for an array of objects
-# (`reviewers[][type]=`) is ambiguous enough that it is not worth relying on. A JSON document has
-# exactly one meaning.
-#
-# prevent_self_review=false is REQUIRED here, not an oversight. You push the tag, so you are the
-# deployment creator; with self-review prevented you would be the one person unable to approve it, and
-# nothing would ever publish. On a single-maintainer project that setting is a deadlock, not a control.
-jq -n --argjson id "$REVIEWER_ID" '{
+# integer) while `-F` guesses the type, and the bracket syntax for an array of objects is ambiguous
+# enough that it is not worth relying on. A JSON document has exactly one meaning.
+jq -n '{
   wait_timer: 0,
   prevent_self_review: false,
-  reviewers: [{ type: "User", id: $id }],
+  reviewers: [],
   deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
 }' | gh api --method PUT "repos/$REPO/environments/$ENVIRONMENT" --input - >/dev/null
-info "environment created/updated with a required reviewer"
+info "environment created/updated — publish runs without a manual approval"
 
-# Restrict it to release tags: a second lock, independent of the workflow's own lineage guard. The guard
-# checks the tag descends from main; this checks the environment is only reachable from a version tag.
-if ! gh api "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
-      -q '.branch_policies[].name' 2>/dev/null | grep -qx 'v\*\.\*\.\*'; then
-  gh api --method POST "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
-    -f 'name=v*.*.*' -f type=tag >/dev/null
-  info "restricted deployments to v*.*.* tags"
-else
-  info "tag policy v*.*.* already present"
-fi
+# Which refs may deploy. BOTH are needed and they are not interchangeable:
+#
+#   main      the primary path. release.yml triggers on a push to main and derives the tag from
+#             build.gradle.kts, so at deployment time github.ref is refs/heads/main. Without this entry
+#             the job is rejected outright with "Branch 'main' is not allowed to deploy to marketplace",
+#             before it even reaches the workflow — which is exactly how the first attempt failed.
+#   v*.*.*    the manual escape hatch: re-cutting a release by pushing an explicit tag.
+for policy in "main:branch" "v*.*.*:tag"; do
+  name=${policy%:*}; type=${policy##*:}
+  if gh api "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
+        -q '.branch_policies[].name' 2>/dev/null | grep -qxF "$name"; then
+    info "deployment policy '$name' already present"
+  else
+    gh api --method POST "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
+      -f "name=$name" -f "type=$type" >/dev/null
+    info "allowed deployments from '$name' ($type)"
+  fi
+done
 
 # --- 2. Marketplace token ------------------------------------------------------------------------------
 say "2/6  JetBrains Marketplace token"
@@ -235,6 +246,34 @@ else
 
   info "wrote docs/ci-signing-key.asc  (fingerprint $ci_fpr)"
   warn "COMMIT docs/ci-signing-key.asc — without the public key nobody can verify a release."
+
+  # --- register the CI key on the GitHub ACCOUNT --------------------------------------------------------
+  # This step did not exist, and its absence is the whole reason v5.0.0 shipped with an unverified tag.
+  #
+  # Certifying the key with the YubiKey (above) makes it trustworthy to a human running `gpg --verify`.
+  # It does nothing for the "Verified" badge, which is a different mechanism entirely: GitHub marks a
+  # signature verified only when the tagger email, an email in a uid of a key REGISTERED ON THE ACCOUNT,
+  # and a verified account email all agree. Certification is not registration, and the two were conflated.
+  if gh gpg-key list >/dev/null 2>&1; then
+    if gh gpg-key add docs/ci-signing-key.asc >/dev/null 2>&1; then
+      info "registered the CI public key on the GitHub account"
+    else
+      info "GitHub already knows this key (or rejected it) — verifying below"
+    fi
+    # The check that matters. A key registered with NO email can never verify a tag, which is precisely
+    # the state the previous key was in: `emails=` came back empty and nothing said so.
+    short=${ci_fpr: -16}
+    if gh api user/gpg_keys -q ".[] | select(.key_id==\"$short\") | .emails[]?.email" 2>/dev/null | grep -q .; then
+      info "the registered key carries an email — tags signed with it can be verified"
+    else
+      warn "the registered key lists NO email address. Tags signed with it will show as UNVERIFIED."
+      warn "Regenerate it with gen-ci-signing-key.sh (which now sets Name-Email) and re-run this step."
+    fi
+  else
+    warn "gh lacks the GPG scope, so the key was NOT registered on your account."
+    warn "Without this the release tag will show as unverified. Run:"
+    warn "  gh auth refresh -s write:gpg_key && gh gpg-key add docs/ci-signing-key.asc"
+  fi
 fi
 
 # --- 5. verify -----------------------------------------------------------------------------------------
@@ -260,8 +299,15 @@ else
   info "no repository-level secrets (correct)"
 fi
 
-gh api "repos/$REPO/environments/$ENVIRONMENT" -q \
-  '"   reviewers: " + ([.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[].reviewer.login] | join(", ")) + " | self-review prevented: " + (.prevent_self_review|tostring)'
+reviewers=$(gh api "repos/$REPO/environments/$ENVIRONMENT" \
+  -q '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[].reviewer.login] | join(", ")')
+if [ -z "$reviewers" ]; then
+  info "no required reviewer — a merge to main publishes without a second confirmation"
+else
+  warn "required reviewer(s) present: $reviewers — publish will WAIT for approval"
+fi
+info "deployments allowed from: $(gh api "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
+  -q '[.branch_policies[] | "\(.type):\(.name)"] | join(", ")')"
 
 # --- 6. branch protection ------------------------------------------------------------------------------
 say "6/6  Branch protection"

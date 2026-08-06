@@ -60,7 +60,10 @@ object JcefState {
         val obj = buildJsonObject {
             put("turnActive", session.turnActive)
             put("interrupting", session.interrupting)
-            put("running", session.isRunning())
+            // "Running" for the GUI means the handshake answered, not just that a process exists. The boot
+            // screen hangs off this, and coming down on a bare spawn showed a chat with empty menus and an
+            // empty dashboard that populated a beat later.
+            put("running", session.isRunning() && session.initialized)
             // "Booting" is a THIRD state, not the absence of `running`: the web app blocks input behind a loading
             // screen while this is true, and a session that failed to launch must fall out of it (both flags
             // false) rather than wait forever.
@@ -68,6 +71,12 @@ object JcefState {
             // Resuming reads an existing transcript back and is the slower of the two waits, so the boot screen
             // labels it differently rather than calling both "Starting" and making the long one look hung.
             put("resuming", session.isStarting() && session.sessionId != null)
+            // A FOURTH boot state: the launch found no `claude` binary at all. The web app swaps the spinner
+            // for the install/path card instead of clearing into an empty tab explained only by a toast.
+            put("binaryMissing", session.binaryMissing)
+            // The binary looks unauthenticated (proactive `auth status` probe, or a turn failed on auth).
+            // Raises the sign-in card — subscription OAuth or API key — wherever it is detected.
+            put("needsLogin", session.needsLogin)
 
             // The live reasoning estimate as a NUMBER, always present (0 when nothing is being reasoned about),
             // so the readout can render a settled "0" instead of omitting the item. An item that only exists
@@ -225,8 +234,12 @@ object JcefState {
 
     fun metaJson(session: ClaudeSession): String {
         // Commands the plugin handles itself (not reported by the binary's slash_commands).
+        //
+        // "login" is deliberately NOT here any more: signing in is a BUTTON (the sign-in card, and the
+        // dashboard's account row), not a command to know about. A typed /login still works — the intercept
+        // stays as a silent alias, because removing an entry point people have used since 4.0 without any
+        // notice is how muscle memory gets punished — it is just no longer advertised in the palette.
         val pluginCommands = mapOf(
-            "login" to "Sign in to Claude (Anthropic OAuth)",
             "btw" to "Ask a side question without disturbing the current turn",
         )
         val binaryNames = session.commands.map { it.name }.toSet()
@@ -255,6 +268,22 @@ object JcefState {
             // so the composer must route Ctrl+V through the host (which reads via wl-paste) instead of
             // trusting the paste event's clipboardData. See JcefChatPanel.PasteClipboard.
             put("hostClipboard", hostClipboardPreferred)
+            // Install routes for THIS OS, for the boot card shown when no `claude` binary exists. The host
+            // decides the list (it knows the OS and the distro); the web app only renders buttons. `display`
+            // is the exact command a button will run — corporate networks block individual installers, so
+            // the user must be able to read it, copy it, and take it elsewhere.
+            put(
+                "installMethods",
+                buildJsonArray {
+                    dev.lain.claudejb.process.BinaryInstall.methods().forEach { m ->
+                        addJsonObject {
+                            put("id", m.id)
+                            put("label", m.label)
+                            put("display", m.display)
+                        }
+                    }
+                },
+            )
         }
         return obj.toString()
     }

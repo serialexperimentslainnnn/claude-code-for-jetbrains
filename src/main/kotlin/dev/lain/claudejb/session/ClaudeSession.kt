@@ -40,6 +40,7 @@ import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.ui.ReviewPrompt
 import kotlinx.serialization.json.JsonArray
@@ -369,6 +370,19 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     private val quotaPollTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollQuota() }.apply { isRepeats = true }
 
+    /** Guards [pollQuota] against overlapping round-trips; see the comment there. EDT-confined. */
+    private var quotaPollInFlight = false
+
+    /**
+     * True once the `initialize` handshake has answered — i.e. the binary is up AND talking, with commands,
+     * models and the account in hand. The GUI treats THIS, not process liveness, as "loaded": a spawned
+     * process that has not answered yet would hand the user a chat whose menus and dashboard are empty and
+     * fill in afterwards. Reset on every launch and teardown.
+     */
+    @Volatile
+    var initialized: Boolean = false
+        private set
+
     /**
      * Fire one session-cost + context-usage poll; results are cached and pushed to panels via [fireState].
      * No-op while the process is not running (the control requests would deliver null and clobber the cached
@@ -377,22 +391,34 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private fun pollQuota() {
         if (!isRunning()) return
-        requestSessionCost { cost ->
-            if (cost != null) {
-                lastSessionCost = cost
+        // Never let polls overlap. The control channel is SHARED with `can_use_tool` and the tool-result
+        // traffic, so at a one-second cadence a binary busy streaming answers slower than we ask, the
+        // requests pile up, and everything queued behind them — tool cards finishing, permissions — waits
+        // on two numbers. One poll in flight at a time; a slow answer skips a tick instead of stacking.
+        if (quotaPollInFlight) return
+        quotaPollInFlight = true
+        var pending = 2
+        // ONE state push per poll, not one per answer: a full push re-serializes meta + state + dashboard,
+        // and doing it twice a second competed with the streaming transcript for no new information.
+        val settle = {
+            if (--pending == 0) {
+                quotaPollInFlight = false
                 fireState()
             }
+        }
+        requestSessionCost { cost ->
+            if (cost != null) lastSessionCost = cost
+            settle()
         }
         requestContextUsage { cu ->
-            if (cu != null) {
-                lastContextUsage = cu
-                fireState()
-            }
+            if (cu != null) lastContextUsage = cu
+            settle()
         }
         // The timer exists to track a turn AS IT RUNS, nothing else. Context and cost cannot move while the
-        // session sits idle, so a poll-per-minute forever was a round-trip through the binary — per tab — for
-        // two numbers that provably had not changed. It now switches itself off at the end of a turn; the
-        // turn-start, turn-end and process-ready paths each poll directly, so nothing waits on a clock.
+        // session sits idle, so polling forever was a round-trip through the binary for two numbers that
+        // provably had not changed — and retiring at turn end is also what makes the 1-second cadence
+        // affordable at all. The turn-start, turn-end and process-ready paths each poll directly, so nothing
+        // waits on a clock.
         if (!turnActive) edt { quotaPollTimer.stop() }
     }
 
@@ -485,9 +511,17 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val settings = ClaudeSettings.getInstance(project)
         val binary = resolveBinary(settings) ?: return false
         if (!passesLaunchGates(settings)) return false
+        if (!hasCredential(settings)) {
+            // Sign-in comes BEFORE the loading screen, not after it. Verifying auth needs no session, and
+            // launching one we know is unauthenticated only buys a spawned process, a spinner, and a turn
+            // that fails later for a reason the user already knew at click time.
+            onLoginNeeded()
+            return false
+        }
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
+        initialized = false
         starting = true
         reconciler.onMessageBoundary()
         // Tell the GUI we are booting BEFORE handing off to the pooled thread, so the loading screen is up for
@@ -514,12 +548,273 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         return true
     }
 
+    /**
+     * True when the last launch attempt found no `claude` binary anywhere. Drives the boot screen's
+     * "Claude Code was not found" card (install buttons + manual path) instead of a spinner that clears
+     * into an empty tab with only a toast to explain itself. Cleared the moment a resolve succeeds.
+     */
+    @Volatile
+    var binaryMissing: Boolean = false
+        private set
+
+    /**
+     * True when the binary looks unauthenticated — proactively (the `auth status` probe on process ready)
+     * or reactively ([LoginDetection] on a failed turn / an auth-status error). Drives the sign-in card
+     * (subscription OAuth or API key); cleared by the next clean turn, a positive probe, and
+     * [dismissLoginCard]. The card and [LoginCoordinator]'s notification coexist on purpose: the
+     * notification reaches a user whose chat tab is hidden, the card reaches the one staring at it.
+     */
+    @Volatile
+    var needsLogin: Boolean = false
+        private set
+
+    private fun onLoginNeeded() {
+        needsLogin = true
+        edt { fireState() }
+        login.maybePrompt()
+    }
+
+    /**
+     * ONCE per session, on the first boot check: if the machine already has a plaintext
+     * `~/.claude/.credentials.json` — a login the user made in their terminal, or an orphan from a hard IDE
+     * kill — take it into the safe and delete it. That login then counts as ours and the tab starts signed
+     * in instead of asking again.
+     *
+     * Once, and only here. Doing it on every poll deleted the file every few seconds, and `auth login`
+     * finishes by writing exactly that file: the browser leg lost its credential the instant it earned it,
+     * and the code-paste fallback became the only route that ever completed. A sign-in in flight writes its
+     * own credential into the safe when it succeeds ([LoginCoordinator]) — the vault does not need to go
+     * looking for it.
+     */
+    private fun absorbExistingLoginOnce() {
+        if (startupHarvestDone) return
+        startupHarvestDone = true
+        // ORDER IS THE WHOLE POINT, and it is the same order the card's sign-in follows
+        // ([LoginCoordinator.completeSignIn]): ask WHO first, take the credential second. Reversed, the
+        // question can no longer be answered by anybody.
+        captureAccountIdentityOnce()
+        dev.lain.claudejb.process.CredentialsVault.harvest()
+    }
+
+    /**
+     * Captures `claude auth status` — the whole JSON, into the IDE safe — while the binary's own credentials
+     * file still exists, because the very next line takes that file away.
+     *
+     * This is why the dashboard's Email and Organization rows were empty. `auth status` names the account
+     * (`email`, `orgId`, `orgName`) only when it authenticates from its OWN store. Handed our credential
+     * through the environment it answers `authMethod: oauth_token` and no identity at all, and `system/init`
+     * carries the same anonymous account object — which is exactly why Plan and Provider filled in while
+     * those two rows stayed blank. Harvest the credential first and there is nothing left to ask: the file was
+     * the only thing that could answer.
+     *
+     * A login made in the user's own terminal is the case this covers; a sign-in through the card is already
+     * in the right order. [dev.lain.claudejb.process.AuthCli.status] does the filing, and only for a reply
+     * that names the account, so this asks at most once per sign-in — with an answer banked there is nothing
+     * to ask. Blocking (it spawns the binary); every caller of this is pooled-thread only.
+     */
+    private fun captureAccountIdentityOnce() {
+        // Never from a test JVM. [dev.lain.claudejb.process.CredentialsVault.credentialsFile] resolves the
+        // DEVELOPER's real home there, so this would probe on the strength of their own login and file the
+        // answer in a throwaway safe — the same reason the vault refuses to touch a real home under test. It
+        // also spawns the stand-in binary, which has no `auth status` to answer with.
+        if (ApplicationManager.getApplication()?.isUnitTestMode != false) return
+        if (dev.lain.claudejb.process.AuthCli.stored()?.email != null) return
+        if (!dev.lain.claudejb.process.CredentialsVault.credentialsFile().isFile) return
+        val settings = ClaudeSettings.getInstance(project)
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
+        // The RAW settings env: overlaying our own credential is precisely what makes the answer anonymous.
+        dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
+    }
+
+    @Volatile
+    private var startupHarvestDone = false
+
+    /**
+     * Whether the live process was launched with `--resume`. Read in [onTerminated]: a resumed launch that
+     * dies before the handshake is a conversation the binary cannot find, which is a recoverable condition
+     * (drop the id, open a fresh one) and not the generic "it exited" failure.
+     */
+    @Volatile
+    private var resumedLaunch = false
+
+    /**
+     * Whether this session has an identity to run as — checked BEFORE spawning anything, since that is a
+     * question about what we hold, not about what the binary can do.
+     *
+     * The identity is exclusively: the vaulted subscription login, an API key in its provider slot, or a
+     * credential the user wrote by hand into the Settings environment. Nothing held → logged out by
+     * definition, and no process is started to re-ask a question we have already answered.
+     *
+     * Deliberately does NOT harvest — see [absorbExistingLoginOnce].
+     */
+    private fun hasCredential(settings: ClaudeSettings): Boolean {
+        if (dev.lain.claudejb.process.CredentialsVault.hasUsableToken()) return true
+        if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
+        if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
+        val explicit = settings.resolveEnv()
+        if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return true
+        // An explicit Log out outranks the binary's own login: otherwise clearing our safe changes nothing
+        // the user can see, because the binary still holds one and the session starts straight back up.
+        if (settings.state.signedOut) return false
+        return binaryHoldsOwnLogin(settings)
+    }
+
+    /**
+     * Last resort: does the BINARY hold a login of its own?
+     *
+     * This is what makes the plugin work off Linux. The vault only ever engages when there is a plaintext
+     * `~/.claude/.credentials.json` to take custody of — which is the Linux situation. On macOS the binary
+     * keeps its credentials in the **Keychain** and writes no such file, so a vault-only view of the world
+     * concludes "signed out" no matter how many times the user signs in: the login card would reappear
+     * immediately after every successful sign-in, forever. Windows behaves the same wherever the binary uses
+     * a store rather than a file.
+     *
+     * So when we hold nothing, we ask instead of assuming. A binary with its own valid login is simply left
+     * to use it: no vault, no config dir, no environment token — and, because it authenticates from its own
+     * store, the dashboard gets the complete account and plan picture there too.
+     *
+     * Throttled hard ([OWN_LOGIN_TTL_MS]): this spawns a process, and the caller polls every few seconds.
+     */
+    private fun binaryHoldsOwnLogin(settings: ClaudeSettings): Boolean {
+        val now = System.currentTimeMillis()
+        ownLoginCheckedAt.takeIf { now - it < OWN_LOGIN_TTL_MS }?.let { return binaryOwnLogin }
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return false
+        // The RAW settings env, deliberately: overlaying our own credentials would be asking the binary
+        // whether IT is signed in while handing it ours.
+        val status = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
+        binaryOwnLogin = status?.loggedIn == true
+        ownLoginCheckedAt = now
+        return binaryOwnLogin
+    }
+
+    @Volatile private var binaryOwnLogin = false
+
+    @Volatile private var ownLoginCheckedAt = 0L
+
+    /**
+     * Re-evaluates which screen this tab should be showing, from scratch. Called periodically while no
+     * session is running — BLOCKING (it stats the filesystem and reads the PasswordSafe), so pooled thread
+     * only; the state changes hop to the EDT themselves.
+     *
+     * Detection used to happen exactly once, inside [start]. So a tab that opened before Claude Code was
+     * installed kept its stale answer forever: installing the binary, or signing in from somewhere else,
+     * changed nothing until the tab was closed and reopened. The three states are a function of the world
+     * (binary present? credential held?) and the world changes underneath us, so they are re-derived rather
+     * than remembered.
+     */
+    fun refreshBootState() {
+        if (starting) return
+        // A sign-in is mid-flight: keep out. This poll harvests the credentials file, and `auth login`
+        // writes exactly that file to finish — taking it away mid-flow breaks the browser leg.
+        if (login.inProgress) return
+        absorbExistingLoginOnce()
+        val settings = ClaudeSettings.getInstance(project)
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath)
+        if ((binary == null) != binaryMissing) {
+            binaryMissing = binary == null
+            edt { fireState() }
+        }
+        if (binary == null) {
+            // The binary went away under a live session — uninstalled, or a path that no longer resolves.
+            // Stop it before showing the install screen, or the user reads "not installed" while a process
+            // from the vanished copy is still answering.
+            edt { if (isRunning()) stop() }
+            return
+        }
+        // Persist a freshly-installed binary's path here too, not only in resolveBinary: the install card's
+        // "it appeared" path went through a start() that could return before ever writing it down.
+        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
+        val credentialed = hasCredential(settings)
+        edt {
+            if (starting) return@edt
+            when {
+                // Signed out: an expired token, a Log out, a credential cleared elsewhere. STOP FIRST — a
+                // live process still holds the old identity, so leaving it up means the tab says "signed
+                // out" while the next turn happily works.
+                !credentialed -> {
+                    if (isRunning()) stop()
+                    // Already asked; do not re-fire, or the notification would repeat every few seconds.
+                    if (!needsLogin) onLoginNeeded()
+                }
+
+                !isRunning() -> start()
+            }
+        }
+    }
+
+    /** The card's "I'm already signed in": hide it until the next auth failure says otherwise. */
+    fun dismissLoginCard() {
+        needsLogin = false
+        edt { fireState() }
+    }
+
+    /**
+     * Proactive auth check, off-EDT: `claude auth status --json` with the full launch env — so the answer
+     * covers every identity the session can actually run on, in the order the binary itself resolves them:
+     * an env credential (the PasswordSafe overlay / explicit Settings vars) first, its own credential store
+     * (the full-consent `auth login`, shared with the terminal CLI) second. Not logged in by ANY of those →
+     * the sign-in card is the first thing the tab shows, before a turn can fail on it.
+     *
+     * A probe that cannot run or parse yields a SYNTHETIC logged-out state rather than silence: the account
+     * card's button must always exist and say something ("Sign in" that leads to an idempotent login beats
+     * a button that omits itself and cannot be found).
+     */
+    fun probeAuthStatus() {
+        val settings = ClaudeSettings.getInstance(project)
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val onOurEnv = dev.lain.claudejb.process.AuthCli.status(binary, effectiveLaunchEnv())
+                ?: dev.lain.claudejb.process.AuthCli.AuthState(loggedIn = false)
+            // WHO the account is takes a second question, and this is why the dashboard's Email and
+            // Organization rows were empty: asked with our credential in its environment the binary reports
+            // `authMethod: oauth_token` and no identity at all. Asked with the RAW settings env it answers
+            // from its own store as `claude.ai` — email, orgId, orgName, plan — which AuthCli.status files in
+            // the safe. `loggedIn` stays the first answer's: that one describes the identity this session
+            // actually runs on. Skipped entirely once the first answer already named the account.
+            // Only worth a second question when somebody IS signed in: an anonymous logged-OUT answer has no
+            // identity to go looking for, and asking anyway spawns a second process per probe for nothing.
+            val status = if (!onOurEnv.loggedIn || onOurEnv.email != null || onOurEnv.orgName != null) {
+                onOurEnv
+            } else {
+                val identity = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
+                    ?.takeIf { it.email != null || it.orgName != null }
+                    ?: dev.lain.claudejb.process.AuthCli.stored()
+                onOurEnv.copy(
+                    email = identity?.email,
+                    orgId = identity?.orgId,
+                    orgName = identity?.orgName,
+                    apiProvider = onOurEnv.apiProvider ?: identity?.apiProvider,
+                    subscriptionType = onOurEnv.subscriptionType ?: identity?.subscriptionType,
+                )
+            }
+            authCliStatus = status
+            if (!status.loggedIn) {
+                onLoginNeeded()
+            } else if (needsLogin) {
+                needsLogin = false
+                edt { fireState() }
+            } else {
+                edt { fireState() } // account card enrichment (email/plan) still wants a push
+            }
+        }
+    }
+
+    /** Last `auth status` probe result — feeds the dashboard's account card (email, plan, Sign in/Log out). */
+    @Volatile
+    var authCliStatus: dev.lain.claudejb.process.AuthCli.AuthState? = null
+        private set
+
     /** Locates the binary and persists the resolved path; null (after notifying) when there is none. */
     private fun resolveBinary(settings: ClaudeSettings): File? {
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: run {
+            binaryMissing = true
+            // The state push is what flips the boot screen into the not-found card; without it the flag
+            // sits unread until some unrelated event happens to re-push.
+            fireState()
             notifyMissingBinary()
             return null
         }
+        binaryMissing = false
         // Persist the auto-detected path so later launches are stable and the user can see/edit it
         // (also refreshes a stale saved path that fell back to auto-detection).
         if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
@@ -549,6 +844,32 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
+     * The env the `claude` process is launched with: the settings-resolved base plus the credentials held
+     * in the IDE's PasswordSafe ([SecretStore]) — overlaid ONLY where the explicit env doesn't already carry
+     * the name, so a hand-written Settings value keeps winning. Credentials travel exclusively through the
+     * environment (never argv — /proc/<pid>/cmdline is world-readable, environ is 0400), and through here
+     * for every consumer, so the auth probe sees exactly what the session process will.
+     */
+    internal fun effectiveLaunchEnv(base: Map<String, String>? = null): Map<String, String> {
+        val env = base ?: ClaudeSettings.getInstance(project).resolveEnv()
+        val settings = ClaudeSettings.getInstance(project)
+        // The Anthropic API key, from its own provider slot. Only when the selected provider IS Anthropic:
+        // under a third-party provider `resolveEnv` has already put THAT provider's key in, and overwriting
+        // it here would send an Anthropic credential to a non-Anthropic endpoint.
+        val apiKey = settings.anthropicApiKey
+            .takeIf { it.isNotBlank() && settings.provider == Provider.ANTHROPIC && SecretStore.API_KEY !in env }
+        val withSecrets = env +
+            SecretStore.envOverlay(env.keys) +
+            (apiKey?.let { mapOf(SecretStore.API_KEY to it) } ?: emptyMap())
+        // The binary runs against its OWN `~/.claude`, untouched. The vaulted subscription login rides here
+        // instead — the WHOLE credential, field by field (token, refresh token, scopes, subscription, rate
+        // tier, account), which is what lets the session run with NOTHING in ~/.claude/.credentials.json and
+        // still report the plan limits. See CredentialsVault.envOverlay: the missing piece was the SCOPES,
+        // not a config directory. Last, and keyed on the merged env, so an explicit API key or token wins.
+        return withSecrets + dev.lain.claudejb.process.CredentialsVault.envOverlay(withSecrets.keys)
+    }
+
+    /**
      * Spawns the process off the EDT and, once it is up, hands back to the EDT to flip [ready].
      *
      * [launchGen] is re-checked at every step that follows a blocking call: a stop()/dispose()/newer start() can
@@ -556,10 +877,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * behind nor mark a session that no longer owns the generation as ready.
      */
     private fun launch(launchGen: Int, settings: ClaudeSettings, binary: File, workDir: File, resume: Boolean) {
-        val env = cachedEnv ?: settings.resolveEnv().also { cachedEnv = it }
+        // No harvest here: absorbing an existing plaintext login is a ONCE-per-session act
+        // ([absorbExistingLoginOnce]), and a sign-in files its own credential when it succeeds.
+        //
+        // The credential reaches the binary through the environment, WHOLE (CredentialsVault.envOverlay), and
+        // the binary keeps its own `~/.claude`. Nothing is relocated, symlinked or deleted.
+        val env = effectiveLaunchEnv(cachedEnv ?: settings.resolveEnv().also { cachedEnv = it })
         // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
         // launch is stale — don't spawn an orphan process nothing will ever tear down.
         if (launchGen != generation) return
+        resumedLaunch = resume
         val opts = launchOptions()
         val proc = ClaudeProcess(
             binary = binary,
@@ -594,6 +921,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         edt {
             ready = true
             transcript.add(Speaker.SYSTEM, "Claude Code ready.")
+            // Auth check HERE, at launch-time readiness — NOT (only) on the Init event, because per the
+            // note above `system/init` doesn't arrive until after the first user turn. Hooked there alone,
+            // the sign-in card waited for the user to type a prompt before appearing, which is exactly
+            // backwards: with no login the card must be the first thing the tab shows.
+            probeAuthStatus()
             fireState()
             // Fill the context and cost meters NOW rather than on the poll timer's first tick.
             //
@@ -625,6 +957,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 agents = info.agents
                 availableOutputStyles = info.availableOutputStyles
                 account = info.account
+                log.debug(
+                    "CC-TRACE initialize reply: account(email=${info.account.email.isNotBlank()}," +
+                        " org=${info.account.organization.isNotBlank()}, plan='${info.account.subscriptionType}'," +
+                        " provider='${info.account.apiProvider}') models=${info.models.size}" +
+                        " commands=${info.commands.size} agents=${info.agents.size}",
+                )
+                // The handshake answered: the process is not merely spawned, it is DELIVERING. This is what
+                // takes the loading screen down, so the chat's first frame is drawn with the command list,
+                // the model catalog and the account already in hand rather than filling in behind it.
+                initialized = true
                 if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
                 // Graceful fallback: the pin ([DEFAULT_MODEL]) was chosen before the catalog was known. If this
                 // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
@@ -680,6 +1022,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         turnActive = false
         interrupting = false
         ready = false
+        initialized = false
         starting = false // any in-flight launch is now stale (generation bumped above); let a restart proceed
         // Reset per-turn live state so a stale figure/chip doesn't linger into a resumed session (restart path).
         liveThinkingTokens = 0
@@ -1635,10 +1978,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
             transcript.add(Speaker.ERROR, message)
             // If the failure reads like a login/auth problem, offer to open an interactive terminal —
-            // /login can't run inside the TTY-less stream-json session.
-            if (LoginDetection.needsLogin(message)) login.maybePrompt()
+            // /login can't run inside the TTY-less stream-json session — and raise the login card.
+            if (LoginDetection.needsLogin(message)) onLoginNeeded()
         } else {
             // A clean turn means we're authenticated; allow a future auth failure to prompt again.
+            needsLogin = false
             login.onCleanResult()
             // Count it toward the one-and-only Marketplace review ask. Only successful turns count, so
             // nobody is ever asked to rate a session that was failing on them. See [ReviewPrompt].
@@ -1763,6 +2107,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     private fun onRateLimit(event: ClaudeEvent.RateLimit) {
         val incoming = event.info
+        log.debug(
+            "CC-TRACE rate_limit_event: window=${incoming.rateLimitType} status=${incoming.status}" +
+                " utilization=${incoming.utilization} -> pct=${incoming.utilizationPercent()}",
+        )
         val window = incoming.rateLimitType
         // The binary often emits a rate_limit_event without `utilization` (it's optional and only present when
         // the API returns it). Don't lose a previously-known utilization just because a later event omitted
@@ -1784,7 +2132,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         event.info.error?.takeIf { it.isNotBlank() }?.let {
             edt {
                 transcript.add(Speaker.ERROR, "Authentication error: $it")
-                if (LoginDetection.needsLogin(it)) login.maybePrompt()
+                if (LoginDetection.needsLogin(it)) onLoginNeeded()
             }
         }
         edt { fireState() }
@@ -1928,6 +2276,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // callback belongs to the old process and must NOT tear down the freshly-started session (which would
         // null `ready`, failAll the new initialize, and print "Session ended"). The current generation wins.
         if (gen != generation) return
+        // Read BEFORE the teardown below clears it: a resume that failed is one that died without ever
+        // answering the handshake. A process that was up and working and then crashed is an ordinary failure,
+        // and its session id is still good.
+        val staleResume = resumedLaunch && !initialized
         // Flush any buffered streaming deltas (reader thread) before tearing down so trailing text isn't dropped.
         flushDeltas()
         // The process is gone: release any in-flight control callbacks so their dialogs don't hang.
@@ -1936,11 +2288,29 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             turnActive = false
             interrupting = false
             ready = false
+            initialized = false
             liveThinkingTokens = 0
             promptSuggestion = null
             cards.clear()
             taskTracker.clear()
             hookNarrator.clear()
+            if (exitCode != 0 && staleResume) {
+                // `--resume <id>` on a conversation the binary doesn't have: it prints "No conversation found
+                // with session ID: …" and exits 1, immediately, every time (verified against 2.1.223). The boot
+                // watcher then relaunches every few seconds, so this is not one failure but an endless loop of
+                // them — a tab stuck on "Loading Claude Code…" behind a stack of identical error toasts.
+                //
+                // The id is simply stale (a session that never got a turn written, a transcript deleted
+                // elsewhere), so it is DROPPED and the tab continues as a new conversation. Restoring history
+                // is best-effort; refusing to open a chat over it is not a trade worth making.
+                log.info("resume of session $sessionId failed (exit $exitCode) — continuing as a new conversation")
+                sessionId = null
+                resumedLaunch = false
+                systemNotice("That conversation is no longer available — started a new one.")
+                fireState()
+                start(resume = false)
+                return@edt
+            }
             if (exitCode != 0) {
                 transcript.add(Speaker.ERROR, "Claude Code exited (code $exitCode).")
                 // The user may not have this tab focused; also raise a notification so the failure isn't missed.
@@ -2041,7 +2411,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /** Runs the OAuth sign-in. Delegates to [login]; public so the composer can route a typed `/login` here. */
-    fun startLogin() = login.start()
+    fun startLogin(mode: LoginCoordinator.Mode = LoginCoordinator.Mode.SUBSCRIPTION) = login.start(mode)
+
+    // The sign-in card's plumbing, one delegate each — the card lives in the panel, the flow in the
+    // coordinator, and the session stays the thin orchestrator between them.
+    fun attachLoginUi(ui: LoginCoordinator.LoginUi) = login.attachUi(ui)
+    fun detachLoginUi(ui: LoginCoordinator.LoginUi) = login.detachUi(ui)
+    fun submitLoginCode(code: String) = login.submitCode(code)
+    fun cancelLogin() = login.cancelLogin()
 
     /**
      * EDT-only. Returns true if the session may launch: either there's no risky exec config (sourceScript / stdio
@@ -2121,8 +2498,17 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         const val CONTROL_TIMEOUT_SECONDS = 30L
 
         /** Interval (ms) of the session-scoped quota poll (get_session_cost + get_context_usage), shared by all
-         *  ChatPanels observing this session — one timer per session, not one per tab. */
-        const val QUOTA_POLL_MS = 60_000
+         *  ChatPanels observing this session — one timer per session, not one per tab.
+         *
+         *  One second, and the budget holds because of two multipliers already in place: the timer only runs
+         *  WHILE A TURN IS ACTIVE (it retires at turn end — idle sessions poll zero times), and both requests
+         *  are local IPC to the `claude` process, which answers from its own counters without a network hop.
+         *  At 60s the context meter and cost sat visibly frozen through a whole turn and only told the truth
+         *  after it ended, which reads as a broken meter exactly while the user is watching it. */
+        const val QUOTA_POLL_MS = 1_000
+
+        /** How long a "the binary has its own login" answer is trusted. It costs a process spawn to get. */
+        private const val OWN_LOGIN_TTL_MS = 30_000L
 
         /**
          * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating

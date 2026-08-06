@@ -45,19 +45,19 @@ class TerminalLauncherTest {
         assertTrue(cmd.startsWith("& \""))
     }
 
-    // ── argv form: what actually gets handed to the terminal (no shell parses it) ────────────────────────────
+    // ── the sign-in mode travels with the command ───────────────────────────────────────────────────────────
 
     @Test
-    fun `loginArgv is the binary plus the auth login subcommand, unquoted and unsplit`() {
-        // Passed as the tab's shellCommand, so a path with spaces must stay ONE element — no quoting, no escaping,
-        // no PowerShell call operator: there is no shell in the middle to misparse it.
+    fun `the subcommand comes from the caller, so Console and SSO are not silently turned into a plain login`() {
+        // A last-resort notice that told a Console user to run the SUBSCRIPTION login would send them through
+        // the wrong OAuth consent — a different account type, not a cosmetic difference.
         assertEquals(
-            listOf("/Applications/My Tools/claude", "auth", "login"),
-            TerminalLauncher.loginArgv("/Applications/My Tools/claude"),
+            "\"/usr/bin/claude\" auth login --console",
+            TerminalLauncher.loginCommand("/usr/bin/claude", listOf("auth", "login", "--console"), isWindows = false),
         )
         assertEquals(
-            listOf("C:\\Program Files\\claude\\claude.exe", "auth", "login"),
-            TerminalLauncher.loginArgv("C:\\Program Files\\claude\\claude.exe"),
+            "& \"C:\\bin\\claude.exe\" auth login --sso",
+            TerminalLauncher.loginCommand("C:\\bin\\claude.exe", listOf("auth", "login", "--sso"), isWindows = true),
         )
     }
 }

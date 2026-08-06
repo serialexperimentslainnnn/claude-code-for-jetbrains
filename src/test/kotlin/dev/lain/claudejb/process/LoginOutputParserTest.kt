@@ -60,9 +60,59 @@ class LoginOutputParserTest {
         )
     }
 
+    // ── the frames the login TUI renders before exiting ──────────────────────────────────────────────────
+
+    /** The frame the binary renders on success under a PTY, right before it exits 0. */
+    private val successScreen =
+        "$esc[2mLogged in as dev@example.com$esc[0m\r\n" +
+            "$esc[32mLogin successful. Press $esc[1mEnter$esc[0m$esc[32m to continue…$esc[0m"
+
+    @Test
+    fun `surfaces the binary's own wording for a failed OAuth exchange`() {
+        val screen = "$esc[31mOAuth error: invalid_grant$esc[0m\r\nPress Enter to retry."
+        assertTrue(LoginOutputParser.looksLikeFailure(screen))
+        assertEquals("OAuth error: invalid_grant", LoginOutputParser.resultMessage(screen, success = false))
+    }
+
+    @Test
+    fun `result message drops the terminal-only keypress instruction`() {
+        assertEquals(
+            "Login successful.",
+            LoginOutputParser.resultMessage(successScreen, success = true),
+        )
+    }
+
+    @Test
+    fun `redactSecrets strips ANSI and masks tokens`() {
+        val token = "sk-ant-oat01-" + "c".repeat(40)
+        val out = LoginOutputParser.redactSecrets("$esc[32mtoken: $token$esc[0m")
+        assertFalse(out.contains(token))
+        assertFalse(out.contains(esc))
+        assertTrue(out.contains("sk-ant-…"))
+    }
+
     @Test
     fun `result falls back to generic wording when no marker line is present`() {
         assertEquals("You're signed in.", LoginOutputParser.resultMessage("(some unrelated frame)", success = true))
         assertEquals("Login failed. Please try again.", LoginOutputParser.resultMessage("(noise)", success = false))
+    }
+
+    // ── setup-token ──────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `extracts the setup token, taking the LAST match past placeholder text`() {
+        val token = "sk-ant-oat01-" + "a".repeat(40)
+        val out = "$esc[2mExample: sk-ant-oat01-xxxxxxxxxxxxxxxxxxxx$esc[0m\nYour token:\n$token\n"
+        assertEquals(token, LoginOutputParser.extractSetupToken(out))
+        assertNull(LoginOutputParser.extractSetupToken("no token here"))
+        // Too short to be real — placeholder-sized fragments must not be captured as credentials.
+        assertNull(LoginOutputParser.extractSetupToken("sk-ant-short"))
+    }
+
+    @Test
+    fun `result messages never carry a token`() {
+        val token = "sk-ant-oat01-" + "b".repeat(40)
+        val msg = LoginOutputParser.resultMessage("Login successful! Token: $token", success = true)
+        assertFalse(msg.contains(token), "a secret leaked into a user-facing message")
     }
 }
