@@ -69,7 +69,7 @@ jobs:
     # the trade is explicit: refreshing what CI has cached now means rebuilding and pushing the image,
     # which is a deliberate act rather than something that drifts between runs.
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. This requires the package to have been granted Read access to
       # THIS repository (package settings -> Manage Actions access): `packages: read` widens what the token
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -195,7 +195,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      # `node-test`, not `jvm-test`: this job is `npm ci` and then vitest. On the single combined image it
+      # pulled a JDK, a Gradle distribution and 3.4 GB of extracted IntelliJ Platform it never opened —
+      # 1m05s of container init for 8 seconds of work.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -205,10 +208,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
-      # baked into the image are invisible and every run silently re-downloads what the image already has.
-      GRADLE_USER_HOME: /opt/gradle-home
+    # No GRADLE_USER_HOME here: there is no Gradle in this image and nothing in this job invokes it.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -241,7 +241,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      # `node-test`: this job is `npm ci` and two `npm audit` invocations. Nothing here touches the JVM.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -251,10 +252,6 @@ jobs:
     permissions:
       contents: read
       packages: read
-    env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
-      # baked into the image are invisible and every run silently re-downloads what the image already has.
-      GRADLE_USER_HOME: /opt/gradle-home
     # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
     # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
     # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
@@ -344,7 +341,7 @@ jobs:
       # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
       # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
       # on its own runner, to save ten minutes on the one job that runs least often.
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -419,14 +416,11 @@ jobs:
     name: Build plugin
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    # NO container, deliberately. This job downloads an artifact and runs `unzip`, `grep` and `ls` over it —
+    # it does not build anything despite the name, and it used to pull GB of JDK, Gradle and extracted
+    # IntelliJ Platform to do it. `unzip` is on the bare runner, and the job now starts instantly.
     permissions:
       contents: read
-      packages: read
     needs: [verify]
     steps:
       - name: Fetch the verified distributable

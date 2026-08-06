@@ -28,18 +28,19 @@ concurrency:
 # around a `credentials:` block.
 #
 #   java-kotlin  needs a JDK and a full Gradle resolution of the IntelliJ Platform, so it runs in
-#                cc-ci:base and inherits the warm GRADLE_USER_HOME. It used to provision the JDK with
+#                jvm-test and inherits the warm GRADLE_USER_HOME. It used to provision the JDK with
 #                setup-java and resolve the platform from cold on every run.
 #   javascript-typescript  is `build-mode: none`. It needs no JDK, no Gradle and no npm install — the
-#                scanner reads the sources. Putting it in the image would add a 6.5 GB pull to a job that
-#                would use none of it, making it strictly slower. It stays on the bare runner.
+#                scanner reads the sources. Putting it in an image would add a pull to a job that would
+#                use none of it, making it strictly slower. It stays on the bare runner.
 jobs:
   analyze-kotlin:
     name: CodeQL (java-kotlin)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      # `jvm-test`: the manual build is `./gradlew classes`, which resolves the whole IntelliJ Platform.
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
