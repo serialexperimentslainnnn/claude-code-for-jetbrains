@@ -1,15 +1,14 @@
 package dev.lain.claudejb.process
 
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.util.SystemInfo
 import dev.lain.claudejb.settings.SecretStore
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 
 /**
- * A throwaway `CLAUDE_CONFIG_DIR` **in RAM**, so the binary can read its own credentials file without that
- * file ever existing on persistent storage.
+ * A throwaway `CLAUDE_CONFIG_DIR` for one session, so the binary can read its own credentials file without
+ * that file existing on persistent storage.
  *
  * This exists because of a measured, non-negotiable fact about the binary (verified against 2.1.223 with the
  * plugin's exact launch arguments): authenticating through `CLAUDE_CODE_OAUTH_TOKEN` gives a REDUCED
@@ -22,8 +21,14 @@ import java.nio.file.attribute.PosixFilePermission
  *
  * So the dashboard's plan limits, plan name and account are not something the plugin can compute or recover:
  * the binary only reports them when it authenticates from a config directory. That directory is what this
- * class provides, and it puts it on **tmpfs** (`/dev/shm`) — memory, wiped on reboot, never written to a
- * disk — with the directory 0700 and the credential 0600.
+ * class provides: a per-session temp dir, 0700, with the credential 0600, removed at teardown.
+ *
+ * **Be exact about what this does and does not claim.** The only PERSISTENT copy of the credential is the
+ * encrypted safe; what lands here is a plaintext projection of it that exists while the session runs and is
+ * owner-only. That is strictly better than `~/.claude/.credentials.json`, which is plaintext and permanent —
+ * but it is not "the credential never touches a disk", and it was briefly special-cased onto `/dev/shm` in
+ * pursuit of that phrasing. That bought a marginally shorter-lived file on ONE operating system in exchange
+ * for the plugin behaving differently on the two most people use.
  *
  * Everything else is a SYMLINK back into the real `~/.claude` (session history, settings, skills, plugins,
  * projects) plus `~/.claude.json`, so relocating the config directory costs nothing: `/resume`, the session
@@ -113,7 +118,7 @@ object RuntimeConfigDir {
                 SecretStore.set(SecretStore.CREDENTIALS_JSON, it)
             }
         }.onFailure { log.warn("could not collect the refreshed credential", it) }
-        runCatching { dir.deleteRecursively() }.onFailure { log.warn("could not remove the RAM config dir", it) }
+        runCatching { dir.deleteRecursively() }.onFailure { log.warn("could not remove the session config dir", it) }
     }
 
     private fun restrict(file: File, owner: Set<PosixFilePermission>) {
