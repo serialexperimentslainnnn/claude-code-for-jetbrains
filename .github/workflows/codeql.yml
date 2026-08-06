@@ -23,39 +23,48 @@ concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The two languages were one matrix, and splitting them is not cosmetic: only ONE of them wants a
+# container, and a matrix cannot express "container here, bare runner there" without `fromJSON` gymnastics
+# around a `credentials:` block.
+#
+#   java-kotlin  needs a JDK and a full Gradle resolution of the IntelliJ Platform, so it runs in
+#                cc-ci:base and inherits the warm GRADLE_USER_HOME. It used to provision the JDK with
+#                setup-java and resolve the platform from cold on every run.
+#   javascript-typescript  is `build-mode: none`. It needs no JDK, no Gradle and no npm install — the
+#                scanner reads the sources. Putting it in the image would add a 6.5 GB pull to a job that
+#                would use none of it, making it strictly slower. It stays on the bare runner.
 jobs:
-  analyze:
-    name: CodeQL (${{ matrix.language }})
+  analyze-kotlin:
+    name: CodeQL (java-kotlin)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
+      packages: read # pull the CI image
       security-events: write # publish findings to the Security tab
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: java-kotlin
-            build-mode: manual
-          - language: javascript-typescript
-            build-mode: none
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # baked into the image are invisible and this job silently re-resolves the whole platform.
+      GRADLE_USER_HOME: /opt/gradle-home
+      GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up JDK 21
-        if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '21'
+      # No `setup-java` step: the image already carries the Temurin 21 the rest of the pipeline builds
+      # with. Provisioning a second JDK here meant CodeQL analysed a build that used a different one.
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
         with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
+          languages: java-kotlin
+          build-mode: manual
           # security-extended over the default pack: this is a security-sensitive plugin with real
           # users, and the extra precision cost is a few minutes on a free runner.
           queries: security-extended
@@ -63,12 +72,33 @@ jobs:
       # Manual build rather than autobuild: autobuild guesses, and this project's build resolves the
       # whole IntelliJ Platform. `classes` compiles main + resources without running tests twice.
       - name: Build (Kotlin)
-        if: matrix.language == 'java-kotlin'
         run: ./gradlew --no-daemon --stacktrace classes
-        env:
-          GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain
 
       - name: Analyze
         uses: github/codeql-action/analyze@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:java-kotlin
+
+  analyze-javascript:
+    name: CodeQL (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@18420e3271f74589575af831a523c833acda327f # codeql-bundle-v2.26.2
+        with:
+          category: /language:javascript-typescript
