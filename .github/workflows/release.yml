@@ -1,15 +1,32 @@
 # Release — sign the plugin and publish it to the JetBrains Marketplace.
 #
 # This is the only workflow that can reach real users, so it is the most constrained one in the repo.
+#
+# THE SEQUENCE, which is the part that is easy to get subtly wrong:
+#
+#   PR develop -> main  ->  tests  ->  merge  ->  tag + GitHub Release  ->  Marketplace, FROM that tag
+#
+# The tag is cut before the artifact is built, and the build then runs from the tag rather than from
+# `main`. That ordering is the point: the tag is the identity of the release (ADR 0001 §3), and `main`
+# is a moving ref — a merge landing between `guard` and `publish` would otherwise be silently included
+# in a release named after a different tree.
+#
+# It is NOT two workflows chained by the tag push, and that is a constraint rather than a preference:
+# a tag pushed with the GITHUB_TOKEN does not create a workflow run
+# (https://docs.github.com/en/actions/concepts/security/github_token — the recursion guard). Chaining
+# would need a PAT, a GitHub App or a deploy key, i.e. a long-lived write credential, to buy nothing:
+# the same ordering is achievable inside one run by checking the tag out.
+#
 # Three independent gates have to line up before anything is published:
 #
-#   1. TAG.      It runs on a `vX.Y.Z` tag and nothing else. The tag is the identity of the artifact
-#                (ADR 0001 §3) — the same input must always mean the same bytes.
-#   2. LINEAGE.  The tagged commit must be reachable from `main`. Tagging a feature branch, or a
-#                develop commit that never went through a PR into main, aborts the run. `main` is
-#                protected and only accepts PRs, so "reachable from main" IS "was reviewed and merged".
-#   3. HUMAN.    Publishing lives in the `marketplace` GitHub Environment with a required reviewer.
-#                Marketplace publication cannot be undone; a version is out the moment it is out.
+#   1. VERSION.  `build.gradle.kts` is the single source of truth and the tag is derived from it, so the
+#                two can never disagree. An existing tag means "already released" and the run stops.
+#   2. LINEAGE.  The commit must be reachable from `main`. Tagging a feature branch, or a develop commit
+#                that never went through a PR into main, aborts the run. `main` is protected and only
+#                accepts PRs, so "reachable from main" IS "was reviewed and merged".
+#   3. HUMAN.    Everything irreversible lives in the `marketplace` GitHub Environment with a required
+#                reviewer — including the tag, which is why cutting it early is safe. Marketplace
+#                publication cannot be undone; a version is out the moment it is out.
 #
 # Gate 2 is the one worth arguing about, so: it is not decoration. Without it, anyone who can push a
 # tag can publish from any code, and the PR review that gate 3 assumes has happened becomes optional.
@@ -159,9 +176,106 @@ jobs:
       id-token: write      # OIDC identity for the attestation
       attestations: write  # write the provenance record
     steps:
+      # fetch-depth: 0 because this job CREATES a tag and has to push it — a shallow clone has no
+      # object graph to tag from.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      # --- the tag comes FIRST, and everything below is built FROM it -----------------------------
+      #
+      # The order is the point of this job. The tag is the identity of the release (ADR 0001 §3), so it
+      # is cut before the artifact exists and the artifact is then produced from that exact ref — rather
+      # than publishing first and stamping a tag on afterwards, which makes the tag a label for something
+      # already gone out.
+      #
+      # This is safe to do this early ONLY because the whole job is behind the `marketplace` environment:
+      # nothing here runs until a human approves, so a tag can no longer appear for a release nobody
+      # authorised. What it can still do is outlive a FAILED publish, and published tags are immutable
+      # here. That is deliberate and the recovery is to re-run this job on the existing tag: the tag step
+      # is a no-op when the ref already exists, and `guard` only blocks a *new* run for an
+      # already-released version.
+      - name: Import the CI signing key
+        run: |
+          printf '%s' "${{ secrets.GPG_SIGNING_KEY }}" | gpg --batch --import
+          fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          [ -n "$fpr" ] || { echo "::error::GPG_SIGNING_KEY did not import — is it truncated?"; exit 1; }
+          echo "GPG_FPR=$fpr" >> "$GITHUB_ENV"
+
+      # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
+      # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
+      # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
+      # attests "this workflow released these bytes", and the human authorisation lives in the two gates
+      # around it — the reviewed PR into main, and the required approval on this environment.
+      - name: Create and sign the release tag
+        if: github.ref_type != 'tag'
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # git cannot pass gpg the loopback flags it needs in a headless runner, so it gets a wrapper that
+          # supplies them. The passphrase travels in the environment, never in argv, where `ps` would see it.
+          printf '#!/bin/sh\nexec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"\n' \
+            > /tmp/gpg-loopback
+          chmod +x /tmp/gpg-loopback
+
+          # A bot identity, not a person: this tag is not a human's assertion and must not look like one.
+          # The noreply address is required by git and is not anyone's mailbox.
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config gpg.program /tmp/gpg-loopback
+          git config user.signingkey "$GPG_FPR"
+
+          git tag -s "$TAG" -m "Release $TAG — published by the release workflow from $GITHUB_SHA"
+          git verify-tag "$TAG"   # never push a signature we have not checked ourselves
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+
+      # Build from the TAG, not from whatever `main` happens to be. On this workflow's primary path the two
+      # are the same commit, and checking the tag out anyway is what makes that a fact rather than a race:
+      # `main` is a moving ref, and a merge landing between the guard job and this one would otherwise be
+      # silently included in a release named after a different tree.
+      - name: Check out the tag being released
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          git checkout --detach "refs/tags/$TAG"
+          echo "building from $TAG -> $(git rev-parse HEAD)"
+
+      # The GitHub Release, created as a DRAFT before anything is published. Draft rather than final
+      # because it has no assets yet — a release that exists with nothing attached is a broken download
+      # link for however long the build takes, and it is visible the whole time.
+      - name: Create the draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          # The newest section of RELEASE_NOTES.md: from the first "## v" heading to the next one. Same
+          # source build.gradle.kts reads for the Marketplace "What's New" panel, so they cannot drift.
+          awk '/^## v/{if(seen)exit; seen=1} seen' RELEASE_NOTES.md > /tmp/notes.md
+          # NB the heredoc body stays indented to this block's level: YAML strips the common indentation,
+          # so the emitted markdown is flush-left. An unindented line here (a bare `---`, say) would end
+          # the block scalar and be read as a YAML document separator.
+          cat >> /tmp/notes.md <<'EOF'
+
+          ---
+
+          **Verifying this release.** Both the `.asc` files and the tag are signed by the project's **CI
+          signing key** (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware
+          key — so the chain terminates in a key that has never been on a computer.
+
+          What the signatures do NOT assert is that a human pressed a button: the release is cut
+          automatically from `main`. That claim rests on the two gates around it — `main` accepts only
+          reviewed pull requests, and publication requires an approval on a protected environment.
+
+          ```sh
+          gpg --import docs/ci-signing-key.asc
+          gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
+          git verify-tag <tag>                        # this workflow cut this release from main
+          ```
+          EOF
+          gh release create "$TAG" --draft --title "$TAG" --notes-file /tmp/notes.md --verify-tag
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
@@ -212,13 +326,9 @@ jobs:
           subject-path: dist/${{ steps.artifact.outputs.name }}
 
       # --- GPG-sign the exact bytes that were published -------------------------------------------
-      - name: Import the CI signing key
-        run: |
-          printf '%s' "${{ secrets.GPG_SIGNING_KEY }}" | gpg --batch --import
-          fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
-          [ -n "$fpr" ] || { echo "::error::GPG_SIGNING_KEY did not import — is it truncated?"; exit 1; }
-          echo "GPG_FPR=$fpr" >> "$GITHUB_ENV"
-
+      # The key is already imported: it was needed above to sign the tag, and it is the same key by
+      # design — one CI signing key backs both claims, and `docs/ci-signing-key.asc` is the single
+      # public half a user needs to check either of them.
       - name: Sign the artifact
         env:
           PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
@@ -236,74 +346,21 @@ jobs:
           for f in "$NAME" "$NAME.sha256"; do gpg --verify "$f.asc" "$f"; done
           sha256sum -c "$NAME.sha256"
 
-      # --- Cut the tag, signed, AFTER the release was approved and actually published -------------
+      # --- Attach the artifacts and take the release out of draft ---------------------------------
       #
-      # Deliberately last, and deliberately not in `guard`. Creating it earlier would mean a tag exists for
-      # a version that was never published (a failed build, a declined approval), and published tags are
-      # immutable here — so the next attempt would be blocked by a tag naming a release that does not exist.
-      # Cutting it here makes the tag mean "this was published", which is the only claim it can honestly make
-      # when the version, not the tag, is the input.
+      # Last, and only now: the draft became a real release the moment it has the four files a user is
+      # told to verify — the signed zip, its checksum, and a detached signature for each. Undrafting
+      # earlier would publish a release whose download links 404 for the length of a build.
       #
-      # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
-      # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
-      # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
-      # now attests "this workflow published these bytes", and the human authorisation lives in the two gates
-      # that remain — the reviewed PR into main, and the required approval on the `marketplace` environment.
-      - name: Create and sign the release tag
-        if: github.ref_type != 'tag'
-        env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
-          TAG: ${{ needs.guard.outputs.tag }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # git cannot pass gpg the loopback flags it needs in a headless runner, so it gets a wrapper that
-          # supplies them. The passphrase travels in the environment, never in argv, where `ps` would see it.
-          printf '#!/bin/sh\nexec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"\n' \
-            > /tmp/gpg-loopback
-          chmod +x /tmp/gpg-loopback
-
-          # A bot identity, not a person: this tag is not a human's assertion and must not look like one.
-          # The noreply address is required by git and is not anyone's mailbox.
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git config gpg.program /tmp/gpg-loopback
-          git config user.signingkey "$GPG_FPR"
-
-          git tag -s "$TAG" -m "Release $TAG — published by the release workflow from $GITHUB_SHA"
-          git verify-tag "$TAG"   # never push a signature we have not checked ourselves
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
-          ls -la
-
-      # --- GitHub Release -------------------------------------------------------------------------
-      - name: Create the GitHub Release
+      # `--clobber` so re-running this job on an existing tag replaces the assets instead of failing on
+      # a name collision. That is the documented recovery path when a publish fails after the tag was
+      # already cut, and it must not require deleting anything by hand.
+      - name: Attach the artifacts and publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
-          # The newest section of RELEASE_NOTES.md: from the first "## v" heading to the next one. Same
-          # source build.gradle.kts reads for the Marketplace "What's New" panel, so they cannot drift.
-          awk '/^## v/{if(seen)exit; seen=1} seen' RELEASE_NOTES.md > /tmp/notes.md
-          # NB the heredoc body stays indented to this block's level: YAML strips the common indentation,
-          # so the emitted markdown is flush-left. An unindented line here (a bare `---`, say) would end
-          # the block scalar and be read as a YAML document separator.
-          cat >> /tmp/notes.md <<'EOF'
-
-          ---
-
-          **Verifying this release.** Both the `.asc` files and the tag are signed by the project's **CI
-          signing key** (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware
-          key — so the chain terminates in a key that has never been on a computer.
-
-          What the signatures do NOT assert is that a human pressed a button: the release is cut
-          automatically from `main`. That claim rests on the two gates around it — `main` accepts only
-          reviewed pull requests, and publication requires an approval on a protected environment.
-
-          ```sh
-          gpg --import docs/ci-signing-key.asc
-          gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
-          git verify-tag <tag>                        # this workflow cut this release from main
-          ```
-          EOF
-          gh release create "${{ needs.guard.outputs.tag }}" dist/* \
-            --title "${{ needs.guard.outputs.tag }}" \
-            --notes-file /tmp/notes.md \
-            --verify-tag
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false
+          echo "released $TAG with:"
+          gh release view "$TAG" --json assets --jq '.assets[].name'
