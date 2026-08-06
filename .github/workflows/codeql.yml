@@ -94,11 +94,30 @@ jobs:
       - name: Give CodeQL's tracer the name Fedora's loader expands to
         run: |
           set -euo pipefail
-          dir=$(ls -d /__t/CodeQL/*/x64/codeql/tools/linux64)
-          echo "tracers shipped in the bundle:"
+
+          # Derived from LD_PRELOAD itself, NOT from a glob over the tool cache. The first attempt used
+          # `ls -d /__t/CodeQL/*/x64/codeql/tools/linux64` and matched TWO directories — the runner image
+          # ships one CodeQL bundle and the action had downloaded another (2.26.1 and 2.26.2 side by side)
+          # — so the variable held two paths and every command after it broke. Picking one by sort order
+          # would just be a nicer-looking guess; LD_PRELOAD names the exact file the loader will be asked
+          # for, so there is nothing left to infer.
+          preload="${LD_PRELOAD:-}"
+          [ -n "$preload" ] || {
+            echo "::error::LD_PRELOAD is unset — CodeQL tracing was never initialised, so this step is"
+            echo "::error::patching a problem that no longer exists in the form it was written for."
+            exit 1
+          }
+          echo "CodeQL will ask the loader for: $preload"
+
+          dir=$(dirname "$preload")
+          echo "tracers shipped in $dir:"
           ls -la "$dir"/*_trace.so
 
-          want="$dir/lib64_x86_64_trace.so"
+          # The same string with the tokens resolved the way Fedora's ld.so resolves them. Substitution
+          # rather than hardcoding the filename, so this keeps working if CodeQL renames around the tokens.
+          want=${preload//'${LIB}'/lib64}
+          want=${want//'${PLATFORM}'/x86_64}
+
           if [ -e "$want" ]; then
             echo "$want already exists — nothing to do."
           else
