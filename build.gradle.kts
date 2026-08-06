@@ -77,7 +77,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     // Unit tests (pure JVM: protocol parsing/building, no IntelliJ Platform fixtures needed).
-    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     // JUnit4/3 on the COMPILE classpath: the plugin's test executor references JUnit4 API, and
@@ -93,7 +93,7 @@ dependencies {
     }
 
     // --- uiTest: RemoteRobot end-to-end (Layer D), gated by -PuiTest.enabled=true ---
-    "uiTestImplementation"(platform("org.junit:junit-bom:5.11.4"))
+    "uiTestImplementation"(platform("org.junit:junit-bom:6.1.2"))
     "uiTestImplementation"("org.junit.jupiter:junit-jupiter")
     "uiTestRuntimeOnly"("org.junit.platform:junit-platform-launcher")
     "uiTestImplementation"("com.intellij.remoterobot:remote-robot:0.11.23")
