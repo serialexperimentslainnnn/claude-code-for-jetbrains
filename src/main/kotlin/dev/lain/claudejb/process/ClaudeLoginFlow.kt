@@ -23,6 +23,12 @@ class ClaudeLoginFlow(
     private val binaryPath: String,
     private val cwd: String?,
     private val env: Map<String, String>,
+    /**
+     * The subcommand to drive. `auth login` writes to the binary's own credential store;
+     * `setup-token` prints a long-lived token instead (surfaced via [Listener.onToken]) so the caller can
+     * keep it in the IDE's PasswordSafe and the binary's store stays empty.
+     */
+    private val args: List<String> = listOf("auth", "login"),
 ) {
 
     private companion object {
@@ -44,6 +50,12 @@ class ClaudeLoginFlow(
         /** The binary is now waiting for the authorization code on stdin (prompt the user, then [submitCode]). */
         fun onCodeRequested()
 
+        /**
+         * A `setup-token` flow printed its long-lived token. Fired at most once, before [onResult]. The
+         * value is a SECRET: store it (PasswordSafe) and nothing else — no logs, no transcript, no UI text.
+         */
+        fun onToken(token: String) {}
+
         /** The flow ended: [success] from the exit code (and a final-output sanity check), with a short [message]. */
         fun onResult(success: Boolean, message: String)
     }
@@ -56,6 +68,8 @@ class ClaudeLoginFlow(
 
     @Volatile private var promptSeen = false
 
+    @Volatile private var tokenSeen = false
+
     @Volatile private var finished = false
 
     /**
@@ -63,7 +77,7 @@ class ClaudeLoginFlow(
      * caller can fall back, e.g. to the IDE terminal) if the process can't be started. Safe to call off the EDT.
      */
     fun start(listener: Listener): Boolean {
-        val builder = PtyProcessBuilder(arrayOf(binaryPath, "auth", "login"))
+        val builder = PtyProcessBuilder((listOf(binaryPath) + args).toTypedArray())
             .setEnvironment(env) // pty4j replaces the env wholesale — [env] must already carry the base
             .setInitialColumns(PTY_COLUMNS) // wide enough that the OAuth URL is emitted on a single line
             .setInitialRows(PTY_ROWS)
@@ -103,6 +117,12 @@ class ClaudeLoginFlow(
                     promptSeen = true
                     listener.onCodeRequested()
                 }
+                if (!tokenSeen) {
+                    LoginOutputParser.extractSetupToken(text)?.let { token ->
+                        tokenSeen = true
+                        listener.onToken(token)
+                    }
+                }
             }
         }.onFailure { log.debug("login PTY reader stopped", it) }
 
@@ -118,12 +138,19 @@ class ClaudeLoginFlow(
         listener.onResult(success, message)
     }
 
-    /** Writes the authorization [code] (plus a newline) to the binary's stdin. No-op if the process is gone. */
+    /**
+     * Writes the authorization [code] to the binary's stdin, terminated with a CARRIAGE RETURN.
+     *
+     * `\r`, not `\n`, and it is the difference between working and hanging: the login TUI (Ink) puts the
+     * TTY in raw mode, where the Enter key arrives as `\r` — that is what its input handler maps to
+     * "submit". A trailing `\n` left the code sitting in the input field with the flow waiting forever,
+     * which the user experienced as the card stuck on "Verifying".
+     */
     fun submitCode(code: String) {
         val proc = process ?: return
         runCatching {
             proc.outputStream.apply {
-                write((code.trim() + "\n").toByteArray(StandardCharsets.UTF_8))
+                write((code.trim() + "\r").toByteArray(StandardCharsets.UTF_8))
                 flush()
             }
         }.onFailure { log.warn("Failed to write the login code to the PTY", it) }

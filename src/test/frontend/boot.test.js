@@ -65,3 +65,192 @@ describe('boot screen', () => {
     expect(region.textContent).toContain('Loading Claude Code');
   });
 });
+
+// The FOURTH boot state: no `claude` binary. The overlay stays up but swaps the spinner for the
+// install/path card — a decision to make, not a wait to sit through.
+describe('missing-binary card', () => {
+  let win, sent;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js'], { vendor: false });
+    sent = [];
+    win.CC.send = (m) => sent.push(m);
+    win.cc.meta({
+      installMethods: [
+        {
+          id: 'sh',
+          label: 'Install via the official script',
+          display: 'curl -fsSL https://claude.ai/install.sh | bash',
+          shell: 'bash',
+        },
+        { id: 'apt', label: 'Install via apt', display: 'sudo apt install claude-code', shell: 'bash' },
+      ],
+    });
+  });
+
+  const card = () => win.document.getElementById('boot-missing');
+  const missing = () => win.cc.state({ starting: false, running: false, binaryMissing: true });
+
+  it('shows the card (and keeps the boot overlay up) when the binary is missing', () => {
+    missing();
+    expect(win.document.getElementById('boot').hidden).toBe(false);
+    expect(card().hidden).toBe(false);
+    expect(win.document.getElementById('boot').classList.contains('missing')).toBe(true);
+  });
+
+  it('renders one row per method: the button, the exact command, and its Copy', () => {
+    missing();
+    const rows = card().querySelectorAll('.boot-install');
+    expect(rows.length).toBe(2);
+    expect(rows[0].querySelector('.boot-install-btn').textContent).toBe('Install via the official script');
+    expect(rows[0].querySelector('.boot-install-cmd').textContent).toContain('install.sh | bash');
+    expect(rows[0].querySelector('.boot-install-hint-label').textContent).toContain('bash');
+    expect(rows[1].querySelector('.boot-install-copy')).toBeTruthy();
+  });
+
+  it('clicking Install sends the method and flips the button to Installing…', () => {
+    missing();
+    const btn = card().querySelector('.boot-install-btn[data-method="apt"]');
+    btn.click();
+    expect(sent).toContainEqual({ type: 'installClaude', method: 'apt' });
+    expect(btn.textContent).toBe('Installing…');
+    expect(btn.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('Copy sends the exact command without running anything', () => {
+    missing();
+    card().querySelector('.boot-install-copy').click();
+    expect(sent).toContainEqual({ type: 'copy', text: 'curl -fsSL https://claude.ai/install.sh | bash' });
+    expect(sent.filter((m) => m.type === 'installClaude')).toEqual([]);
+  });
+
+  it('the path row submits and a host error resets the Installing state', () => {
+    missing();
+    const input = win.document.getElementById('boot-path');
+    input.value = '/opt/claude/claude';
+    win.document.getElementById('boot-path-use').click();
+    expect(sent).toContainEqual({ type: 'setBinaryPath', path: '/opt/claude/claude' });
+
+    card().querySelector('.boot-install-btn').click();
+    win.cc.bootPathError('That runs, but it isn’t Claude Code.');
+    expect(win.document.getElementById('boot-path-err').textContent).toContain('isn’t Claude Code');
+    expect(card().querySelector('.boot-install-btn').getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('the card comes down when the binary appears', () => {
+    missing();
+    win.cc.state({ starting: true, running: false, binaryMissing: false });
+    expect(card().hidden).toBe(true);
+    expect(win.document.getElementById('boot-sub').textContent).toBe('Starting the agent');
+  });
+});
+
+// The sign-in card: raised by needsLogin (or proactively by the host), driven step by step by cc.authState.
+describe('sign-in card', () => {
+  let win, sent;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js'], { vendor: false });
+    sent = [];
+    win.CC.send = (m) => sent.push(m);
+  });
+
+  const card = () => win.document.getElementById('auth-card');
+  const step = (name) => card().querySelector('.auth-step[data-step="' + name + '"]');
+
+  it('appears on needsLogin and on cc.showAuth, and the install card wins over it', () => {
+    expect(card().hidden).toBe(true);
+    win.cc.state({ running: true, needsLogin: true });
+    expect(card().hidden).toBe(false);
+    win.cc.state({ running: false, needsLogin: true, binaryMissing: true });
+    expect(card().hidden).toBe(true); // signing in is meaningless without a binary
+    win.cc.state({ running: true, needsLogin: false });
+    win.cc.showAuth();
+    expect(card().hidden).toBe(false);
+  });
+
+  it('subscription click moves to waiting and asks the host to start the flow', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.document.getElementById('auth-sub').click();
+    expect(sent).toContainEqual({ type: 'loginSubscription' });
+    expect(step('waiting').hidden).toBe(false);
+    expect(step('idle').hidden).toBe(true);
+  });
+
+  it('url and code events both land on the ONE browser step — the code is optional, not a stage', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });
+    expect(step('browser').hidden).toBe(false);
+    // The URL is never rendered as text — it is 200 characters of query string. Two buttons instead.
+    expect(win.document.getElementById('auth-url')).toBeNull();
+    expect(win.document.getElementById('auth-url-open').disabled).toBe(false);
+    // The optional code field is already on this screen, before any code event arrives.
+    expect(win.document.getElementById('auth-code')).toBeTruthy();
+    expect(win.document.getElementById('auth-code-label').textContent).toContain('optional');
+    win.document.getElementById('auth-url-copy').click();
+    expect(sent).toContainEqual({ type: 'copy', text: 'https://claude.ai/oauth/authorize?x=1' });
+    win.document.getElementById('auth-url-open').click();
+    expect(sent).toContainEqual({ type: 'open', url: 'https://claude.ai/oauth/authorize?x=1' });
+
+    // The binary asking for the code stays on the SAME step, re-framed — no screen jump.
+    win.cc.authState({ step: 'code' });
+    expect(step('browser').hidden).toBe(false);
+    expect(win.document.getElementById('auth-code-label').textContent).toContain('authorization code');
+  });
+
+  it('the browser buttons are inert until the host supplies a URL, and a restart drops the old one', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.cc.authState({ step: 'waiting' });
+    expect(win.document.getElementById('auth-url-open').disabled).toBe(true);
+
+    win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });
+    expect(win.document.getElementById('auth-url-open').disabled).toBe(false);
+
+    // Restarting the flow invalidates that URL — its consent page belongs to an attempt that is over.
+    win.cc.authState({ step: 'waiting' });
+    expect(win.document.getElementById('auth-url-open').disabled).toBe(true);
+  });
+
+  it('the code input submits and is CLEARED — a secret must not linger in the DOM', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.cc.authState({ step: 'code' });
+    const input = win.document.getElementById('auth-code');
+    input.value = 'AUTH-CODE-42';
+    win.document.getElementById('auth-code-use').click();
+    expect(sent).toContainEqual({ type: 'submitLoginCode', code: 'AUTH-CODE-42' });
+    expect(input.value).toBe('');
+    expect(step('verifying').hidden).toBe(false);
+  });
+
+  it('verifying has its own Cancel, so a hung submit is never a dead end', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.cc.authState({ step: 'verifying' });
+    win.document.getElementById('auth-cancel-verify').click();
+    expect(sent).toContainEqual({ type: 'cancelLogin' });
+    expect(step('idle').hidden).toBe(false);
+  });
+
+  it('the API key input submits and is cleared too', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    const input = win.document.getElementById('auth-key');
+    input.value = 'sk-ant-test';
+    win.document.getElementById('auth-key-use').click();
+    expect(sent).toContainEqual({ type: 'useApiKey', key: 'sk-ant-test' });
+    expect(input.value).toBe('');
+  });
+
+  it('dismiss tells the host and an error shows its message with a retry back to idle', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.document.getElementById('auth-dismiss').click();
+    expect(sent).toContainEqual({ type: 'dismissAuth' });
+
+    win.cc.authState({ step: 'error', message: 'The sign-in finished but no token was captured' });
+    expect(win.document.getElementById('auth-error').textContent).toContain('no token was captured');
+    win.document.getElementById('auth-retry').click();
+    expect(step('idle').hidden).toBe(false);
+  });
+
+  it('comes down when needsLogin clears', () => {
+    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: true, needsLogin: false });
+    expect(card().hidden).toBe(true);
+  });
+});

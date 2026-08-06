@@ -7,27 +7,34 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Pure logic of [RateLimitInfo]. The binary reports quota utilization on two different scales (0..100 and,
- * near the limit, 0..1) and varying window/status strings; the UI quota bar depends on this normalization,
- * so these tests pin the contract independently of the wire decoding (which ProtocolParserTest covers).
+ * Pure logic of [RateLimitInfo]. The wire reports utilization as a 0..100 percentage (the SDK documents
+ * every `get_usage` window as "Percentage of the window used, 0-100"); the UI quota bar depends on this
+ * normalization, so these tests pin the contract independently of the wire decoding (which
+ * ProtocolParserTest covers).
+ *
+ * These tests used to pin the OPPOSITE at the low end: a "two scales" heuristic multiplied anything
+ * `<= 1.0` by 100, and the test named `utilization exactly 1 is treated as the fractional scale` froze
+ * that guess as if it were the contract. A live session at a genuine 1% rendered as 100% — the guess is
+ * undecidable exactly at 1.0, and every freshly reset window climbs through that range.
  */
 class RateLimitInfoTest {
 
     // --- utilizationPercent ---
 
     @Test
-    fun `utilization on 0 to 100 scale is passed through`() {
+    fun `utilization is a 0 to 100 percentage, passed through`() {
         assertEquals(92, RateLimitInfo(utilization = 92.0).utilizationPercent())
     }
 
     @Test
-    fun `utilization on 0 to 1 scale is multiplied by 100`() {
-        assertEquals(50, RateLimitInfo(utilization = 0.5).utilizationPercent())
+    fun `utilization 1 means 1 percent, not a full window`() {
+        assertEquals(1, RateLimitInfo(utilization = 1.0).utilizationPercent())
     }
 
     @Test
-    fun `utilization exactly 1 is treated as the fractional scale`() {
-        assertEquals(100, RateLimitInfo(utilization = 1.0).utilizationPercent())
+    fun `sub-percent utilization rounds instead of inflating`() {
+        assertEquals(1, RateLimitInfo(utilization = 0.5).utilizationPercent())
+        assertEquals(0, RateLimitInfo(utilization = 0.2).utilizationPercent())
     }
 
     @Test

@@ -235,6 +235,22 @@ object JcefBridge {
         data class McpReconnect(val name: String) : SessionControl
         data class McpToggle(val name: String, val enabled: Boolean) : SessionControl
         data class StopTask(val taskId: String) : SessionControl
+
+        // The "Claude Code was not found" boot card: run an official installer in the IDE terminal,
+        // validate a user-typed binary path, or re-check after an install finished.
+        data class InstallClaude(val method: String) : SessionControl
+        data class SetBinaryPath(val path: String) : SessionControl
+        object RecheckBinary : SessionControl
+
+        // The sign-in card and the dashboard's account button. The two credential-bearing messages
+        // (UseApiKey, SubmitLoginCode) carry SECRETS: they cross the in-memory JCEF bridge only, and their
+        // values must never be logged, echoed into state pushes, or appear in any error text.
+        object LoginSubscription : SessionControl
+        data class UseApiKey(val key: String) : SessionControl
+        data class SubmitLoginCode(val code: String) : SessionControl
+        object CancelLogin : SessionControl
+        object DismissAuth : SessionControl
+        object Logout : SessionControl
     }
 
     /** Typed accessors over one inbound payload, so the per-group parsers below read as plain field reads. */
@@ -246,6 +262,13 @@ object JcefBridge {
         fun long(key: String, fallback: Long): Long = (obj[key] as? JsonPrimitive)?.longOrNull ?: fallback
         fun json(key: String): JsonObject? = obj[key] as? JsonObject
     }
+
+    /**
+     * A string as a JS expression: a JSON string literal is a valid JavaScript string literal, and the
+     * serializer's escaping (quotes, backslashes, control characters) is exactly what stops a message that
+     * happens to contain `")` from breaking out of the `host.exec` call that embeds it.
+     */
+    fun jsString(s: String): String = JsonPrimitive(s).toString()
 
     /**
      * Parses one `window.__ccSend` payload. Malformed input or an unrecognized `type` maps to [Msg.Unknown].
@@ -335,8 +358,31 @@ object JcefBridge {
 
     private fun parseSessionControls(type: String, f: Fields): Msg? = when (type) {
         "mcpReconnect" -> Msg.McpReconnect(f.text("name"))
+
         "mcpToggle" -> Msg.McpToggle(f.text("name"), f.bool("enabled"))
+
         "stopTask" -> Msg.StopTask(f.text("taskId"))
+
+        // The "Claude Code was not found" boot card.
+        "installClaude" -> Msg.InstallClaude(f.text("method"))
+
+        "setBinaryPath" -> Msg.SetBinaryPath(f.text("path"))
+
+        "recheckBinary" -> Msg.RecheckBinary
+
+        // The sign-in card and the dashboard account button.
+        "loginSubscription" -> Msg.LoginSubscription
+
+        "useApiKey" -> Msg.UseApiKey(f.text("key"))
+
+        "submitLoginCode" -> Msg.SubmitLoginCode(f.text("code"))
+
+        "cancelLogin" -> Msg.CancelLogin
+
+        "dismissAuth" -> Msg.DismissAuth
+
+        "logout" -> Msg.Logout
+
         else -> null
     }
 

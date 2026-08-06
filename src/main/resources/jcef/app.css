@@ -1614,6 +1614,13 @@ mark.cc-hit.active {
 .btn:active {
   transform: translateY(0) scale(0.98);
 }
+.btn:disabled,
+.btn:disabled:hover {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+  filter: none;
+}
 .btn.primary {
   background: var(--accent);
   color: #fff;
@@ -2474,6 +2481,194 @@ body.reduced-motion .boot-dots::after {
 #app.booting #conversation {
   pointer-events: none;
   user-select: none;
+}
+
+/* ── "Claude Code was not found" card (the boot overlay's fourth state) ─────── */
+#boot.missing .boot-dots {
+  display: none; /* nothing is loading — the card asks for a decision, not patience */
+}
+#boot-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  margin-top: 6px;
+  text-align: left;
+}
+#boot-missing[hidden] {
+  display: none;
+}
+.boot-missing-title {
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+.boot-missing-sub {
+  font-size: 12px;
+  color: var(--dim);
+  text-align: center;
+}
+.boot-install {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.boot-install-btn {
+  align-self: flex-start;
+  font-weight: 600;
+}
+.boot-install-btn.installing {
+  opacity: 0.75;
+}
+.boot-install-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.boot-install-hint-label {
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.boot-install-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--code-bg, rgba(128, 128, 128, 0.12));
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.boot-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.boot-path-label,
+.auth-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+.boot-path-controls,
+.auth-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.boot-path-controls input,
+.auth-row input {
+  flex: 1;
+  min-width: 0;
+  /* Same themed field as the elicitation cards — a bare UA-styled white input reads as foreign
+     in every dark theme the IDE ships. */
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  outline: none;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
+}
+.boot-path-controls input:focus,
+.auth-row input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.boot-path-controls input::placeholder,
+.auth-row input::placeholder {
+  color: var(--dim);
+}
+.boot-path-err,
+.auth-error {
+  font-size: 12px;
+  color: var(--error, #d66);
+  min-height: 1em;
+}
+
+/* ── sign-in card ───────────────────────────────────────────────────────────── */
+#auth-card {
+  position: absolute;
+  inset: 0;
+  z-index: 55; /* below #boot (60): no binary beats no login */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+#auth-card[hidden] {
+  display: none;
+}
+.auth-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 440px;
+  padding: 0 24px;
+  text-align: center;
+}
+.auth-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.auth-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.auth-step[hidden] {
+  display: none;
+}
+.auth-primary {
+  font-weight: 600;
+}
+.auth-hint {
+  font-size: 11px;
+  color: var(--dim);
+}
+.auth-divider {
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.auth-quiet {
+  background: none;
+  border: none;
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+}
+.auth-wait {
+  font-size: 13px;
+  color: var(--dim);
+}
+.auth-sub-wait {
+  font-size: 13px;
+  font-weight: 600;
+}
+.auth-url-actions {
+  gap: 8px;
+}
+.account-auth-row {
+  margin-top: 6px;
+}
+.account-auth-btn {
+  font-size: 12px;
 }
 
 /* Reduced motion — driven by the HOST (body.reduced-motion), deliberately NOT by

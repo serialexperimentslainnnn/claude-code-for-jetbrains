@@ -126,9 +126,13 @@ object JcefSessionData {
         put("limitReached", extra.spendLimitReached)
     }
 
-    /** The wire reports 0..100 here, but has historically also sent 0..1; accept both, clamp, never crash. */
-    private fun pctOf(raw: Double): Int =
-        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
+    /**
+     * The wire scale is 0..100 (the SDK documents every `get_usage` window as "Percentage of the window
+     * used, 0-100"); clamp, never crash. The former "accept 0..1 too" heuristic is deliberately gone: it
+     * was undecidable at exactly 1.0 and rendered a genuine 1% as 100% — observed live, and reachable by
+     * every user at the start of every freshly reset window. Same rule as [RateLimitInfo.utilizationPercent].
+     */
+    private fun pctOf(raw: Double): Int = Math.round(raw).toInt().coerceIn(0, 100)
 
     /** Epoch seconds → ISO-8601, so event-sourced windows match the shape `get_usage` already returns. */
     private fun isoOf(epochSeconds: Long): String =
@@ -203,17 +207,31 @@ object JcefSessionData {
         return null
     }
 
-    /** `{ email, org, plan, provider }` or null when the account is empty (no fields reported). */
+    /**
+     * `{ email, org, plan, provider, loggedIn }` — session-reported account fields, enriched by the
+     * `auth status` probe ([ClaudeSession.authCliStatus]), which also knows about a session that has no
+     * account because it is NOT signed in. `loggedIn` drives the dashboard's Sign in / Log out button:
+     * absent (null) when unknown, so the button doesn't claim a state nobody verified.
+     */
     private fun accountJson(session: ClaudeSession): JsonObject? {
         val acct = session.account
+        val probe = session.authCliStatus
         val empty = acct.email.isBlank() && acct.organization.isBlank() &&
-            acct.subscriptionType.isBlank() && acct.apiProvider.isBlank()
+            acct.subscriptionType.isBlank() && acct.apiProvider.isBlank() && probe == null
         if (empty) return null
         return buildJsonObject {
-            put("email", acct.email.ifBlank { null })
+            put("email", acct.email.ifBlank { null } ?: probe?.email)
             put("org", acct.organization.ifBlank { null })
-            put("plan", acct.subscriptionType.ifBlank { null })
-            put("provider", acct.apiProvider.ifBlank { null })
+            // Last resort, the vaulted blob: an env-token session gets a reduced `auth status` with no plan
+            // in it, and the plan is something we already hold.
+            put(
+                "plan",
+                acct.subscriptionType.ifBlank { null }
+                    ?: probe?.subscriptionType
+                    ?: dev.lain.claudejb.process.CredentialsVault.subscriptionType(),
+            )
+            put("provider", acct.apiProvider.ifBlank { null } ?: probe?.authMethod)
+            put("loggedIn", probe?.loggedIn)
         }
     }
 

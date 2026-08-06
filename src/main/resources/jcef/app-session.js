@@ -282,6 +282,22 @@
       statRow('Plan', acct.plan),
       statRow('Provider', acct.provider),
     ];
+    // Sign in / Log out, from the VERIFIED auth state only (`loggedIn` comes from the host's
+    // `auth status` probe). When it is unknown the row is omitted — a button must not claim a state
+    // nobody checked. Signing in is a button here, not a slash command to know about.
+    if (acct.loggedIn === true || acct.loggedIn === false) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn account-auth-btn';
+      btn.textContent = acct.loggedIn ? 'Log out' : 'Sign in';
+      btn.addEventListener('click', function () {
+        CC.send({ type: acct.loggedIn ? 'logout' : 'loginSubscription' });
+      });
+      var row = document.createElement('div');
+      row.className = 'account-auth-row';
+      row.appendChild(btn);
+      rows.push(row);
+    }
     return card('Account', rows);
   }
 

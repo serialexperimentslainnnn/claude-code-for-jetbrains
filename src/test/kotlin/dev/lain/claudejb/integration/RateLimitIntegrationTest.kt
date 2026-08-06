@@ -17,6 +17,7 @@ class RateLimitIntegrationTest : FakeClaudeTestBase() {
         assertTrue("isWarning", rl.isWarning)
         assertEquals("five_hour", rl.rateLimitType)
         assertEquals("5h", rl.windowLabel())
-        assertEquals(92, rl.utilizationPercent())
+        // 92.5 rounds to 93. The former 92 pinned truncation, a leftover of the removed 0..1 heuristic.
+        assertEquals(93, rl.utilizationPercent())
     }
 }

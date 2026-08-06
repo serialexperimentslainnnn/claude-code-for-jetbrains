@@ -191,6 +191,17 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         }
     }
 
+    /**
+     * The Anthropic API key, in its OWN slot (`providerApiKey:anthropic`) like every other provider's —
+     * a DeepSeek key and an Anthropic key are separate entries and can never be mistaken for each other.
+     *
+     * Unlike a third-party provider this one carries NO base URL: it is an alternative first-party identity,
+     * so [Provider.launchEnv] rightly emits nothing for it. The key is applied at launch by
+     * [ClaudeSession.effectiveLaunchEnv], which is also where the subscription credential is resolved, so
+     * one place decides which identity a session runs as.
+     */
+    val anthropicApiKey: String get() = getProviderApiKey(Provider.ANTHROPIC)
+
     /** Env that routes the binary to the selected provider — empty for Anthropic (native auth). */
     private fun providerEnv(): Map<String, String> = Provider.launchEnv(provider, getProviderApiKey(provider))
 

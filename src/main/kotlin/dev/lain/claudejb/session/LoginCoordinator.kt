@@ -1,6 +1,5 @@
 package dev.lain.claudejb.session
 
-import com.intellij.ide.BrowserUtil
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -48,6 +47,33 @@ class LoginCoordinator(
     private val log = thisLogger()
 
     /**
+     * The sign-in card, when a chat panel is attached. This seam is what makes the flow NATIVE: with a UI
+     * present the whole OAuth dance runs inside the plugin (card → browser → code back into the card) and
+     * neither a terminal tab nor a modal dialog ever appears. Registered by JcefChatPanel in `init`,
+     * detached in `dispose`; with none attached the legacy paths below still work.
+     */
+    interface LoginUi {
+        /** The OAuth authorize URL: show it on the card (the browser is opened separately). */
+        fun onAuthUrl(url: String)
+
+        /** The binary now waits for the authorization code — the card swaps to its code input. */
+        fun onCodeRequested()
+
+        /** The flow ended. On success the session restart follows; on failure [message] goes on the card. */
+        fun onLoginResult(success: Boolean, message: String)
+    }
+
+    @Volatile private var ui: LoginUi? = null
+
+    fun attachUi(loginUi: LoginUi) {
+        ui = loginUi
+    }
+
+    fun detachUi(loginUi: LoginUi) {
+        if (ui === loginUi) ui = null
+    }
+
+    /**
      * Set once we've offered the sign-in for the current auth-failure streak, so a retry storm doesn't fire one
      * notification per failed turn. Cleared by [onCleanResult] on the next non-error result — which is also what
      * clears it after a successful login, since the restart's first clean turn gets there.
@@ -58,6 +84,48 @@ class LoginCoordinator(
     @Volatile private var flow: ClaudeLoginFlow? = null
 
     @Volatile private var authUrl: String? = null
+
+    /**
+     * True while a sign-in is actually in flight.
+     *
+     * Load-bearing for [ClaudeSession.refreshBootState], which harvests the credentials file every few
+     * seconds: `claude auth login` WRITES that file as it completes, so harvesting mid-flow deletes the
+     * credential out from under the binary and the browser leg silently fails — leaving the code-paste
+     * fallback as the only route that ever worked. Nothing touches that file while this is true.
+     */
+    val inProgress: Boolean get() = flow != null
+
+    /**
+     * Feeds the card-entered authorization code to the running flow, with a WATCHDOG: if the flow gives no
+     * verdict within [VERIFY_TIMEOUT_MS], it is cancelled and the card told so. A submit that hangs must
+     * end in words, never in a spinner the user has to give up on — that exact dead end was observed live
+     * (the raw-TTY Enter defect) and the escape has to exist independently of that fix being right.
+     */
+    fun submitCode(code: String) {
+        val current = flow ?: return
+        current.submitCode(code)
+        verifyTimer?.stop()
+        verifyTimer = javax.swing.Timer(VERIFY_TIMEOUT_MS) {
+            if (flow === current) {
+                cancelLogin()
+                ui?.onLoginResult(false, "No answer after submitting the code. Try again — or use the API-key route.")
+            }
+        }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    private var verifyTimer: javax.swing.Timer? = null
+
+    /** The card's Cancel: kill the in-flight flow, if any. */
+    fun cancelLogin() {
+        verifyTimer?.stop()
+        verifyTimer = null
+        flow?.cancel()
+        flow = null
+        authUrl = null
+    }
 
     /** A turn ended cleanly: the auth-failure streak is over, so the next failure may prompt again. */
     fun onCleanResult() {
@@ -103,9 +171,14 @@ class LoginCoordinator(
             notifyMissingBinary()
             return
         }
+        // PRIMARY: the in-card native flow, whenever a card exists to drive it. The terminal is the fallback
+        // (PTY spawn failed), the "run it yourself" notice the last resort — the exact inverse of the pre-5
+        // ordering, which dropped the user into a terminal tab as the happy path.
+        val cardUi = ui
+        if (cardUi != null && startCardFlow(binary, cardUi)) return
         edt {
             if (openTerminal(binary)) return@edt
-            log.info("IDE terminal unavailable for /login — falling back to the native PTY flow")
+            log.info("IDE terminal unavailable for /login — falling back to the dialog-driven PTY flow")
             if (startNativePtyFlow(binary)) {
                 notifyInfo("Signing in… your browser should open. Approve access there to finish.")
                 return@edt
@@ -115,6 +188,71 @@ class LoginCoordinator(
                     TerminalLauncher.loginCommand(binary.absolutePath),
             )
         }
+    }
+
+    /**
+     * The native, card-driven subscription flow: `claude auth login` under a PTY, every step surfaced on
+     * the sign-in card and nothing else on screen.
+     *
+     * `auth login`, NOT `setup-token`, and the difference is the OAuth CONSENT: setup-token mints a
+     * reduced-scope token, and the scopes it drops (file upload among them) are ones Claude Code actually
+     * exercises — a pasted attachment travels through "Upload files on your behalf". So the full login it
+     * is, with its cost stated rather than hidden: the credentials land in the binary's own store, SHARED
+     * with the terminal CLI (OS keychain on macOS, DPAPI on Windows, a 0600 file on Linux) — subscription
+     * identity is no longer separable from the CLI's, and Log out signs the terminal out too. The
+     * PasswordSafe remains the home of the API-key route, which stays fully plugin-owned.
+     *
+     * Returns false when the PTY could not spawn, so [start] falls back to the terminal.
+     */
+    private fun startCardFlow(binary: File, cardUi: LoginUi): Boolean {
+        // pty4j REPLACES the child env wholesale — merge the base in or the binary loses PATH/HOME.
+        val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
+        val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env, args = listOf("auth", "login"))
+        val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
+            override fun onAuthUrl(url: String) {
+                authUrl = url
+                // NO BrowserUtil.browse here: the binary opens the browser itself the moment it prints
+                // this URL, and browsing it again from the host opened a SECOND tab on every sign-in.
+                // The card's "Open browser again" button covers the case where the binary's attempt
+                // failed (headless browser config, snap confinement).
+                edt { cardUi.onAuthUrl(url) }
+            }
+
+            override fun onCodeRequested() = edt { cardUi.onCodeRequested() }
+
+            override fun onToken(token: String) {
+                // `auth login` normally prints none; if a flow variant ever does, the safe is the one
+                // place it may go. Never logged, never shown, never echoed back.
+                dev.lain.claudejb.settings.SecretStore.set(dev.lain.claudejb.settings.SecretStore.OAUTH_TOKEN, token)
+            }
+
+            override fun onResult(success: Boolean, message: String) = edt {
+                verifyTimer?.stop()
+                verifyTimer = null
+                flow = null
+                authUrl = null
+                if (success) {
+                    // `auth login` wrote its credentials to ~/.claude/.credentials.json — plaintext on
+                    // Linux and readable by anything running as the user. Take it into the IDE's encrypted
+                    // safe and delete it immediately; the launch path writes it back 0600 for the session
+                    // and harvests it again at teardown, so it is on disk only while a session runs.
+                    val vaulted = dev.lain.claudejb.process.CredentialsVault.harvest()
+                    cardUi.onLoginResult(true, message)
+                    notifyInfo(
+                        if (vaulted) {
+                            "Signed in. Your credentials were moved into the IDE's password safe."
+                        } else {
+                            "Signed in to Claude."
+                        },
+                    )
+                    restartSession() // relaunch on the fresh credentials
+                } else {
+                    cardUi.onLoginResult(false, message)
+                }
+            }
+        })
+        if (started) flow = ptyFlow
+        return started
     }
 
     /**
@@ -160,8 +298,9 @@ class LoginCoordinator(
         val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
         val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
             override fun onAuthUrl(url: String) {
+                // The binary already opened the browser itself; browsing again here doubled the tab. The
+                // URL is kept only as the hint shown in the code dialog.
                 authUrl = url
-                edt { BrowserUtil.browse(url) }
             }
 
             override fun onCodeRequested() = edt { promptForCode(ptyFlow) }
@@ -197,5 +336,14 @@ class LoginCoordinator(
         } else {
             ptyFlow.submitCode(code.trim())
         }
+    }
+
+    private companion object {
+        /**
+         * How long a submitted code may sit unanswered before the flow is cancelled and the card says so.
+         * Generous — the exchange is one HTTPS round-trip — but bounded: past this, waiting longer is not
+         * going to produce a different outcome.
+         */
+        const val VERIFY_TIMEOUT_MS = 45_000
     }
 }

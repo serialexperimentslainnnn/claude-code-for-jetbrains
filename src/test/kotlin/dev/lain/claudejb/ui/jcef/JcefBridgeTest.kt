@@ -269,6 +269,52 @@ class JcefBridgeTest {
         assertEquals("task42", m.taskId)
     }
 
+    // ── "Claude Code was not found" boot card ────────────────────────────────────────────────────────────
+
+    @Test
+    fun `parse installClaude carries the method id`() {
+        val m = JcefBridge.parse("""{"type":"installClaude","method":"apt"}""") as JcefBridge.Msg.InstallClaude
+        assertEquals("apt", m.method)
+    }
+
+    @Test
+    fun `parse setBinaryPath carries the path`() {
+        val m = JcefBridge.parse("""{"type":"setBinaryPath","path":"/opt/claude/claude"}""") as JcefBridge.Msg.SetBinaryPath
+        assertEquals("/opt/claude/claude", m.path)
+    }
+
+    @Test
+    fun `parse recheckBinary`() {
+        assertEquals(JcefBridge.Msg.RecheckBinary, JcefBridge.parse("""{"type":"recheckBinary"}"""))
+    }
+
+    // ── sign-in card ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `parse loginSubscription cancelLogin dismissAuth logout`() {
+        assertEquals(JcefBridge.Msg.LoginSubscription, JcefBridge.parse("""{"type":"loginSubscription"}"""))
+        assertEquals(JcefBridge.Msg.CancelLogin, JcefBridge.parse("""{"type":"cancelLogin"}"""))
+        assertEquals(JcefBridge.Msg.DismissAuth, JcefBridge.parse("""{"type":"dismissAuth"}"""))
+        assertEquals(JcefBridge.Msg.Logout, JcefBridge.parse("""{"type":"logout"}"""))
+    }
+
+    @Test
+    fun `parse useApiKey and submitLoginCode carry their secret verbatim`() {
+        val key = JcefBridge.parse("""{"type":"useApiKey","key":"sk-ant-test-123"}""") as JcefBridge.Msg.UseApiKey
+        assertEquals("sk-ant-test-123", key.key)
+        val code = JcefBridge.parse("""{"type":"submitLoginCode","code":"ABC-42"}""") as JcefBridge.Msg.SubmitLoginCode
+        assertEquals("ABC-42", code.code)
+    }
+
+    @Test
+    fun `jsString escapes what would break out of a host exec call`() {
+        assertEquals("\"plain\"", JcefBridge.jsString("plain"))
+        // A quote+paren payload must come back inert, and control chars must be escaped, or a message
+        // containing them would terminate the JS string it is embedded in.
+        assertEquals("\"a\\\"b\"", JcefBridge.jsString("a\"b"))
+        assertEquals("\"line\\nbreak\"", JcefBridge.jsString("line\nbreak"))
+    }
+
     // ── jump-to-code links ───────────────────────────────────────────────────────────────────────────────
 
     @Test

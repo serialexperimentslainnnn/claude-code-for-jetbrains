@@ -48,7 +48,12 @@ abstract class FakeClaudeTestBase : BasePlatformTestCase() {
         val settings = ClaudeSettings.getInstance(project)
         settings.state.claudePath = fakeClaude
         // The plugin forwards these KEY=VALUE lines to the subprocess env (resolveEnv → parseEnv).
-        settings.state.envVars = "FAKE_FIXTURE=${fixture(fixtureName)}"
+        //
+        // ANTHROPIC_API_KEY is here because the session refuses to launch with no identity at all — sign-in
+        // comes before the loading screen, so an unauthenticated start is a sign-in card, not a process.
+        // These tests take the same route a user does when they write a credential into Settings by hand;
+        // the fake binary ignores the value. Deliberately NOT a test-mode bypass in production code.
+        settings.state.envVars = "FAKE_FIXTURE=${fixture(fixtureName)}\nANTHROPIC_API_KEY=fake-claude-needs-none"
         settings.state.sourceScript = ""
         // The session spawns the process in project.basePath; BasePlatformTestCase's temp basePath may not
         // exist on disk yet (it's a notional path), so materialize it or the spawn fails with

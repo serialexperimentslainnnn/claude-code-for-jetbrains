@@ -287,10 +287,16 @@ data class RateLimitInfo(
     val overageInUse: Boolean = false,
     val surpassedThreshold: Double? = null,
 ) {
-    /** Normalized 0..100 percent, or null if the binary didn't report utilization. */
-    fun utilizationPercent(): Int? = utilization?.let {
-        (if (it <= 1.0) it * 100 else it).toInt().coerceIn(0, 100)
-    }
+    /**
+     * Clamped 0..100 percent, or null if the binary didn't report utilization.
+     *
+     * The wire scale is 0..100 — the SDK documents `get_usage`'s windows as "Percentage of the window
+     * used, 0-100", and the event carries the same quantity. This used to guess: anything `<= 1.0` was
+     * assumed to be a 0..1 fraction and multiplied by 100. That guess is undecidable exactly at 1.0, and
+     * it lost: a session at a genuine 1% rendered as **100%**, observed live — every freshly reset window
+     * climbs through the 0..1 range, so every user saw a full red bar at the start of every window.
+     */
+    fun utilizationPercent(): Int? = utilization?.let { Math.round(it).toInt().coerceIn(0, 100) }
 
     val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
     val isExhausted: Boolean get() = status == "rejected"

@@ -91,6 +91,28 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private var lastUsage: dev.lain.claudejb.protocol.UsageReport? = null
     private var lastUsageAt = 0L
 
+    /**
+     * Plan-limits poll. Unlike context and cost — which cannot move while the session idles, so their timer
+     * retires at turn end — the quota IS shared state: other sessions, other devices and claude.ai itself
+     * consume the same windows, and a window reset is a wall-clock event. So this ticks for the panel's whole
+     * lifetime, gated on [isShowing]: a background tab skips the round-trip and catches up within one tick of
+     * being brought forward.
+     */
+    private val usageTimer = Timer(USAGE_POLL_MS) { if (isShowing) requestUsage() }.apply { isRepeats = true }
+
+    /** Last observed process liveness, so [onStateChanged] can spot a restart. EDT-confined. */
+    private var wasRunning = false
+
+    /** Everything that is per-PROCESS rather than per-panel: asked on every launch, not just the first. */
+    private fun onSessionReady() {
+        requestMcp()
+        requestVersion()
+        requestUsage()
+    }
+
+    /** The two onboarding cards' host side (install-the-binary + sign-in), kept OFF this class on purpose. */
+    private val onboarding = OnboardingController(project, session, host::exec)
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -98,6 +120,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         livePanels.add(this)
         session.transcript.addListener(this)
         session.addListener(this)
+        session.attachLoginUi(onboarding) // the sign-in card renders in this panel's web view
 
         // Re-push the theme whenever the IDE's Look-and-Feel changes; tied to this panel's lifetime.
         val lafConn = ApplicationManager.getApplication().messageBus.connect(this)
@@ -112,9 +135,8 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushSession()
         // These three all need a live `claude` process, and the panel is constructed BEFORE session.start()
         // runs — so calling them directly here always lost. See [whenReady].
-        whenReady(::requestMcp)
-        whenReady(::requestVersion)
-        whenReady(::requestUsage)
+        whenReady(::onSessionReady)
+        usageTimer.start()
         structural = true
         ensureTimer()
     }
@@ -174,8 +196,18 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushMetaState()
         pushSession()
         drainPendingUntilReady()
+        // A RESTART is a new process, so everything that is only asked once per process has to be asked
+        // again. [whenReady] fires once in the constructor and never again, so after a sign-out/sign-in the
+        // dashboard sat empty until a prompt happened to produce a rate_limit_event — the panels looked
+        // broken when they had simply never been asked.
+        val running = session.isRunning()
+        if (running && !wasRunning) onSessionReady()
+        wasRunning = running
         // A window moved (a rate_limit_event landed) → re-ask for all of them. requestUsage throttles itself.
         if (session.rateLimits.isNotEmpty()) requestUsage()
+        // The not-found card is up → the onboarding watcher looks for the binary appearing (an install
+        // finishing) and starts the session without further clicks.
+        onboarding.onStateChanged()
     }
 
     /**
@@ -354,9 +386,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     /**
      * Refreshes the plan-limit windows, then re-pushes the dashboard.
      *
-     * Throttled rather than polled: the trigger is a `rate_limit_event` (the binary telling us a window moved)
-     * or the dashboard being opened, and never a timer. The windows reset on the hour scale, so a periodic
-     * refresh would be network traffic in service of a number nobody is watching change.
+     * Called by [usageTimer] every [USAGE_POLL_MS] while the panel is showing, and directly on the event
+     * triggers (a `rate_limit_event`, the dashboard opening, session ready). The throttle below is burst
+     * protection for the event triggers — a run of rate_limit_events must not turn into a request storm —
+     * and its floor sits under the timer's period so the periodic tick is never swallowed by it.
      */
     private fun requestUsage() {
         val now = System.currentTimeMillis()
@@ -595,6 +628,16 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         }
 
         is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
+
+        // Everything the two onboarding cards send (install / binary path / sign-in / logout) lives in
+        // its own collaborator — see OnboardingController. `handle` returns false only for messages that
+        // are not onboarding's, and every remaining SessionControl IS handled above, so falling through
+        // here means a new message was added without a handler: surface it instead of ignoring it.
+        else -> {
+            val handled = onboarding.handle(m)
+            if (!handled) logger.warn("unhandled session-control message: $m")
+            Unit
+        }
     }
 
     private fun onLifecycle(m: JcefBridge.Msg.Lifecycle) = when (m) {
@@ -835,7 +878,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         livePanels.remove(this)
         session.transcript.removeListener(this)
         session.removeListener(this)
+        session.detachLoginUi(onboarding)
+        onboarding.dispose()
         timer.stop()
+        usageTimer.stop()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }
 
@@ -851,8 +897,15 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         /** How many recently-opened files the attach menu offers before the user has to search. */
         private const val RECENT_FILES_LIMIT = 14
 
-        /** Floor between `get_usage` round-trips. The windows move on the hour scale; this is generous. */
-        private const val USAGE_MIN_INTERVAL_MS = 30_000L
+        /** Period of the plan-limits poll while the panel is visible. */
+        private const val USAGE_POLL_MS = 15_000
+
+        /**
+         * Floor between `get_usage` round-trips — burst protection for the event-driven triggers. MUST stay
+         * below [USAGE_POLL_MS], or the periodic tick is silently throttled away and the poll only *looks*
+         * like it runs every 15 s.
+         */
+        private const val USAGE_MIN_INTERVAL_MS = 12_000L
 
         // Vibe Mode is global (ChatTheme.vibeMode), so a toggle on one tab must re-theme them all.
         private val livePanels = java.util.concurrent.CopyOnWriteArrayList<JcefChatPanel>()
