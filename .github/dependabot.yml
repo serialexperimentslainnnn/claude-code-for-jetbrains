@@ -10,8 +10,11 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      # Monthly, not weekly. Every proposed bump costs a full pipeline and a review, and weekly produced
+      # more of both than the changes justified — build tooling that moves a patch version does not need
+      # attention four times a month. SECURITY updates are unaffected: they arrive on their own schedule
+      # regardless of this interval, which is the point of separating them.
+      interval: monthly
     open-pull-requests-limit: 5
     commit-message:
       prefix: build       # Conventional Commits — the commit-msg hook and the changelog both depend on it
@@ -25,6 +28,11 @@ updates:
       security:
         applies-to: security-updates
         patterns: ['*']
+    ignore:
+      # A major of an action can change its inputs or its runtime, and every one here is pinned by commit
+      # SHA — so the diff is opaque by design and the changelog is the only way to know what moved.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
 
   # Build tooling only: vitest/jsdom for the frontend tests, commitlint for the commit gate, and the
   # Agent SDK as protocol reference. None of it ships (see SECURITY.md), which is exactly why the
@@ -32,8 +40,11 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      # Monthly, not weekly. Every proposed bump costs a full pipeline and a review, and weekly produced
+      # more of both than the changes justified — build tooling that moves a patch version does not need
+      # attention four times a month. SECURITY updates are unaffected: they arrive on their own schedule
+      # regardless of this interval, which is the point of separating them.
+      interval: monthly
     open-pull-requests-limit: 3
     commit-message:
       prefix: build
@@ -52,6 +63,11 @@ updates:
         applies-to: security-updates
         patterns: ['*']
     ignore:
+      # Majors are proposed by a human, not by a bot. They are where a bump actually breaks something, they
+      # need reading the changelog and running the suite, and a PR that sits open for weeks re-running CI on
+      # every merge into develop is worse than no PR. Patch and minor keep arriving grouped.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
       # The SDK baseline is not Dependabot's to move. `checkDrift` bumps it as part of a *reconciled*
       # protocol review — taking the new version without reading the surface diff is how a protocol gap
       # gets silently blessed.
@@ -60,8 +76,11 @@ updates:
   - package-ecosystem: gradle
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      # Monthly, not weekly. Every proposed bump costs a full pipeline and a review, and weekly produced
+      # more of both than the changes justified — build tooling that moves a patch version does not need
+      # attention four times a month. SECURITY updates are unaffected: they arrive on their own schedule
+      # regardless of this interval, which is the point of separating them.
+      interval: monthly
     open-pull-requests-limit: 3
     commit-message:
       prefix: build
@@ -78,6 +97,11 @@ updates:
         applies-to: security-updates
         patterns: ['*']
     ignore:
+      # Majors by hand — and this ecosystem is the cautionary tale: the IntelliJ Platform Gradle Plugin
+      # 2.16 -> 2.18 bump passed CI and hung the headless suite locally, forever, inside the platform's own
+      # test fixture. A bot cannot make that call and CI would not have caught it either.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
       # kotlinx-serialization is provided by the IntelliJ Platform at runtime; the declared version has
       # to match what the targeted IDEs ship, not the newest release. Bumping it blindly is a
       # NoSuchMethodError on a user's IDE, not an upgrade.

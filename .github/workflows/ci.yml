@@ -67,9 +67,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          # Only the trunk writes the shared cache. A PR from a fork must never be able to poison what
-          # the next build on develop reads back.
-          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+          # Read-only ONLY for pull requests from forks. Every other branch writes its own cache, which is
+          # what stops a second push from re-downloading 1.25 GB of IDEs it already had.
+          #
+          # This is safe without our help, and the previous blanket read-only was more conservative than the
+          # platform requires. GitHub scopes caches per branch: "Workflow runs cannot restore caches created
+          # for child branches or sibling branches", and a cache created on a pull request is written to the
+          # merge ref, so it "can only be restored by re-runs of the pull request". A topic branch therefore
+          # cannot reach — let alone overwrite — what develop reads back. Forks stay read-only anyway: there
+          # is no reason to let untrusted code populate anything this repository will later restore.
+          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
 
       # Coverage is verified HERE, in the same job and the same Gradle invocation as the tests.
       # `koverVerify` depends on `:test`, so running it in the separate `Static analysis` job re-ran the whole
@@ -98,6 +105,14 @@ jobs:
     name: Static analysis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Same door as the verifier: pull requests into main, and the protected branches themselves.
+    # A branch iterating towards develop runs only the two test suites; formatting, lint and coverage are
+    # settled before anything is promoted. The cost is real and worth naming — a formatting or detekt
+    # failure now lands ON develop and is fixed by a follow-up commit, instead of being caught in the PR.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,7 +125,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -193,6 +208,13 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
+    # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
+    # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -219,6 +241,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [test, frontend-test]
+    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads. It runs where the answer is load-bearing —
+    # on every pull request, and on the protected branches — and NOT on each push to a topic branch, where it
+    # was re-verifying a commit nobody was about to merge. The gate is unchanged: it is still a required check
+    # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
+    # is a real cost and the reason it ran everywhere until now.
+    # Where the exhaustive check belongs: the develop -> main door, plus the protected branches themselves.
+    #
+    # NOT on topic branches and NOT on pull requests into develop — those iterate constantly and this job is
+    # ~10 minutes and 1.25 GB of IDE downloads. It DOES run on any pull request targeting main, because that
+    # is the merge that publishes, and it is the only gate that catches a BINARY incompatibility across the
+    # 251 -> 262 range (compiling against 252 proves nothing about 262 — see the 4.4.1 /login regression).
+    if: >-
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -231,7 +268,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
 
       # The runner ships with a few GB of preinstalled toolchains we will never use, and the verifier
       # needs room for multiple extracted IDEs. Reclaiming it is cheaper than debugging a disk-full run.
