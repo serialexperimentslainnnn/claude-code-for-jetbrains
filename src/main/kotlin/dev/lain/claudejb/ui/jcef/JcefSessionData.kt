@@ -216,22 +216,37 @@ object JcefSessionData {
     private fun accountJson(session: ClaudeSession): JsonObject? {
         val acct = session.account
         val probe = session.authCliStatus
+        // The stored `auth status` reply — the binary's own words, filed in the safe by the last probe. The
+        // probe is a process spawn and cannot run on every push, so without this the card had nothing to show
+        // between probes and the Email / Organization rows sat empty.
+        val stored = dev.lain.claudejb.process.AuthCli.stored()
         val empty = acct.email.isBlank() && acct.organization.isBlank() &&
-            acct.subscriptionType.isBlank() && acct.apiProvider.isBlank() && probe == null
+            acct.subscriptionType.isBlank() && acct.apiProvider.isBlank() && probe == null && stored == null
         if (empty) return null
         return buildJsonObject {
-            put("email", acct.email.ifBlank { null } ?: probe?.email)
-            put("org", acct.organization.ifBlank { null })
-            // Last resort, the vaulted blob: an env-token session gets a reduced `auth status` with no plan
-            // in it, and the plan is something we already hold.
+            put("email", acct.email.ifBlank { null } ?: probe?.email ?: stored?.email)
+            put("org", acct.organization.ifBlank { null } ?: probe?.orgName ?: stored?.orgName)
+            // Last resort, the vaulted blob: the plan is also carried inside the credential we hold, so the
+            // row survives even a session that never managed to probe.
             put(
                 "plan",
                 acct.subscriptionType.ifBlank { null }
                     ?: probe?.subscriptionType
+                    ?: stored?.subscriptionType
                     ?: dev.lain.claudejb.process.CredentialsVault.subscriptionType(),
             )
-            put("provider", acct.apiProvider.ifBlank { null } ?: probe?.authMethod)
-            put("loggedIn", probe?.loggedIn)
+            // `apiProvider` ("firstParty") before `authMethod` ("claude.ai"): both describe the route, and the
+            // former is the one the session's own account event uses, so the row can't change vocabulary
+            // depending on which source answered.
+            put(
+                "provider",
+                acct.apiProvider.ifBlank { null }
+                    ?: probe?.apiProvider ?: probe?.authMethod
+                    ?: stored?.apiProvider ?: stored?.authMethod,
+            )
+            // The stored reply counts as verified: it IS a past `auth status`, and Log out clears the safe
+            // (AUTH_STATUS included), so it cannot outlive the identity it describes.
+            put("loggedIn", probe?.loggedIn ?: stored?.loggedIn)
         }
     }
 

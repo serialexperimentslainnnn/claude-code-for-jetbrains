@@ -10,6 +10,14 @@ import java.nio.file.Paths
  * `~/.claude/projects/<cwd-encoded>/<sessionId>.jsonl`. We never duplicate that content; readers above
  * ([SessionTitleReader], [SessionTranscriptReader]) parse these files on demand.
  *
+ * **READ-ONLY means read-only: this object does not delete, and neither does anything else in the plugin
+ * except the one credentials file it harvests** ([dev.lain.claudejb.process.CredentialsVault]). It used to
+ * offer a `delete(sessionId)` behind a "Delete Previous Session…" menu item, and that came out along with
+ * the recursive delete that destroyed a user's entire `~/.claude` — see the note on
+ * [dev.lain.claudejb.process.CredentialsVault] and `NoFileDeletionContractTest`. These files are the user's
+ * conversations and they are not ours to remove; whoever wants one gone can remove it themselves, where the
+ * decision is theirs and a mistake is theirs too.
+ *
  * All access is best-effort and confined to `~/.claude/projects`; every call tolerates a missing/locked
  * tree and returns null/empty rather than throwing. IO is blocking — call off the EDT.
  */
@@ -50,17 +58,6 @@ internal object SessionStore {
 
     /** Whether the binary still has a transcript for [sessionId]. */
     fun exists(sessionId: String): Boolean = locate(sessionId) != null
-
-    /**
-     * Permanently deletes the `<sessionId>.jsonl` transcript under `~/.claude/projects`. Confined by the same
-     * [SAFE_ID] guard as [locate]: a non-UUID id (traversal attempt) is rejected before any filesystem access,
-     * so deletion can never escape the projects tree. Best-effort — returns true only if a file was actually
-     * removed; false on a bad id, absent file, or IO error. Blocking IO — call off the EDT.
-     */
-    fun delete(sessionId: String): Boolean {
-        val file = locate(sessionId) ?: return false
-        return runCatching { Files.deleteIfExists(file) }.getOrDefault(false)
-    }
 
     /** Raw JSONL lines for [sessionId], or null if the file is absent/unreadable. */
     fun readLines(sessionId: String): List<String>? =

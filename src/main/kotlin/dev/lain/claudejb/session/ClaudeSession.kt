@@ -589,15 +589,40 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private fun absorbExistingLoginOnce() {
         if (startupHarvestDone) return
         startupHarvestDone = true
+        // ORDER IS THE WHOLE POINT, and it is the same order the card's sign-in follows
+        // ([LoginCoordinator.completeSignIn]): ask WHO first, take the credential second. Reversed, the
+        // question can no longer be answered by anybody.
+        captureAccountIdentityOnce()
         dev.lain.claudejb.process.CredentialsVault.harvest()
+    }
+
+    /**
+     * Captures `claude auth status` — the whole JSON, into the IDE safe — while the binary's own credentials
+     * file still exists, because the very next line takes that file away.
+     *
+     * This is why the dashboard's Email and Organization rows were empty. `auth status` names the account
+     * (`email`, `orgId`, `orgName`) only when it authenticates from its OWN store. Handed our credential
+     * through the environment it answers `authMethod: oauth_token` and no identity at all, and `system/init`
+     * carries the same anonymous account object — which is exactly why Plan and Provider filled in while
+     * those two rows stayed blank. Harvest the credential first and there is nothing left to ask: the file was
+     * the only thing that could answer.
+     *
+     * A login made in the user's own terminal is the case this covers; a sign-in through the card is already
+     * in the right order. [dev.lain.claudejb.process.AuthCli.status] does the filing, and only for a reply
+     * that names the account, so this asks at most once per sign-in — with an answer banked there is nothing
+     * to ask. Blocking (it spawns the binary); every caller of this is pooled-thread only.
+     */
+    private fun captureAccountIdentityOnce() {
+        if (dev.lain.claudejb.process.AuthCli.stored()?.email != null) return
+        if (!dev.lain.claudejb.process.CredentialsVault.credentialsFile().isFile) return
+        val settings = ClaudeSettings.getInstance(project)
+        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
+        // The RAW settings env: overlaying our own credential is precisely what makes the answer anonymous.
+        dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
     }
 
     @Volatile
     private var startupHarvestDone = false
-
-    /** This session's RAM-backed `CLAUDE_CONFIG_DIR`, or null when the platform has no tmpfs. */
-    @Volatile
-    private var configDir: File? = null
 
     /**
      * Whether the live process was launched with `--resume`. Read in [onTerminated]: a resumed launch that
@@ -733,8 +758,28 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val settings = ClaudeSettings.getInstance(project)
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
         ApplicationManager.getApplication().executeOnPooledThread {
-            val status = dev.lain.claudejb.process.AuthCli.status(binary, effectiveLaunchEnv())
+            val onOurEnv = dev.lain.claudejb.process.AuthCli.status(binary, effectiveLaunchEnv())
                 ?: dev.lain.claudejb.process.AuthCli.AuthState(loggedIn = false)
+            // WHO the account is takes a second question, and this is why the dashboard's Email and
+            // Organization rows were empty: asked with our credential in its environment the binary reports
+            // `authMethod: oauth_token` and no identity at all. Asked with the RAW settings env it answers
+            // from its own store as `claude.ai` — email, orgId, orgName, plan — which AuthCli.status files in
+            // the safe. `loggedIn` stays the first answer's: that one describes the identity this session
+            // actually runs on. Skipped entirely once the first answer already named the account.
+            val status = if (onOurEnv.email != null || onOurEnv.orgName != null) {
+                onOurEnv
+            } else {
+                val identity = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
+                    ?.takeIf { it.email != null || it.orgName != null }
+                    ?: dev.lain.claudejb.process.AuthCli.stored()
+                onOurEnv.copy(
+                    email = identity?.email,
+                    orgId = identity?.orgId,
+                    orgName = identity?.orgName,
+                    apiProvider = onOurEnv.apiProvider ?: identity?.apiProvider,
+                    subscriptionType = onOurEnv.subscriptionType ?: identity?.subscriptionType,
+                )
+            }
             authCliStatus = status
             if (!status.loggedIn) {
                 onLoginNeeded()
@@ -809,14 +854,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val withSecrets = env +
             SecretStore.envOverlay(env.keys) +
             (apiKey?.let { mapOf(SecretStore.API_KEY to it) } ?: emptyMap())
-        // The RAM config dir wins when it exists: it is the identity that reports the full picture, and
-        // adding the env token alongside would flip the binary back to the reduced `oauth_token` one.
-        configDir?.let {
-            return withSecrets + mapOf(dev.lain.claudejb.process.RuntimeConfigDir.ENV_NAME to it.absolutePath)
-        }
-        // The vaulted subscription login rides here too, as CLAUDE_CODE_OAUTH_TOKEN — which is what lets
-        // the session run with NOTHING in ~/.claude/.credentials.json. Last, and keyed on the merged env,
-        // so an explicit API key or token still wins.
+        // The binary runs against its OWN `~/.claude`, untouched. The vaulted subscription login rides here
+        // instead — the WHOLE credential, field by field (token, refresh token, scopes, subscription, rate
+        // tier, account), which is what lets the session run with NOTHING in ~/.claude/.credentials.json and
+        // still report the plan limits. See CredentialsVault.envOverlay: the missing piece was the SCOPES,
+        // not a config directory. Last, and keyed on the merged env, so an explicit API key or token wins.
         return withSecrets + dev.lain.claudejb.process.CredentialsVault.envOverlay(withSecrets.keys)
     }
 
@@ -831,11 +873,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // No harvest here: absorbing an existing plaintext login is a ONCE-per-session act
         // ([absorbExistingLoginOnce]), and a sign-in files its own credential when it succeeds.
         //
-        // The credential reaches the binary through a RAM-backed CLAUDE_CONFIG_DIR — measured, not chosen:
-        // with CLAUDE_CODE_OAUTH_TOKEN the binary answers `rate_limits: null` and an account with no email
-        // or plan, so the whole dashboard goes dark. See RuntimeConfigDir. Nothing is written to persistent
-        // storage either way.
-        configDir = dev.lain.claudejb.process.RuntimeConfigDir.prepare()
+        // The credential reaches the binary through the environment, WHOLE (CredentialsVault.envOverlay), and
+        // the binary keeps its own `~/.claude`. Nothing is relocated, symlinked or deleted.
         val env = effectiveLaunchEnv(cachedEnv ?: settings.resolveEnv().also { cachedEnv = it })
         // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
         // launch is stale — don't spawn an orphan process nothing will ever tear down.
@@ -973,11 +1012,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process?.closeStdin()
         process?.destroy()
         process = null
-        // Take the (possibly REFRESHED) credential out of the RAM config dir and back into the safe, then
-        // wipe the directory. The binary rotates the token in place, so this is what makes the login
-        // long-lived instead of expiring into a sign-in card.
-        dev.lain.claudejb.process.RuntimeConfigDir.collect(configDir)
-        configDir = null
         turnActive = false
         interrupting = false
         ready = false

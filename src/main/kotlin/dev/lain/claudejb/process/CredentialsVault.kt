@@ -34,6 +34,11 @@ import java.io.File
  * plaintext is the exact thing this class exists to stop, and a rule with an exception for the awkward case
  * is not a rule — the awkward case is where it would have mattered.
  *
+ * **`~/.claude/.credentials.json` is the ONE file this plugin is allowed to delete, and this is the only
+ * class allowed to delete it** — enforced by `NoFileDeletionContractTest`, which exists because a recursive
+ * delete in the (now removed) session config dir followed symlinks into `~/.claude` and destroyed a user's
+ * conversations, skills and session history. Nothing else on their disk is ours to remove.
+ *
  * The cost is stated rather than hidden: only the binary can spend the refresh token, and it does that by
  * rewriting its own file. With no file it cannot, so when the access token expires the credential is simply
  * spent and the sign-in card comes back. A periodic sign-in is the price of never having a bearer token
@@ -54,6 +59,17 @@ object CredentialsVault {
      * the same outcome.
      */
     private const val EXPIRY_MARGIN_MS = 10 * 60 * 1000L
+
+    // The rest of the credential's env surface. Verified present in the shipped CLI's own env registry
+    // (`sdk.mjs`/`bridge.mjs` name them, and sdk.mjs lists the OAuth ones in its subprocess passthrough).
+    // `SecretStore.OAUTH_TOKEN` carries the access token itself.
+    private const val ENV_REFRESH_TOKEN = "CLAUDE_CODE_OAUTH_REFRESH_TOKEN"
+    private const val ENV_SCOPES = "CLAUDE_CODE_OAUTH_SCOPES"
+    private const val ENV_SUBSCRIPTION_TYPE = "CLAUDE_CODE_SUBSCRIPTION_TYPE"
+    private const val ENV_RATE_LIMIT_TIER = "CLAUDE_CODE_RATE_LIMIT_TIER"
+    private const val ENV_ACCOUNT_UUID = "CLAUDE_CODE_ACCOUNT_UUID"
+    private const val ENV_ORGANIZATION_UUID = "CLAUDE_CODE_ORGANIZATION_UUID"
+    private const val ENV_USER_EMAIL = "CLAUDE_CODE_USER_EMAIL"
 
     /**
      * Overridable BY TESTS ONLY, and not a nicety: these operations MOVE a real credential, so a test run
@@ -85,8 +101,39 @@ object CredentialsVault {
     }
 
     /**
-     * The launch environment's share of the credential: `CLAUDE_CODE_OAUTH_TOKEN` from the vaulted blob,
-     * so the binary authenticates with nothing on disk.
+     * The launch environment's share of the credential: **the whole vaulted blob, field by field**, so the
+     * binary authenticates with nothing on disk AND with the identity it actually wrote at login.
+     *
+     * THE BUG THIS FIXES, because it cost a user their session history before it was understood: only
+     * `accessToken` used to be handed over. A bare access token leaves the binary without the OAuth
+     * **scopes**, and the SDK is explicit about the consequence — `SDKControlGetUsageResponse` documents
+     * `rate_limits_available` as *"False when plan rate limits do not apply (API key, Bedrock, Vertex, or
+     * **missing profile scope**)"*. The stored blob grants `user:profile`; the env did not say so, so
+     * `get_usage` answered `rate_limits: null` and every session meter went dark. That was misdiagnosed as
+     * "the binary only reports this from its own config directory", which produced a relocated
+     * `CLAUDE_CONFIG_DIR` full of symlinks into `~/.claude` and a recursive delete that emptied it. The
+     * directory was never needed: the binary reads all of this from the environment.
+     *
+     * Mapping, from the file the CLI writes (`claudeAiOauth`) to the names the binary reads:
+     *
+     * ```
+     * accessToken      -> CLAUDE_CODE_OAUTH_TOKEN
+     * refreshToken     -> CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+     * scopes[]         -> CLAUDE_CODE_OAUTH_SCOPES        (space-separated, the OAuth `scope` encoding)
+     * subscriptionType -> CLAUDE_CODE_SUBSCRIPTION_TYPE
+     * rateLimitTier    -> CLAUDE_CODE_RATE_LIMIT_TIER
+     * ```
+     *
+     * plus the account the same login wrote to `~/.claude.json`, held whole in the safe by [AccountProfile]:
+     * `accountUuid` → `CLAUDE_CODE_ACCOUNT_UUID`, `organizationUuid` → `CLAUDE_CODE_ORGANIZATION_UUID`,
+     * `emailAddress` → `CLAUDE_CODE_USER_EMAIL`.
+     *
+     * Absent fields are simply omitted — never blanked. An empty env var is a value, and a blank scope list
+     * or subscription would be us telling the binary something false about the account.
+     *
+     * `CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH` is deliberately NOT set: it announces that the HOST will refresh
+     * the token, and this host cannot (only the binary can spend a refresh token). Claiming it would leave
+     * an expiry with nobody handling it.
      *
      * Empty when the safe holds nothing, when the blob does not parse, when the token is at or within
      * [EXPIRY_MARGIN_MS] of expiry, or when [existing] already names a credential: an API key or a token
@@ -95,7 +142,32 @@ object CredentialsVault {
     fun envOverlay(existing: Set<String>): Map<String, String> {
         if (SecretStore.OAUTH_TOKEN in existing || SecretStore.API_KEY in existing) return emptyMap()
         val token = usableToken() ?: return emptyMap()
-        return mapOf(SecretStore.OAUTH_TOKEN to token)
+        val oauth = oauthNode() ?: return emptyMap()
+        val env = mutableMapOf(SecretStore.OAUTH_TOKEN to token)
+        oauth.string("refreshToken")?.let { env[ENV_REFRESH_TOKEN] = it }
+        oauth.strings("scopes")?.takeIf { it.isNotEmpty() }?.let { env[ENV_SCOPES] = it.joinToString(" ") }
+        oauth.string("subscriptionType")?.let { env[ENV_SUBSCRIPTION_TYPE] = it }
+        oauth.string("rateLimitTier")?.let { env[ENV_RATE_LIMIT_TIER] = it }
+        accountNode()?.let { account ->
+            account.string("accountUuid")?.let { env[ENV_ACCOUNT_UUID] = it }
+            account.string("organizationUuid")?.let { env[ENV_ORGANIZATION_UUID] = it }
+            account.string("emailAddress")?.let { env[ENV_USER_EMAIL] = it }
+        }
+        return env
+    }
+
+    /** A non-blank string field, or null — so an absent field is omitted rather than sent as `""`. */
+    private fun kotlinx.serialization.json.JsonObject.string(name: String): String? =
+        this[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    /** A string-array field (`scopes`), or null. Non-string entries are dropped rather than stringified. */
+    private fun kotlinx.serialization.json.JsonObject.strings(name: String): List<String>? =
+        (this[name] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull?.takeIf(String::isNotBlank) }
+
+    /** The `oauthAccount` object [AccountProfile] banked at sign-in, or null. */
+    private fun accountNode() = AccountProfile.storedAccountJson()?.let { blob ->
+        runCatching { json.parseToJsonElement(blob).jsonObject }.getOrNull()
     }
 
     /**

@@ -49,10 +49,22 @@ object SecretStore {
      */
     const val ACCOUNT_PROFILE = "CLAUDE_ACCOUNT_PROFILE"
 
+    /**
+     * The last successful `claude auth status` reply, VERBATIM — the binary's own statement of who is signed
+     * in (`loggedIn`, `authMethod`, `apiProvider`, `email`, `orgId`, `orgName`, `subscriptionType`).
+     *
+     * Kept here, and kept whole, for two reasons. It is the authoritative source for the dashboard's account
+     * card: the probe is a process spawn, so it cannot run on every push, and without a stored copy the card
+     * had nothing to show between probes. And it is identity, not credential — so like [ACCOUNT_PROFILE] it
+     * stays out of [EXCLUSIVE] (storing it must never evict the credential beside it) and out of the child
+     * environment.
+     */
+    const val AUTH_STATUS = "CLAUDE_AUTH_STATUS"
+
     /** Auth modes: mutually exclusive by construction — setting one clears the others. */
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
-    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE
+    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
 
     /** The subset that is injected into the child environment — [CREDENTIALS_JSON] is file-shaped, not env. */
     private val ENV_NAMES = listOf(OAUTH_TOKEN)

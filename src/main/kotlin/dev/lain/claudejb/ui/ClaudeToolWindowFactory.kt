@@ -204,8 +204,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             addSeparator()
             add(simple("Rename Session…") { renameActiveSession(project, tabs) })
             add(simple("Fork Session") { forkActiveSession(project, tabs) })
+            // No "Delete Previous Session…": the plugin does not delete the user's conversations. See
+            // SessionStore's KDoc and NoFileDeletionContractTest.
             add(simple("Open Previous Session…") { openPreviousSession(project, tabs) })
-            add(simple("Delete Previous Session…") { deletePreviousSession(project) })
             add(simple("Add Current File as @-context") { activePanel(tabs)?.mentionCurrentFile() })
             add(
                 simple("Settings…") {
@@ -342,55 +343,6 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                                 s.title = ref.title
                                 s.restore(ref.sessionId, entries)
                                 openChat(project, tabs, s)
-                            }, ModalityState.any())
-                        }
-                    }
-                    .setRequestFocus(true)
-                    .createPopup()
-                    .showCenteredInCurrentWindow(project)
-            }, ModalityState.any())
-        }
-    }
-
-    /**
-     * Lets the user permanently delete a past session's transcript: shows the same rich chooser, then on pick asks
-     * for confirmation and calls [SessionStore.delete] (UUID-guarded — can never escape `~/.claude/projects`). The
-     * delete IO runs off the EDT. This removes the binary's source-of-truth file, so the session disappears from
-     * every "previous session" list and can no longer be resumed.
-     */
-    private fun deletePreviousSession(project: Project) {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val refs = SessionTranscriptReader.listSessions(project)
-            ApplicationManager.getApplication().invokeLater({
-                if (refs.isEmpty()) {
-                    Messages.showInfoMessage(project, "No previous sessions to delete.", "Claude Code")
-                    return@invokeLater
-                }
-                JBPopupFactory.getInstance()
-                    .createPopupChooserBuilder(refs)
-                    .setTitle("Delete Previous Session")
-                    .setRenderer(SessionRefRenderer())
-                    .setItemChosenCallback { ref ->
-                        val ok = Messages.showYesNoDialog(
-                            project,
-                            "Permanently delete the session \"${ref.title}\"?\n" +
-                                "This removes its transcript and it can no longer be resumed.",
-                            "Delete Session",
-                            "Delete",
-                            "Cancel",
-                            Messages.getWarningIcon(),
-                        )
-                        if (ok != Messages.YES) return@setItemChosenCallback
-                        ApplicationManager.getApplication().executeOnPooledThread {
-                            val deleted = SessionStore.delete(ref.sessionId)
-                            ApplicationManager.getApplication().invokeLater({
-                                if (!deleted) {
-                                    Messages.showErrorDialog(
-                                        project,
-                                        "Could not delete the session file.",
-                                        "Delete Session",
-                                    )
-                                }
                             }, ModalityState.any())
                         }
                     }

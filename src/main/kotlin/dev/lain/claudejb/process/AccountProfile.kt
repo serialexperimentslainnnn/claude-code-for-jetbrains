@@ -18,9 +18,10 @@ import java.io.File
  * not need the binary to tell it any of this — reading it directly means the account card is populated
  * whatever identity the session ends up running as, on every platform.
  *
- * What CANNOT come from here is the plan-limit windows: those are a network call the binary makes to the
- * claude.ai usage endpoint, and it only makes it for its own `claude.ai` identity. That is the one thing
- * still worth a config directory for.
+ * The plan-limit windows are a different thing and they do NOT come from here: the binary fetches them from
+ * the claude.ai usage endpoint and reports them through `get_usage`. It needs the account's OAuth scopes to
+ * do it (`user:profile`), which is why the account object banked here is also fed to the process — see
+ * [CredentialsVault.envOverlay]. Passing only the access token is what used to leave the meters dark.
  *
  * Cached in memory after the first read — this is a small file on a hot path (every dashboard push).
  */
@@ -76,9 +77,8 @@ object AccountProfile {
     /**
      * The WHOLE `oauthAccount` object as the binary wrote it, held in the safe.
      *
-     * Kept entire rather than reduced to the two fields the dashboard shows: it is what gets handed BACK to
-     * the binary in a generated `.claude.json` ([RuntimeConfigDir]), and a subset would be us deciding which
-     * of its own fields it is allowed to have.
+     * Kept entire rather than reduced to the two fields the dashboard shows: it is the binary's own object,
+     * and a subset would be us deciding which of its fields it is allowed to have.
      */
     fun storedAccountJson(): String? = SecretStore.get(SecretStore.ACCOUNT_PROFILE)
 
