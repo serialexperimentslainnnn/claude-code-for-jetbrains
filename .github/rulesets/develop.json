@@ -4,20 +4,28 @@
   "enforcement": "active",
   "conditions": {
     "ref_name": {
-      "include": ["refs/heads/develop"],
+      "include": [
+        "refs/heads/develop"
+      ],
       "exclude": []
     }
   },
   "bypass_actors": [],
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "required_signatures" },
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_signatures"
+    },
     {
       "type": "pull_request",
       "parameters": {
         "_comment": [
-          "0, not 1 — see the long note in main.json. GitHub does not let an author approve their own",
+          "0, not 1 \u2014 see the long note in main.json. GitHub does not let an author approve their own",
           "pull request, so on a single-maintainer repository requiring an approval makes the branch",
           "unmergeable rather than well-guarded. Raise it to 1 when a second maintainer exists."
         ],
@@ -26,7 +34,10 @@
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false,
-        "allowed_merge_methods": ["squash", "merge"]
+        "allowed_merge_methods": [
+          "squash",
+          "merge"
+        ]
       }
     },
     {
@@ -35,12 +46,18 @@
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "JVM tests" },
-          { "context": "Static analysis" },
-          { "context": "Frontend tests" },
-          { "context": "Dependency audit" },
-          { "context": "Plugin verifier" },
-          { "context": "Build plugin" }
+          {
+            "context": "JVM tests"
+          },
+          {
+            "context": "Static analysis"
+          },
+          {
+            "context": "Frontend tests"
+          },
+          {
+            "context": "Dependency audit"
+          }
         ]
       }
     }

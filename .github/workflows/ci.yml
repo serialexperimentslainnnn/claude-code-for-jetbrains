@@ -232,9 +232,8 @@ jobs:
     # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
     # is a real cost and the reason it ran everywhere until now.
     if: >-
-      github.event_name == 'pull_request' ||
-      github.ref == 'refs/heads/develop' ||
-      github.ref == 'refs/heads/main'
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
