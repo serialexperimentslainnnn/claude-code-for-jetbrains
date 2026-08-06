@@ -19,11 +19,8 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.SimpleListCellRenderer
-import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
-import com.intellij.ui.content.ContentManager
-import com.intellij.ui.content.ContentManagerEvent
-import com.intellij.ui.content.ContentManagerListener
+import com.intellij.ui.tabs.TabInfo
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
@@ -41,6 +38,10 @@ import javax.swing.JList
  * Registers the right-anchored "Claude Code" tool window. Each conversation is a closeable tab (a
  * [JcefChatPanel] over its own [ClaudeSession]); "New chat" opens another, mirroring the web UI. The title
  * bar and gear menu act on whichever tab is selected.
+ *
+ * The tab strip is the plugin's own ([ChatTabsPanel]) rather than the tool window's: the platform's content
+ * tabs do not scroll, so past a handful of chats the earliest ones simply stopped being drawn. The tool
+ * window therefore holds exactly ONE content, and everything below talks to that strip.
  */
 class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
@@ -49,7 +50,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     // projects. The tool window, however, must be resolved per-project on demand ([resolveToolWindow]) — caching
     // it in a field would make a second project's window overwrite the first's and misdirect attention checks.
     /** Maps each live session to its tab, so a background session can target its own badge/notification. */
-    private val contents = HashMap<ClaudeSession, Content>()
+    private val tabOf = HashMap<ClaudeSession, TabInfo>()
 
     /** Per-session throttle for attention notifications (badge is never throttled). */
     private val lastNotified = HashMap<ClaudeSession, Long>()
@@ -58,40 +59,45 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val manager = ChatSessionManager.getInstance(project)
         val cm = toolWindow.contentManager
 
-        cm.addContentManagerListener(object : ContentManagerListener {
-            override fun contentRemoved(event: ContentManagerEvent) {
-                (event.content.component as? JcefChatPanel)?.let {
+        val tabs = ChatTabsPanel(project, toolWindow.disposable)
+        tabs.onEvents(
+            selected = { info -> (info?.component as? JcefChatPanel)?.let { manager.setActive(it.session) } },
+            closed = { info ->
+                (info.component as? JcefChatPanel)?.let {
                     manager.remove(it.session)
-                    contents.remove(it.session)
+                    tabOf.remove(it.session)
                     lastNotified.remove(it.session)
                 }
-            }
+            },
+        )
+        // ONE content, holding the whole strip. Not closeable: closing it would take every chat with it, and
+        // the tool window would be left showing nothing with no way back.
+        val content = ContentFactory.getInstance().createContent(tabs, "", false)
+        content.isCloseable = false
+        // The focus fix, unchanged in substance: tell the platform where this content's keyboard focus lives,
+        // resolved LAZILY against the selected tab (CEF's real input component does not exist yet, and the
+        // selected tab changes underneath).
+        content.setPreferredFocusedComponent { tabs.selectedChat?.focusTarget() }
+        content.setDisposer(tabs)
+        cm.addContent(content)
 
-            override fun selectionChanged(event: ContentManagerEvent) {
-                if (event.operation == ContentManagerEvent.ContentOperation.add) {
-                    // The user is now looking at this tab — clear its attention badge.
-                    event.content.setIcon(null)
-                    (event.content.component as? JcefChatPanel)?.let { manager.setActive(it.session) }
-                }
-            }
-        })
-
-        restoreOrCreate(project, cm, manager)
+        restoreOrCreate(project, tabs, manager)
 
         toolWindow.setTitleActions(
             listOf(
-                NewChatAction { openChat(project, cm, manager.create()) },
-                InterruptAction(cm),
-                CommandsAction(cm),
-                DiffHistoryAction { openDiffHistory(project, cm) },
+                SignOutAction(tabs),
+                NewChatAction { openChat(project, tabs, manager.create()) },
+                InterruptAction(tabs),
+                CommandsAction(tabs),
+                DiffHistoryAction { openDiffHistory(project, tabs) },
                 CloseAllDiffsAction(project),
             ),
         )
-        toolWindow.setAdditionalGearActions(buildGearGroup(project, cm))
+        toolWindow.setAdditionalGearActions(buildGearGroup(project, tabs))
     }
 
     /** Starts [session]'s process, then adds a tab for it and wires it. */
-    private fun openChat(project: Project, cm: ContentManager, session: ClaudeSession) {
+    private fun openChat(project: Project, tabs: ChatTabsPanel, session: ClaudeSession) {
         // Launch the binary FIRST, before building the tab. `start()` only dispatches — it hands the blocking
         // work (env resolution sources a login shell, then the spawn) to a pooled thread and returns — so doing
         // it here means `claude` boots WHILE JCEF creates its browser, instead of waiting for it to finish.
@@ -104,34 +110,21 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         session.start()
 
         val panel = JcefChatPanel(project, session)
-        val content = ContentFactory.getInstance().createContent(panel, tabTitle(session.title), false)
-        // Tell the platform WHERE the keyboard focus of this tab lives. Without it the ContentManager has nowhere
-        // to put focus when the tab is selected — a JBPanel isn't focusable — so the embedded browser never gets
-        // it: the composer looked alive but refused to take a click, and any focus round-trip through the IDE
-        // (a dialog closing, another tool window) dropped focus into the void and left the chat wedged.
-        // Resolved LAZILY (a Computable, not a fixed component): CEF's real input component doesn't exist yet at
-        // this point — the native browser is created later, when the tab is first shown.
-        content.setPreferredFocusedComponent { panel.focusTarget() }
-        content.isCloseable = true
-        content.description = session.title // full title as the tab tooltip
-        content.setDisposer(panel)
-        contents[session] = content
+        // The panel is the tab's disposer — same contract the Content had, and what makes a closed chat
+        // actually tear its JCEF browser down instead of leaking it.
+        val tab = tabs.add(panel, tabTitle(session.title), session.title, panel)
+        tabOf[session] = tab
         session.addListener(object : SessionListener {
-            override fun onAttention(reason: AttentionReason) = onSessionAttention(project, cm, session, reason)
+            override fun onAttention(reason: AttentionReason) = onSessionAttention(project, tabs, session, reason)
             override fun onTitleChanged() {
-                contents[session]?.let {
-                    it.displayName = tabTitle(session.title)
-                    it.description = session.title
-                }
+                tabOf[session]?.let { tabs.relabel(it, tabTitle(session.title), session.title) }
             }
         })
-        cm.addContent(content)
-        // requestFocus = true: the ContentManager performs the focus transfer AS PART OF the selection — the same
-        // path a manual tab switch takes. Selecting without it and then asking for the focus ourselves loses the
-        // race: "New chat" is a toolbar action, and the platform restores focus to wherever it was when an action
-        // finishes, stepping on our request. (The caret itself is settled later, when the page is up — see
-        // JcefHost.markWebReady.) The trailing `true` IS requestFocus — a Java API, so it cannot be named here.
-        cm.setSelectedContent(content, true)
+        // Selecting transfers the keyboard focus as part of the selection — the same path a manual tab switch
+        // takes ([ChatTabsPanel]'s selection listener). Selecting and then asking for the focus separately
+        // loses the race: "New chat" is a toolbar action, and the platform restores focus to wherever it was
+        // when an action finishes. (The caret itself is settled later, when the page is up — JcefHost.markWebReady.)
+        tabs.select(tab)
     }
 
     /**
@@ -140,13 +133,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * currently is (working in the editor must NOT trigger a popup for the chat you're already looking at).
      * Otherwise badge the tab (always) and raise a throttled notification. Fired on the EDT.
      */
-    private fun onSessionAttention(project: Project, cm: ContentManager, session: ClaudeSession, reason: AttentionReason) {
+    private fun onSessionAttention(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, reason: AttentionReason) {
         val tw = resolveToolWindow(project)
-        val content = contents[session] ?: return
-        val onScreen = tw != null && tw.isVisible && cm.selectedContent?.component === content.component
+        val tab = tabOf[session] ?: return
+        val onScreen = tw != null && tw.isVisible && tabs.selected === tab
         if (onScreen) return
 
-        content.setIcon(AllIcons.General.Modified)
+        tabs.badge(tab, AllIcons.General.Modified)
 
         val now = System.currentTimeMillis()
         if (now - (lastNotified[session] ?: 0L) <= NOTIFY_THROTTLE_MS) return
@@ -165,10 +158,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             )
             .addAction(
                 NotificationAction.createSimpleExpiring("Open") {
-                    contents[session]?.let {
-                        cm.setSelectedContent(it)
-                        it.setIcon(null)
-                    }
+                    tabOf[session]?.let { tabs.select(it) } // selecting clears the badge, see ChatTabsPanel
                     resolveToolWindow(project)?.activate(null)
                 },
             )
@@ -179,47 +169,44 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun resolveToolWindow(project: Project): ToolWindow? =
         ToolWindowManager.getInstance(project).getToolWindow("Claude Code")
 
-    private fun activePanel(cm: ContentManager): JcefChatPanel? = cm.selectedContent?.component as? JcefChatPanel
+    private fun activePanel(tabs: ChatTabsPanel): JcefChatPanel? = tabs.selectedChat
 
     /**
      * Opens (or focuses) the Diff History tab for the active session. If a [DiffHistoryPanel] for that same session
      * is already open we just [DiffHistoryPanel.refresh] it and re-select its tab, so it always reflects edits made
      * since it was surfaced; otherwise a fresh closeable tab is created. No-op (with a hint) when no chat is open.
      */
-    private fun openDiffHistory(project: Project, cm: ContentManager) {
-        val session = activePanel(cm)?.session ?: run {
+    private fun openDiffHistory(project: Project, tabs: ChatTabsPanel) {
+        val session = activePanel(tabs)?.session ?: run {
             Messages.showInfoMessage(project, "Open a chat first.", "Diff History")
             return
         }
-        val existing = cm.contents.firstOrNull {
-            (it.component as? DiffHistoryPanel)?.let { panel -> panel.boundSession === session } == true
+        val existing = tabs.all().firstOrNull {
+            (it.component as? DiffHistoryPanel)?.boundSession === session
         }
         if (existing != null) {
             (existing.component as DiffHistoryPanel).refresh()
-            cm.setSelectedContent(existing)
+            tabs.select(existing)
             return
         }
         val panel = DiffHistoryPanel(project, session)
-        val content = ContentFactory.getInstance().createContent(panel, "Diff History", false)
-        content.isCloseable = true
-        cm.addContent(content)
-        cm.setSelectedContent(content)
+        tabs.select(tabs.add(panel, "Diff History", "Diff History", null))
     }
 
-    private fun buildGearGroup(project: Project, cm: ContentManager) =
+    private fun buildGearGroup(project: Project, tabs: ChatTabsPanel) =
         DefaultActionGroup().apply {
             // Context · Cost · Account · MCP all live in the formatted JCEF dashboard now — open that
             // instead of the old plain-text dialogs.
-            add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(cm)?.openDashboard() })
-            add(simple("Agents") { activePanel(cm)?.let { InfoDialogs.showAgents(project, it.session) } })
-            add(simple("Binary Version…") { activePanel(cm)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
-            add(simple("Effective Settings…") { activePanel(cm)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
+            add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(tabs)?.openDashboard() })
+            add(simple("Agents") { activePanel(tabs)?.let { InfoDialogs.showAgents(project, it.session) } })
+            add(simple("Binary Version…") { activePanel(tabs)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
+            add(simple("Effective Settings…") { activePanel(tabs)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
             addSeparator()
-            add(simple("Rename Session…") { renameActiveSession(project, cm) })
-            add(simple("Fork Session") { forkActiveSession(project, cm) })
-            add(simple("Open Previous Session…") { openPreviousSession(project, cm) })
+            add(simple("Rename Session…") { renameActiveSession(project, tabs) })
+            add(simple("Fork Session") { forkActiveSession(project, tabs) })
+            add(simple("Open Previous Session…") { openPreviousSession(project, tabs) })
             add(simple("Delete Previous Session…") { deletePreviousSession(project) })
-            add(simple("Add Current File as @-context") { activePanel(cm)?.mentionCurrentFile() })
+            add(simple("Add Current File as @-context") { activePanel(tabs)?.mentionCurrentFile() })
             add(
                 simple("Settings…") {
                     ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
@@ -238,9 +225,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * exists are skipped; only if there's genuinely nothing to restore does a fresh chat open. Restore can be turned
      * off in settings. The blocking session-file reads run on a pooled thread; tabs are opened back on the EDT.
      */
-    private fun restoreOrCreate(project: Project, cm: ContentManager, manager: ChatSessionManager) {
+    private fun restoreOrCreate(project: Project, tabs: ChatTabsPanel, manager: ChatSessionManager) {
         if (!ClaudeSettings.getInstance(project).restoreOpenChatsOnStartup) {
-            openChat(project, cm, manager.create())
+            openChat(project, tabs, manager.create())
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -261,13 +248,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 }
             ApplicationManager.getApplication().invokeLater({
                 if (restored.isEmpty()) {
-                    openChat(project, cm, manager.create())
+                    openChat(project, tabs, manager.create())
                 } else {
                     for (r in restored) {
                         val s = manager.create()
                         s.title = r.title ?: s.title
                         s.restore(r.id, r.entries)
-                        openChat(project, cm, s)
+                        openChat(project, tabs, s)
                     }
                 }
             }, ModalityState.any())
@@ -279,8 +266,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * the binary's `/rename` (persisting a `customTitle` line) and relabels the tab via the title-changed listener.
      * No-op when there's no active chat or the input is blank/unchanged.
      */
-    private fun renameActiveSession(project: Project, cm: ContentManager) {
-        val session = activePanel(cm)?.session ?: return
+    private fun renameActiveSession(project: Project, tabs: ChatTabsPanel) {
+        val session = activePanel(tabs)?.session ?: return
         val input = Messages.showInputDialog(
             project,
             "New session name:",
@@ -299,8 +286,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * fork reuses the source `sessionId`, so [openChat]'s `start()` re-attaches via `--resume`; the binary branches
      * the conversation once the new tab sends its first message. No-op when there's no active session id yet.
      */
-    private fun forkActiveSession(project: Project, cm: ContentManager) {
-        val source = activePanel(cm)?.session ?: return
+    private fun forkActiveSession(project: Project, tabs: ChatTabsPanel) {
+        val source = activePanel(tabs)?.session ?: return
         val sourceId = source.sessionId ?: run {
             Messages.showInfoMessage(project, "This session hasn't been initialized yet — nothing to fork.", "Claude Code")
             return
@@ -317,7 +304,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 val s = manager.create()
                 s.title = "$sourceTitle (fork)"
                 s.restore(sourceId, entries)
-                openChat(project, cm, s)
+                openChat(project, tabs, s)
             }, ModalityState.any())
         }
     }
@@ -329,7 +316,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
      * the binary re-attach via `--resume` automatically. The blocking session-file reads run on a pooled thread;
      * the popup and tab opening happen on the EDT.
      */
-    private fun openPreviousSession(project: Project, cm: ContentManager) {
+    private fun openPreviousSession(project: Project, tabs: ChatTabsPanel) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val refs = SessionTranscriptReader.listSessions(project)
             ApplicationManager.getApplication().invokeLater({
@@ -354,7 +341,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                                 val s = manager.create()
                                 s.title = ref.title
                                 s.restore(ref.sessionId, entries)
-                                openChat(project, cm, s)
+                                openChat(project, tabs, s)
                             }, ModalityState.any())
                         }
                     }
@@ -476,9 +463,32 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         override fun actionPerformed(e: AnActionEvent) = onNew()
     }
 
-    private class InterruptAction(private val cm: ContentManager) :
+    /**
+     * Signs out of Claude, from the tool window's own title bar.
+     *
+     * It lives here rather than in the web UI because the composer's readout is a wrapping flex row of
+     * metrics: a button at its end drops onto a second line as soon as the numbers fill the width. The title
+     * bar is on screen at all times, never reflows, and is where an IDE user looks for a tool window's own
+     * controls. The dashboard's account row keeps its Log out — same message, two doors.
+     */
+    private class SignOutAction(private val tabs: ChatTabsPanel) :
+        AnAction("Log out", "Sign out of Claude — stops the session and returns to the sign-in card", AllIcons.Actions.Exit) {
+        override fun actionPerformed(e: AnActionEvent) {
+            tabs.selectedChat?.requestLogout()
+        }
+
+        override fun update(e: AnActionEvent) {
+            // Greyed on a non-chat tab (Diff History), where there is no session to sign out of.
+            e.presentation.isEnabled = tabs.selectedChat != null
+        }
+
+        /** EDT, for the same selection-state data race spelled out in [InterruptAction]. */
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+    }
+
+    private class InterruptAction(private val tabs: ChatTabsPanel) :
         AnAction("Interrupt", "Stop the current turn", AllIcons.Actions.Suspend) {
-        private fun session(): ClaudeSession? = (cm.selectedContent?.component as? JcefChatPanel)?.session
+        private fun session(): ClaudeSession? = tabs.selectedChat?.session
         override fun actionPerformed(e: AnActionEvent) {
             session()?.interrupt()
         }
@@ -487,20 +497,19 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         /**
-         * EDT **deliberately**, not an oversight. [session] reads `ContentManager.getSelectedContent()`, which is
-         * `ContentManagerImpl.mySelection` — a plain `ArrayList` mutated on the EDT, with no internal
-         * synchronization and no threading assertion to warn you. Reading it from a background thread is a data
-         * race whose worst case is not a stale label but an `IndexOutOfBoundsException`: `isEmpty()` says no,
-         * the EDT clears the selection, `get(0)` throws. Moving this to BGT to silence an
-         * "N ms to grab EDT" warning would trade a cosmetic log line for a real (if rare) crash.
+         * EDT **deliberately**, not an oversight. [session] reads the tab strip's current selection, which is
+         * Swing state mutated on the EDT with no internal synchronization and no threading assertion to warn
+         * you. Reading it from a background thread is a data race whose worst case is not a stale label but an
+         * exception mid-iteration. Moving this to BGT to silence an "N ms to grab EDT" warning would trade a
+         * cosmetic log line for a real (if rare) crash.
          */
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
     }
 
-    private class CommandsAction(private val cm: ContentManager) :
+    private class CommandsAction(private val tabs: ChatTabsPanel) :
         AnAction("Commands", "Browse all slash commands", AllIcons.Actions.Find) {
         override fun actionPerformed(e: AnActionEvent) {
-            (cm.selectedContent?.component as? JcefChatPanel)?.showCommandPalette()
+            tabs.selectedChat?.showCommandPalette()
         }
     }
 
@@ -550,19 +559,17 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
          */
         fun openDiffHistoryFor(project: Project, session: ClaudeSession) {
             val tw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("Claude Code") ?: return
-            val cm = tw.contentManager
-            val existing = cm.contents.firstOrNull {
+            // The tool window holds ONE content: the tab strip. Everything the user sees is a tab inside it.
+            val tabs = tw.contentManager.contents.firstNotNullOfOrNull { it.component as? ChatTabsPanel } ?: return
+            val existing = tabs.all().firstOrNull {
                 (it.component as? DiffHistoryPanel)?.boundSession === session
             }
             if (existing != null) {
                 (existing.component as DiffHistoryPanel).refresh()
-                cm.setSelectedContent(existing)
+                tabs.select(existing)
             } else {
                 val panel = DiffHistoryPanel(project, session)
-                val content = ContentFactory.getInstance().createContent(panel, "Diff History", false)
-                content.isCloseable = true
-                cm.addContent(content)
-                cm.setSelectedContent(content)
+                tabs.select(tabs.add(panel, "Diff History", "Diff History", null))
             }
             tw.activate(null)
         }
