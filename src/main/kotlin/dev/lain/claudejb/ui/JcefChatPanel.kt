@@ -380,7 +380,11 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
     private fun pushSession() {
-        host.exec("window.cc.session && window.cc.session(" + JcefSessionData.sessionJson(session, lastUsage) + ")")
+        val json = JcefSessionData.sessionJson(session, lastUsage)
+        // The host→web half of the data-flow trace: this is EXACTLY what the dashboard receives. An empty
+        // panel with a full CC-TRACE control reply means the loss is between the session cache and here.
+        LOG.debug("CC-TRACE pushSession ${json.take(TRACE_MAX)}")
+        host.exec("window.cc.session && window.cc.session($json)")
     }
 
     /**
@@ -886,6 +890,11 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     private companion object {
+        private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(JcefChatPanel::class.java)
+
+        /** Trace truncation for CC-TRACE lines; matches SessionControlClient's. */
+        private const val TRACE_MAX = 2000
+
         private val BTW = Regex("^/btw\\b.*")
 
         // Files larger than this skip the EDT-side hunk read/diff for hunk-by-hunk review (full accept still works).

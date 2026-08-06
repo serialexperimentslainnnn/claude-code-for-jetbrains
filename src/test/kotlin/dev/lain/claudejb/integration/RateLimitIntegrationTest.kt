@@ -2,7 +2,8 @@ package dev.lain.claudejb.integration
 
 /**
  * A `rate_limit_event` on the stream is decoded into [RateLimitInfo] and exposed via [ClaudeSession.rateLimit]
- * (drives the quota bar). Fixture reports a five-hour window at 92.5% utilization with a warning status.
+ * (drives the quota bar). The fixture reports a five-hour window at `utilization: 0.925` — the FRACTION the
+ * binary really sends (captured live on 2.1.223), not a 0..100 percentage.
  */
 class RateLimitIntegrationTest : FakeClaudeTestBase() {
 
@@ -17,7 +18,6 @@ class RateLimitIntegrationTest : FakeClaudeTestBase() {
         assertTrue("isWarning", rl.isWarning)
         assertEquals("five_hour", rl.rateLimitType)
         assertEquals("5h", rl.windowLabel())
-        // 92.5 rounds to 93. The former 92 pinned truncation, a leftover of the removed 0..1 heuristic.
-        assertEquals(93, rl.utilizationPercent())
+        assertEquals(93, rl.utilizationPercent()) // 0.925 -> 92.5% -> rounds to 93
     }
 }

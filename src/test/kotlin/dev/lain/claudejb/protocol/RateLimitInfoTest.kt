@@ -7,34 +7,40 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Pure logic of [RateLimitInfo]. The wire reports utilization as a 0..100 percentage (the SDK documents
- * every `get_usage` window as "Percentage of the window used, 0-100"); the UI quota bar depends on this
- * normalization, so these tests pin the contract independently of the wire decoding (which
- * ProtocolParserTest covers).
+ * Pure logic of [RateLimitInfo]. The UI quota bar depends on this normalization, so the contract is pinned
+ * here independently of the wire decoding (which ProtocolParserTest covers).
  *
- * These tests used to pin the OPPOSITE at the low end: a "two scales" heuristic multiplied anything
- * `<= 1.0` by 100, and the test named `utilization exactly 1 is treated as the fractional scale` froze
- * that guess as if it were the contract. A live session at a genuine 1% rendered as 100% — the guess is
- * undecidable exactly at 1.0, and every freshly reset window climbs through that range.
+ * THE SCALE IS A 0..1 FRACTION, and it is NOT the same as `get_usage`'s. Both previous versions of this
+ * file were wrong in opposite directions, which is why the source is a live capture rather than a reading
+ * of the types — `claude` 2.1.223, with claude.ai showing 92% of the weekly window spent:
+ *
+ * ```
+ * {"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.92,"surpassedThreshold":0.75}
+ * ```
+ *
+ * `sdk.d.ts` documents "Percentage of the window used, 0-100" only on the `get_usage` windows;
+ * `SDKRateLimitInfo.utilization` says nothing, and assuming it matched turned a 92% window into a 1% bar.
  */
 class RateLimitInfoTest {
 
     // --- utilizationPercent ---
 
     @Test
-    fun `utilization is a 0 to 100 percentage, passed through`() {
-        assertEquals(92, RateLimitInfo(utilization = 92.0).utilizationPercent())
+    fun `the live capture — 0_92 is 92 percent`() {
+        assertEquals(92, RateLimitInfo(utilization = 0.92).utilizationPercent())
     }
 
     @Test
-    fun `utilization 1 means 1 percent, not a full window`() {
-        assertEquals(1, RateLimitInfo(utilization = 1.0).utilizationPercent())
+    fun `a full window is 1_0, not 100`() {
+        assertEquals(100, RateLimitInfo(utilization = 1.0).utilizationPercent())
     }
 
     @Test
-    fun `sub-percent utilization rounds instead of inflating`() {
-        assertEquals(1, RateLimitInfo(utilization = 0.5).utilizationPercent())
-        assertEquals(0, RateLimitInfo(utilization = 0.2).utilizationPercent())
+    fun `a freshly reset window reads low, not full`() {
+        // The regression this replaces: 0.01 read on the 0..100 scale rounded to 0 and, before that, a
+        // "<= 1.0 means fraction" guess turned a genuine 1 into 100.
+        assertEquals(1, RateLimitInfo(utilization = 0.01).utilizationPercent())
+        assertEquals(6, RateLimitInfo(utilization = 0.06).utilizationPercent())
     }
 
     @Test
@@ -44,8 +50,8 @@ class RateLimitInfoTest {
 
     @Test
     fun `utilization is clamped to 0 and 100`() {
-        assertEquals(100, RateLimitInfo(utilization = 150.0).utilizationPercent())
-        assertEquals(0, RateLimitInfo(utilization = -5.0).utilizationPercent())
+        assertEquals(100, RateLimitInfo(utilization = 1.5).utilizationPercent())
+        assertEquals(0, RateLimitInfo(utilization = -0.5).utilizationPercent())
     }
 
     // --- status flags ---

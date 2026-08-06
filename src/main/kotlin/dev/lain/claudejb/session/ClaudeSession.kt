@@ -374,6 +374,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private var quotaPollInFlight = false
 
     /**
+     * True once the `initialize` handshake has answered — i.e. the binary is up AND talking, with commands,
+     * models and the account in hand. The GUI treats THIS, not process liveness, as "loaded": a spawned
+     * process that has not answered yet would hand the user a chat whose menus and dashboard are empty and
+     * fill in afterwards. Reset on every launch and teardown.
+     */
+    @Volatile
+    var initialized: Boolean = false
+        private set
+
+    /**
      * Fire one session-cost + context-usage poll; results are cached and pushed to panels via [fireState].
      * No-op while the process is not running (the control requests would deliver null and clobber the cached
      * last-good values, blanking the usage meter); and even when running we only overwrite the cache on a
@@ -511,6 +521,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
         ready = false
+        initialized = false
         starting = true
         reconciler.onMessageBoundary()
         // Tell the GUI we are booting BEFORE handing off to the pooled thread, so the loading screen is up for
@@ -564,17 +575,41 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
+     * ONCE per session, on the first boot check: if the machine already has a plaintext
+     * `~/.claude/.credentials.json` — a login the user made in their terminal, or an orphan from a hard IDE
+     * kill — take it into the safe and delete it. That login then counts as ours and the tab starts signed
+     * in instead of asking again.
+     *
+     * Once, and only here. Doing it on every poll deleted the file every few seconds, and `auth login`
+     * finishes by writing exactly that file: the browser leg lost its credential the instant it earned it,
+     * and the code-paste fallback became the only route that ever completed. A sign-in in flight writes its
+     * own credential into the safe when it succeeds ([LoginCoordinator]) — the vault does not need to go
+     * looking for it.
+     */
+    private fun absorbExistingLoginOnce() {
+        if (startupHarvestDone) return
+        startupHarvestDone = true
+        dev.lain.claudejb.process.CredentialsVault.harvest()
+    }
+
+    @Volatile
+    private var startupHarvestDone = false
+
+    /** This session's RAM-backed `CLAUDE_CONFIG_DIR`, or null when the platform has no tmpfs. */
+    @Volatile
+    private var configDir: File? = null
+
+    /**
      * Whether this session has an identity to run as — checked BEFORE spawning anything, since that is a
      * question about what we hold, not about what the binary can do.
      *
-     * Absorbs a plaintext `~/.claude/.credentials.json` first, so a login made in the user's terminal counts
-     * as one of ours (and stops being plaintext in the same breath). After that the identity is exclusively:
-     * the vaulted subscription login, an API key in the safe, or a credential the user wrote by hand into
-     * the Settings environment. Nothing held → logged out by definition, and no process is started to
-     * re-ask a question we have already answered.
+     * The identity is exclusively: the vaulted subscription login, an API key in its provider slot, or a
+     * credential the user wrote by hand into the Settings environment. Nothing held → logged out by
+     * definition, and no process is started to re-ask a question we have already answered.
+     *
+     * Deliberately does NOT harvest — see [absorbExistingLoginOnce].
      */
     private fun hasCredential(settings: ClaudeSettings): Boolean {
-        dev.lain.claudejb.process.CredentialsVault.harvest()
         if (dev.lain.claudejb.process.CredentialsVault.hasUsableToken()) return true
         if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
         if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
@@ -594,28 +629,41 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * than remembered.
      */
     fun refreshBootState() {
-        if (isRunning() || starting) return
+        if (starting) return
         // A sign-in is mid-flight: keep out. This poll harvests the credentials file, and `auth login`
         // writes exactly that file to finish — taking it away mid-flow breaks the browser leg.
         if (login.inProgress) return
+        absorbExistingLoginOnce()
         val settings = ClaudeSettings.getInstance(project)
         val binary = ClaudeBinaryLocator.locate(settings.claudePath)
         if ((binary == null) != binaryMissing) {
             binaryMissing = binary == null
             edt { fireState() }
         }
-        if (binary == null) return
+        if (binary == null) {
+            // The binary went away under a live session — uninstalled, or a path that no longer resolves.
+            // Stop it before showing the install screen, or the user reads "not installed" while a process
+            // from the vanished copy is still answering.
+            edt { if (isRunning()) stop() }
+            return
+        }
         // Persist a freshly-installed binary's path here too, not only in resolveBinary: the install card's
         // "it appeared" path went through a start() that could return before ever writing it down.
         if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
         val credentialed = hasCredential(settings)
         edt {
-            if (isRunning() || starting) return@edt
+            if (starting) return@edt
             when {
-                credentialed -> start()
+                // Signed out: an expired token, a Log out, a credential cleared elsewhere. STOP FIRST — a
+                // live process still holds the old identity, so leaving it up means the tab says "signed
+                // out" while the next turn happily works.
+                !credentialed -> {
+                    if (isRunning()) stop()
+                    // Already asked; do not re-fire, or the notification would repeat every few seconds.
+                    if (!needsLogin) onLoginNeeded()
+                }
 
-                // Already asked; do not re-fire, or the notification would repeat every few seconds.
-                !needsLogin -> onLoginNeeded()
+                !isRunning() -> start()
             }
         }
     }
@@ -717,6 +765,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val withSecrets = env +
             SecretStore.envOverlay(env.keys) +
             (apiKey?.let { mapOf(SecretStore.API_KEY to it) } ?: emptyMap())
+        // The RAM config dir wins when it exists: it is the identity that reports the full picture, and
+        // adding the env token alongside would flip the binary back to the reduced `oauth_token` one.
+        configDir?.let {
+            return withSecrets + mapOf(dev.lain.claudejb.process.RuntimeConfigDir.ENV_NAME to it.absolutePath)
+        }
         // The vaulted subscription login rides here too, as CLAUDE_CODE_OAUTH_TOKEN — which is what lets
         // the session run with NOTHING in ~/.claude/.credentials.json. Last, and keyed on the merged env,
         // so an explicit API key or token still wins.
@@ -731,12 +784,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * behind nor mark a session that no longer owns the generation as ready.
      */
     private fun launch(launchGen: Int, settings: ClaudeSettings, binary: File, workDir: File, resume: Boolean) {
-        // Absorb whatever plaintext credential is lying around — a login the user made in their terminal,
-        // or an orphan left by a hard IDE kill — into the safe, and delete it. This is the ONLY place a
-        // login can enter the plugin without going through its own card, and it must not leave a copy.
-        dev.lain.claudejb.process.CredentialsVault.harvest()
-        // The credential reaches the binary through CLAUDE_CODE_OAUTH_TOKEN in this env and NEVER through a
-        // file. Nothing writes ~/.claude/.credentials.json back — see CredentialsVault.
+        // No harvest here: absorbing an existing plaintext login is a ONCE-per-session act
+        // ([absorbExistingLoginOnce]), and a sign-in files its own credential when it succeeds.
+        //
+        // The credential reaches the binary through a RAM-backed CLAUDE_CONFIG_DIR — measured, not chosen:
+        // with CLAUDE_CODE_OAUTH_TOKEN the binary answers `rate_limits: null` and an account with no email
+        // or plan, so the whole dashboard goes dark. See RuntimeConfigDir. Nothing is written to persistent
+        // storage either way.
+        configDir = dev.lain.claudejb.process.RuntimeConfigDir.prepare()
         val env = effectiveLaunchEnv(cachedEnv ?: settings.resolveEnv().also { cachedEnv = it })
         // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
         // launch is stale — don't spawn an orphan process nothing will ever tear down.
@@ -811,6 +866,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 agents = info.agents
                 availableOutputStyles = info.availableOutputStyles
                 account = info.account
+                log.debug(
+                    "CC-TRACE initialize reply: account(email=${info.account.email.isNotBlank()}," +
+                        " org=${info.account.organization.isNotBlank()}, plan='${info.account.subscriptionType}'," +
+                        " provider='${info.account.apiProvider}') models=${info.models.size}" +
+                        " commands=${info.commands.size} agents=${info.agents.size}",
+                )
+                // The handshake answered: the process is not merely spawned, it is DELIVERING. This is what
+                // takes the loading screen down, so the chat's first frame is drawn with the command list,
+                // the model catalog and the account already in hand rather than filling in behind it.
+                initialized = true
                 if (info.outputStyle.isNotBlank()) outputStyle = info.outputStyle
                 // Graceful fallback: the pin ([DEFAULT_MODEL]) was chosen before the catalog was known. If this
                 // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
@@ -863,14 +928,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         process?.closeStdin()
         process?.destroy()
         process = null
-        // The session is over: take the credentials off the disk and back into the safe. Harvesting HERE
-        // (rather than only at the next launch) is what makes the on-disk window the session's lifetime
-        // instead of "until the IDE is next opened" — the binary refreshes the file during the session, so
-        // this also captures the rotated token rather than restoring a stale one next time.
-        dev.lain.claudejb.process.CredentialsVault.harvest()
+        // Take the (possibly REFRESHED) credential out of the RAM config dir and back into the safe, then
+        // wipe the directory. The binary rotates the token in place, so this is what makes the login
+        // long-lived instead of expiring into a sign-in card.
+        dev.lain.claudejb.process.RuntimeConfigDir.collect(configDir)
+        configDir = null
         turnActive = false
         interrupting = false
         ready = false
+        initialized = false
         starting = false // any in-flight launch is now stale (generation bumped above); let a restart proceed
         // Reset per-turn live state so a stale figure/chip doesn't linger into a resumed session (restart path).
         liveThinkingTokens = 0
@@ -1955,6 +2021,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     private fun onRateLimit(event: ClaudeEvent.RateLimit) {
         val incoming = event.info
+        log.debug(
+            "CC-TRACE rate_limit_event: window=${incoming.rateLimitType} status=${incoming.status}" +
+                " utilization=${incoming.utilization} -> pct=${incoming.utilizationPercent()}",
+        )
         val window = incoming.rateLimitType
         // The binary often emits a rate_limit_event without `utilization` (it's optional and only present when
         // the API returns it). Don't lose a previously-known utilization just because a later event omitted
@@ -2128,6 +2198,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             turnActive = false
             interrupting = false
             ready = false
+            initialized = false
             liveThinkingTokens = 0
             promptSuggestion = null
             cards.clear()

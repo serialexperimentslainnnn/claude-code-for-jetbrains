@@ -93,7 +93,16 @@ class LoginCoordinator(
      * credential out from under the binary and the browser leg silently fails — leaving the code-paste
      * fallback as the only route that ever worked. Nothing touches that file while this is true.
      */
-    val inProgress: Boolean get() = flow != null
+    val inProgress: Boolean get() = signingIn
+
+    /**
+     * Deliberately NOT derived from `flow != null`. That was the bug: `flow` is assigned only AFTER the PTY
+     * has been started, and cleared at the TOP of the result handler, leaving two windows in which a sign-in
+     * was running while this read false — long enough for the watcher to harvest (and now stop the session)
+     * exactly as the binary was writing the credential it had just been granted. This is raised before
+     * anything spawns and lowered only when the flow is completely done with.
+     */
+    @Volatile private var signingIn = false
 
     /**
      * Feeds the card-entered authorization code to the running flow, with a WATCHDOG: if the flow gives no
@@ -125,6 +134,7 @@ class LoginCoordinator(
         flow?.cancel()
         flow = null
         authUrl = null
+        signingIn = false
     }
 
     /** A turn ended cleanly: the auth-failure streak is over, so the next failure may prompt again. */
@@ -207,14 +217,23 @@ class LoginCoordinator(
     private fun startCardFlow(binary: File, cardUi: LoginUi): Boolean {
         // pty4j REPLACES the child env wholesale — merge the base in or the binary loses PATH/HOME.
         val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
+        // BEFORE the spawn: from here until the flow is fully settled, nothing else may touch the
+        // credentials file — `auth login` finishes by writing it, and taking it away mid-flow is what broke
+        // the browser leg and left code-paste as the only route that worked.
+        signingIn = true
         val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env, args = listOf("auth", "login"))
         val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
             override fun onAuthUrl(url: String) {
                 authUrl = url
-                // NO BrowserUtil.browse here: the binary opens the browser itself the moment it prints
-                // this URL, and browsing it again from the host opened a SECOND tab on every sign-in.
-                // The card's "Open browser again" button covers the case where the binary's attempt
-                // failed (headless browser config, snap confinement).
+                // NO BrowserUtil.browse: the binary opens the browser itself, and THAT is the tab that
+                // completes the sign-in. Opening it again from here just added a second tab on top.
+                //
+                // Removing this once looked like it broke the browser leg, which is why it came back for a
+                // build. It did not: what broke it was the boot watcher harvesting (and deleting)
+                // ~/.claude/.credentials.json mid-flow — `auth login` finishes by writing exactly that file.
+                // With that race closed (LoginCoordinator.signingIn) the binary's own tab works, so ours is
+                // pure duplication. The card's "Open your browser" button remains for the case where the
+                // binary's attempt genuinely fails.
                 edt { cardUi.onAuthUrl(url) }
             }
 
@@ -236,7 +255,10 @@ class LoginCoordinator(
                     // Linux and readable by anything running as the user. Take it into the IDE's encrypted
                     // safe and delete it immediately; the launch path writes it back 0600 for the session
                     // and harvests it again at teardown, so it is on disk only while a session runs.
+                    // OUR harvest, while the guard still holds — so the credential lands in the safe here
+                    // rather than being raced for by the watcher.
                     val vaulted = dev.lain.claudejb.process.CredentialsVault.harvest()
+                    signingIn = false
                     cardUi.onLoginResult(true, message)
                     notifyInfo(
                         if (vaulted) {
@@ -247,11 +269,12 @@ class LoginCoordinator(
                     )
                     restartSession() // relaunch on the fresh credentials
                 } else {
+                    signingIn = false
                     cardUi.onLoginResult(false, message)
                 }
             }
         })
-        if (started) flow = ptyFlow
+        if (started) flow = ptyFlow else signingIn = false // a PTY that never spawned holds no guard
         return started
     }
 
@@ -295,11 +318,12 @@ class LoginCoordinator(
         // pty4j REPLACES the child env wholesale (unlike ClaudeProcess, which inherits the parent's and layers
         // extras on top), so the base environment has to be merged in here or the binary loses PATH/HOME entirely.
         val env = System.getenv() + ClaudeSettings.getInstance(project).resolveEnv()
+        signingIn = true // same guard as the card flow, raised before the spawn
         val ptyFlow = ClaudeLoginFlow(binary.absolutePath, project.basePath, env)
         val started = ptyFlow.start(object : ClaudeLoginFlow.Listener {
             override fun onAuthUrl(url: String) {
-                // The binary already opened the browser itself; browsing again here doubled the tab. The
-                // URL is kept only as the hint shown in the code dialog.
+                // Same as the card flow: the binary's own tab is the one that completes the sign-in, so we
+                // do not open a second. The URL is kept as the hint shown in the code dialog.
                 authUrl = url
             }
 
@@ -309,14 +333,18 @@ class LoginCoordinator(
                 flow = null
                 authUrl = null
                 if (success) {
+                    // Harvest under the guard, then lower it — same ordering as the card flow.
+                    dev.lain.claudejb.process.CredentialsVault.harvest()
+                    signingIn = false
                     notifyInfo(message)
                     restartSession() // pick up the new credentials
                 } else {
+                    signingIn = false
                     notifyError(message)
                 }
             }
         })
-        if (started) flow = ptyFlow
+        if (started) flow = ptyFlow else signingIn = false
         return started
     }
 

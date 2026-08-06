@@ -34,13 +34,36 @@ describe('boot screen', () => {
     expect(app().classList.contains('booting')).toBe(false);
   });
 
-  it('comes down when the launch FAILED — neither starting nor running', () => {
-    // The regression that matters. A missing binary, a declined trust prompt or a refused remote-mount project
-    // all end with both flags false. If that did not clear the screen, the tab would stay covered forever with
-    // no way to reach the notification explaining why.
+  it('stays up when the launch FAILED — the chat is not reachable without a session', () => {
+    // The invariant, and it outranks the older reading of this case. A declined trust prompt or a refused
+    // remote-mount project ends with both flags false; showing the chat then hands the user a composer with
+    // no process behind it, which is how the dashboard came up half-empty. The explaining notification is an
+    // IDE toast outside this view, so it is visible either way.
     win.cc.state({ starting: true, running: false });
     win.cc.state({ starting: false, running: false });
+    expect(boot().hidden).toBe(false);
+  });
+
+  it('a session that dies returns to the loading screen', () => {
+    win.cc.state({ starting: false, running: true });
     expect(boot().hidden).toBe(true);
+    win.cc.state({ starting: false, running: false });
+    expect(boot().hidden).toBe(false);
+  });
+
+  it('the sign-in screen replaces the spinner instead of being covered by it', () => {
+    // #boot is z-index 60 and the auth card 55, so "both up" means the user stares at a spinner while the
+    // card they need is underneath it. Exactly one screen at a time.
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(boot().hidden).toBe(true);
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+  });
+
+  it('the sign-in card comes down once the session is running', () => {
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+    win.cc.state({ starting: false, running: true, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(true);
   });
 
   it('distinguishes resuming from a cold start', () => {
@@ -158,17 +181,19 @@ describe('sign-in card', () => {
 
   it('appears on needsLogin and on cc.showAuth, and the install card wins over it', () => {
     expect(card().hidden).toBe(true);
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     expect(card().hidden).toBe(false);
     win.cc.state({ running: false, needsLogin: true, binaryMissing: true });
     expect(card().hidden).toBe(true); // signing in is meaningless without a binary
-    win.cc.state({ running: true, needsLogin: false });
+    // showAuth() is the post-install nudge, and it lands on a tab with no session yet — a running session
+    // means the sign-in it would ask for has already happened.
+    win.cc.state({ running: false, needsLogin: false });
     win.cc.showAuth();
     expect(card().hidden).toBe(false);
   });
 
   it('subscription click moves to waiting and asks the host to start the flow', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.document.getElementById('auth-sub').click();
     expect(sent).toContainEqual({ type: 'loginSubscription' });
     expect(step('waiting').hidden).toBe(false);
@@ -176,7 +201,7 @@ describe('sign-in card', () => {
   });
 
   it('url and code events both land on the ONE browser step — the code is optional, not a stage', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });
     expect(step('browser').hidden).toBe(false);
     // The URL is never rendered as text — it is 200 characters of query string. Two buttons instead.
@@ -197,7 +222,7 @@ describe('sign-in card', () => {
   });
 
   it('the browser buttons are inert until the host supplies a URL, and a restart drops the old one', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'waiting' });
     expect(win.document.getElementById('auth-url-open').disabled).toBe(true);
 
@@ -210,7 +235,7 @@ describe('sign-in card', () => {
   });
 
   it('the code input submits and is CLEARED — a secret must not linger in the DOM', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'code' });
     const input = win.document.getElementById('auth-code');
     input.value = 'AUTH-CODE-42';
@@ -221,7 +246,7 @@ describe('sign-in card', () => {
   });
 
   it('verifying has its own Cancel, so a hung submit is never a dead end', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'verifying' });
     win.document.getElementById('auth-cancel-verify').click();
     expect(sent).toContainEqual({ type: 'cancelLogin' });
@@ -229,7 +254,7 @@ describe('sign-in card', () => {
   });
 
   it('the API key input submits and is cleared too', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     const input = win.document.getElementById('auth-key');
     input.value = 'sk-ant-test';
     win.document.getElementById('auth-key-use').click();
@@ -238,7 +263,7 @@ describe('sign-in card', () => {
   });
 
   it('dismiss tells the host and an error shows its message with a retry back to idle', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.document.getElementById('auth-dismiss').click();
     expect(sent).toContainEqual({ type: 'dismissAuth' });
 
@@ -249,7 +274,7 @@ describe('sign-in card', () => {
   });
 
   it('comes down when needsLogin clears', () => {
-    win.cc.state({ running: true, needsLogin: true });
+    win.cc.state({ running: false, needsLogin: true });
     win.cc.state({ running: true, needsLogin: false });
     expect(card().hidden).toBe(true);
   });

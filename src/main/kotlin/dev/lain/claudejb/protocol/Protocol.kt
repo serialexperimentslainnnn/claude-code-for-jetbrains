@@ -277,7 +277,7 @@ data class RateLimitInfo(
     val status: String = "allowed", // allowed | allowed_warning | rejected
     val resetsAt: Long? = null, // epoch seconds when this window resets
     val rateLimitType: String? = null, // five_hour | seven_day | seven_day_opus/sonnet | overage
-    val utilization: Double? = null, // % of quota used (0..100, sometimes 0..1)
+    val utilization: Double? = null, // FRACTION of quota used, 0..1 — see utilizationPercent()
     val overageStatus: String? = null,
     val isUsingOverage: Boolean = false,
     // Both of these ARE on the wire and were previously dropped — confirmed by capturing a live
@@ -290,13 +290,21 @@ data class RateLimitInfo(
     /**
      * Clamped 0..100 percent, or null if the binary didn't report utilization.
      *
-     * The wire scale is 0..100 — the SDK documents `get_usage`'s windows as "Percentage of the window
-     * used, 0-100", and the event carries the same quantity. This used to guess: anything `<= 1.0` was
-     * assumed to be a 0..1 fraction and multiplied by 100. That guess is undecidable exactly at 1.0, and
-     * it lost: a session at a genuine 1% rendered as **100%**, observed live — every freshly reset window
-     * climbs through the 0..1 range, so every user saw a full red bar at the start of every window.
+     * **The event's scale is a 0..1 FRACTION, and it is not the same as `get_usage`'s.** Captured live from
+     * `claude` 2.1.223 while claude.ai reported 92% of the weekly window spent:
+     *
+     * ```
+     * {"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.92,"surpassedThreshold":0.75}
+     * ```
+     *
+     * `surpassedThreshold: 0.75` is the corroborating detail — thresholds are announced at 75%/85%, so the
+     * companion field is unambiguously a fraction too. `sdk.d.ts` documents "Percentage of the window used,
+     * 0-100" ONLY on the `get_usage` windows ([UsageWindow]); `SDKRateLimitInfo.utilization` carries no
+     * such note, and the two really do differ. Reading the event on the 0..100 scale rendered a window at
+     * 92% as **1%** — a quota bar that is not merely wrong but reassuring while the limit is about to hit.
      */
-    fun utilizationPercent(): Int? = utilization?.let { Math.round(it).toInt().coerceIn(0, 100) }
+    fun utilizationPercent(): Int? =
+        utilization?.let { Math.round(it * PERCENT).toInt().coerceIn(0, 100) }
 
     val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
     val isExhausted: Boolean get() = status == "rejected"
@@ -315,6 +323,9 @@ data class RateLimitInfo(
     }
 
     companion object {
+        /** The event's fraction → percent. [UsageWindow] needs no such factor: it is already 0..100. */
+        private const val PERCENT = 100
+
         /**
          * DESCRIPTIVE label for a window, for the usage panel — where each bar needs to say what it measures.
          * Deliberately separate from [windowLabel]: the pill is space-constrained and the panel is not, and

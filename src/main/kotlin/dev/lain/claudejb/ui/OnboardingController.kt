@@ -48,7 +48,9 @@ internal class OnboardingController(
     }
 
     private fun tick() {
-        if (session.isRunning()) return
+        // Runs while the session is UP too, and that is the point: losing the binary or the credential has
+        // to walk the flow backwards (stop the process, show the matching screen), not sit there with a
+        // chat whose identity is gone.
         // BLOCKING: stats the filesystem and reads the PasswordSafe (a keychain round-trip on some hosts).
         ApplicationManager.getApplication().executeOnPooledThread { session.refreshBootState() }
     }

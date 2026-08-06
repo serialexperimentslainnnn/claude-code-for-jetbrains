@@ -60,7 +60,10 @@ object JcefState {
         val obj = buildJsonObject {
             put("turnActive", session.turnActive)
             put("interrupting", session.interrupting)
-            put("running", session.isRunning())
+            // "Running" for the GUI means the handshake answered, not just that a process exists. The boot
+            // screen hangs off this, and coming down on a bare spawn showed a chat with empty menus and an
+            // empty dashboard that populated a beat later.
+            put("running", session.isRunning() && session.initialized)
             // "Booting" is a THIRD state, not the absence of `running`: the web app blocks input behind a loading
             // screen while this is true, and a session that failed to launch must fall out of it (both flags
             // false) rather than wait forever.

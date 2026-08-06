@@ -1156,22 +1156,33 @@
     var boot = document.getElementById('boot');
     var app = document.getElementById('app');
     if (!boot) return;
-    // FOUR states now: running (go), starting (wait), binaryMissing (the install/path card), and none of
-    // the above (a failed launch for another reason — trust declined, remote mount — which must clear the
-    // screen so the explaining notification is visible).
-    var missing = !s.running && !s.starting && !!s.binaryMissing;
-    var booting = (!s.running && !!s.starting) || missing;
-    boot.hidden = !booting;
+    // ONE invariant, and everything else follows from it: **the chat is reachable only while the `claude`
+    // process is running.** Install -> sign in -> loading -> plugin, in that order, and any step backwards
+    // (the process exits, is restarted, the credential goes away) returns to the matching screen rather
+    // than leaving a chat on screen that has nothing behind it.
+    //
+    // This used to be `starting || binaryMissing`, so every OTHER not-running state — signed out, a dead
+    // process, a launch that failed — fell through to the chat UI, which then rendered its first frame with
+    // no session behind it and stayed half-empty.
+    // Exactly ONE screen at a time, in the order the flow runs: install -> sign in -> loading -> chat.
+    // `#boot` hosts the install card and the spinner; the sign-in card is its own layer, so the spinner
+    // must stand down while it is up or it would simply cover it (z-index 60 over 55).
+    var missing = !s.running && !!s.binaryMissing;
+    var awaitingAuth = !s.running && !missing && (!!s.needsLogin || authForced);
+    var booting = !s.running;
+    var showBoot = missing || (booting && !awaitingAuth);
+    boot.hidden = !showBoot;
     boot.classList.toggle('missing', missing);
     // Announce the FIRST booting render, not just a transition into it. The screen is already on-screen when
     // the page loads, so the common case never transitions — and the element's own aria-live never fires
     // either, because static markup present at load is not a mutation. Once per boot: `announcedBoot` resets
     // when the screen comes down, so a later relaunch announces again.
-    if (booting && !missing && !announcedBoot) {
+    if (showBoot && !missing && !announcedBoot) {
       announcedBoot = true;
       CC.announce && CC.announce('Loading Claude Code');
     }
-    if (!booting) announcedBoot = false;
+    if (!showBoot) announcedBoot = false;
+    // `booting`, not `showBoot`: the chat stays inert for the sign-in screen too.
     if (app) app.classList.toggle('booting', booting);
     var card = document.getElementById('boot-missing');
     if (card) card.hidden = !missing;
@@ -1184,7 +1195,7 @@
       installingId = null; // a fresh boot resets any "Installing…" button
       setBootError('');
     }
-    if (!booting) return;
+    if (!showBoot) return;
     if (missing) {
       renderInstallMethods();
       return;
@@ -1366,8 +1377,10 @@
     lastAuthState = s;
     var card = document.getElementById('auth-card');
     if (!card) return;
-    // The install card wins when both would show: signing in is meaningless without a binary.
-    var visible = (!!s.needsLogin || authForced) && !s.binaryMissing;
+    // Two gates, both from the same rule (install -> sign in -> loading -> chat): the install card wins,
+    // because signing in is meaningless without a binary; and a RUNNING session wins over both, so the
+    // card cannot linger over a live chat once the sign-in it was asking for has happened.
+    var visible = (!!s.needsLogin || authForced) && !s.binaryMissing && !s.running;
     if (!visible && !card.hidden) {
       authForced = false;
       announcedAuth = false;
