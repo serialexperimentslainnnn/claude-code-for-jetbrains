@@ -69,7 +69,7 @@ jobs:
     # the trade is explicit: refreshing what CI has cached now means rebuilding and pushing the image,
     # which is a deliberate act rather than something that drifts between runs.
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. This requires the package to have been granted Read access to
       # THIS repository (package settings -> Manage Actions access): `packages: read` widens what the token
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -195,7 +195,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      # `node-test`, not `jvm-test`: this job is `npm ci` and then vitest. On the single combined image it
+      # pulled a JDK, a Gradle distribution and 3.4 GB of extracted IntelliJ Platform it never opened —
+      # 1m05s of container init for 8 seconds of work.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -205,10 +208,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
-      # baked into the image are invisible and every run silently re-downloads what the image already has.
-      GRADLE_USER_HOME: /opt/gradle-home
+    # No GRADLE_USER_HOME here: there is no Gradle in this image and nothing in this job invokes it.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -241,7 +241,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      # `node-test`: this job is `npm ci` and two `npm audit` invocations. Nothing here touches the JVM.
+      image: ghcr.io/serialexperimentslainnnn/node-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -251,10 +252,6 @@ jobs:
     permissions:
       contents: read
       packages: read
-    env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
-      # baked into the image are invisible and every run silently re-downloads what the image already has.
-      GRADLE_USER_HOME: /opt/gradle-home
     # Same door. NB this is the check that judges exactly what a Dependabot pull request changes, so it no
     # longer runs on the PR that proposes the bump — only once that bump is on develop, and again before it
     # can reach main. Nothing ships un-audited; the finding simply arrives one merge later.
@@ -276,6 +273,63 @@ jobs:
       - name: Audit the full tree (informational)
         run: npm audit || true
 
+  # Release readiness: refuse to promote develop -> main while a bot still has work in flight.
+  #
+  # A release is a claim that `develop` is a finished state. An open pull request from Claude or from
+  # Dependabot is the opposite of that claim: it is a change someone intended to be in this release,
+  # sitting one click away from being in it. Merging past it does not lose the work, it does something
+  # worse — it ships a version whose CHANGELOG was written as if that work had landed. For Dependabot
+  # specifically it also means shipping with a known dependency update sitting unmerged, which is the
+  # one class of pending change a security advisory can be written about.
+  #
+  # This is a status check and NOT a ruleset entry because it cannot be one: a GitHub ruleset can require
+  # a check, a signature or an approval, and has no vocabulary for "no other pull request exists". The
+  # gate is therefore this job, and `.github/rulesets/main.json` requires it by DISPLAY name.
+  #
+  # THE COST, stated rather than discovered: Dependabot's resting state is "has something open" — this
+  # repository's history shows long runs of them. So this gate will block releases until that queue is
+  # drained, and draining it becomes a release step. That is the intended trade (nothing ships alongside
+  # an un-merged dependency bump), but it is the kind of gate that gets bypassed if the queue is ignored
+  # for weeks. If it starts being routinely in the way, the fix is to merge Dependabot more often — not
+  # to widen the filter.
+  bot-work-in-flight:
+    name: No bot PRs pending on develop
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Not in the CI image on purpose: this job needs `gh`, which the image does not install, and needs
+    # nothing the image does provide. A bare runner ships `gh` and starts instantly.
+    permissions:
+      contents: read
+      pull-requests: read
+    # Only at the release door. On a pull request into develop this would be self-referential.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - name: Fail if Claude or Dependabot has open pull requests into develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The login is matched by PATTERN because the exact one depends on how each integration is
+          # installed: the REST API renders an app author as `app/<slug>` (`app/dependabot` is what this
+          # repository's history shows), while a bot user appears as `<name>[bot]`. Anchored rather than
+          # a bare substring, so a human whose username merely contains "claude" or "dependabot" is not
+          # caught by a release gate.
+          pending=$(gh pr list --repo "$GITHUB_REPOSITORY" --base develop --state open \
+                      --json number,title,url,author \
+                      --jq '[.[] | select(.author.login
+                                          | ascii_downcase
+                                          | test("^app/(claude|dependabot)$|^(claude|dependabot)(\\[bot\\])?$"))]')
+
+          count=$(printf '%s' "$pending" | jq 'length')
+          if [ "$count" -eq 0 ]; then
+            echo "no bot pull requests open against develop — clear to promote."
+            exit 0
+          fi
+
+          echo "::error::$count bot pull request(s) still open against develop. Merge or close them before releasing."
+          printf '%s' "$pending" | jq -r '.[] | "  #\(.number)  \(.author.login)  \(.title)\n      \(.url)"'
+          exit 1
+
   # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
   # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
   # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
@@ -287,7 +341,7 @@ jobs:
       # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
       # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
       # on its own runner, to save ten minutes on the one job that runs least often.
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
       # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
       # fails with a 401 that reads like a wrong image name rather than a permission problem.
@@ -362,14 +416,11 @@ jobs:
     name: Build plugin
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: ghcr.io/serialexperimentslainnnn/cc-ci:base
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    # NO container, deliberately. This job downloads an artifact and runs `unzip`, `grep` and `ls` over it —
+    # it does not build anything despite the name, and it used to pull GB of JDK, Gradle and extracted
+    # IntelliJ Platform to do it. `unzip` is on the bare runner, and the job now starts instantly.
     permissions:
       contents: read
-      packages: read
     needs: [verify]
     steps:
       - name: Fetch the verified distributable

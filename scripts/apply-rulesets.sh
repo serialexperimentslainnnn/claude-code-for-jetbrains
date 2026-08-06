@@ -43,7 +43,15 @@ for file in .github/rulesets/*.json; do
   # The JSON files carry `_comment` keys explaining the non-obvious choices — chiefly why the required
   # approval count is 0 on a single-maintainer repo. Those keys are documentation, not API fields, so
   # they are stripped here rather than risking a 422 on an unrecognised property.
-  body=$(jq 'walk(if type == "object" then del(._comment) else . end)' "$file")
+  #
+  # Every key with the `_comment` PREFIX, not just the exact name. Two comments cannot share one object
+  # under the exact-match version, so the moment a second annotation is needed in the same block the
+  # obvious move is to call it `_comment_<something>` — which then sails through this filter and gets
+  # rejected by the API as an unrecognised property. The 422 does not name the offending key, so the
+  # failure reads as "the ruleset is wrong" rather than "the comment leaked". Observed, not hypothetical.
+  body=$(jq 'walk(if type == "object"
+                  then with_entries(select(.key | startswith("_comment") | not))
+                  else . end)' "$file")
 
   if [ -n "$id" ]; then
     echo "updating '$name' (id $id)…"
