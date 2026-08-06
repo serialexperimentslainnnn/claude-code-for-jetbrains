@@ -42,7 +42,14 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
     private fun edit(tool: String, id: String, path: String, snapshot: Boolean = true) {
         transcript.add(Speaker.TOOL, tool, meta = tool, toolUseId = id)
         if (snapshot) {
-            diffs.captureForReview(tool, buildJsonObject { put("file_path", path); put("content", "new") }, id)
+            diffs.captureForReview(
+                tool,
+                buildJsonObject {
+                    put("file_path", path)
+                    put("content", "new")
+                },
+                id,
+            )
         }
     }
 
@@ -80,7 +87,10 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
         transcript.add(Speaker.TOOL, "Edit", meta = "Edit", toolUseId = id)
         val snap = diffs.captureForReview(
             "Edit",
-            buildJsonObject { put("file_path", file.absolutePath); put("content", "claude's version\n") },
+            buildJsonObject {
+                put("file_path", file.absolutePath)
+                put("content", "claude's version\n")
+            },
             id,
         )
         assertNotNull(snap)
@@ -105,7 +115,10 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
         transcript.add(Speaker.TOOL, "Write", meta = "Write", toolUseId = id)
         val snap = diffs.captureForReview(
             "Write",
-            buildJsonObject { put("file_path", outside); put("content", "x") },
+            buildJsonObject {
+                put("file_path", outside)
+                put("content", "x")
+            },
             id,
         )
         assertFalse(rollback.revertEdit(snap!!))
@@ -118,7 +131,10 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
         transcript.add(Speaker.TOOL, "Write", meta = "Write", toolUseId = id)
         diffs.captureForReview(
             "Write",
-            buildJsonObject { put("file_path", inside.absolutePath); put("content", "x") },
+            buildJsonObject {
+                put("file_path", inside.absolutePath)
+                put("content", "x")
+            },
             id,
         )
         assertEquals("inside.kt", rollback.reviewableEdits().single().displayPath)

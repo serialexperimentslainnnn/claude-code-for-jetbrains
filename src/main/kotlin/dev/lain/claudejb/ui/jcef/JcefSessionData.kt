@@ -224,31 +224,45 @@ object JcefSessionData {
             acct.subscriptionType.isBlank() && acct.apiProvider.isBlank() && probe == null && stored == null
         if (empty) return null
         return buildJsonObject {
-            put("email", acct.email.ifBlank { null } ?: probe?.email ?: stored?.email)
-            put("org", acct.organization.ifBlank { null } ?: probe?.orgName ?: stored?.orgName)
+            put("email", firstPresent(acct.email, probe?.email, stored?.email))
+            put("org", firstPresent(acct.organization, probe?.orgName, stored?.orgName))
             // Last resort, the vaulted blob: the plan is also carried inside the credential we hold, so the
             // row survives even a session that never managed to probe.
             put(
                 "plan",
-                acct.subscriptionType.ifBlank { null }
-                    ?: probe?.subscriptionType
-                    ?: stored?.subscriptionType
-                    ?: dev.lain.claudejb.process.CredentialsVault.subscriptionType(),
+                firstPresent(
+                    acct.subscriptionType,
+                    probe?.subscriptionType,
+                    stored?.subscriptionType,
+                    dev.lain.claudejb.process.CredentialsVault.subscriptionType(),
+                ),
             )
             // `apiProvider` ("firstParty") before `authMethod` ("claude.ai"): both describe the route, and the
             // former is the one the session's own account event uses, so the row can't change vocabulary
             // depending on which source answered.
             put(
                 "provider",
-                acct.apiProvider.ifBlank { null }
-                    ?: probe?.apiProvider ?: probe?.authMethod
-                    ?: stored?.apiProvider ?: stored?.authMethod,
+                firstPresent(
+                    acct.apiProvider,
+                    probe?.apiProvider,
+                    probe?.authMethod,
+                    stored?.apiProvider,
+                    stored?.authMethod,
+                ),
             )
             // The stored reply counts as verified: it IS a past `auth status`, and Log out clears the safe
             // (AUTH_STATUS included), so it cannot outlive the identity it describes.
             put("loggedIn", probe?.loggedIn ?: stored?.loggedIn)
         }
     }
+
+    /**
+     * The first candidate that carries something, or null. Blank counts as absent: the session's own account
+     * object reports its unknown fields as `""`, and an empty string is a value the frontend would happily
+     * render as a present-but-empty row.
+     */
+    internal fun firstPresent(vararg candidates: String?): String? =
+        candidates.firstOrNull { !it.isNullOrBlank() }
 
     /** One row per subagent task: `{ id, desc, type, status, tokens, tools }`; empty array when none. */
     private fun subagentsJson(session: ClaudeSession) = buildJsonArray {

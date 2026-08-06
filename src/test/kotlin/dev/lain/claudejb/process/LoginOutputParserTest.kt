@@ -64,12 +64,12 @@ class LoginOutputParserTest {
 
     /** The frame the binary renders on success under a PTY, right before it exits 0. */
     private val successScreen =
-        "${esc}[2mLogged in as dev@example.com${esc}[0m\r\n" +
-            "${esc}[32mLogin successful. Press ${esc}[1mEnter${esc}[0m${esc}[32m to continue…${esc}[0m"
+        "$esc[2mLogged in as dev@example.com$esc[0m\r\n" +
+            "$esc[32mLogin successful. Press $esc[1mEnter$esc[0m$esc[32m to continue…$esc[0m"
 
     @Test
     fun `surfaces the binary's own wording for a failed OAuth exchange`() {
-        val screen = "${esc}[31mOAuth error: invalid_grant$esc[0m\r\nPress Enter to retry."
+        val screen = "$esc[31mOAuth error: invalid_grant$esc[0m\r\nPress Enter to retry."
         assertTrue(LoginOutputParser.looksLikeFailure(screen))
         assertEquals("OAuth error: invalid_grant", LoginOutputParser.resultMessage(screen, success = false))
     }

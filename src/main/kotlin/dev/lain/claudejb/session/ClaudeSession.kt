@@ -613,6 +613,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * to ask. Blocking (it spawns the binary); every caller of this is pooled-thread only.
      */
     private fun captureAccountIdentityOnce() {
+        // Never from a test JVM. [dev.lain.claudejb.process.CredentialsVault.credentialsFile] resolves the
+        // DEVELOPER's real home there, so this would probe on the strength of their own login and file the
+        // answer in a throwaway safe — the same reason the vault refuses to touch a real home under test. It
+        // also spawns the stand-in binary, which has no `auth status` to answer with.
+        if (ApplicationManager.getApplication()?.isUnitTestMode != false) return
         if (dev.lain.claudejb.process.AuthCli.stored()?.email != null) return
         if (!dev.lain.claudejb.process.CredentialsVault.credentialsFile().isFile) return
         val settings = ClaudeSettings.getInstance(project)
@@ -766,7 +771,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // from its own store as `claude.ai` — email, orgId, orgName, plan — which AuthCli.status files in
             // the safe. `loggedIn` stays the first answer's: that one describes the identity this session
             // actually runs on. Skipped entirely once the first answer already named the account.
-            val status = if (onOurEnv.email != null || onOurEnv.orgName != null) {
+            // Only worth a second question when somebody IS signed in: an anonymous logged-OUT answer has no
+            // identity to go looking for, and asking anyway spawns a second process per probe for nothing.
+            val status = if (!onOurEnv.loggedIn || onOurEnv.email != null || onOurEnv.orgName != null) {
                 onOurEnv
             } else {
                 val identity = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())

@@ -101,7 +101,10 @@ object AuthCli {
             val cmd = GeneralCommandLine(listOf(binary.absolutePath) + args)
                 .withEnvironment(env)
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
-            CapturingProcessHandler(cmd).runProcess(TIMEOUT_MS)
+            // destroyOnTimeout: a binary that never answers must not outlive the question. Without it the
+            // timeout only stops us WAITING — the process and its stream readers stay alive, which surfaced as
+            // a leaked-thread failure attributed to whichever test ran next.
+            CapturingProcessHandler(cmd).runProcess(TIMEOUT_MS, true)
         }.getOrNull() ?: return null
         if (output.isTimeout || output.exitCode != 0) return null
         return output.stdout
