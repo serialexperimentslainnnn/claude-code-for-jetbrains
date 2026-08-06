@@ -9,15 +9,23 @@
 name: CI
 
 on:
-  push:
-    # Every working branch gets the same gate. A quality bar that only applies once you open the PR is a
-    # bar you discover late, when the change is already big and the rework is expensive.
-    branches:
-      - develop
-      - main
-      - 'feature/**'
-      - 'bugfix/**'
-      - 'hotfix/**'
+  # Pull requests ONLY — there is deliberately no `push` trigger.
+  #
+  # A branch with an open PR fires `pull_request` on every push to it (the `synchronize` event), so the
+  # iteration loop is fully covered, and covered ONCE. Having both triggers meant two complete pipelines per
+  # commit for identical information; this removes that at the root instead of relying on the concurrency
+  # group to cancel one of them in time.
+  #
+  # Two consequences, recorded because each removes something we were leaning on:
+  #
+  #  - No CI on the push that a merge into `develop` creates. That run was the stated justification for
+  #    dropping the up-to-date requirement on develop — two pull requests that are green apart can break
+  #    together, and develop's own run was what would have caught it. It is now caught at the pull request
+  #    into `main`, where the full gate runs, rather than immediately after the merge.
+  #  - A branch with no open pull request gets no checks at all. That is the intent: no PR, no promotion.
+  #
+  # `release.yml` is unaffected — it carries its own `push: branches: [main]` trigger and still fires on the
+  # merge that publishes.
   pull_request:
     branches: [develop, main]
   workflow_dispatch:
