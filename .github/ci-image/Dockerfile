@@ -89,6 +89,14 @@ RUN ./gradlew --no-daemon --version \
     && ./gradlew --no-daemon dependencies --configuration compileClasspath > /dev/null 2>&1 || true
 
 # npm dependencies for the frontend tests. `npm ci` needs package-lock.json, which is why it is copied above.
+#
+# What is baked is the npm CACHE, not `node_modules`, and the distinction is the whole point: the cleanup
+# step below wipes /warmup, so a baked node_modules would be deleted moments after being built — the warm-up
+# would look like it worked and buy nothing. `node_modules` also MUST match the package-lock.json of whatever
+# commit CI checks out, not the one that happened to be current when the image was cut, so keeping it would
+# be wrong even if it survived. The cache is version-addressed and therefore safe to reuse: `npm ci` in CI
+# rebuilds node_modules from it without touching the network.
+ENV npm_config_cache=/opt/npm-cache
 RUN npm ci --no-audit --no-fund
 
 # The big one. `verifyPlugin` is what pulls the IDEs, and there is no way to fetch them without running it,
