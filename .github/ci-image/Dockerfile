@@ -112,5 +112,4 @@ RUN ./gradlew --no-daemon verifyPlugin > /dev/null 2>&1 || true
 # The sources were only ever scaffolding for the warm-up; keeping them would ship a stale copy of the
 # repository inside the image, which someone would eventually mistake for the real one.
 RUN rm -rf /warmup/* /warmup/.git /warmup/.[!.]* 2>/dev/null || true
-
 WORKDIR /workspace

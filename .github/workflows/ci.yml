@@ -59,11 +59,22 @@ jobs:
     name: JVM tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # EVERY job in this file runs in this image, and the image is the ONLY caching mechanism.
+    #
+    # `gradle/actions/setup-gradle` used to sit in the heavy jobs and was quietly useless here: the warm
+    # GRADLE_USER_HOME measures 31 GB (23 GB of extracted IDE transforms under caches/9.5.1, 7.7 GB of the
+    # downloaded IDE artifacts under modules-2), and a GitHub Actions cache entry is capped at 10 GB per
+    # repository. It could never have stored what it appeared to be storing — it was saving a partial
+    # cache, evicting it, and re-downloading the rest on the next run. The image has no such ceiling, and
+    # the trade is explicit: refreshing what CI has cached now means rebuilding and pushing the image,
+    # which is a deliberate act rather than something that drifts between runs.
     container:
       image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
-      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
-      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      # rotate, and access dies with the job. This requires the package to have been granted Read access to
+      # THIS repository (package settings -> Manage Actions access): `packages: read` widens what the token
+      # may ask for, it does not authorise it against a package the repo was never linked to. Without that
+      # link the pull fails with a bare `denied`, which reads like a wrong image name.
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -80,19 +91,9 @@ jobs:
           persist-credentials: false
 
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          # Read-only ONLY for pull requests from forks. Every other branch writes its own cache, which is
-          # what stops a second push from re-downloading 1.25 GB of IDEs it already had.
-          #
-          # This is safe without our help, and the previous blanket read-only was more conservative than the
-          # platform requires. GitHub scopes caches per branch: "Workflow runs cannot restore caches created
-          # for child branches or sibling branches", and a cache created on a pull request is written to the
-          # merge ref, so it "can only be restored by re-runs of the pull request". A topic branch therefore
-          # cannot reach — let alone overwrite — what develop reads back. Forks stay read-only anyway: there
-          # is no reason to let untrusted code populate anything this repository will later restore.
-          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
+      # NB there is deliberately no `setup-gradle` step, in this job or any other. See the note at the
+      # `container:` block above: the image IS the cache, and the action's cache was never doing the job
+      # it looked like it was doing.
 
       # Coverage is verified HERE, in the same job and the same Gradle invocation as the tests.
       # `koverVerify` depends on `:test`, so running it in the separate `Static analysis` job re-ran the whole
@@ -150,11 +151,9 @@ jobs:
           persist-credentials: false
 
 
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
-
-
+      # `npm ci` is fast rather than free here: node_modules is NOT baked into the image (it must match the
+      # lockfile of the commit under test, not the one current when the image was cut), but the npm cache is,
+      # so this resolves from /opt/npm-cache without touching the network.
       - run: npm ci
 
       # detekt: rule config in config/detekt/detekt.yml, each non-default setting carrying its reasoning
@@ -321,16 +320,10 @@ jobs:
           persist-credentials: false
 
 
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
-
-      # The runner ships with a few GB of preinstalled toolchains we will never use, and the verifier
-      # needs room for multiple extracted IDEs. Reclaiming it is cheaper than debugging a disk-full run.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h /
+      # The old `Free disk space` step is gone. It deleted /usr/share/dotnet and friends, and inside a
+      # container those paths are the IMAGE's, not the runner's — it was freeing nothing while looking
+      # like the safety margin for this job. The margin now comes from the IDEs being baked: this job no
+      # longer downloads or extracts 1.25 GB, it reads what is already on disk.
 
       - name: Verify plugin
         run: ./gradlew --no-daemon --stacktrace verifyPlugin
@@ -366,6 +359,14 @@ jobs:
     name: Build plugin
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container:
+      image: ghcr.io/serialexperimentslainnnn/cc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
     needs: [verify]
     steps:
       - name: Fetch the verified distributable
