@@ -91,41 +91,68 @@ jobs:
       # The `ls` is not decoration. It is the evidence that the bundle still has the layout this assumes;
       # deliberately not guarded with `|| true`, so a future CodeQL release that moves these files fails
       # here loudly instead of silently going back to the old behaviour.
-      - name: Give CodeQL's tracer the name Fedora's loader expands to
+      # Point LD_PRELOAD at a path that resolves on BOTH sides of the container boundary.
+      #
+      # THE ACTUAL CAUSE, after three wrong guesses. `Initialize CodeQL` runs INSIDE this container and
+      # writes to $GITHUB_ENV:
+      #
+      #   LD_PRELOAD=/__t/CodeQL/<v>/x64/codeql/tools/linux64/${LIB}_${PLATFORM}_trace.so
+      #
+      # `/__t` is the name the tool cache has INSIDE the container. On the host the same directory is
+      # /opt/hostedtoolcache — which is exactly what this job used to export back when it ran on a bare
+      # runner, and the reason the message never appeared there. But $GITHUB_ENV is consumed by the runner
+      # process, which lives on the HOST, so the runner's own helpers start with an LD_PRELOAD naming a
+      # path that does not exist from where they stand, and ld.so logs
+      #
+      #   ERROR: ld.so: object '.../${LIB}_${PLATFORM}_trace.so' from LD_PRELOAD
+      #          cannot be preloaded (cannot open shared object file): ignored
+      #
+      # What it is NOT, each ruled out by measurement rather than argument: not a missing Fedora package
+      # (the bundle ships the full matrix — lib/lib64/lib32/x86_64-linux-gnu × x86_64/haswell/i686/xeon_phi
+      # — and `lib64_x86_64_trace.so` is present in the container with mode 0755); not a glibc difference
+      # (Fedora 44's loader expands the tokens and loads the real tracer correctly — verified inside this
+      # exact image, `AT_PLATFORM: x86_64`, all dependencies satisfied); and not a broken database (the
+      # tracing that matters happens inside the container, where the path is valid, which is why the scan
+      # succeeds regardless).
+      #
+      # THE FIX. /opt/hostedtoolcache is real on the host, so making it resolve in here as well gives one
+      # string that both sides can open. Verified in this image before being written here.
+      #
+      # Residual: the ERROR still appears once, at the start of THIS step — the rewrite cannot take effect
+      # before the step that performs it. `Build (Kotlin)` and `Analyze`, the steps that actually run the
+      # compiler, get the corrected value.
+      - name: Make CodeQL's LD_PRELOAD resolve on the host as well as in the container
         run: |
           set -euo pipefail
-
-          # Derived from LD_PRELOAD itself, NOT from a glob over the tool cache. The first attempt used
-          # `ls -d /__t/CodeQL/*/x64/codeql/tools/linux64` and matched TWO directories — the runner image
-          # ships one CodeQL bundle and the action had downloaded another (2.26.1 and 2.26.2 side by side)
-          # — so the variable held two paths and every command after it broke. Picking one by sort order
-          # would just be a nicer-looking guess; LD_PRELOAD names the exact file the loader will be asked
-          # for, so there is nothing left to infer.
           preload="${LD_PRELOAD:-}"
           [ -n "$preload" ] || {
             echo "::error::LD_PRELOAD is unset — CodeQL tracing was never initialised, so this step is"
-            echo "::error::patching a problem that no longer exists in the form it was written for."
+            echo "::error::patching a problem that no longer exists in the shape it was written for."
             exit 1
           }
-          echo "CodeQL will ask the loader for: $preload"
 
-          dir=$(dirname "$preload")
-          echo "tracers shipped in $dir:"
-          ls -la "$dir"/*_trace.so
+          # Only rewrite the in-container name. A self-hosted runner whose tool cache is somewhere else
+          # leaves this untouched rather than being handed a path invented for GitHub's hosted images.
+          case "$preload" in
+            /__t/*) ;;
+            *) echo "LD_PRELOAD is not under /__t ($preload) — nothing to rewrite."; exit 0 ;;
+          esac
 
-          # The same string with the tokens resolved the way Fedora's ld.so resolves them. Substitution
-          # rather than hardcoding the filename, so this keeps working if CodeQL renames around the tokens.
-          want=${preload//'${LIB}'/lib64}
-          want=${want//'${PLATFORM}'/x86_64}
+          mkdir -p /opt
+          [ -e /opt/hostedtoolcache ] || ln -s /__t /opt/hostedtoolcache
 
-          if [ -e "$want" ]; then
-            echo "$want already exists — nothing to do."
-          else
-            # The 64-bit tracer, whatever it is called: everything that is not the 32-bit one.
-            src=$(ls "$dir"/*_trace.so | grep -v -- '_i386_' | head -1)
-            [ -n "$src" ] || { echo "::error::no 64-bit tracer found in $dir"; exit 1; }
-            ln -sv "$src" "$want"
-          fi
+          new=${preload/#\/__t\//\/opt\/hostedtoolcache\/}
+
+          # Prove the rewritten path resolves HERE before handing it to every later step; the host half is
+          # the native directory and needs no proving. Tokens substituted only for this check — the value
+          # exported below keeps them, because the loader is what expands them.
+          probe=${new//'${LIB}'/lib64}
+          probe=${probe//'${PLATFORM}'/x86_64}
+          [ -e "$probe" ] || { echo "::error::rewritten path does not resolve: $probe"; exit 1; }
+
+          echo "LD_PRELOAD=$new" >> "$GITHUB_ENV"
+          echo "was: $preload"
+          echo "now: $new"
 
       # Manual build rather than autobuild: autobuild guesses, and this project's build resolves the
       # whole IntelliJ Platform. `classes` compiles main + resources without running tests twice.
