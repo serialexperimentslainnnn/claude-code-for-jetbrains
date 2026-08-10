@@ -95,8 +95,38 @@ object AuthCli {
     fun logout(binary: File, env: Map<String, String>): Boolean =
         run(binary, env, "auth", "logout") != null
 
+    /**
+     * **Non-interactive** `claude auth login`, driven entirely by a refresh token in the environment — no
+     * browser, no TTY, no user.
+     *
+     * This is a first-class path in the binary, not a trick: given `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` the
+     * command takes a dedicated branch (`tengu_login_from_refresh_token`), exchanges the token at
+     * `platform.claude.com/v1/oauth/token` and stores the result in its own credential store, then exits 0.
+     * `CLAUDE_CODE_OAUTH_SCOPES` accompanies it and is always sent: the binary carries an explicit refusal
+     * for the case where it is missing ("required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN", naming the
+     * space-separated scopes it wants), and the grant cannot be restated without it — so
+     * [dev.lain.claudejb.process.CredentialsVault.renew] will not attempt a renewal from a blob that carries
+     * no scopes. Verified against `claude` 2.1.223 that the branch is taken and is genuinely non-interactive:
+     * with a deliberately invalid refresh token it fails on the HTTP round-trip and exits 1 without opening
+     * a browser or waiting on a terminal.
+     *
+     * That is what makes the vaulted login survive a reboot: the access token lives hours, the refresh token
+     * lives weeks, and this is the plugin's way of spending the second to mint the first WITHOUT holding an
+     * OAuth client itself. Not "the host refreshes the token" — the binary does, exactly as it always has.
+     *
+     * Its own 30 s HTTP timeout sits under this one, hence the longer wait: a renewal killed at 15 s would be
+     * reported as a failed login when it was merely a slow network.
+     */
+    fun loginFromRefreshToken(binary: File, env: Map<String, String>): Boolean =
+        run(binary, env, "auth", "login", timeoutMs = LOGIN_TIMEOUT_MS) != null
+
     /** Runs the binary with [args] and the given env; null on spawn failure, timeout or non-zero exit. */
-    private fun run(binary: File, env: Map<String, String>, vararg args: String): String? {
+    private fun run(
+        binary: File,
+        env: Map<String, String>,
+        vararg args: String,
+        timeoutMs: Int = TIMEOUT_MS,
+    ): String? {
         val output = runCatching {
             val cmd = GeneralCommandLine(listOf(binary.absolutePath) + args)
                 .withEnvironment(env)
@@ -104,11 +134,14 @@ object AuthCli {
             // destroyOnTimeout: a binary that never answers must not outlive the question. Without it the
             // timeout only stops us WAITING — the process and its stream readers stay alive, which surfaced as
             // a leaked-thread failure attributed to whichever test ran next.
-            CapturingProcessHandler(cmd).runProcess(TIMEOUT_MS, true)
+            CapturingProcessHandler(cmd).runProcess(timeoutMs, true)
         }.getOrNull() ?: return null
         if (output.isTimeout || output.exitCode != 0) return null
         return output.stdout
     }
 
     private const val TIMEOUT_MS = 15_000
+
+    /** A renewal is a network round-trip with a 30 s timeout of its own; 15 s would cut it short. */
+    private const val LOGIN_TIMEOUT_MS = 60_000
 }

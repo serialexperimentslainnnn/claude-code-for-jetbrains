@@ -39,10 +39,16 @@ import java.io.File
  * delete in the (now removed) session config dir followed symlinks into `~/.claude` and destroyed a user's
  * conversations, skills and session history. Nothing else on their disk is ours to remove.
  *
- * The cost is stated rather than hidden: only the binary can spend the refresh token, and it does that by
- * rewriting its own file. With no file it cannot, so when the access token expires the credential is simply
- * spent and the sign-in card comes back. A periodic sign-in is the price of never having a bearer token
- * sitting in a world-readable-by-the-user file.
+ * **Expiry is handled by renewal, not by asking the user again** ([renew]). The access token lives hours —
+ * measured at ~10 h on a fresh `auth login` — so with nothing but the token in the safe the identity died
+ * overnight and the sign-in card was back after every reboot: the credential persisted perfectly and simply
+ * expired. Only the binary can spend a refresh token, and that stays true here; the plugin does not hold an
+ * OAuth client, does not talk to the token endpoint and does not write the file back. It runs the binary's
+ * own non-interactive `auth login` with the vaulted refresh token in the environment
+ * ([AuthCli.loginFromRefreshToken]), lets it mint and store a fresh credential, and harvests that the same
+ * way it harvests any other login. The refresh token (weeks, and rotated at every renewal) becomes the thing
+ * that survives a restart, and the plaintext file exists only for the moment between the binary writing it
+ * and [harvest] taking it away.
  */
 object CredentialsVault {
 
@@ -59,6 +65,9 @@ object CredentialsVault {
      * the same outcome.
      */
     private const val EXPIRY_MARGIN_MS = 10 * 60 * 1000L
+
+    /** How long a failed renewal stops us trying again — the boot watcher polls every few seconds. */
+    private const val RENEW_COOLDOWN_MS = 5 * 60 * 1000L
 
     // The rest of the credential's env surface. Verified present in the shipped CLI's own env registry
     // (`sdk.mjs`/`bridge.mjs` name them, and sdk.mjs lists the OAuth ones in its subprocess passthrough).
@@ -171,13 +180,86 @@ object CredentialsVault {
     }
 
     /**
-     * Whether the vault holds a subscription credential that can still authenticate a session.
+     * Whether the vault holds an access token that can authenticate a session **right now**.
      *
-     * An EXPIRED blob deliberately answers false: it cannot be refreshed without writing the file back, so
-     * it is not an identity any more. Callers treat that as signed-out and show the card, which beats
-     * launching a session that will fail its first turn.
+     * An expired blob answers false — but that is no longer the end of the identity: see [canRenew], which
+     * asks the second question ("can we mint a new one?"). Callers wanting "is there an identity at all"
+     * must consider both, or they will show a sign-in card to a user whose credential only needed renewing.
      */
     fun hasUsableToken(): Boolean = usableToken() != null
+
+    /**
+     * Whether the vaulted blob can be turned back into a live access token without the user.
+     *
+     * Three conditions, all from the blob itself: a refresh token, the scopes it was issued with (the
+     * non-interactive path asks for them and the grant cannot be restated without them — see
+     * [AuthCli.loginFromRefreshToken]), and a
+     * `refreshTokenExpiresAt` that is still in the future. A blob with no expiry recorded is given the
+     * benefit of the doubt: the endpoint is the authority on that, and a wrong guess here costs one failed
+     * renewal, while refusing costs a sign-in the user did not need.
+     *
+     * Also false during the cooldown a failed renewal sets, so a caller that polls every few seconds cannot
+     * turn a transient network failure into a process spawn every few seconds.
+     */
+    fun canRenew(): Boolean {
+        if (System.currentTimeMillis() < renewBlockedUntil) return false
+        val oauth = oauthNode() ?: return false
+        if (oauth.string("refreshToken") == null) return false
+        if (oauth.strings("scopes").isNullOrEmpty()) return false
+        val expiresAt = oauth["refreshTokenExpiresAt"]?.jsonPrimitive?.longOrNull ?: return true
+        return expiresAt - System.currentTimeMillis() > EXPIRY_MARGIN_MS
+    }
+
+    /** An identity that exists but is not usable as it stands — exactly the case [renew] exists for. */
+    fun needsRenewal(): Boolean = usableToken() == null && canRenew()
+
+    /**
+     * Mints a fresh credential from the vaulted refresh token, by running the binary's own non-interactive
+     * `auth login` ([AuthCli.loginFromRefreshToken]) and taking custody of what it writes.
+     *
+     * BLOCKING — it spawns a process and makes a network call. Pooled thread only, and never while a
+     * [dev.lain.claudejb.session.LoginCoordinator] sign-in is in flight: both write the same file, and the
+     * caller owns that guard.
+     *
+     * The order after a successful login is the same one every other credential path here follows, for the
+     * same reason: [AccountProfile.capture] asks `~/.claude.json` WHO this is while the login is freshest,
+     * then [harvest] takes the credential off the disk. Reversed, the question can still be answered — but a
+     * renewal is also the moment the account object is rewritten, so capturing here keeps the dashboard's
+     * identity from ageing out with the token that carried it.
+     *
+     * A failure of any leg (login, harvest, or a harvested blob that still is not usable) arms a cooldown
+     * and answers false; the caller then falls back to whatever other identity exists, and ultimately to the
+     * sign-in card. Nothing is cleared: a transient failure must not destroy a refresh token that is still
+     * perfectly good for the next attempt.
+     *
+     * @param baseEnv the RAW settings env. Deliberately not the launch env — handing the binary the expired
+     *   access token we are trying to replace is at best noise and at worst the thing it authenticates with.
+     */
+    fun renew(binary: File, baseEnv: Map<String, String>): Boolean {
+        if (inertHere()) return false
+        val oauth = oauthNode() ?: return false
+        val refreshToken = oauth.string("refreshToken") ?: return false
+        val scopes = oauth.strings("scopes")?.takeIf { it.isNotEmpty() } ?: return false
+        // Case-insensitively: environment names are case-insensitive on Windows, so a hand-written
+        // `Claude_Code_Oauth_Token` in Settings would survive an exact-match removal and then be the very
+        // expired token the renewal is trying to replace.
+        val env = baseEnv.filterKeys { !it.equals(SecretStore.OAUTH_TOKEN, ignoreCase = true) } + mapOf(
+            ENV_REFRESH_TOKEN to refreshToken,
+            ENV_SCOPES to scopes.joinToString(" "),
+        )
+        val renewed = AuthCli.loginFromRefreshToken(binary, env) && run {
+            AccountProfile.capture()
+            harvest()
+            hasUsableToken()
+        }
+        if (!renewed) log.warn("could not renew the vaulted credential from its refresh token")
+        renewBlockedUntil = if (renewed) 0L else System.currentTimeMillis() + RENEW_COOLDOWN_MS
+        return renewed
+    }
+
+    /** Set by a failed [renew]; see [canRenew]. */
+    @Volatile
+    private var renewBlockedUntil = 0L
 
     /**
      * The plan name recorded in the vaulted blob (`max`, `pro`, …), or null.
