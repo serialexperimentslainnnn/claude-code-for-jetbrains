@@ -61,6 +61,9 @@ object JcefSessionData {
             put("account", accountJson(session) ?: JsonNull)
             put("subagents", subagentsJson(session))
             put("backgroundTasks", backgroundTasksJson(session))
+            // The tree behind the Agents / Subagents windows: every agent with the chain it hangs off, so a
+            // row can say "Chat |_ Agent A |_ Agent B" and link straight to that tab.
+            put("agentTree", agentTreeJson(session))
             // Always emit a friendly model label (even on a default session where session.model is null)
             // and the known working dir, so the Session card is never empty — the prior nulls made the
             // whole dashboard collapse to "No session data yet" on a fresh/idle session.
@@ -261,6 +264,55 @@ object JcefSessionData {
     internal fun firstPresent(vararg candidates: String?): String? =
         candidates.firstOrNull { !it.isNullOrBlank() }
 
+    /**
+     * The agent tree for the Agents / Subagents windows:
+     * `[{ agentId, label, type, status, depth, parent, chain, running }]`, empty when this chat has none.
+     *
+     * [chain] is the ownership line the user asked to see — `Chat |_ Agent A |_ Agent B` — built here rather
+     * than in the frontend because the parentage is a property of the data, not of how it is drawn, and the
+     * same string is what the Background tasks window shows for the task's owner.
+     *
+     * Every row carries its `agentId`, which is what the window's link sends back to jump to that tab.
+     */
+    private fun agentTreeJson(session: ClaudeSession) = buildJsonArray {
+        val nodes = session.runningAgents.nodes
+        nodes.values.forEach { node ->
+            addJsonObject {
+                put("agentId", node.agentId)
+                put("label", node.meta.label())
+                put("type", node.meta.agentType)
+                put("status", node.status.name.lowercase())
+                put("depth", node.depth)
+                put("parent", node.parentAgentId)
+                put("chain", ownershipChain(session.title, node.agentId, nodes))
+                put("running", node.status == dev.lain.claudejb.session.AgentStatus.RUNNING)
+            }
+        }
+    }
+
+    /**
+     * `Chat |_ Agent A |_ Agent B` for [agentId], walking up `parentAgentId`.
+     *
+     * Guarded against a cycle by construction: the walk stops at the first id it has already seen. The binary
+     * writes these parent links, and a malformed one must degrade to a shorter chain, never to a hang.
+     */
+    private fun ownershipChain(
+        chatTitle: String,
+        agentId: String,
+        nodes: Map<String, dev.lain.claudejb.session.AgentNode>,
+    ): String {
+        val parts = ArrayDeque<String>()
+        val seen = HashSet<String>()
+        var current: String? = agentId
+        while (current != null && seen.add(current)) {
+            val node = nodes[current] ?: break
+            parts.addFirst(node.meta.label())
+            current = node.parentAgentId
+        }
+        parts.addFirst(chatTitle)
+        return parts.joinToString(" |_ ")
+    }
+
     /** One row per subagent task: `{ id, desc, type, status, tokens, tools }`; empty array when none. */
     private fun subagentsJson(session: ClaudeSession) = buildJsonArray {
         session.subagentTasks.values.forEach { task ->
@@ -281,11 +333,25 @@ object JcefSessionData {
      * missed edge the way the subagent list can, and it is deliberately not correlated with it.
      */
     private fun backgroundTasksJson(session: ClaudeSession) = buildJsonArray {
+        val nodes = session.runningAgents.nodes
         session.backgroundTasks.forEach { task ->
+            // Which agent owns it, when that is knowable at all. `background_tasks_changed` carries only
+            // {task_id, task_type, description} — no parent, no tool_use_id — so the owner can only be
+            // recovered when the same task_id was seen earlier on the edge stream, which is where the
+            // tool_use_id lives. When it cannot be, the row says the chat and stops there: an invented
+            // chain would be worse than an honest gap.
+            val owner = session.subagentTasks[task.taskId]?.toolUseId
+                ?.let { tool -> nodes.values.firstOrNull { it.meta.toolUseId == tool } }
             addJsonObject {
                 put("id", task.taskId)
                 put("desc", task.description)
                 put("type", task.taskType)
+                put("agentId", owner?.agentId)
+                put(
+                    "chain",
+                    owner?.let { ownershipChain(session.title, it.agentId, nodes) }
+                        ?: "${session.title}  ·  no known agent",
+                )
             }
         }
     }

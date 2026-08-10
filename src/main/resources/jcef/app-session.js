@@ -305,52 +305,69 @@
     return card('Session', rows);
   }
 
-  function buildSubagentsCard(subs) {
-    if (!Array.isArray(subs) || !subs.length) return null;
-    var rows = [];
-    for (var i = 0; i < subs.length; i++) {
-      var s = subs[i] || {};
-      var id = s.id;
-      var desc = s.desc != null ? String(s.desc) : '';
-      var type = s.type != null ? String(s.type) : '';
-      var status = s.status != null ? String(s.status) : '';
-      var tokens = fmtInt(s.tokens);
-
-      var metaBits = [];
-      if (type) metaBits.push(type);
-      if (status) metaBits.push(status);
-      if (tokens != null) metaBits.push(tokens + ' tok');
-
-      var stopBtn = h('span', {
-        class: 'btn',
-        attrs: { role: 'button', tabindex: '0' },
-        text: 'Stop',
+  /**
+   * One row of the Agents / Subagents windows.
+   *
+   * The whole row is the link: clicking it goes to that agent's tab, reopening it when the user had closed
+   * it. The ownership chain (`Chat |_ Agent A |_ Agent B`) is built by the host, because parentage is a
+   * property of the data rather than of how it is drawn — and it is the same string the Background tasks
+   * window shows, so "where does this hang from" reads identically everywhere.
+   */
+  function agentRow(a) {
+    var label = a.label != null ? String(a.label) : 'Agent';
+    var metaBits = [];
+    if (a.type) metaBits.push(String(a.type));
+    if (a.status) metaBits.push(String(a.status));
+    var depth = typeof a.depth === 'number' ? a.depth : 1;
+    return h(
+      'div',
+      {
+        class: 'subagent-row agent-row' + (a.running ? ' running' : ''),
+        attrs: { role: 'button', tabindex: '0', title: a.chain || label },
         on: {
-          click: (function (taskId) {
-            return function (ev) {
-              ev.preventDefault();
-              ev.stopPropagation();
-              if (taskId != null) send({ type: 'stopTask', taskId: taskId });
+          click: (function (agentId) {
+            return function () {
+              if (agentId) send({ type: 'revealAgent', agentId: agentId });
             };
-          })(id),
+          })(a.agentId),
         },
-      });
+      },
+      h(
+        'div',
+        { class: 'subagent-main' },
+        h('span', { class: 'subagent-desc', text: treePrefix(depth) + label }),
+        h('span', { class: 'subagent-meta', text: metaBits.join(' · ') }),
+        a.chain ? h('span', { class: 'agent-chain', text: a.chain }) : null
+      )
+    );
+  }
 
-      rows.push(
-        h(
-          'div',
-          { class: 'subagent-row' },
-          h(
-            'div',
-            { class: 'subagent-main' },
-            h('span', { class: 'subagent-desc', text: desc || type || 'Subagent' }),
-            metaBits.length ? h('span', { class: 'subagent-meta', text: metaBits.join(' · ') }) : null
-          ),
-          stopBtn
-        )
-      );
-    }
-    return card('Subagents', rows, true);
+  /** `|_ ` per level, capped — the same tree idiom the tab strips use, so one visual language for hanging off. */
+  function treePrefix(depth) {
+    var n = Math.max(0, Math.min(4, depth - 1));
+    var out = '';
+    for (var i = 0; i < n; i++) out += '|_ ';
+    return out + '|_ ';
+  }
+
+  /** Agents spawned directly by this chat's turns. */
+  function buildAgentsCard(tree) {
+    if (!Array.isArray(tree)) return null;
+    var roots = tree.filter(function (a) {
+      return a && !a.parent;
+    });
+    if (!roots.length) return null;
+    return card('Agents', roots.map(agentRow), true);
+  }
+
+  /** Agents spawned BY another agent, at any depth — the window that answers "who launched this?". */
+  function buildSubagentsCard(tree) {
+    if (!Array.isArray(tree)) return null;
+    var nested = tree.filter(function (a) {
+      return a && a.parent;
+    });
+    if (!nested.length) return null;
+    return card('Subagents', nested.map(agentRow), true);
   }
 
   // Live background tasks, from the `background_tasks_changed` LEVEL signal: the host always sends the CURRENT
@@ -380,19 +397,36 @@
         },
       });
 
-      rows.push(
+      // Where it runs. The chat is always known -- it is the session that reported the task -- but the
+      // OWNING AGENT often is not: `background_tasks_changed` carries only id, type and description, with
+      // no parent and no tool_use_id. When the host could not resolve one it says so, because a made-up
+      // chain would be worse than an honest gap.
+      var chain = t.chain != null ? String(t.chain) : '';
+      var row = h(
+        'div',
+        {
+          class: 'subagent-row' + (t.agentId ? ' agent-row' : ''),
+          attrs: t.agentId ? { role: 'button', tabindex: '0', title: chain } : { title: chain },
+          on: t.agentId
+            ? {
+                click: (function (agentId) {
+                  return function () {
+                    send({ type: 'revealAgent', agentId: agentId });
+                  };
+                })(t.agentId),
+              }
+            : null,
+        },
         h(
           'div',
-          { class: 'subagent-row' },
-          h(
-            'div',
-            { class: 'subagent-main' },
-            h('span', { class: 'subagent-desc', text: desc || type || 'Background task' }),
-            type ? h('span', { class: 'subagent-meta', text: type }) : null
-          ),
-          stopBtn
-        )
+          { class: 'subagent-main' },
+          h('span', { class: 'subagent-desc', text: desc || type || 'Background task' }),
+          type ? h('span', { class: 'subagent-meta', text: type }) : null,
+          chain ? h('span', { class: 'agent-chain', text: chain }) : null
+        ),
+        stopBtn
       );
+      rows.push(row);
     }
     return card('Background tasks', rows, true);
   }
@@ -523,9 +557,12 @@
       buildCostCard(s.cost),
       buildAccountCard(s.account),
       buildEnvCard(s),
-      buildSubagentsCard(s.subagents),
-      buildBackgroundTasksCard(s.backgroundTasks),
       buildMcpCard(lastMcp),
+      // Session first, then the three windows the agent work moved into, in the order the user asked for:
+      // Session · Agents · Subagents · Background tasks.
+      buildAgentsCard(s.agentTree),
+      buildSubagentsCard(s.agentTree),
+      buildBackgroundTasksCard(s.backgroundTasks),
     ];
 
     var any = false;

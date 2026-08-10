@@ -17,8 +17,12 @@ import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.context.EditorContextProvider
 import dev.lain.claudejb.context.FilePickerHelper
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.protocol.mergedOver
+import dev.lain.claudejb.session.PluginAgentIndex
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -121,9 +125,47 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     /** The two onboarding cards' host side (install-the-binary + sign-in), kept OFF this class on purpose. */
     private val onboarding = OnboardingController(project, session, host::exec)
 
+    /**
+     * The `Agents` / `Subagents` rows, at the top of THIS panel.
+     *
+     * They live inside the chat rather than beside the chat strip because that is the only place they can sit
+     * *below* the chat's own tab and still belong to it: `JBTabs` owns the space between its header and its
+     * content, so a wrapper around the strip would have put the agent rows above the chat tabs. Being
+     * per-chat also makes "show the agents of the selected chat" free — nothing has to be swapped when the
+     * user switches tab, because each chat carries its own rows.
+     */
+    private val agentTabs = AgentTabsPanel(project, this)
+
+    // Declared ABOVE `init`, which assigns them. Kotlin runs initializers and init blocks in declaration
+    // order, so a field declared below would still be null when the constructor writes it — the defect that
+    // killed every chat tab in 5.0.0 and the reason InitOrderContractTest scans this file.
+    /** Wired in `init` to [onAgentsScanned]; a field so a test or a future owner can substitute it. */
+    var onAgentsUpdated: (List<String>) -> Unit = {}
+
+    /** Wired in `init` to [revealAgent]. */
+    var onRevealAgent: (String) -> Unit = {}
+
+    /** Agents whose tab the user closed. Not a delete — see [PluginAgentIndex]; the card reopens them. */
+    private val hiddenAgents = HashSet<String>()
+
     init {
         background = ChatTheme.BG
+        add(agentTabs, BorderLayout.NORTH)
         add(host.component, BorderLayout.CENTER)
+        agentTabs.onShowTranscript = ::showTranscript
+        agentTabs.onTabClosed = { agentId ->
+            hiddenAgents += agentId
+            session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, agentId, false) }
+            renderAgentRows()
+        }
+        onAgentsUpdated = ::onAgentsScanned
+        onRevealAgent = ::revealAgent
+        // What the user closed in an earlier run stays closed: the index is read once here, before the first
+        // scan can render anything, so a restored chat never flashes a tab the user had dismissed.
+        session.sessionId?.let { id ->
+            val index = PluginAgentIndex.getInstance(project)
+            hiddenAgents += index.admittedAgents(id) - index.openAgents(id).toSet()
+        }
 
         livePanels.add(this)
         session.transcript.addListener(this)
@@ -150,6 +192,48 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     // ── TranscriptModel.Listener ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Which transcript this browser is painting: null = the chat's own, otherwise that agent's.
+     *
+     * One browser, many transcripts. Spawning a JCEF per agent tab would mean a Chromium process per agent,
+     * and the session this feature exists for runs dozens at once.
+     */
+    private var shownAgentId: String? = null
+
+    /**
+     * Paints [agentId]'s transcript (null → the chat's own), replacing whatever is on screen.
+     *
+     * While an agent is shown, the chat's live rows are still tracked in the model but not pushed: the
+     * frontend upserts by row id, so letting both streams write would interleave a live chat row into an
+     * agent's transcript — the very mixing this release removes. Switching back re-sends the chat in full.
+     */
+    fun showTranscript(agentId: String?) {
+        if (shownAgentId == agentId) return
+        shownAgentId = agentId
+        dirty.clear()
+        host.exec("window.cc.clear && window.cc.clear()")
+        if (agentId == null) {
+            structural = true
+            ensureTimer()
+        } else {
+            pushAgentTranscript(agentId)
+        }
+    }
+
+    /** Re-sends the shown agent's transcript after a scan; a no-op when the chat's own is on screen. */
+    private fun refreshShownAgent() {
+        val id = shownAgentId ?: return
+        pushAgentTranscript(id)
+    }
+
+    private fun pushAgentTranscript(agentId: String) {
+        val entries = session.runningAgents.nodes[agentId]?.entries.orEmpty()
+        host.exec("window.cc.clear && window.cc.clear()")
+        if (entries.isNotEmpty()) {
+            host.exec("window.cc.batch && window.cc.batch(" + JcefBridge.agentBatchJson(entries) + ")")
+        }
+    }
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {
         // Append-at-tail (the common streaming case) leaves every existing row's order unchanged, so we only need
@@ -179,6 +263,14 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Coalescer tick (EDT): one `cc.batch` frame — all rows on a structural change, else just the dirty ones. */
     private fun onTick() {
+        // An agent's transcript is on screen: keep coalescing the chat's rows into the model, but do not
+        // paint them over the agent's. They are re-sent whole when the user switches back.
+        if (shownAgentId != null) {
+            dirty.clear()
+            structural = true
+            timer.stop()
+            return
+        }
         val entries = session.transcript.entries
         val items: List<Pair<TranscriptEntry, Int>> = if (structural) {
             structural = false
@@ -199,6 +291,84 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     // ── SessionListener ──────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The agent tree moved: repaint the strips, refresh the shown agent's transcript, and let whoever owns
+     * the tab strips (the tool window factory) blink and notify for the newly-admitted ones.
+     */
+    override fun onAgentsChanged(freshlyAdmitted: List<String>) {
+        onAgentsUpdated(freshlyAdmitted)
+        refreshShownAgent()
+        pushSession()
+    }
+
+    /** Repaints both rows from the registry, minus whatever the user has closed. */
+    private fun renderAgentRows() = agentTabs.render(session.runningAgents, hiddenAgents)
+
+    /**
+     * A scan finished. Repaint the rows, then blink the tabs of agents seen for the first time and raise ONE
+     * grouped notification for the burst — on a session spawning dozens at once, one popup per agent is a
+     * storm, and the blink is what carries "this one is new" without interrupting.
+     */
+    private fun onAgentsScanned(freshlyAdmitted: List<String>) {
+        renderAgentRows()
+        val fresh = freshlyAdmitted.filterNot { it in hiddenAgents }
+        if (fresh.isEmpty()) return
+        fresh.forEach { agentTabs.blink(it) }
+        notifyAgentsSpawned(fresh)
+    }
+
+    /**
+     * One IDE notification per burst of spawns, with a link into the tool window.
+     *
+     * Grouped rather than one-per-agent because the session this exists for spawns them in waves: dozens of
+     * popups say nothing except "stop looking at the IDE". Suppressed entirely when this chat is the one on
+     * screen — the blinking tab has already said it, and a popup for what you are looking at is noise.
+     */
+    private fun notifyAgentsSpawned(fresh: List<String>) {
+        val tw = ToolWindowManager.getInstance(project).getToolWindow(CLAUDE_TOOL_WINDOW)
+        if (tw != null && tw.isVisible && isShowing) return
+        val names = fresh.mapNotNull { session.runningAgents.nodes[it]?.meta?.label() }
+        val text = when {
+            names.size == 1 -> "Agent started in \"${session.title}\": ${names.first()}"
+            names.isNotEmpty() -> "${names.size} agents started in \"${session.title}\""
+            else -> return
+        }
+        NotificationGroupManager.getInstance().getNotificationGroup("Claude Code")
+            .createNotification("Claude Code", text, NotificationType.INFORMATION)
+            .addAction(
+                NotificationAction.createSimpleExpiring("Open") {
+                    fresh.firstOrNull()?.let { revealAgent(it) }
+                    ToolWindowManager.getInstance(project).getToolWindow(CLAUDE_TOOL_WINDOW)?.activate(null)
+                },
+            )
+            .notify(project)
+    }
+
+    /**
+     * Reveals an agent's tab, reopening it when the user had closed it.
+     *
+     * This is what makes closing a tab safe: the agent, its transcript and its card are all still there, so
+     * "closed" only ever meant "not currently shown".
+     */
+    private fun revealAgent(agentId: String) {
+        if (hiddenAgents.remove(agentId)) {
+            session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, agentId, true) }
+            renderAgentRows()
+        }
+        agentTabs.reveal(agentId)
+    }
+
+    /**
+     * The agent a `revealAgent` names: its id when the sender had one, else the agent spawned by that
+     * `tool_use_id`. Null when nothing matches — a card whose agent the binary never wrote a sidecar for
+     * (or one belonging to a terminal run) simply does nothing, rather than opening someone else's tab.
+     */
+    private fun resolveAgentId(m: JcefBridge.Msg.RevealAgent): String? {
+        m.agentId.takeIf { it.isNotBlank() }?.let { return it }
+        val tool = m.toolUseId.takeIf { it.isNotBlank() } ?: return null
+        return session.runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
+    }
 
     override fun onStateChanged() {
         pushMetaState()
@@ -644,6 +814,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
         is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
 
+        // The transcript card (and the dashboard lists) asking to go to an agent's tab. Reopens it when the
+        // user had closed it: closing hides a view, it never removes the agent or its transcript.
+        is JcefBridge.Msg.RevealAgent -> resolveAgentId(m)?.let { onRevealAgent(it) }
+
         // Everything the two onboarding cards send (install / binary path / sign-in / logout) lives in
         // its own collaborator — see OnboardingController. `handle` returns false only for messages that
         // are not onboarding's, and every remaining SessionControl IS handled above, so falling through
@@ -923,6 +1097,9 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
         /** How many recently-opened files the attach menu offers before the user has to search. */
         private const val RECENT_FILES_LIMIT = 14
+
+        /** The tool window this plugin registers; used to tell "am I on screen?" from a notification. */
+        private const val CLAUDE_TOOL_WINDOW = "Claude Code"
 
         /** Period of the plan-limits poll, visible or not — a window reset happens on wall-clock time. */
         private const val USAGE_POLL_MS = 30_000
