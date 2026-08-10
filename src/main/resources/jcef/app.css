@@ -532,6 +532,37 @@ details.fold .fold-body p:first-child {
      and at message speed a burst of them reads as sluggish rather than smooth. */
   animation: rise 0.22s var(--ease) both;
 }
+/* A row of the Agents / Subagents / Background tasks windows that links to a tab. The whole row is the
+   target, so it says so on hover; the ownership chain sits under the label, dimmer, because it answers
+   "where does this hang from" rather than "what is this". */
+.agent-row {
+  cursor: pointer;
+}
+.agent-row:hover {
+  background: var(--surface2);
+}
+.agent-chain {
+  display: block;
+  font-size: 11px;
+  opacity: 0.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An Agent/Task card is a link to that agent's tab, not an expander: its work lives in its own transcript
+   now. It says so by pointing rather than by looking different — a second card style in a transcript that is
+   mostly tool cards would be noise, and the chevron is already hidden for it below. */
+.tool.agent-link > .tool-head {
+  cursor: pointer;
+}
+.tool.agent-link > .tool-head:hover .name {
+  text-decoration: underline;
+}
+.tool.agent-link > .tool-head .chev {
+  visibility: hidden;
+}
+
 /* state borders use status hues — NOT the accent. --info = sky blue (loading/running). */
 /* Active (loading until a result lands, or running on a heartbeat) → fade sky-blue ↔ amber + spin.
    Most tools never emit a tool_progress (so never hit RUNNING), so loading shares the fade — that's

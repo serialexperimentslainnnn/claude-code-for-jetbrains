@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui.jcef
 import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.protocol.AskQuestion
+import dev.lain.claudejb.session.EntryDTO
 import dev.lain.claudejb.session.TranscriptEntry
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -68,6 +69,38 @@ object JcefBridge {
     /** A batch of `(row, order)` for one `cc.batch([...])` frame (the JS upserts each by id). JSON array literal. */
     fun batchJson(items: List<Pair<TranscriptEntry, Int>>): String =
         JsonArray(items.map { (e, order) -> entryJson(e, order) }).toString()
+
+    /**
+     * The same row shape, built from a **reconstructed** entry rather than a live one.
+     *
+     * An agent's transcript is read back from the binary's own per-agent file (as is a restored session's),
+     * so it arrives as [dev.lain.claudejb.session.EntryDTO] with no live tool state and no row ids. Ids are
+     * synthesised from the position, which is all the frontend needs — it upserts by id and repositions to
+     * `order`, and a reconstructed transcript is replaced wholesale rather than patched row by row.
+     *
+     * Tool rows are marked FINISHED: whatever the agent was doing when it wrote that file, it is not doing
+     * it now in a way this row can track, and a card left spinning forever is a lie the UI tells by omission.
+     */
+    fun agentBatchJson(entries: List<EntryDTO>): String =
+        JsonArray(
+            entries.mapIndexed { index, dto ->
+                buildJsonObject {
+                    put("id", index.toLong())
+                    put("order", index)
+                    put("speaker", dto.speaker)
+                    put("text", dto.text)
+                    dto.meta?.let { put("meta", it) }
+                    dto.toolUseId?.let { put("toolUseId", it) }
+                    dto.filePath?.let { put("filePath", it) }
+                    dto.commandText?.let { put("command", it) }
+                    put("state", "FINISHED")
+                    put("elapsed", 0)
+                    if (dto.speaker == "TOOL" && dto.toolUseId != null && dto.meta in REVIEWABLE_TOOLS) {
+                        put("reviewable", true)
+                    }
+                }
+            },
+        ).toString()
 
     /** One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). */
     fun permissionJson(p: PendingPermission, diff: String? = null): JsonObject = buildJsonObject {
@@ -236,6 +269,19 @@ object JcefBridge {
         data class McpToggle(val name: String, val enabled: Boolean) : SessionControl
         data class StopTask(val taskId: String) : SessionControl
 
+        /**
+         * Go to an agent's tab: sent by the Agent/Task card in the transcript and by the dashboard lists.
+         *
+         * Two ways to name the agent, because the two senders know different things. The dashboard has the
+         * [agentId]; a transcript card only ever knew its [toolUseId], and the pairing between them comes
+         * from the binary's own sidecar, which the host reads — so the card sends what it has and the host
+         * resolves. Exactly one of the two is non-blank.
+         *
+         * Also the documented way back to a tab the user closed: closing hides a view, it never destroys
+         * anything, so revealing it again just re-opens a window onto a file that is still there.
+         */
+        data class RevealAgent(val agentId: String, val toolUseId: String) : SessionControl
+
         // The "Claude Code was not found" boot card: run an official installer in the IDE terminal,
         // validate a user-typed binary path, or re-check after an install finished.
         data class InstallClaude(val method: String) : SessionControl
@@ -369,6 +415,8 @@ object JcefBridge {
         "mcpToggle" -> Msg.McpToggle(f.text("name"), f.bool("enabled"))
 
         "stopTask" -> Msg.StopTask(f.text("taskId"))
+
+        "revealAgent" -> Msg.RevealAgent(f.text("agentId"), f.text("toolUseId"))
 
         // The "Claude Code was not found" boot card.
         "installClaude" -> Msg.InstallClaude(f.text("method"))

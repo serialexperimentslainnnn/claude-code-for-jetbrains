@@ -319,6 +319,15 @@
     // distinct from this tool's own routed output (.tool-out).
     var children = el('div', { class: 'tool-children' });
     head.addEventListener('click', function () {
+      // An Agent/Task card is a LINK to that agent's tab, not an expander. Its work no longer lives in this
+      // transcript -- it has its own tab with its own transcript -- so expanding would open an empty box,
+      // and the card is also the documented way back to a tab the user closed.
+      // The host maps this tool_use_id to the agent it spawned (AgentRegistry knows the pairing from the
+      // binary's own sidecar), so the card does not have to carry an id it never sees.
+      if (node.__isAgentCard && node.__toolUseId) {
+        safeSend({ type: 'revealAgent', toolUseId: node.__toolUseId });
+        return;
+      }
       node.classList.toggle('open');
     });
     node.appendChild(head);
@@ -569,8 +578,12 @@
       rec.outNode = rec.el.__outNode || rec.el.querySelector('.tool-out');
       rec.el.__toolUseId = entry.toolUseId;
       toolCards.set(entry.toolUseId, rec.el);
-      // All tool cards (incl. Agent/Task) start collapsed and toggle on click — predictable, and
-      // never auto-expanded (which read as "stuck open"). Expand an Agent to see its nested activity.
+      // A tool card starts collapsed and toggles on click. An Agent/Task card is the exception: since 5.5.0
+      // the agent's work lives in its own tab, so the card LINKS there instead of expanding onto nothing.
+      if (entry.meta === 'Task' || entry.meta === 'Agent') {
+        rec.el.__isAgentCard = true;
+        rec.el.classList.add('agent-link');
+      }
     }
     if (entry.speaker === 'TOOL') {
       var icNode = rec.el.querySelector('.ic');
