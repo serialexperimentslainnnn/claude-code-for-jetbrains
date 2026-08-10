@@ -1108,15 +1108,28 @@
       // not, because a window reported at 103% is exactly the number the user needs to see.
       var fill = h('i', { class: usageLevel(win.pct) });
       fill.style.width = Math.max(0, Math.min(100, win.pct)) + '%';
-      host.appendChild(
+      // How long the window has left, on its OWN line under the bar. A percentage without it says how much is
+      // spent but not whether that matters: 90% with eight minutes to go and 90% with six hours to go are
+      // different situations, and only the dashboard was answering that. Under the bar rather than beside it
+      // because the bar row is already three items wide per window — a fourth turned the countdown into the
+      // first thing to be squeezed out, which is the one case where it matters most.
+      var reset = CC.resetInShort(win.resetsAt);
+      var item = h(
+        'div',
+        {
+          class: 'ub-item',
+          title: label + ' — ' + pct + ' used' + (reset ? ' · ' + CC.resetIn(win.resetsAt) : ''),
+        },
         h(
           'div',
-          { class: 'ub-item', title: label + ' — ' + pct + ' used' },
+          { class: 'ub-row' },
           h('span', { class: 'ub-label', text: label }),
           h('span', { class: 'ub-track' }, fill),
           h('span', { class: 'ub-pct', text: pct })
         )
       );
+      if (reset) item.appendChild(h('span', { class: 'ub-reset', text: 'Reset time: ' + reset }));
+      host.appendChild(item);
       shown++;
     }
     if (shown > 0) host.removeAttribute('hidden');

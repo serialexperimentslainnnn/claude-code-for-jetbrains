@@ -93,7 +93,7 @@ object JcefSessionData {
             .filterKeys { key -> fromReport.none { it.key == key } }
             .map { (key, info) ->
                 val pct = info.utilization?.let { it * 100 }
-                Window(key, RateLimitInfo.windowTitleFor(key), pct, info.resetsAt?.let(::isoOf), info.isExhausted)
+                Window(key, RateLimitInfo.windowTitleFor(key), pct, info.resetsAtIso(), info.isExhausted)
             }
         val windows = fromReport + fromEvents
         if (windows.isEmpty() && report?.extra == null) return null
@@ -134,10 +134,6 @@ object JcefSessionData {
         put("pct", extra.utilization) // EXPERIMENT: raw, un-rounded, like the windows — so the decimal shows
         put("limitReached", extra.spendLimitReached)
     }
-
-    /** Epoch seconds → ISO-8601, so event-sourced windows match the shape `get_usage` already returns. */
-    private fun isoOf(epochSeconds: Long): String =
-        java.time.Instant.ofEpochSecond(epochSeconds).toString()
 
     private const val TEN = 10.0
 

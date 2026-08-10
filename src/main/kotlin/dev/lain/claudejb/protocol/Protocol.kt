@@ -291,6 +291,13 @@ data class RateLimitInfo(
     fun utilizationPercent(): Int? =
         utilization?.let { Math.round(it * PERCENT).toInt().coerceIn(0, 100) }
 
+    /**
+     * [resetsAt] as ISO-8601, the shape `get_usage` already uses, so a window sourced from an EVENT and one
+     * sourced from the REPORT are interchangeable to every surface that renders a countdown. The conversion
+     * lives on the model because both UI builders need it and two copies would be two chances to drift.
+     */
+    fun resetsAtIso(): String? = resetsAt?.let { java.time.Instant.ofEpochSecond(it).toString() }
+
     val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
     val isExhausted: Boolean get() = status == "rejected"
 

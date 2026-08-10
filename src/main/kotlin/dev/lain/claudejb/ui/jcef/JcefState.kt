@@ -35,21 +35,29 @@ object JcefState {
         // EXPERIMENT (Lain's comma test): carry the raw decimals here too, so the composer readout does not
         // round to Int either — otherwise the decimal never shows and the test can't see a comma vs a dot.
         val fromReport = usage?.windows.orEmpty().mapNotNull { (key, w) ->
-            w.utilization?.let { Triple(key, w.title(key), it) }
+            w.utilization?.let { CompactWindow(key, w.title(key), it, w.resetsAt) }
         }
         val fromEvents = session.rateLimits
-            .filterKeys { key -> fromReport.none { it.first == key } }
+            .filterKeys { key -> fromReport.none { it.key == key } }
             .mapNotNull { (key, info) ->
-                info.utilization?.let { Triple(key, RateLimitInfo.windowTitleFor(key), it * 100) }
+                info.utilization?.let {
+                    CompactWindow(key, RateLimitInfo.windowTitleFor(key), it * 100, info.resetsAtIso())
+                }
             }
-        (fromReport + fromEvents).forEach { (key, label, pct) ->
+        (fromReport + fromEvents).forEach { w ->
             addJsonObject {
-                put("key", key)
-                put("label", label)
-                put("pct", pct)
+                put("key", w.key)
+                put("label", w.label)
+                put("pct", w.pct)
+                // The countdown, so the readout can say how long the window has left. A percentage alone does
+                // not tell you whether 90% is urgent; only the dashboard was answering that.
+                w.resetsAt?.let { put("resetsAt", it) }
             }
         }
     }
+
+    /** One window as the composer readout needs it; a Triple stopped being readable at four fields. */
+    private data class CompactWindow(val key: String, val label: String, val pct: Double, val resetsAt: String?)
 
     fun stateJson(session: ClaudeSession, usage: UsageReport? = null): String {
         val provider = session.provider

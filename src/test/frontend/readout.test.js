@@ -107,6 +107,34 @@ describe('plan-limit bars', () => {
     expect(items()[0].querySelector('.ub-pct').textContent).toBe('103.0%');
   });
 
+  it('shows how long each window has left, compactly, with the sentence in the tooltip', () => {
+    // A percentage alone does not say whether it is urgent: 90% with eight minutes to go and 90% with six
+    // hours to go are different situations, and only the dashboard was answering that.
+    const in90min = new Date(Date.now() + 90 * 60000).toISOString();
+    win.cc.state({
+      ...base,
+      usage: [
+        { key: 'five_hour', label: 'Current session', pct: 90, resetsAt: in90min },
+        { key: 'seven_day', label: 'All models', pct: 9 },
+      ],
+    });
+    expect(items()[0].querySelector('.ub-reset').textContent).toBe('Reset time: 1h 30m');
+    // Its own line under the bar row, not a fourth item squeezed into it.
+    expect(items()[0].querySelector('.ub-row .ub-reset')).toBeNull();
+    expect(items()[0].querySelector('.ub-row .ub-pct')).not.toBeNull();
+    expect(items()[0].getAttribute('title')).toContain('Resets in 1h 30m');
+    // A window with no reset time gets no element at all — an empty slot would read as "resets now".
+    expect(items()[1].querySelector('.ub-reset')).toBeNull();
+    expect(items()[1].getAttribute('title')).not.toContain('Resets');
+  });
+
+  it('says "soon" once the reset time has passed rather than a negative countdown', () => {
+    const past = new Date(Date.now() - 60000).toISOString();
+    win.cc.state({ ...base, usage: [{ key: 'a', label: 'Over', pct: 100, resetsAt: past }] });
+    expect(items()[0].querySelector('.ub-reset').textContent).toBe('Reset time: soon');
+    expect(items()[0].getAttribute('title')).toContain('Resets shortly');
+  });
+
   it('hides the row entirely when no window carries a percentage', () => {
     win.cc.state({ ...base });
     expect(bars().hasAttribute('hidden')).toBe(true);

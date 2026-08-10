@@ -45,6 +45,7 @@ import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.ui.ReviewPrompt
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -1669,8 +1670,34 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     onResult(report)
                 }
             },
-            decode = ::parseUsageReport,
+            decode = { payload ->
+                logUsageReply(payload)
+                parseUsageReport(payload)
+            },
         )
+    }
+
+    /**
+     * Logs what the `get_usage` poll actually came back with, once per poll, at INFO.
+     *
+     * The derived per-window lines below cannot answer the question that keeps coming up — *is the figure on
+     * screen stale, or is the server really still saying that?* — because a window the reply omits leaves no
+     * line at all, and a carried-forward one is indistinguishable from a fresh one. This prints the wire:
+     * `rate_limits` verbatim, truncated. It is what told us the binary was not caching and that the replies
+     * during a two-hour exhausted window were complete rather than the header-seeded fallback.
+     *
+     * One line every 30 s is the deliberate cost. It is bounded (the payload is a handful of windows) and the
+     * alternative is a user reporting a wrong number with nothing in `idea.log` to check it against.
+     */
+    private fun logUsageReply(payload: JsonObject?) {
+        val limits = payload?.get("rate_limits")
+        if (limits == null || limits is JsonNull) {
+            // NOT the same as an empty object: the binary sends null when plan limits do not apply at all
+            // (API key, Bedrock, Vertex) or when its own fetch had nothing to fall back on.
+            log.info("get_usage: rate_limits=null (available=${payload?.get("rate_limits_available")})")
+            return
+        }
+        log.info("get_usage: ${limits.toString().take(USAGE_LOG_CHARS)}")
     }
 
     /**
@@ -2647,6 +2674,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          */
         private val QUOTA_THRESHOLDS = listOf(65, 85)
         private const val QUOTA_THRESHOLD_HIGH = 85
+
+        /** Truncation for the `get_usage` reply trace — a bound, since the payload is not ours to size. */
+        private const val USAGE_LOG_CHARS = 2000
 
         /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
         val IDE_MCP_TRANSPORTS = McpTransport.entries.map { it.wire }

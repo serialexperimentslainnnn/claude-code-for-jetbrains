@@ -315,6 +315,34 @@
   };
 
   // ---------------------------------------------------------------------------
+  // How long a quota window has left. Relative, because an absolute timestamp
+  // makes the reader do the arithmetic. Lives here rather than in one of the
+  // two modules that render it, so the dashboard card and the composer's bar
+  // row can never disagree about what "shortly" means.
+  // ---------------------------------------------------------------------------
+  /** Minutes until `iso`, or null when it is missing or unparseable. */
+  function minutesUntil(iso) {
+    if (!iso) return null;
+    var when = Date.parse(iso);
+    if (isNaN(when)) return null;
+    return Math.round((when - Date.now()) / 60000);
+  }
+  /** "4h 50m" / "12m" / "soon" — the compact form, for the composer's bar row. */
+  CC.resetInShort = function (iso) {
+    var mins = minutesUntil(iso);
+    if (mins === null) return null;
+    if (mins <= 0) return 'soon';
+    var hours = Math.floor(mins / 60);
+    return hours > 0 ? hours + 'h ' + (mins % 60) + 'm' : mins + 'm';
+  };
+  /** "Resets in 4h 50m" — the sentence form, for the dashboard card and tooltips. */
+  CC.resetIn = function (iso) {
+    var short = CC.resetInShort(iso);
+    if (short === null) return null;
+    return short === 'soon' ? 'Resets shortly' : 'Resets in ' + short;
+  };
+
+  // ---------------------------------------------------------------------------
   // Tiny event bus: on(event, fn) / emit(event, ...args).
   // ---------------------------------------------------------------------------
   var listeners = {};

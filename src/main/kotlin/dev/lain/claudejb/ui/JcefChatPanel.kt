@@ -93,13 +93,20 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private var lastUsageAt = 0L
 
     /**
-     * Plan-limits poll. Unlike context and cost — which cannot move while the session idles, so their timer
-     * retires at turn end — the quota IS shared state: other sessions, other devices and claude.ai itself
-     * consume the same windows, and a window reset is a wall-clock event. So this ticks for the panel's whole
-     * lifetime, gated on [isShowing]: a background tab skips the round-trip and catches up within one tick of
-     * being brought forward.
+     * Plan-limits poll, unconditional for the panel's whole lifetime.
+     *
+     * Unlike context and cost — which cannot move while the session idles, so their timer retires at turn end
+     * — the quota IS shared state: other sessions, other devices and claude.ai itself consume the same
+     * windows, and **a window reset is a wall-clock event that owes nothing to this IDE**.
+     *
+     * It used to be gated on [isShowing], and that gate is the bug: a tool window the user had collapsed, or
+     * a chat tab that was not the selected one, stopped asking entirely — so a window could reset, or fill
+     * from another device, and the panel went on displaying the last figure it happened to catch until
+     * something else (a turn, opening the dashboard) triggered a probe. "It only updates when I talk to the
+     * agent" is exactly what a visibility-gated poll looks like from outside. The round-trip it saved is one
+     * control request every half minute against a process that is already running.
      */
-    private val usageTimer = Timer(USAGE_POLL_MS) { if (isShowing) requestUsage() }.apply { isRepeats = true }
+    private val usageTimer = Timer(USAGE_POLL_MS) { requestUsage() }.apply { isRepeats = true }
 
     /** Last observed process liveness, so [onStateChanged] can spot a restart. EDT-confined. */
     private var wasRunning = false
@@ -917,13 +924,13 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         /** How many recently-opened files the attach menu offers before the user has to search. */
         private const val RECENT_FILES_LIMIT = 14
 
-        /** Period of the plan-limits poll while the panel is visible. */
-        private const val USAGE_POLL_MS = 15_000
+        /** Period of the plan-limits poll, visible or not — a window reset happens on wall-clock time. */
+        private const val USAGE_POLL_MS = 30_000
 
         /**
          * Floor between `get_usage` round-trips — burst protection for the event-driven triggers. MUST stay
          * below [USAGE_POLL_MS], or the periodic tick is silently throttled away and the poll only *looks*
-         * like it runs every 15 s.
+         * like it runs on its period.
          */
         private const val USAGE_MIN_INTERVAL_MS = 12_000L
 
