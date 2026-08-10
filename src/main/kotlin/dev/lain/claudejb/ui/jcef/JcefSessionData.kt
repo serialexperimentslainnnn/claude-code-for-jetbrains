@@ -87,12 +87,13 @@ object JcefSessionData {
         // EXPERIMENT (Lain's comma test): carry the decimals — do NOT round to Int — so we can see whether the
         // frontend renders a fractional percentage with a comma (locale formatting in play) or a dot.
         val fromReport = report?.windows?.map { (key, w) ->
-            Window(key, w.utilization, w.resetsAt, exhausted = false)
+            Window(key, w.title(key), w.utilization, w.resetsAt, exhausted = false)
         }.orEmpty()
         val fromEvents = session.rateLimits
             .filterKeys { key -> fromReport.none { it.key == key } }
             .map { (key, info) ->
-                Window(key, info.utilization?.let { it * 100 }, info.resetsAt?.let(::isoOf), info.isExhausted)
+                val pct = info.utilization?.let { it * 100 }
+                Window(key, RateLimitInfo.windowTitleFor(key), pct, info.resetsAt?.let(::isoOf), info.isExhausted)
             }
         val windows = fromReport + fromEvents
         if (windows.isEmpty() && report?.extra == null) return null
@@ -104,7 +105,7 @@ object JcefSessionData {
                     windows.forEach { w ->
                         addJsonObject {
                             put("key", w.key)
-                            put("label", RateLimitInfo.windowTitleFor(w.key))
+                            put("label", w.label)
                             put("pct", w.pct)
                             put("resetsAt", w.resetsAt)
                             put("exhausted", w.exhausted)
@@ -116,7 +117,13 @@ object JcefSessionData {
         }
     }
 
-    private data class Window(val key: String, val pct: Double?, val resetsAt: String?, val exhausted: Boolean)
+    private data class Window(
+        val key: String,
+        val label: String,
+        val pct: Double?,
+        val resetsAt: String?,
+        val exhausted: Boolean,
+    )
 
     /** The pay-as-you-go balance. Credits are minor units (`decimal_places`), not whole currency. */
     private fun extraUsageJson(extra: ExtraUsage): JsonObject = buildJsonObject {

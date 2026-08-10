@@ -4,6 +4,7 @@ import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.UsageReport
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.LegacyModels
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.StatusLineFormatter
 import dev.lain.claudejb.settings.Provider
@@ -34,15 +35,17 @@ object JcefState {
         // EXPERIMENT (Lain's comma test): carry the raw decimals here too, so the composer readout does not
         // round to Int either — otherwise the decimal never shows and the test can't see a comma vs a dot.
         val fromReport = usage?.windows.orEmpty().mapNotNull { (key, w) ->
-            w.utilization?.let { key to it }
+            w.utilization?.let { Triple(key, w.title(key), it) }
         }
         val fromEvents = session.rateLimits
             .filterKeys { key -> fromReport.none { it.first == key } }
-            .mapNotNull { (key, info) -> info.utilization?.let { key to it * 100 } }
-        (fromReport + fromEvents).forEach { (key, pct) ->
+            .mapNotNull { (key, info) ->
+                info.utilization?.let { Triple(key, RateLimitInfo.windowTitleFor(key), it * 100) }
+            }
+        (fromReport + fromEvents).forEach { (key, label, pct) ->
             addJsonObject {
                 put("key", key)
-                put("label", RateLimitInfo.windowTitleFor(key))
+                put("label", label)
                 put("pct", pct)
             }
         }
@@ -157,15 +160,26 @@ object JcefState {
         put(
             "options",
             buildJsonArray {
-                session.models
-                    .filter { it.value != ClaudeSession.RECOMMENDED_ALIAS }
-                    .forEach { m ->
-                        addJsonObject {
-                            put("value", m.value)
-                            put("label", modelDisplayLabel(m))
-                            put("selected", m.value == selectedModel)
-                        }
+                val catalog = session.models.filter { it.value != ClaudeSession.RECOMMENDED_ALIAS }
+                catalog.forEach { m ->
+                    addJsonObject {
+                        put("value", m.value)
+                        put("label", modelDisplayLabel(m))
+                        put("selected", m.value == selectedModel)
                     }
+                }
+                // Previous generations, tagged so the composer can fold them into an "Other models" submenu
+                // instead of burying the four current models in a list of seventeen. The GROUPING is decided
+                // here, not in the web app: the host owns which models exist and what they are called, and a
+                // frontend that had to recognise "old" ids would be a second, divergent copy of that rule.
+                LegacyModels.offeredAlongside(catalog.map { it.value }).forEach { entry ->
+                    addJsonObject {
+                        put("value", entry.value)
+                        put("label", entry.label)
+                        put("selected", entry.value == selectedModel)
+                        put("group", "other")
+                    }
+                }
             },
         )
     }
@@ -317,6 +331,10 @@ object JcefState {
     fun modelLabel(session: ClaudeSession): String {
         val id = session.model ?: session.preferredDefaultModel()
         session.models.firstOrNull { it.value == id }?.let { return modelDisplayLabel(it) }
+        // A model picked from "Other models" is not in the catalog, so the pill would fall through to
+        // deriveModelLabel — which is right for `claude-opus-4-7` and wrong for `claude-3-5-sonnet`, where the
+        // version leads the family and it renders "3 5 Sonnet". The curated label is the authority for ours.
+        LegacyModels.labelFor(id)?.let { return it }
         return deriveModelLabel(id)
     }
 
