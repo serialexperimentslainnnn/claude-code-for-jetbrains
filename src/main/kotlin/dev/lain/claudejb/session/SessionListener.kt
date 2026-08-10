@@ -19,4 +19,14 @@ interface SessionListener {
 
     /** The session title changed (the binary generated/renamed it); the tab should relabel. Fired on the EDT. */
     fun onTitleChanged() {}
+
+    /**
+     * The agent tree changed: a scan of the binary's per-subagent files finished.
+     *
+     * [freshlyAdmitted] are the agents seen for the FIRST time in this scan, which is what the UI uses to
+     * open a tab, blink it and notify **once** — deriving that by diffing snapshots in the panel would put
+     * the same bookkeeping in every listener. An empty list still means "re-read the tree": an existing
+     * agent's transcript or status may have moved. Fired on the EDT.
+     */
+    fun onAgentsChanged(freshlyAdmitted: List<String>) {}
 }
