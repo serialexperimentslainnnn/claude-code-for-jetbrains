@@ -23,15 +23,15 @@ import kotlinx.serialization.json.put
  *   context:  { categories:[{name, tokens}], used, max, pct } | null,
  *   cost:     { usd:Number|null, input, output, cacheWrite, cacheRead } | null,
  *   account:  { email, org, plan, provider } | null,
- *   subagents:[{ id, desc, type, status, tokens, tools }],
- *   backgroundTasks:[{ id, desc, type }],
+ *   agentTree:[{ agentId, label, type, status, depth, parent, chain, running }],
+ *   backgroundTasks:[{ id, desc, type, agentId|null, chain }],
  *   model:    String|null,
  *   cwd:      String|null,
  *   version:  String|null
  * }
  * </pre>
  *
- * Every card is null-safe: absent data emits JSON `null` (objects) or `[]` (subagents/backgroundTasks). The
+ * Every card is null-safe: absent data emits JSON `null` (objects) or `[]` (agentTree/backgroundTasks). The
  * dashboard frontend hides any card whose data is null/empty, so a partially-populated session renders cleanly.
  *
  * Sources:
@@ -39,9 +39,11 @@ import kotlinx.serialization.json.put
  *  - cost     ← [ClaudeSession.lastSessionCost] (raw `get_session_cost` JsonObject); the per-component token
  *               tally is decoded from an `apiUsage` block when present and the USD figure from a cost field;
  *  - account  ← [ClaudeSession.account];
- *  - subagents← [ClaudeSession.subagentTasks] (edge-derived: task_started/progress/updated/notification);
- *  - backgroundTasks ← [ClaudeSession.backgroundTasks] (the `background_tasks_changed` LEVEL signal — always the
- *    current set, so it cannot wedge on a missed edge; deliberately NOT correlated with `subagents`);
+ *  - agentTree← [ClaudeSession.runningAgents] (the binary's own per-agent sidecars: parentage, depth and the
+ *    model-written label, so the Agents/Subagents windows draw a tree rather than a flat task list);
+ *  - backgroundTasks ← [ClaudeSession.backgroundTasks] (the `background_tasks_changed` LEVEL signal — always
+ *    the current set, so it cannot wedge on a missed edge). Its owning agent is resolved through
+ *    [ClaudeSession.subagentTasks] when the same task_id was seen there, and left unclaimed when it was not;
  *  - model    ← [ClaudeSession.model];
  *  - cwd/version: [ClaudeSession] exposes no synchronous getter for either (cwd arrives only ephemerally on
  *    the `system/init` event and the binary version only via an async control request), so both are emitted
@@ -59,7 +61,9 @@ object JcefSessionData {
             put("context", contextJson(session) ?: JsonNull)
             put("cost", costJson(session) ?: JsonNull)
             put("account", accountJson(session) ?: JsonNull)
-            put("subagents", subagentsJson(session))
+            // NB no `subagents` key any more. It was the edge-derived task list, and the Agents / Subagents
+            // windows replaced it with the real tree (`agentTree`) — two lists of the same thing, built from
+            // different sources, is how they end up disagreeing on screen.
             put("backgroundTasks", backgroundTasksJson(session))
             // The tree behind the Agents / Subagents windows: every agent with the chain it hangs off, so a
             // row can say "Chat |_ Agent A |_ Agent B" and link straight to that tab.
@@ -313,19 +317,11 @@ object JcefSessionData {
         return parts.joinToString(" |_ ")
     }
 
-    /** One row per subagent task: `{ id, desc, type, status, tokens, tools }`; empty array when none. */
-    private fun subagentsJson(session: ClaudeSession) = buildJsonArray {
-        session.subagentTasks.values.forEach { task ->
-            addJsonObject {
-                put("id", task.taskId)
-                put("desc", task.description)
-                put("type", task.subagentType)
-                put("status", task.status)
-                put("tokens", task.usage.totalTokens)
-                put("tools", task.usage.toolUses)
-            }
-        }
-    }
+    // NB `subagentsJson` lived here until 5.5.0. The Session view no longer carries agent data at all: the
+    // Agents / Subagents windows read the real tree from the binary's per-agent files, and keeping a second
+    // list built from the task event stream would have meant two views of the same agents that can disagree.
+    // `ClaudeSession.subagentTasks` is still used — it is what resolves a background task's owning agent —
+    // but it is no longer a thing the dashboard draws.
 
     /**
      * One row per live background task: `{ id, desc, type }`; empty array when none. Sourced from the
