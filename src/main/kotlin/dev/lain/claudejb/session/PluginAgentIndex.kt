@@ -1,16 +1,14 @@
 package dev.lain.claudejb.session
 
-import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.State
-import com.intellij.openapi.components.Storage
-import com.intellij.openapi.components.StoragePathMacros
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.util.xmlb.XmlSerializerUtil
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * Which subagents belong to a **plugin** session, and what the user did with their tabs.
@@ -27,23 +25,22 @@ import kotlinx.serialization.json.Json
  * on disk, and the card that spawned it is still in the main transcript, so clicking that card reopens the
  * tab. Closing is a view decision, not a delete.
  *
- * Stored in `workspace.xml` next to [SessionHistory] — same reasoning: this is per-user UI state, not
- * something to commit.
+ * **Stored under `~/.claude`, deliberately NOT in the project's `.idea/`.** The project directory is shared,
+ * gets committed by accident and is routinely synced, so anything written there is effectively published —
+ * and an agent's identity alone hints at what the user is working on. `~/.claude` is where this
+ * conversation's data already lives, is private to the user, and is the source of truth the plugin reads
+ * anyway. The file sits in its own namespaced directory so nothing of ours can ever be mistaken for one of
+ * the binary's own files: `~/.claude/ide/claude-code-native/agent-index.json`.
  *
- * **Ids and two booleans, nothing else, and that is a hard invariant** (`AgentIndexPrivacyTest`). No prompt,
- * no description, no transcript and no tool output ever goes into `.idea/`: those live in the binary's own
- * files under `~/.claude`, which is the single source of truth the whole plugin already relies on. The
- * project directory is shared, sometimes committed by accident and routinely synced, so anything written
- * there is effectively published — an agent's description alone can leak what the user is working on.
+ * Even there it records **ids and two booleans** (`AgentIndexPrivacyTest`): titles, prompts and transcripts
+ * are read from the binary's files on demand, so duplicating them buys nothing and creates a second copy to
+ * leak or go stale.
+ *
+ * IO is best-effort and tolerant: an unreadable or corrupt file behaves as an empty index rather than
+ * throwing, and a failed write costs the tab layout of the next restart, nothing else.
  */
 @Service(Service.Level.PROJECT)
-@State(name = "ClaudeCodeAgentIndex", storages = [Storage(StoragePathMacros.WORKSPACE_FILE)])
-class PluginAgentIndex : PersistentStateComponent<PluginAgentIndex.State> {
-
-    class State {
-        /** `sessionId -> [AgentRecord]`, as one JSON string (same shape trick [SessionHistory] uses). */
-        @JvmField var agentsJson: String = ""
-    }
+class PluginAgentIndex {
 
     /** One admitted agent. [open] is the tab state; [closedByUser] is what makes a close stick. */
     @Serializable
@@ -53,15 +50,8 @@ class PluginAgentIndex : PersistentStateComponent<PluginAgentIndex.State> {
         val closedByUser: Boolean = false,
     )
 
-    private var state = State()
     private val cache = LinkedHashMap<String, MutableList<AgentRecord>>()
     private var loaded = false
-
-    override fun getState(): State = state
-    override fun loadState(s: State) {
-        XmlSerializerUtil.copyBean(s, state)
-        loaded = false
-    }
 
     /**
      * Records that this plugin saw [agentId] spawn in [sessionId]. Idempotent: re-admitting an agent the
@@ -81,6 +71,10 @@ class PluginAgentIndex : PersistentStateComponent<PluginAgentIndex.State> {
     @Synchronized
     fun isAdmitted(sessionId: String, agentId: String): Boolean =
         records(sessionId).any { it.agentId == agentId }
+
+    /** Every agent this plugin has ever admitted for [sessionId], in admission order. */
+    @Synchronized
+    fun admittedAgents(sessionId: String): List<String> = records(sessionId).map { it.agentId }
 
     /** Admitted agents of [sessionId] whose tab should be reopened on restore, in admission order. */
     @Synchronized
@@ -115,18 +109,42 @@ class PluginAgentIndex : PersistentStateComponent<PluginAgentIndex.State> {
     private fun load(): LinkedHashMap<String, MutableList<AgentRecord>> {
         if (!loaded) {
             cache.clear()
-            cache.putAll(decode(state.agentsJson).mapValues { it.value.toMutableList() })
+            val body = indexFile()?.let { f -> runCatching { Files.readString(f) }.getOrNull() }.orEmpty()
+            cache.putAll(decode(body).mapValues { it.value.toMutableList() })
             loaded = true
         }
         return cache
     }
 
     private fun flush() {
-        state.agentsJson = encode(cache)
+        val file = indexFile() ?: return
+        runCatching {
+            Files.createDirectories(file.parent)
+            Files.writeString(file, encode(cache))
+        }
     }
+
+    /** `~/.claude/ide/claude-code-native/agent-index.json`, or null when the JVM reports no home. */
+    private fun indexFile(): Path? = homeOverride?.let { Paths.get(it) }
+        ?.let { it.resolve(DIR_IDE).resolve(DIR_PLUGIN).resolve(FILE) }
 
     companion object {
         private val JSON = Json { ignoreUnknownKeys = true }
+
+        private const val DIR_IDE = "ide"
+        private const val DIR_PLUGIN = "claude-code-native"
+        private const val FILE = "agent-index.json"
+
+        /**
+         * The `~/.claude` directory to write into. Overridable **for tests only**, following the same rule
+         * `CredentialsVault.homeOverride` established: a test JVM must never write into the developer's real
+         * home, which is how an earlier test run harvested and deleted live credentials.
+         */
+        @Volatile
+        var homeOverride: String? = defaultHome()
+
+        private fun defaultHome(): String? =
+            System.getProperty("user.home")?.takeIf { it.isNotBlank() }?.let { "$it/.claude" }
 
         fun getInstance(project: Project): PluginAgentIndex = project.service()
 
