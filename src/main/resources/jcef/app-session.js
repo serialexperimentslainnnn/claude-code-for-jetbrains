@@ -78,7 +78,11 @@
   // `wide` cards span the whole grid row (.dash-card.wide { grid-column: 1 / -1 }). Use it for anything with rows
   // that need horizontal room — the context legend, and the server/task lists whose name column would otherwise
   // collapse to an ellipsis inside a 260px column.
-  function card(title, body, wide) {
+  /**
+   * A dashboard card. [anchor], when given, tags the card so a view button can scroll straight to it —
+   * the four buttons are views of one panel, not four panels, so navigation is a scroll, not a rebuild.
+   */
+  function card(title, body, wide, anchor) {
     // body may be a node, an array of nodes, or empty. Hide when nothing renders.
     var children = [];
     if (Array.isArray(body)) {
@@ -90,7 +94,9 @@
     }
     if (!children.length) return null;
     var head = h('div', { class: 'dash-title', text: title });
-    return h('div', { class: 'dash-card' + (wide ? ' wide' : '') }, head, children);
+    var props = { class: 'dash-card' + (wide ? ' wide' : '') };
+    if (anchor) props.attrs = { 'data-card': anchor };
+    return h('div', props, head, children);
   }
 
   // ---------------------------------------------------------------------------
@@ -357,7 +363,7 @@
       return a && !a.parent;
     });
     if (!roots.length) return null;
-    return card('Agents', roots.map(agentRow), true);
+    return card('Agents', roots.map(agentRow), true, 'agents');
   }
 
   /** Agents spawned BY another agent, at any depth — the window that answers "who launched this?". */
@@ -367,7 +373,7 @@
       return a && a.parent;
     });
     if (!nested.length) return null;
-    return card('Subagents', nested.map(agentRow), true);
+    return card('Subagents', nested.map(agentRow), true, 'subagents');
   }
 
   // Live background tasks, from the `background_tasks_changed` LEVEL signal: the host always sends the CURRENT
@@ -428,7 +434,7 @@
       );
       rows.push(row);
     }
-    return card('Background tasks', rows, true);
+    return card('Background tasks', rows, true, 'background');
   }
 
   // status → mcp-dot class. Defensive: unknown maps to nothing extra.
@@ -587,6 +593,53 @@
   }
 
   // ---------------------------------------------------------------------------
+  /**
+   * One of the four view buttons. [anchor] is the card to scroll to once the panel is open (null = the top,
+   * i.e. the Session view). Opening an already-open panel on the same button closes it, so a button toggles
+   * its own view rather than trapping the user in the dashboard.
+   */
+  function viewButton(label, anchor) {
+    return h('button', {
+      class: 'dash-toggle',
+      attrs: { type: 'button', 'data-anchor': anchor || 'session' },
+      text: label,
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          if (shown && currentAnchor === (anchor || 'session')) {
+            toggle();
+            return;
+          }
+          currentAnchor = anchor || 'session';
+          if (!shown) toggle();
+          scrollToAnchor();
+          markActiveButton();
+        },
+      },
+    });
+  }
+
+  /** Which view the last button press asked for; drives the scroll and the active-button highlight. */
+  var currentAnchor = 'session';
+
+  function scrollToAnchor() {
+    if (!panel) return;
+    if (currentAnchor === 'session') {
+      panel.scrollTop = 0;
+      return;
+    }
+    var card = panel.querySelector('[data-card="' + currentAnchor + '"]');
+    if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start' });
+  }
+
+  function markActiveButton() {
+    var all = document.querySelectorAll('.dash-toggle');
+    for (var i = 0; i < all.length; i++) {
+      var isActive = shown && all[i].getAttribute('data-anchor') === currentAnchor;
+      all[i].classList.toggle('active', isActive);
+    }
+  }
+
   // Build the toggle + panel once. Idempotent.
   // ---------------------------------------------------------------------------
   function build() {
@@ -606,18 +659,19 @@
       root.appendChild(panel);
     }
 
-    toggleBtn = h('button', {
-      class: 'dash-toggle',
-      attrs: { type: 'button' },
-      text: 'Session',
-      on: {
-        click: function (ev) {
-          ev.preventDefault();
-          toggle();
-        },
-      },
-    });
-    root.appendChild(toggleBtn);
+    // Four buttons, stacked: Session, then the three windows the agent work moved into. Each opens the
+    // dashboard scrolled to its own card, so they are views of one panel rather than four panels -- the
+    // data is the same payload and splitting it would mean four things to keep in sync.
+    toggleBtn = viewButton('Session', null);
+    var stack = h(
+      'div',
+      { class: 'dash-toggles' },
+      toggleBtn,
+      viewButton('Agents', 'agents'),
+      viewButton('Subagents', 'subagents'),
+      viewButton('Background tasks', 'background')
+    );
+    root.appendChild(stack);
 
     applyVisibility();
     render();
@@ -631,6 +685,8 @@
       panel.classList.add('open');
       // Hide the transcript while the dashboard fills the conversation area — the dock (composer) stays visible.
       if (conv) conv.setAttribute('hidden', '');
+      // The first button doubles as the way OUT: with the panel open it reads "Chat". The other three keep
+      // their names and only light up, so the stack always says both where you are and how to leave.
       toggleBtn.textContent = 'Chat';
       toggleBtn.classList.add('active');
     } else {
@@ -640,6 +696,7 @@
       toggleBtn.textContent = 'Session';
       toggleBtn.classList.remove('active');
     }
+    markActiveButton();
   }
 
   function toggle() {

@@ -302,8 +302,24 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushSession()
     }
 
-    /** Repaints both rows from the registry, minus whatever the user has closed. */
-    private fun renderAgentRows() = agentTabs.render(session.runningAgents, hiddenAgents)
+    /**
+     * Repaints the row stack from the registry, minus whatever the user has closed.
+     *
+     * The owner of a background task is resolved through the edge stream: `background_tasks_changed` carries
+     * no parent, but the same `task_id` seen earlier as a subagent task does carry the `tool_use_id` that
+     * names an agent. When that lookup fails the task stays at the chat's level rather than being guessed
+     * into somebody's row.
+     */
+    private fun renderAgentRows() = agentTabs.render(
+        registry = session.runningAgents,
+        backgroundTasks = session.backgroundTasks,
+        hiddenAgents = hiddenAgents,
+        ownerOf = { taskId ->
+            session.subagentTasks[taskId]?.toolUseId?.let { tool ->
+                session.runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
+            }
+        },
+    )
 
     /**
      * A scan finished. Repaint the rows, then blink the tabs of agents seen for the first time and raise ONE
@@ -373,6 +389,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     override fun onStateChanged() {
         pushMetaState()
         pushSession()
+        // Background tasks arrive on this path (`background_tasks_changed` is a level signal that fires
+        // state), not through the agent scan — so their rows would otherwise only refresh when an agent
+        // happened to change.
+        renderAgentRows()
         drainPendingUntilReady()
         // A RESTART is a new process, so everything that is only asked once per process has to be asked
         // again. [whenReady] fires once in the constructor and never again, so after a sign-out/sign-in the
