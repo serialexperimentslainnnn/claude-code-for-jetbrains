@@ -96,11 +96,8 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
         settledThinking = null
     }
 
-    /**
-     * Anchors a subagent's finalized assistant text under its Agent's tool_use id without touching the top-level
-     * live stream. Subagent text arrives finalized with a parent id; top-level text keeps the streaming path.
-     */
-    fun addSubagentText(text: String, parentToolUseId: String) {
-        transcript.add(Speaker.ASSISTANT, text, parentToolUseId = parentToolUseId)
-    }
+    // NB `addSubagentText` lived here until 5.5.0. A subagent's text no longer belongs in this transcript at
+    // all: it goes to that agent's own tab, read from the binary's per-agent file by AgentRegistry. Deleted
+    // rather than left warm — a helper that still anchors agent output under an Agent card is exactly how
+    // the interleaving this release removes would come back.
 }

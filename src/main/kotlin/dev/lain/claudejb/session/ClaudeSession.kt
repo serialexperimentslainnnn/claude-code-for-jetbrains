@@ -207,6 +207,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     val subagentTasks: Map<String, TaskProgressInfo> get() = taskTracker.tasks
 
     /**
+     * The agents of this chat: their tree, their status and their own transcripts.
+     *
+     * Fed from the binary's own per-subagent files (see [AgentRegistry]) rather than from the event stream,
+     * so a live agent and a restored one are the same thing read the same way. The scan is IO and runs off
+     * the EDT ([scanAgents]); listeners hear about it through [SessionListener.onAgentsChanged].
+     */
+    // NB named `runningAgents`, not `agents`: `agents` is already the CATALOG of agent types the binary
+    // offers in its initialize reply. Two different things — what you can spawn, and what is running.
+    val runningAgents = AgentRegistry(subagentsDir = { sessionId?.let { SessionStore.subagentsDir(it) } })
+
+    /** Guards against piling scans on top of each other while one is already walking the directory. */
+    private val agentScanInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
      * The live background-task set from `system/background_tasks_changed` — a LEVEL signal (REPLACE semantics),
      * deliberately independent of [subagentTasks] (the SDK forbids correlating the level with the edge stream).
      */
@@ -1954,19 +1968,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.AssistantText -> edt {
-                // Subagent text arrives finalized with a parent id: anchor it under its Agent without touching
-                // the top-level live stream. Top-level text keeps the existing streaming reconciliation.
-                if (event.parentToolUseId != null) {
-                    reconciler.addSubagentText(event.text, event.parentToolUseId)
-                } else {
-                    reconciler.finalizeAssistant(event.text)
-                }
+                // A subagent's text belongs to ITS tab, not here. It used to be anchored under the Agent card
+                // in this transcript, which is exactly what made a session running agents under agents
+                // unreadable: consecutive blocks from different agents, interleaved, with no way to follow
+                // any single one. The agent's own transcript is read from the binary's file by AgentRegistry,
+                // so nothing is lost by dropping it — and the Agent card links to that tab.
+                if (event.parentToolUseId == null) reconciler.finalizeAssistant(event.text)
             }
         }
     }
 
     private fun onInit(event: ClaudeEvent.Init) {
         sessionId = event.info.sessionId
+        // The id is what locates this session's agent directory, so this is the earliest point a restored
+        // session can bring its previously-admitted agents back. Off-EDT, and a no-op when there are none.
+        restoreAdmittedAgents()
         if (model == null && event.info.model.isNotBlank()) model = event.info.model
         if (event.info.outputStyle.isNotBlank()) outputStyle = event.info.outputStyle
         // The plugin is the source of truth for permissionMode. system/init re-arrives every turn and
@@ -1986,11 +2002,17 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     private fun onToolUse(event: ClaudeEvent.ToolUse) = edt {
-        // Only break the top-level live stream for top-level tool calls; a subagent's tool call must not
-        // cut a top-level paragraph that may continue after the Agent finishes.
-        if (event.parentToolUseId == null) {
-            reconciler.onMessageBoundary()
+        // A subagent's tool call belongs to its own tab, read from the binary's per-agent transcript. Keeping
+        // it here is what buried the main conversation under other agents' work. The snapshot capture below
+        // still has to happen for it, though: the binary writes the file whoever asked for it, so the diff
+        // must be captured for a subagent's Edit exactly as for a top-level one.
+        if (event.parentToolUseId != null) {
+            if (event.name in DiffPresenter.REVIEWABLE_TOOLS) {
+                diffs.captureForReview(event.name, event.input, event.id)
+            }
+            return@edt
         }
+        reconciler.onMessageBoundary()
         transcript.add(
             Speaker.TOOL,
             formatToolUse(event.name, event.input, workingDir),
@@ -2044,6 +2066,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         } else {
             null
         }
+        // A subagent's result goes to its own tab, like its call. Everything above still ran for it — the
+        // VFS refresh and the snapshot bookkeeping are about files on disk, not about which transcript
+        // shows the row.
+        if (event.parentToolUseId != null) return@edt
         if (diff != null) {
             transcript.addToolOutput(event.toolUseId, diff, parentToolUseId = event.parentToolUseId, meta = "diff")
         } else {
@@ -2130,9 +2156,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // progress wins); here we only keep the state and fire so the UI refreshes. ---
     private fun onTask(event: ClaudeEvent.Task) {
         when (event) {
-            is ClaudeEvent.TaskStarted -> edt { if (taskTracker.onStarted(event.info)) fireState() }
+            is ClaudeEvent.TaskStarted -> edt {
+                // The admission seed: this Task call is ours, so the agent whose sidecar names it — and
+                // everything it spawns below — may be shown. See AgentRegistry's admission rule.
+                runningAgents.observeSpawn(event.info.toolUseId)
+                scanAgents()
+                if (taskTracker.onStarted(event.info)) fireState()
+            }
 
             is ClaudeEvent.TaskProgress -> edt {
+                // Also an admission seed, deliberately: a task_started can be missed (a resumed session
+                // reattaches mid-flight), and progress carries the same tool_use_id.
+                runningAgents.observeSpawn(event.info.toolUseId)
                 taskTracker.onProgress(event.info)
                 fireState()
             }
@@ -2143,7 +2178,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.TaskNotification -> edt {
-                // Settled: drop from the live map (TaskTracker); surface a discreet notice unless asked to skip it.
+                // Settled: the tab KEEPS its transcript and gains a status — reading why an agent failed is
+                // the case this feature came from. Only the live task map drops it.
+                runningAgents.observeSettled(event.info.toolUseId, agentStatusOf(event.info.status))
+                scanAgents()
                 if (taskTracker.onNotification(event.info)) {
                     val label = event.info.summary.ifBlank { "Subagent ${event.info.status}" }
                     systemNotice("Subagent ${event.info.status}: $label")
@@ -2482,6 +2520,58 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     private fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
+
+    /**
+     * Re-reads the agent directory off the EDT and tells the UI, if anything came of it.
+     *
+     * Coalesced rather than queued: while a scan is walking the directory, further requests are dropped —
+     * a burst of task events on a heavy session (dozens of agents spawning at once, which is the case this
+     * feature exists for) would otherwise queue one directory walk per event.
+     */
+    fun scanAgents() {
+        if (!agentScanInFlight.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val fresh = runCatching { runningAgents.scan() }.getOrDefault(emptyList())
+            // Persist what was admitted, so a later run of the plugin still counts these as ours while a
+            // terminal-spawned agent in the same directory never does. Done here rather than at task_started
+            // because the tool_use_id → agent id mapping only exists once the binary has written the sidecar.
+            sessionId?.let { id ->
+                runCatching {
+                    val index = PluginAgentIndex.getInstance(project)
+                    runningAgents.nodes.keys.forEach { index.admit(id, it) }
+                }
+            }
+            agentScanInFlight.set(false)
+            edt { fireAgents(fresh) }
+        }
+    }
+
+    /**
+     * Brings back the agents a previous run of the plugin admitted for this session id, then scans.
+     *
+     * This is the whole of "restore the agent tabs": the transcripts are the binary's files, still on disk,
+     * and the index says which of the agents in that directory were ever ours. An agent spawned from the
+     * terminal is in the same directory and is never in the index, so it stays invisible.
+     */
+    private fun restoreAdmittedAgents() {
+        val id = sessionId ?: return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching { PluginAgentIndex.getInstance(project).admittedAgents(id) }
+                .getOrDefault(emptyList())
+                .takeIf { it.isNotEmpty() }
+                ?.let { runningAgents.preAdmit(it) }
+            scanAgents()
+        }
+    }
+
+    /** `task_notification`'s status string → the agent lifecycle the tab shows. */
+    private fun agentStatusOf(status: String): AgentStatus = when (status.lowercase()) {
+        "completed" -> AgentStatus.COMPLETED
+        "failed" -> AgentStatus.FAILED
+        else -> AgentStatus.STOPPED
+    }
+
+    private fun fireAgents(fresh: List<String>) = listeners.forEach { it.onAgentsChanged(fresh) }
 
     private fun fireState() = listeners.forEach { it.onStateChanged() }
     private fun fireMetadata() = listeners.forEach { it.onMetadataChanged() }

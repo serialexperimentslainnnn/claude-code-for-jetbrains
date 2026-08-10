@@ -117,16 +117,7 @@ class TranscriptReconcilerTest : BasePlatformTestCase() {
         assertEquals("two", entries()[1].text)
     }
 
-    fun `test addSubagentText anchors under parent without breaking live stream`() {
-        reconciler.appendAssistant("top-level streaming ")
-        reconciler.addSubagentText("subagent reply", parentToolUseId = "agent-1")
-        // The live top-level entry must still be growable after the subagent insert.
-        reconciler.appendAssistant("continues")
-
-        val top = entries().first { it.parentToolUseId == null && it.speaker == Speaker.ASSISTANT }
-        val sub = entries().first { it.parentToolUseId == "agent-1" }
-        assertEquals("top-level streaming continues", top.text)
-        assertEquals(Speaker.ASSISTANT, sub.speaker)
-        assertEquals("subagent reply", sub.text)
-    }
+    // NB the `addSubagentText` test lived here until 5.5.0, when subagent output stopped going into this
+    // transcript at all — it belongs to that agent's own tab now, and the coverage moved to
+    // AgentRegistryTest, which reads the binary's per-agent file the way the UI does.
 }
