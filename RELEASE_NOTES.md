@@ -12,6 +12,12 @@ terminal and without you. Nothing about how it's stored changes: the credential 
 OS store and never sits in plaintext on disk. In practice you'll now only be asked to sign in after a long
 idle period, or if Anthropic invalidates the session.
 
+**Which sign-in this is about:** the **subscription** one (Claude Pro or Max — the *Sign in* button and the
+account row in the dashboard). That is the credential that carries a token with an expiry date on it. If you
+authenticate with an **Anthropic API key** instead, nothing here changes for you and nothing here was broken
+for you: an API key does not expire and has nothing to renew, it is kept in the same OS-backed store, and it
+already survived restarts.
+
 ## v5.0.0 — 2026-08-05
 
 **Nothing you use changes.** This is a major because the *project* changed, not the product: the whole

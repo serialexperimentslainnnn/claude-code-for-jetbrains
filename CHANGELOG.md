@@ -30,6 +30,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code — the only Windows-specific care is that the renewal environment strips `CLAUDE_CODE_OAUTH_TOKEN`
   case-insensitively, since environment names are case-insensitive there.
 
+  **Scope: the subscription (OAuth) credential only.** An Anthropic API key is a different identity in a
+  different slot — `providerApiKey:anthropic` in the same PasswordSafe, not `CLAUDE_CREDENTIALS_JSON` — and it
+  has no expiry and no refresh token, so there was nothing to lose across a restart and there is nothing to
+  renew now. `CredentialsVault.renew()` reads the `claudeAiOauth` blob and nothing else, and `envOverlay`
+  withdraws entirely when an API key is present, so an API-key session is untouched by any of this.
+
   An expired-but-renewable credential now counts as an identity (`CredentialsVault.canRenew`), the renewal
   runs off the EDT at launch (`ClaudeSession.renewVaultedCredential`, before the launch env is built, and
   never while a sign-in is in flight), the refresh token rotates at every renewal so ordinary use extends it
