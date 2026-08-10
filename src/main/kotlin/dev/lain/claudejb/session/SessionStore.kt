@@ -63,6 +63,33 @@ internal object SessionStore {
     fun readLines(sessionId: String): List<String>? =
         locate(sessionId)?.let { runCatching { Files.readAllLines(it) }.getOrNull() }
 
+    /**
+     * The binary's per-session sidecar directory, `<sessionId>/` next to `<sessionId>.jsonl`.
+     *
+     * Verified against `claude` 2.1.226: alongside the session transcript the binary keeps a directory of the
+     * same name holding `subagents/` (one `agent-<id>.jsonl` plus an `agent-<id>.meta.json` per subagent) and
+     * `tool-results/`. Returns null when the directory does not exist — a session that never spawned an agent
+     * simply has none.
+     */
+    fun sessionDir(sessionId: String): Path? {
+        val transcript = locate(sessionId) ?: return null
+        val dir = transcript.resolveSibling(sessionId)
+        return if (Files.isDirectory(dir)) dir else null
+    }
+
+    /**
+     * `<sessionId>/subagents/`, the directory holding one transcript + metadata pair per subagent.
+     *
+     * Note this returns the DIRECTORY, not its contents: which of those agents may be shown is not a
+     * filesystem question. The same session id can be resumed from the terminal, so the directory mixes
+     * agents this plugin spawned with agents it never saw — [PluginAgentIndex] is what tells them apart.
+     */
+    fun subagentsDir(sessionId: String): Path? =
+        sessionDir(sessionId)?.resolve(SUBAGENTS)?.takeIf { Files.isDirectory(it) }
+
+    /** Directory name the binary uses for per-subagent transcripts inside the session's sidecar dir. */
+    private const val SUBAGENTS = "subagents"
+
     /** Session transcript files for the project at [basePath], newest-first. Empty if the dir is absent. */
     fun listFiles(basePath: String): List<Path> {
         val dir = projectDir(basePath) ?: return emptyList()
