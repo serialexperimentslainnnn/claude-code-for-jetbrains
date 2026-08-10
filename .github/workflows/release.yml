@@ -336,9 +336,19 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          cache-read-only: true
+      # NB no `setup-gradle`, deliberately, and this was the last one left in any workflow.
+      #
+      # It sat here with `cache-read-only: true` — and after `ci.yml` dropped its own copies, NOTHING
+      # writes that cache any more, so this step restored an entry no job produces. It was paying the
+      # restore for a cache that does not exist. The reason ci.yml removed it applies here too: a warm
+      # GRADLE_USER_HOME for this project is ~31 GB against a 10 GB per-repository cache ceiling, so the
+      # action could never store what it appeared to store.
+      #
+      # Nothing else is lost: the build runs `./gradlew --no-daemon`, which needs no setup from the
+      # action, and the wrapper's own integrity is pinned by `gradle/wrapper/gradle-wrapper.properties`
+      # plus the checked-in validation. What this job does pay, and pays knowingly, is a cold download of
+      # the IntelliJ platform artifacts on every release — a handful of minutes, a few times a month,
+      # against a cache that was not working.
 
       # --- build, sign and publish: ONE Gradle invocation --------------------------------------
       # The order inside it is not stylistic. Verified against the plugin's own source
