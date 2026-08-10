@@ -6,14 +6,17 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * What [PluginAgentIndex] is allowed to write into `.idea/workspace.xml`, pinned as a contract.
+ * What [PluginAgentIndex] is allowed to persist, pinned as a contract.
  *
- * The project directory is shared, gets committed by accident and is routinely synced, so anything written
- * there is effectively published. An agent's description alone ("Translate erp-sap-standards") says what the
- * user is working on; a prompt or a transcript says far more. All of that already lives in the binary's files
- * under `~/.claude`, which is the source of truth the plugin reads anyway — so the index carries **ids and
- * two booleans**, and this test exists to keep a future "just add the title so the tab restores faster" from
- * quietly turning workspace state into a data leak.
+ * Two rules, and both came from the user. **Nothing goes into the project's `.idea/`**: it is shared, gets
+ * committed by accident and is routinely synced, so anything there is effectively published — the index
+ * lives under `~/.claude`, private to the user and where this data already is. And even there it carries
+ * **ids and two booleans**: an agent's description ("Translate erp-sap-standards") already says what the
+ * user is working on, and a prompt or transcript says far more. Titles and transcripts are read from the
+ * binary's own files on demand, so copying them buys nothing and creates a second thing to leak or go stale.
+ *
+ * This test exists to stop a future "just cache the title so the tab restores faster" from quietly turning
+ * an index into a data store.
  */
 class AgentIndexPrivacyTest {
 
@@ -46,5 +49,12 @@ class AgentIndexPrivacyTest {
     fun `corrupt or blank state never throws`() {
         assertTrue(PluginAgentIndex.decode("").isEmpty())
         assertTrue(PluginAgentIndex.decode("{not json").isEmpty())
+    }
+
+    @Test
+    fun `the index lives under the user's claude home, never in the project`() {
+        // The location IS the privacy decision, so it is pinned rather than left to a comment.
+        val home = PluginAgentIndex.homeOverride
+        assertTrue(home != null && home.endsWith("/.claude"), "expected ~/.claude, got $home")
     }
 }
