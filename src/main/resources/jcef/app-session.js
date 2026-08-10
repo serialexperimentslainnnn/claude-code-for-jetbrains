@@ -176,15 +176,9 @@
     return 'lvl-low';
   }
 
-  /** "Resets in 4h 50m" — relative, because an absolute timestamp makes you do the arithmetic yourself. */
+  /** "Resets in 4h 50m" — one implementation, in app-core, shared with the composer's bar row. */
   function resetIn(iso) {
-    if (!iso) return null;
-    var when = Date.parse(iso);
-    if (isNaN(when)) return null;
-    var mins = Math.round((when - Date.now()) / 60000);
-    if (mins <= 0) return 'Resets shortly';
-    var hours = Math.floor(mins / 60);
-    return 'Resets in ' + (hours > 0 ? hours + 'h ' + (mins % 60) + 'm' : mins + 'm');
+    return CC.resetIn(iso);
   }
 
   function buildContextCard(ctx) {

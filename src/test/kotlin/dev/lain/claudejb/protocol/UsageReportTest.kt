@@ -418,6 +418,15 @@ class UsageReportTest {
         assertNull(withRawLimits(rawLimit("Fable", 5)).mergedOver(previous).extra)
     }
 
+    @Test
+    fun `an event-sourced window converts its reset time to the shape the report already uses`() {
+        // The composer readout and the dashboard both render a countdown, and a window can reach them from
+        // either path. One conversion on the model, so an event-sourced window and a report-sourced one are
+        // interchangeable to every surface instead of ISO in one place and epoch seconds in the other.
+        assertEquals("2026-08-13T16:59:59Z", RateLimitInfo(resetsAt = 1_786_640_399L).resetsAtIso())
+        assertNull(RateLimitInfo().resetsAtIso())
+    }
+
     // --- UsageWindow.utilizationPercent: the scale, and the bug that came from guessing it ---
 
     @Test

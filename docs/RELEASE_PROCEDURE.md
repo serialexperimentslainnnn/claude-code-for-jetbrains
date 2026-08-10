@@ -145,6 +145,19 @@ Merge once the GitHub Actions CI workflow is green. **Do not**
 rebase onto `main` — use a merge commit so the tag points to a commit that
 exists on both branches.
 
+**The release PR is closed to late commits, cosmetic ones above all.** Everything the release
+contains — code, tests, changelog, release notes, the version bump, and any wording or formatting
+touch-up — goes in *before* the PR is opened. Once it is open, the branch is frozen except for a
+fix to something the review or CI actually found.
+
+This is not tidiness. A commit pushed onto an open release PR invalidates every gate that already
+passed on it: the full local battery was run against a tree that is no longer the tree being
+merged, and `main` is a publishing branch, so what lands there reaches users without a further
+approval step. A "cosmetic" commit is the worst version of this, because it is the one nobody
+re-verifies — the diff looks harmless, so the checks get read as still valid when they belong to a
+different commit. If something cosmetic turns up mid-PR, it waits for the next release; if it truly
+cannot wait, close the PR, land the change, re-run the full battery, and open a new one.
+
 ### 7. Tag and push
 
 After the PR is merged:
