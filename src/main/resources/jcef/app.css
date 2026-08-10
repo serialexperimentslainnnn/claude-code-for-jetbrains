@@ -1223,6 +1223,39 @@ mark.cc-hit.active {
   margin-left: auto;
 }
 
+/* "Other models": a collapsible group inside a pill menu, expanded in place.
+   The header is a .menu-item so it inherits hover/focus/padding — it must NOT get the ✓, which is why
+   .menu-group-header is never given the `selected` class. */
+.menu-group {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.menu-group-header {
+  color: var(--dim);
+}
+.menu-group-caret {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--dim);
+}
+.menu-group-caret::after {
+  content: '▸';
+}
+.menu-group.open .menu-group-caret::after {
+  content: '▾';
+}
+.menu-group-items {
+  display: none;
+}
+.menu-group.open .menu-group-items {
+  display: block;
+}
+/* Indented so a collapsed/expanded group reads as a level, not as more of the flat list. */
+.menu-group-items .menu-item {
+  padding-left: 20px;
+}
+
 /* rich attach menu (search + recent files), AI-Assistant style */
 .attach-menu {
   min-width: 290px;
@@ -1400,6 +1433,59 @@ mark.cc-hit.active {
   height: 100%;
   background: var(--accent);
   border-radius: inherit;
+}
+
+/* ── plan-limit bars, the row under the readout ───────────────────────────────
+   auto-fit + 1fr is what makes this responsive without a media query: the row
+   always spends the FULL tool-window width, dropping to fewer columns as the
+   window narrows instead of leaving a ragged tail or overflowing. */
+.usage-bars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 3px 14px;
+  margin: -4px 4px 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.usage-bars .ub-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* without this a long label refuses to shrink and the grid overflows */
+}
+.usage-bars .ub-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-bars .ub-track {
+  flex: 1 1 40px;
+  min-width: 24px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  overflow: hidden;
+}
+.usage-bars .ub-track > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--info);
+  transition:
+    width 0.35s var(--ease),
+    background-color 0.35s var(--ease);
+}
+.usage-bars .ub-track > i.lvl-mid {
+  background: var(--warning);
+}
+.usage-bars .ub-track > i.lvl-high {
+  background: var(--danger);
+}
+.usage-bars .ub-pct {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -2136,25 +2222,9 @@ mark.cc-hit.active {
   color: var(--danger);
 }
 
-/* The composer readout's dot — same scale, glanceable form. */
-.usage-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  margin-right: 6px;
-  flex: 0 0 auto;
-  transition: background-color 0.35s var(--ease);
-}
-.usage-dot.lvl-low {
-  background: var(--info);
-}
-.usage-dot.lvl-mid {
-  background: var(--warning);
-}
-.usage-dot.lvl-high {
-  background: var(--danger);
-}
+/* NB the composer's `.usage-dot` lived here until the plan limits moved to their own bar row under the
+   readout (`.usage-bars`, further up). Deleted rather than kept warm: an unused rule is a rule nobody
+   maintains, and the row it styled is not coming back. */
 .usage-reset {
   margin-top: 4px;
   font-size: 11.5px;
