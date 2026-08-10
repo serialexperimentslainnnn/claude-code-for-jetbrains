@@ -1034,9 +1034,9 @@
       ro.appendChild(
         h(
           'span',
-          { class: 'ro-item', title: String(win.label || '') + ' — ' + win.pct + '% used' },
+          { class: 'ro-item', title: String(win.label || '') + ' — ' + win.pct.toFixed(1) + '% used' },
           h('span', { class: 'usage-dot ' + usageLevel(win.pct) }),
-          h('span', { text: String(win.label || '') + ' ' + win.pct + '%' })
+          h('span', { text: String(win.label || '') + ' ' + win.pct.toFixed(1) + '%' })
         )
       );
     }

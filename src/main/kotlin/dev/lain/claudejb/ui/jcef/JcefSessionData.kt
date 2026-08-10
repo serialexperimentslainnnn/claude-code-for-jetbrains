@@ -84,13 +84,15 @@ object JcefSessionData {
      * "unknown" and "none used" are different claims and a bar cannot show both.
      */
     private fun usageJson(session: ClaudeSession, report: UsageReport?): JsonObject? {
+        // EXPERIMENT (Lain's comma test): carry the decimals — do NOT round to Int — so we can see whether the
+        // frontend renders a fractional percentage with a comma (locale formatting in play) or a dot.
         val fromReport = report?.windows?.map { (key, w) ->
-            Window(key, w.utilization?.let { pctOf(it) }, w.resetsAt, exhausted = false)
+            Window(key, w.utilization, w.resetsAt, exhausted = false)
         }.orEmpty()
         val fromEvents = session.rateLimits
             .filterKeys { key -> fromReport.none { it.key == key } }
             .map { (key, info) ->
-                Window(key, info.utilizationPercent(), info.resetsAt?.let(::isoOf), info.isExhausted)
+                Window(key, info.utilization?.let { it * 100 }, info.resetsAt?.let(::isoOf), info.isExhausted)
             }
         val windows = fromReport + fromEvents
         if (windows.isEmpty() && report?.extra == null) return null
@@ -114,7 +116,7 @@ object JcefSessionData {
         }
     }
 
-    private data class Window(val key: String, val pct: Int?, val resetsAt: String?, val exhausted: Boolean)
+    private data class Window(val key: String, val pct: Double?, val resetsAt: String?, val exhausted: Boolean)
 
     /** The pay-as-you-go balance. Credits are minor units (`decimal_places`), not whole currency. */
     private fun extraUsageJson(extra: ExtraUsage): JsonObject = buildJsonObject {
@@ -122,17 +124,9 @@ object JcefSessionData {
         put("spent", extra.usedCredits?.let { it / TEN.pow(extra.decimalPlaces) })
         put("limit", extra.monthlyLimit)
         put("currency", extra.currency)
-        put("pct", extra.utilization?.let { pctOf(it) })
+        put("pct", extra.utilization) // EXPERIMENT: raw, un-rounded, like the windows — so the decimal shows
         put("limitReached", extra.spendLimitReached)
     }
-
-    /**
-     * The wire scale is 0..100 (the SDK documents every `get_usage` window as "Percentage of the window
-     * used, 0-100"); clamp, never crash. The former "accept 0..1 too" heuristic is deliberately gone: it
-     * was undecidable at exactly 1.0 and rendered a genuine 1% as 100% — observed live, and reachable by
-     * every user at the start of every freshly reset window. Same rule as [RateLimitInfo.utilizationPercent].
-     */
-    private fun pctOf(raw: Double): Int = Math.round(raw).toInt().coerceIn(0, 100)
 
     /** Epoch seconds → ISO-8601, so event-sourced windows match the shape `get_usage` already returns. */
     private fun isoOf(epochSeconds: Long): String =

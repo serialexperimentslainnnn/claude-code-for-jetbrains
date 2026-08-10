@@ -129,7 +129,7 @@
     var level = exhausted ? 'lvl-high' : known ? usageLevel(pct) : 'lvl-low';
     var fill = h('div', {
       class: 'usage-fill ' + level,
-      style: { width: (known ? pct : 0) + '%' },
+      style: { width: (known ? pct.toFixed(1) : 0) + '%' },
     });
     var reset = resetIn(resetsAt);
     return h(
@@ -139,7 +139,8 @@
         'div',
         { class: 'usage-head' },
         h('span', { class: 'usage-label', text: label == null ? '' : String(label) }),
-        h('span', { class: 'usage-pct', text: known ? pct + '% used' : '—' })
+        // toFixed(1): one decimal, and it also kills the IEEE-754 tail (0.28*100 = 28.000000000000004).
+        h('span', { class: 'usage-pct', text: known ? pct.toFixed(1) + '% used' : '—' })
       ),
       h('div', { class: 'usage-track' }, fill),
       reset ? h('div', { class: 'usage-reset', text: reset }) : null

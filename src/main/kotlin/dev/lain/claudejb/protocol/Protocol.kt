@@ -287,22 +287,7 @@ data class RateLimitInfo(
     val overageInUse: Boolean = false,
     val surpassedThreshold: Double? = null,
 ) {
-    /**
-     * Clamped 0..100 percent, or null if the binary didn't report utilization.
-     *
-     * **The event's scale is a 0..1 FRACTION, and it is not the same as `get_usage`'s.** Captured live from
-     * `claude` 2.1.223 while claude.ai reported 92% of the weekly window spent:
-     *
-     * ```
-     * {"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.92,"surpassedThreshold":0.75}
-     * ```
-     *
-     * `surpassedThreshold: 0.75` is the corroborating detail — thresholds are announced at 75%/85%, so the
-     * companion field is unambiguously a fraction too. `sdk.d.ts` documents "Percentage of the window used,
-     * 0-100" ONLY on the `get_usage` windows ([UsageWindow]); `SDKRateLimitInfo.utilization` carries no
-     * such note, and the two really do differ. Reading the event on the 0..100 scale rendered a window at
-     * 92% as **1%** — a quota bar that is not merely wrong but reassuring while the limit is about to hit.
-     */
+    /** Clamped 0..100 percent, or null if the binary didn't report utilization. */
     fun utilizationPercent(): Int? =
         utilization?.let { Math.round(it * PERCENT).toInt().coerceIn(0, 100) }
 
