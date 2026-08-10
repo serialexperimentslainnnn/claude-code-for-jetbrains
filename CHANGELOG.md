@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.1] — 2026-08-10
+
+### Fixed
+- **The plan limits stopped refreshing whenever the panel was not on screen.** The poll was gated on
+  `isShowing`, so a collapsed tool window or a chat tab that was not the selected one asked for nothing at
+  all — and a quota window is not the plugin's state to begin with: other sessions, other devices and
+  claude.ai spend the same windows, and a **reset is a wall-clock event that owes nothing to this IDE**. The
+  figure on screen was therefore whatever the last probe happened to catch, and it only moved again when
+  something else triggered one — a turn, or opening the dashboard. "It only updates when I talk to the agent"
+  is precisely what a visibility-gated poll looks like from outside. The gate is gone and the period is 30 s;
+  what it was saving is one control request per half minute against a process that is already running, and
+  the event-driven refreshes (turn edges, `rate_limit_event`, dashboard open, session ready) are unchanged.
+
+### Added
+- **The chat's plan-limit row now says how long each window has left** — `Reset time: 4h 18m` on its own line
+  directly under that window's bar, with the full sentence in the tooltip. A percentage alone does not say
+  whether it is urgent: 90% with eight minutes to go and 90% with six hours to go are different situations,
+  and only the dashboard was answering that. Under the bar rather than beside it because the row is already
+  three items wide per window, and a fourth made the countdown the first thing to be squeezed out — the one
+  case where it matters most. The countdown is computed by one function in `app-core`
+  (`CC.resetIn`/`resetInShort`) that the dashboard card now shares, and a window with no reset time renders
+  no element rather than an empty slot that would read as "resets now".
+
+### Changed
+- **Every `get_usage` poll now logs the reply it got**, `rate_limits` verbatim (truncated), at INFO. The
+  derived per-window lines cannot answer the question that keeps coming up — *is the number on screen stale,
+  or is the server still saying that?* — because a window the reply omits leaves no line at all, and one
+  carried forward from the previous poll is indistinguishable from a fresh one. It immediately earned its
+  place: a live capture showed **two of three consecutive polls** coming back in the header-seeded shape
+  (`five_hour`/`seven_day` only, no `limits[]`, `resets_at` rounded to `.000Z`), which is the degraded reply
+  5.1.0's merge exists for, and confirmed the binary does not cache the endpoint.
+- `RateLimitInfo.resetsAtIso()` puts the epoch-seconds → ISO-8601 conversion on the model, so a window that
+  reaches a surface from the *event* stream and one that arrives in the `get_usage` *report* are
+  interchangeable to everything that renders them. It was a private copy in the dashboard's builder, and the
+  composer needed the same thing.
+
 ## [5.1.0] — 2026-08-10
 
 ### Added

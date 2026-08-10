@@ -1441,17 +1441,24 @@ mark.cc-hit.active {
    window narrows instead of leaving a ragged tail or overflowing. */
 .usage-bars {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 3px 14px;
   margin: -4px 4px 8px;
   font-size: 12px;
   color: var(--dim);
 }
+/* Two lines per window: the bar row, and the countdown under it. */
 .usage-bars .ub-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0; /* without this a long label refuses to shrink and the grid overflows */
+}
+.usage-bars .ub-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0; /* without this a long label refuses to shrink and the grid overflows */
+  min-width: 0;
 }
 .usage-bars .ub-label {
   flex: 0 1 auto;
@@ -1485,6 +1492,17 @@ mark.cc-hit.active {
 }
 .usage-bars .ub-pct {
   flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+/* Time left in the window, on its own line under the bar. Dimmer and smaller on
+   purpose: it qualifies the percentage, it does not compete with it. Never wraps
+   — a countdown broken across two lines reads as two values. */
+.usage-bars .ub-reset {
+  font-size: 11px;
+  opacity: 0.72;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 

@@ -1,3 +1,14 @@
+## v5.1.1 — 2026-08-10
+
+**The plan limits kept updating only when you talked to the agent.** The poll stopped whenever the chat was
+not on screen — a collapsed tool window, or another tab selected — so a limit could reset, or fill up from
+another device, and the bars went on showing the last figure they happened to catch until something made you
+send a message. They now refresh every 30 seconds regardless of what you are looking at.
+
+**And the bars say how long each window has left** — `Reset time: 4h 18m`, right under each one. 90% with
+eight minutes to go and 90% with six hours to go are not the same situation, and until now only the
+dashboard told you which one you were in.
+
 ## v5.1.0 — 2026-08-10
 
 **Older models are selectable again.** The model picker has an **Other models** group with the previous
