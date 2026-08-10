@@ -645,10 +645,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * credential the user wrote by hand into the Settings environment. Nothing held → logged out by
      * definition, and no process is started to re-ask a question we have already answered.
      *
-     * Deliberately does NOT harvest — see [absorbExistingLoginOnce].
+     * A vaulted login whose access token has expired but whose refresh token has not counts as an identity —
+     * it is one renewal away from live, and [renewVaultedCredential] performs that renewal off the EDT at
+     * launch time. Answering "signed out" here instead is what made every reboot end at the sign-in card.
+     *
+     * Deliberately does NOT harvest — see [absorbExistingLoginOnce] — and deliberately does not RENEW either:
+     * this runs on the EDT from [start], and renewal spawns a process.
      */
     private fun hasCredential(settings: ClaudeSettings): Boolean {
         if (dev.lain.claudejb.process.CredentialsVault.hasUsableToken()) return true
+        if (dev.lain.claudejb.process.CredentialsVault.canRenew()) return true
         if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
         if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
         val explicit = settings.resolveEnv()
@@ -690,6 +696,34 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     @Volatile private var binaryOwnLogin = false
 
     @Volatile private var ownLoginCheckedAt = 0L
+
+    /**
+     * Brings the vaulted subscription login back to life when its access token has expired, BEFORE the launch
+     * env is built. Blocking (process + network) — pooled thread only, which is why it lives in [launch] and
+     * not in [start].
+     *
+     * This is what makes a login survive a reboot. The access token the OAuth flow issues is good for hours;
+     * the refresh token beside it in the safe is good for weeks and is rotated at every renewal. Without this
+     * step the plugin held a perfectly persisted credential and still asked the user to sign in every
+     * morning — the credential had not been lost, it had merely expired with nothing allowed to spend it.
+     *
+     * @return whether this launch has an identity to run as. A renewal that fails does not condemn the
+     *   launch: the ttl cache is dropped first so the fallback question ("does the BINARY hold its own
+     *   login?") is asked again — a renewal can sign the binary in even when we fail to take custody of what
+     *   it wrote, which is the normal case wherever it uses an OS store instead of a file.
+     */
+    private fun renewVaultedCredential(binary: File, settings: ClaudeSettings): Boolean {
+        // A sign-in owns `~/.claude/.credentials.json` from the browser leg until it is banked; renewing
+        // underneath it would take away the very file the flow is about to write.
+        if (login.inProgress) return true
+        if (!dev.lain.claudejb.process.CredentialsVault.needsRenewal()) return true
+        if (dev.lain.claudejb.process.CredentialsVault.renew(binary, settings.resolveEnv())) {
+            dev.lain.claudejb.process.AccountProfile.invalidate()
+            return true
+        }
+        ownLoginCheckedAt = 0
+        return hasCredential(settings)
+    }
 
     /**
      * Re-evaluates which screen this tab should be showing, from scratch. Called periodically while no
@@ -882,6 +916,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         //
         // The credential reaches the binary through the environment, WHOLE (CredentialsVault.envOverlay), and
         // the binary keeps its own `~/.claude`. Nothing is relocated, symlinked or deleted.
+        //
+        // Renewal FIRST, and here rather than in start(): it spawns a process, start() runs on the EDT, and
+        // the env below has to be built from the credential we are about to hold — not the expired one.
+        if (!renewVaultedCredential(binary, settings)) {
+            edt { onLoginNeeded() }
+            return
+        }
         val env = effectiveLaunchEnv(cachedEnv ?: settings.resolveEnv().also { cachedEnv = it })
         // A stop()/dispose()/newer start() may have raced in during the (slow) env resolution. If so, this
         // launch is stale — don't spawn an orphan process nothing will ever tear down.
@@ -2108,7 +2149,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private fun onRateLimit(event: ClaudeEvent.RateLimit) {
         val incoming = event.info
         log.debug(
-            "CC-TRACE rate_limit_event: window=${incoming.rateLimitType} status=${incoming.status}" +
+            "rate_limit_event: window=${incoming.rateLimitType} status=${incoming.status}" +
                 " utilization=${incoming.utilization} -> pct=${incoming.utilizationPercent()}",
         )
         val window = incoming.rateLimitType

@@ -44,6 +44,19 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
     private fun blob(token: String, inMs: Long) =
         """{"claudeAiOauth":{"accessToken":"$token","expiresAt":${System.currentTimeMillis() + inMs}}}"""
 
+    /** The real shape the binary writes: an access token AND the refresh token that outlives it. */
+    private fun renewable(accessInMs: Long, refreshInMs: Long): String {
+        val now = System.currentTimeMillis()
+        return """
+            {"claudeAiOauth":{"accessToken":"stale","expiresAt":${now + accessInMs},
+             "refreshToken":"rt","refreshTokenExpiresAt":${now + refreshInMs},
+             "scopes":["user:profile","user:inference"]}}
+        """.trimIndent()
+    }
+
+    private val hour = 60 * 60 * 1000L
+    private val day = 24 * hour
+
     fun `test harvest moves the file into the safe and deletes it`() {
         file.parentFile?.mkdirs()
         file.writeText("""{"claudeAiOauth":{"accessToken":"secret-token"}}""")
@@ -108,13 +121,61 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
         assertFalse(file.exists())
     }
 
-    fun `test an expired token is not an identity — it cannot be refreshed without the file`() {
+    fun `test an expiring token is not handed out, and with no refresh token it is not an identity`() {
         SecretStore.set(SecretStore.CREDENTIALS_JSON, blob("stale-token", inMs = 60_000))
 
         assertTrue("an expiring token must not be handed out", CredentialsVault.envOverlay(emptySet()).isEmpty())
-        // Refreshing needs the binary to rewrite its own file, which never happens now. So this counts as
-        // signed out and the card comes back, instead of a session that fails its first turn.
         assertFalse(CredentialsVault.hasUsableToken())
+        // Nothing to renew from: this blob carries an access token and nothing else.
+        assertFalse(CredentialsVault.canRenew())
+        assertFalse(CredentialsVault.needsRenewal())
+    }
+
+    fun `test an expired token with a live refresh token is still an identity, pending renewal`() {
+        // THE REBOOT CASE. The access token is issued for hours, so an overnight restart always lands here;
+        // answering "signed out" is what put the sign-in card in front of the user every morning.
+        SecretStore.set(SecretStore.CREDENTIALS_JSON, renewable(accessInMs = -60_000, refreshInMs = day * 20))
+
+        assertFalse(CredentialsVault.hasUsableToken())
+        assertTrue("a live refresh token is an identity one renewal away", CredentialsVault.canRenew())
+        assertTrue(CredentialsVault.needsRenewal())
+    }
+
+    fun `test a live access token needs no renewal`() {
+        SecretStore.set(SecretStore.CREDENTIALS_JSON, renewable(accessInMs = 6 * hour, refreshInMs = day * 20))
+
+        assertTrue(CredentialsVault.hasUsableToken())
+        assertFalse("nothing to renew while the token is live", CredentialsVault.needsRenewal())
+    }
+
+    fun `test an expired refresh token cannot renew`() {
+        SecretStore.set(SecretStore.CREDENTIALS_JSON, renewable(accessInMs = -60_000, refreshInMs = -day))
+
+        assertFalse(CredentialsVault.canRenew())
+        assertFalse("a spent refresh token must lead to the sign-in card", CredentialsVault.needsRenewal())
+    }
+
+    fun `test renewal needs the scopes the binary demands`() {
+        // The non-interactive path is driven by CLAUDE_CODE_OAUTH_SCOPES alongside the refresh token, and a
+        // blob that cannot state the grant it was issued under is not renewable — better to say so here than
+        // to spawn a process that exits 1.
+        SecretStore.set(
+            SecretStore.CREDENTIALS_JSON,
+            """{"claudeAiOauth":{"accessToken":"stale","expiresAt":0,"refreshToken":"rt","scopes":[]}}""",
+        )
+
+        assertFalse(CredentialsVault.canRenew())
+    }
+
+    fun `test a refresh token with no recorded expiry is given the benefit of the doubt`() {
+        SecretStore.set(
+            SecretStore.CREDENTIALS_JSON,
+            """{"claudeAiOauth":{"accessToken":"stale","expiresAt":0,"refreshToken":"rt","scopes":["a"]}}""",
+        )
+
+        // The endpoint is the authority on whether it is still good; a wrong guess costs one failed renewal,
+        // refusing costs a sign-in nobody needed.
+        assertTrue(CredentialsVault.canRenew())
     }
 
     fun `test an explicit credential outranks the vaulted one`() {

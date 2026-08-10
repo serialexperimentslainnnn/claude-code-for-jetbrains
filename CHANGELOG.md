@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1] — 2026-08-10
+
+### Fixed
+- **The subscription login did not survive a restart.** The credential was stored correctly — in the IDE's
+  PasswordSafe, which resolves to the OS store — KWallet or GNOME Keyring through the Secret Service on
+  Linux, the Keychain on macOS, the Credential Manager on Windows — and it was still there after the reboot,
+  confirmed by reading the entry back out of the OS store directly. What expired was the *access
+  token* inside it: the OAuth flow issues one good for hours (~10 h, measured), so any restart the next day
+  found a perfectly persisted credential that no longer authenticated anything. `hasUsableToken()` answered
+  false, and false meant "signed out", so the sign-in card came back every morning.
+
+  The blob beside it always carried a **refresh token valid for weeks** and the plugin never spent it, by
+  design: only the binary can, and it does so by rewriting `~/.claude/.credentials.json` — the exact file the
+  vault exists to remove. The way out is that the binary has a **non-interactive** login for precisely this:
+  given `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` and `CLAUDE_CODE_OAUTH_SCOPES`, `claude auth login` takes a
+  dedicated branch, mints a fresh credential and exits — no browser, no TTY, no user. So renewal is now the
+  binary's job, exactly as it always was, and the plugin's job stays what it was: take custody of the result
+  and delete the plaintext copy. No OAuth client here, no token endpoint called from the IDE, no file written
+  back — the invariant `NoFileDeletionContractTest` and the vault's KDoc both state is untouched.
+
+  Reported on **Linux and Windows**, and it is one bug rather than two: the binary's default credential store
+  is its `plaintext` provider (`~/.claude/.credentials.json`) on every platform, so the vault takes custody
+  the same way everywhere and the token expires the same way everywhere. The fix carries no platform-specific
+  code — the only Windows-specific care is that the renewal environment strips `CLAUDE_CODE_OAUTH_TOKEN`
+  case-insensitively, since environment names are case-insensitive there.
+
+  **Scope: the subscription (OAuth) credential only.** An Anthropic API key is a different identity in a
+  different slot — `providerApiKey:anthropic` in the same PasswordSafe, not `CLAUDE_CREDENTIALS_JSON` — and it
+  has no expiry and no refresh token, so there was nothing to lose across a restart and there is nothing to
+  renew now. `CredentialsVault.renew()` reads the `claudeAiOauth` blob and nothing else, and `envOverlay`
+  withdraws entirely when an API key is present, so an API-key session is untouched by any of this.
+
+  An expired-but-renewable credential now counts as an identity (`CredentialsVault.canRenew`), the renewal
+  runs off the EDT at launch (`ClaudeSession.renewVaultedCredential`, before the launch env is built, and
+  never while a sign-in is in flight), the refresh token rotates at every renewal so ordinary use extends it
+  indefinitely, and a failed renewal arms a five-minute cooldown so the three-second boot watcher cannot turn
+  a flaky network into a process spawn per poll. Sign-in is now needed only after a genuinely idle period, or
+  when Anthropic invalidates the grant.
+
 ## [5.0.0] — 2026-08-05
 
 The standards-compliance major. The repository was taken through the standards catalogue domain by domain —

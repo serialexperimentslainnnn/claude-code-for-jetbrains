@@ -1,3 +1,23 @@
+## v5.0.1 — 2026-08-10
+
+**You should stop having to sign in every morning.** Your login was being stored properly all along — in your
+OS credential store, through the IDE's own password safe (KWallet or GNOME Keyring on Linux, Keychain on
+macOS, Credential Manager on Windows). What was expiring was the token inside it: Claude issues one that lasts
+hours, so a restart the next day found a credential that had gone stale, and the plugin asked you to sign in
+again rather than renewing it.
+
+It renews it now. The longer-lived half of your credential — the part good for weeks, and refreshed every time
+it's used — is handed back to the `claude` binary, which mints a new token without a browser, without a
+terminal and without you. Nothing about how it's stored changes: the credential still lives encrypted in your
+OS store and never sits in plaintext on disk. In practice you'll now only be asked to sign in after a long
+idle period, or if Anthropic invalidates the session.
+
+**Which sign-in this is about:** the **subscription** one (Claude Pro or Max — the *Sign in* button and the
+account row in the dashboard). That is the credential that carries a token with an expiry date on it. If you
+authenticate with an **Anthropic API key** instead, nothing here changes for you and nothing here was broken
+for you: an API key does not expire and has nothing to renew, it is kept in the same OS-backed store, and it
+already survived restarts.
+
 ## v5.0.0 — 2026-08-05
 
 **Nothing you use changes.** This is a major because the *project* changed, not the product: the whole

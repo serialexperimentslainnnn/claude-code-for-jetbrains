@@ -31,12 +31,14 @@ object JcefState {
      * because there the distinction between "unknown" and "unused" is worth the row.
      */
     private fun compactUsageJson(session: ClaudeSession, usage: UsageReport?) = buildJsonArray {
+        // EXPERIMENT (Lain's comma test): carry the raw decimals here too, so the composer readout does not
+        // round to Int either — otherwise the decimal never shows and the test can't see a comma vs a dot.
         val fromReport = usage?.windows.orEmpty().mapNotNull { (key, w) ->
-            w.utilization?.let { key to normalizePercent(it) }
+            w.utilization?.let { key to it }
         }
         val fromEvents = session.rateLimits
             .filterKeys { key -> fromReport.none { it.first == key } }
-            .mapNotNull { (key, info) -> info.utilizationPercent()?.let { key to it } }
+            .mapNotNull { (key, info) -> info.utilization?.let { key to it * 100 } }
         (fromReport + fromEvents).forEach { (key, pct) ->
             addJsonObject {
                 put("key", key)
@@ -45,10 +47,6 @@ object JcefState {
             }
         }
     }
-
-    /** The wire has sent both 0..100 and 0..1 historically; accept either, clamp, never crash. */
-    private fun normalizePercent(raw: Double): Int =
-        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
 
     fun stateJson(session: ClaudeSession, usage: UsageReport? = null): String {
         val provider = session.provider
