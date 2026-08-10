@@ -49,3 +49,71 @@ describe('composer readout', () => {
     expect(readoutText()).toContain('Running');
   });
 });
+
+// The plan-limit bars: their own row, under the readout.
+//
+// They were dots inline in the readout, i.e. at the end of a wrapping row of unrelated metrics — so the windows
+// nearest their cap were the ones most likely to wrap out of sight. The separation is the point of the row, and
+// it is what these pin: the bars are a SIBLING of .readout, not inside it.
+describe('plan-limit bars', () => {
+  let win;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js'], { vendor: false });
+  });
+
+  const bars = () => win.document.querySelector('.usage-bars');
+  const items = () => Array.from(bars().querySelectorAll('.ub-item'));
+  const base = { running: true, starting: false };
+
+  it('renders one labelled bar per window, outside the readout', () => {
+    win.cc.state({
+      ...base,
+      usage: [
+        { key: 'five_hour', label: 'Current session', pct: 13 },
+        { key: 'seven_day', label: 'All models', pct: 9 },
+        { key: 'model_scoped:Fable', label: 'Fable', pct: 71.25 },
+      ],
+    });
+    expect(items()).toHaveLength(3);
+    expect(items().map((el) => el.querySelector('.ub-label').textContent)).toEqual([
+      'Current session',
+      'All models',
+      'Fable',
+    ]);
+    expect(items()[2].querySelector('.ub-pct').textContent).toBe('71.3%');
+    // Sibling, not descendant: the readout must be able to grow without displacing them.
+    expect(win.document.querySelector('.readout .ub-item')).toBeNull();
+  });
+
+  it('sets the fill width from the percentage and its colour from the level', () => {
+    win.cc.state({
+      ...base,
+      usage: [
+        { key: 'a', label: 'Low', pct: 10 },
+        { key: 'b', label: 'Mid', pct: 70 },
+        { key: 'c', label: 'High', pct: 90 },
+      ],
+    });
+    const fills = items().map((el) => el.querySelector('.ub-track > i'));
+    expect(fills.map((f) => f.style.width)).toEqual(['10%', '70%', '90%']);
+    expect(fills.map((f) => f.className)).toEqual(['lvl-low', 'lvl-mid', 'lvl-high']);
+  });
+
+  it('clamps the BAR past 100% but never the number', () => {
+    // A window the server reports over its cap is exactly the figure the user needs to read; what must not
+    // happen is the fill overflowing its track.
+    win.cc.state({ ...base, usage: [{ key: 'a', label: 'Over', pct: 103 }] });
+    expect(items()[0].querySelector('.ub-track > i').style.width).toBe('100%');
+    expect(items()[0].querySelector('.ub-pct').textContent).toBe('103.0%');
+  });
+
+  it('hides the row entirely when no window carries a percentage', () => {
+    win.cc.state({ ...base });
+    expect(bars().hasAttribute('hidden')).toBe(true);
+    win.cc.state({ ...base, usage: [{ key: 'a', label: 'Unknown', pct: null }] });
+    expect(bars().hasAttribute('hidden')).toBe(true);
+    expect(items()).toHaveLength(0);
+    win.cc.state({ ...base, usage: [{ key: 'a', label: 'Known', pct: 5 }] });
+    expect(bars().hasAttribute('hidden')).toBe(false);
+  });
+});

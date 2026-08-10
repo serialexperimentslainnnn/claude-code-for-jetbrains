@@ -4,6 +4,111 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] — 2026-08-10
+
+### Added
+- **An "Other models" group in the model picker**, holding previous generations (Opus 4.8 → 4.0, Sonnet 4.6 →
+  4.0, Sonnet 3.7 and 3.5, Haiku 3.5). Collapsed by default so the four current models keep the menu they had,
+  and expanded automatically when the selected model lives inside it.
+
+  The list is **curated in the plugin**, which deserves stating plainly because this repository removed a
+  hardcoded model label in 4.3.3. There is no runtime source for it: the binary's selectable catalog — the
+  `initialize` reply, and the identical answer to the `list_models` control request — contains only the current
+  generation, and `ModelInfo` carries no `deprecated`/`legacy` flag. The binary still *accepts* these ids, it
+  just will not list them. The distinction that makes a curated list defensible here: these are **historical**
+  ids, which never change and never disappear, so the list can only gain entries. What went stale in 4.3.3 was
+  a label describing the *current* tier. Nothing here names a current model, and a test enforces that.
+
+  Choosing a model the account cannot run is handled rather than left to fail: `set_model` is now sent as a
+  **correlated** control request, and a refusal restores the previous model and says so in the transcript
+  instead of leaving the tab pointed at a model every later turn would fail on.
+
+- **Per-model plan limits — Fable among them — are reported.** `get_usage` returns them in
+  `rate_limits.model_scoped`, an *array* alongside the keyed windows rather than another key inside them
+  (`sdk.d.ts`: `{ display_name, utilization, resets_at }[]`, and its own example names `'Fable'`).
+  `parseUsageReport` walked only the keyed windows, so every per-model figure the server sent was dropped on
+  the floor — which is why the CLI's `/usage` showed a Fable row the plugin never did.
+
+  Reading that array is necessary and **not sufficient**, which is what the first attempt got wrong: the
+  binary does not relay `model_scoped`, it *synthesises* it, and only behind its own remote config. Its
+  projection (`IUt(limits, jJe())` in 2.1.223) reads the `tengu_usage_overage_included_models` gate, returns
+  an empty list the moment that gate is empty, and the key is spliced into `rate_limits` only when the
+  projection yielded something — so in a `--print` session it simply never arrived, which is why the plugin
+  logged `five_hour` and `seven_day` and nothing else while the same account's interactive `/usage` listed
+  Fable. The plugin therefore also walks the **raw `rate_limits.limits[]` array the projection reads from**,
+  which does ride through untouched — the binary's own `/usage` formatter assumes as much, calling `IUt` on
+  this very payload — taking the `weekly_scoped` entries that name a model, with the binary's filter and
+  without its allowlist. Dropping the allowlist is deliberate: it selects which models get *overage billing*,
+  not which limits a user is subject to, and a limit that meters you is worth showing whether or not you can
+  pay past it. `resets_at` is epoch seconds there as often as a string, so it is normalised rather than
+  deserialized — a numeric one would have failed to decode and dropped the whole window in silence.
+
+  And a usage refresh is now **merged** into the last one instead of replacing it, because the same fetch has
+  a second fallback that omits windows: `loadPlanRateLimits` gives `/api/oauth/usage` 5 s, and on a timeout, a
+  429 or a fieldless body it substitutes `seedUtilization()` — an object rebuilt from the rate-limit *response
+  headers*, which structurally carries only `five_hour` and `seven_day`. It is flagged `status:"seeded"` and
+  then accepted identically to a full reply, so a poll that simply failed was indistinguishable from one
+  saying the per-model window no longer exists — and the Fable bar blinked out and back every few polls.
+  Merged by window key over the whole set, since `seven_day_opus`/`seven_day_sonnet` are missing from a seeded
+  object for the same reason and would flicker the same way; a carried-forward window keeps the last figure
+  actually reported for it and the next real refresh overwrites it. The extra-credit balance is deliberately
+  not carried: `null` there already means "this plan has none" as often as "this reply did not say".
+
+  They are keyed `model_scoped:<display_name>` because the quota-crossing record is kept per window and has to
+  stay stable across refreshes, and titled from the server's own `display_name` — the *only* source for it,
+  since nothing in the plugin can name a window the server invents. An entry whose name collides with a keyed
+  window is dropped rather than duplicated, one missing a name or a figure is skipped, and they sort after the
+  known windows so the row order the user already reads does not shuffle when Anthropic adds a model.
+
+### Removed
+- **The `nimbus_quill` usage window is no longer shown.** The claude.ai usage endpoint emits it and the CLI
+  relays it untouched; it appears in no version of the binary and in no SDK type, so nothing here can say what
+  it meters — it rendered as "Nimbus quill 0.0%", a row that asks a question and answers none. Hidden **by
+  name**, deliberately not by a general "hide unknown windows" rule, which would silently swallow the next
+  real limit; the moment it means something, deleting one line brings it back with its label, bar and ordering
+  intact.
+
+  It kept appearing anyway, because the filter sat on one of the **two** paths that feed a window to the UI:
+  the `get_usage` report was filtered, the `rate_limit_event` stream was not, and that is the door it was
+  arriving through. The rule is now applied on both (`isHiddenUsageWindow`), and on the event path the window
+  is dropped whole rather than merely hidden — it must not become the session's `rateLimit` either, which
+  drives the single-number quota bar.
+
+### Fixed
+- **A quota notification announcing 100% when almost nothing had been used.** `get_usage` reports each
+  window as a percentage on a 0–100 scale — `sdk.d.ts` says so on every window, and a live reply from
+  `claude` 2.1.222 carries `8` and `67`. `ClaudeSession` held a private copy of an "the wire sends both
+  0–100 and 0–1, accept either" heuristic that multiplied any value `<= 1.0` by a hundred. So a window at a
+  genuine **1%** was reported as **100%**, crossed the 85% threshold, and raised an IDE notification telling
+  the user their plan was spent — at the moment they had spent almost none of it, which is to say right
+  after a window resets. The heuristic is undecidable at exactly 1.0 by construction: it cannot tell a full
+  window from a barely-touched one.
+
+  The rule now lives once, on the model (`UsageWindow.utilizationPercent()`), with no scale guessing: the
+  value is already a percentage. Two of the three copies had been removed in 5.0.1 when the dashboard
+  stopped rounding; this was the third, and the only one wired to notifications, which is why the bars got
+  quieter while the notifications kept shouting. The event path (`RateLimitInfo.utilization`, genuinely a
+  0..1 fraction) is unchanged and was never affected.
+
+### Changed
+- **The plan limits are their own row under the status line**, one labelled bar per window, instead of dots
+  at the end of the readout. Inline, they sat behind `Running… / Context 65% / 65.3k out / 0 reasoning` on a
+  wrapping row — so the windows *nearest their cap*, the ones the row exists for, were the ones most likely to
+  wrap out of sight in a narrow tool window. The row is a `repeat(auto-fit, minmax(150px, 1fr))` grid: it
+  spends the full width at any size and drops to fewer columns as the panel narrows, with no media query and
+  no fixed layout to outgrow. The bar is clamped to 100%; the number is not, because a window reported past
+  its cap is exactly the figure worth reading.
+
+- Quota notifications title themselves through `UsageWindow.title(key)` rather than from the key, so a
+  per-model window announces "Fable quota at 85%" instead of the synthetic `model_scoped:Fable`. The record
+  that decides whether a threshold has already been announced stays keyed by the key, which is what makes it
+  survive a refresh.
+
+- The `get_usage` path now logs each window's raw utilization and the percentage derived from it, at INFO.
+  When the false 100% was reported there was nothing in `idea.log` to check it against, because only the
+  *event* path carried a trace — and that one is `debug`, so it is off by default. A number the user can see
+  should leave behind the value that produced it.
+
 ## [5.0.1] — 2026-08-10
 
 ### Fixed

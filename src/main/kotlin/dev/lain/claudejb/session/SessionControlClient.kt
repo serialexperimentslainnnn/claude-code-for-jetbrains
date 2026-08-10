@@ -87,6 +87,19 @@ class SessionControlClient(
         buildRequest: (requestId: String) -> String,
         onResult: (T?) -> Unit,
         decode: (JsonObject?) -> T?,
+    ) = send(buildRequest) { res -> onResult(decode(res.payload)) }
+
+    /**
+     * Like [query], but hands the caller the RAW outcome instead of a decoded payload.
+     *
+     * The distinction is not cosmetic: [query] collapses "the binary refused" and "the binary agreed and had
+     * nothing to say" into the same `null`, because all it forwards is `decode(payload)`. For a request whose
+     * answer IS the success flag — `set_model`, where a refused model must be rolled back and an accepted one
+     * has no payload at all — that collapse would revert every successful change.
+     */
+    fun send(
+        buildRequest: (requestId: String) -> String,
+        onOutcome: (ClaudeEvent.ControlResult) -> Unit,
     ) {
         val id = newRequestId()
         // Watchdog: a semi-stuck binary could otherwise leave this callback pending forever (eternal "Loading…").
@@ -98,15 +111,13 @@ class SessionControlClient(
         val requestLine = buildRequest(id)
         pending[id] = { res ->
             watchdog.cancel()
-            val decoded = decode(res.payload)
-            // The data-flow trace: what the binary ANSWERED and what our decode made of it. When a panel is
-            // empty, this line is the split between "the binary never sent it" and "we dropped it".
+            // The data-flow trace: what the binary ANSWERED. When a panel is empty, this line is the split
+            // between "the binary never sent it" and "we dropped it" (the decode happens in the caller).
             log.debug(
                 "CC-TRACE control reply ${requestSubtype(requestLine)} id=$id success=${res.success}" +
-                    " err=${res.error ?: "-"} payload=${res.payload?.toString()?.take(TRACE_MAX) ?: "null"}" +
-                    " -> decoded=${decoded?.toString()?.take(TRACE_MAX) ?: "null"}",
+                    " err=${res.error ?: "-"} payload=${res.payload?.toString()?.take(TRACE_MAX) ?: "null"}",
             )
-            onResult(decoded)
+            onOutcome(res)
         }
         log.debug("CC-TRACE control send ${requestSubtype(requestLine)} id=$id")
         write(requestLine)

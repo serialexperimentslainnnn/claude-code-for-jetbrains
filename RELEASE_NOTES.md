@@ -1,3 +1,28 @@
+## v5.1.0 — 2026-08-10
+
+**Older models are selectable again.** The model picker has an **Other models** group with the previous
+generations — Opus 4.8 through 4.0, Sonnet 4.6 through 4.0, Sonnet 3.7 and 3.5, Haiku 3.5. It stays collapsed
+so the current models are still one click away, and opens on its own if you have an older model selected. If
+your plan doesn't include the one you pick, the plugin tells you and puts your previous model back rather than
+leaving the chat stuck on something every message would fail on.
+
+**Your plan limits now sit in their own row, right under the status line** — one labelled bar per window
+(*Current session*, *All models*, and any per-model limit), blue while you have room, amber as you get close,
+red near the cap. They used to be small dots tacked onto the end of the status line, which meant that in a
+narrow tool window the limits closest to running out were the first to wrap out of sight. The row now takes
+the full width of the panel whatever size you've dragged it to, and reflows instead of overflowing.
+
+**Fable usage is reported.** Per-model limits — Fable's among them — live in a separate list the plugin was
+walking past, so `claude`'s own `/usage` showed a Fable row and the plugin showed nothing. They're now read
+and shown like any other window, under the name the API gives them, whether or not the CLI decides to
+pre-package them for us.
+
+**No more "quota at 100%" when you have barely used any.** A window that was genuinely at 1% was being read
+as if it were full, which tripped the near-the-limit warning and popped an IDE notification saying your plan
+was spent. It fired most reliably right after a limit window resets — the moment you have the *most* quota
+left. The percentage is now read on the scale the API actually sends, and the dashboard and the notification
+can no longer disagree.
+
 ## v5.0.1 — 2026-08-10
 
 **You should stop having to sign in every morning.** Your login was being stored properly all along — in your

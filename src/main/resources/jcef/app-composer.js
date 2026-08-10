@@ -296,6 +296,8 @@
 
     // readout (subtle session line)
     var readout = h('div', { class: 'readout', attrs: { hidden: 'hidden' } });
+    // Plan limits, one bar per window, on their own row under the readout — see renderUsageBars().
+    var usageBars = h('div', { class: 'usage-bars', attrs: { hidden: 'hidden' } });
 
     var card = h('div', { class: 'composer-card' }, inputRow, bar);
 
@@ -303,6 +305,7 @@
     mount.appendChild(queue);
     mount.appendChild(attachments);
     mount.appendChild(readout); // session-usage line sits ABOVE the prompt box
+    mount.appendChild(usageBars); // …and the plan-limit bars directly under it
     mount.appendChild(card);
 
     els = {
@@ -313,6 +316,7 @@
       queue: queue,
       ghost: ghost,
       readout: readout,
+      usageBars: usageBars,
       attachments: attachments,
       attachBtn: attachBtn,
     };
@@ -518,27 +522,70 @@
     if (!opts.length) return;
 
     var menu = h('div', { class: 'menu', attrs: { role: 'listbox' } });
-    for (var i = 0; i < opts.length; i++) {
-      (function (o) {
-        var item = h(
-          'div',
-          {
-            class: 'menu-item' + (o.selected ? ' selected' : ''),
-            attrs: { role: 'option' },
-            on: {
-              click: function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                chooseOption(def, o);
-              },
+
+    /** One selectable row. Shared by the main list and the "Other models" group so they cannot drift apart. */
+    function optionItem(o) {
+      var item = h(
+        'div',
+        {
+          class: 'menu-item' + (o.selected ? ' selected' : ''),
+          attrs: { role: 'option' },
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              chooseOption(def, o);
             },
           },
-          h('span', { class: 'menu-item-label', text: o.label != null ? String(o.label) : '' })
-        );
-        // The selected ✓ is drawn by CSS (.menu-item.selected::after) — don't ALSO append a span here, or the
-        // chosen item shows two ticks.
-        menu.appendChild(item);
-      })(opts[i]);
+        },
+        h('span', { class: 'menu-item-label', text: o.label != null ? String(o.label) : '' })
+      );
+      // The selected ✓ is drawn by CSS (.menu-item.selected::after) — don't ALSO append a span here, or the
+      // chosen item shows two ticks.
+      return item;
+    }
+
+    // The host tags previous-generation models with group:'other' (JcefState.modelJson). Everything untagged
+    // stays in the flat list exactly as before, so no other pill's menu changes shape.
+    var main = [];
+    var other = [];
+    for (var i = 0; i < opts.length; i++) {
+      (opts[i].group === 'other' ? other : main).push(opts[i]);
+    }
+    for (var j = 0; j < main.length; j++) menu.appendChild(optionItem(main[j]));
+
+    if (other.length) {
+      // Expanded IN PLACE rather than as a second floating panel: this menu is already position-clamped to a
+      // narrow tool window, and a flyout would need its own edge handling to avoid opening off-screen. It
+      // starts open when the current selection lives inside it, so the ✓ is never hidden behind a collapsed row.
+      var expanded = other.some(function (o) {
+        return o.selected;
+      });
+      var group = h('div', { class: 'menu-group' + (expanded ? ' open' : '') });
+      var items = h('div', { class: 'menu-group-items' });
+      var header = h(
+        'div',
+        {
+          class: 'menu-item menu-group-header',
+          attrs: { role: 'button', 'aria-expanded': expanded ? 'true' : 'false' },
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation(); // never let this reach the document handler that closes the menu
+              var nowOpen = !group.classList.contains('open');
+              group.classList.toggle('open', nowOpen);
+              header.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
+              if (openMenu && openMenu.anchor) positionMenu(menu, openMenu.anchor);
+            },
+          },
+        },
+        h('span', { class: 'menu-item-label', text: 'Other models' }),
+        h('span', { class: 'menu-group-caret' })
+      );
+      for (var k = 0; k < other.length; k++) items.appendChild(optionItem(other[k]));
+      group.appendChild(header);
+      group.appendChild(items);
+      menu.appendChild(group);
     }
 
     document.body.appendChild(menu);
@@ -1024,28 +1071,56 @@
       ro.appendChild(h('span', { class: 'ro-item', text: '$' + s.costUsd.toFixed(s.costUsd < 1 ? 4 : 2) }));
     }
 
-    // Plan limits, one dot per window. A dot rather than a bar because this line is glanceable chrome: colour
-    // carries the urgency and the number carries the detail, and neither needs horizontal room the composer
-    // does not have. The dashboard shows the same windows as full bars.
-    var usage = Array.isArray(s.usage) ? s.usage : [];
-    for (var u = 0; u < usage.length; u++) {
-      var win = usage[u] || {};
-      if (typeof win.pct !== 'number') continue;
-      ro.appendChild(
-        h(
-          'span',
-          { class: 'ro-item', title: String(win.label || '') + ' — ' + win.pct.toFixed(1) + '% used' },
-          h('span', { class: 'usage-dot ' + usageLevel(win.pct) }),
-          h('span', { text: String(win.label || '') + ' ' + win.pct.toFixed(1) + '%' })
-        )
-      );
-    }
     // NB no sign-out control here. The readout is a wrapping flex row of metrics, so a button pushed to its
     // far end drops onto a second line the moment the numbers fill the width. Log out lives in the tool
     // window's title bar (ClaudeToolWindowFactory.SignOutAction) and on the dashboard's account row.
     ro.removeAttribute('hidden');
     if (running && s.thinkingStatus) ro.classList.add('thinking');
     else ro.classList.remove('thinking');
+
+    renderUsageBars(s);
+  }
+
+  /**
+   * Plan limits, one labelled bar per window, on their own row directly under the readout.
+   *
+   * They used to be dots inline in the readout, which put them at the end of a wrapping row of unrelated
+   * metrics: the windows that matter most (the ones nearest their cap) were the ones most likely to be pushed
+   * onto a second line or off the visible width. A bar reads the fill at a glance where a dot only reads a
+   * colour, and giving them their own row means the length of the status line can no longer displace them.
+   *
+   * The row is a `repeat(auto-fit, minmax(…, 1fr))` grid, so it is one bar per column at full tool-window
+   * width and reflows to fewer, still-full-width columns as the window narrows — never a fixed track that
+   * leaves dead space on the right or overflows on the left.
+   */
+  function renderUsageBars(s) {
+    if (!els || !els.usageBars) return;
+    var host = els.usageBars;
+    host.innerHTML = '';
+    var usage = Array.isArray(s.usage) ? s.usage : [];
+    var shown = 0;
+    for (var u = 0; u < usage.length; u++) {
+      var win = usage[u] || {};
+      if (typeof win.pct !== 'number') continue;
+      var label = String(win.label || '');
+      var pct = win.pct.toFixed(1) + '%';
+      // The BAR is clamped to 0..100 so a server figure past its cap cannot overflow the track; the TEXT is
+      // not, because a window reported at 103% is exactly the number the user needs to see.
+      var fill = h('i', { class: usageLevel(win.pct) });
+      fill.style.width = Math.max(0, Math.min(100, win.pct)) + '%';
+      host.appendChild(
+        h(
+          'div',
+          { class: 'ub-item', title: label + ' — ' + pct + ' used' },
+          h('span', { class: 'ub-label', text: label }),
+          h('span', { class: 'ub-track' }, fill),
+          h('span', { class: 'ub-pct', text: pct })
+        )
+      );
+      shown++;
+    }
+    if (shown > 0) host.removeAttribute('hidden');
+    else host.setAttribute('hidden', 'hidden');
   }
 
   /**

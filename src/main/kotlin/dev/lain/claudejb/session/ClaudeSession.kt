@@ -35,6 +35,7 @@ import dev.lain.claudejb.protocol.RateLimitInfo
 import dev.lain.claudejb.protocol.SlashCommand
 import dev.lain.claudejb.protocol.TaskProgressInfo
 import dev.lain.claudejb.protocol.UsageReport
+import dev.lain.claudejb.protocol.isHiddenUsageWindow
 import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
@@ -1462,8 +1463,39 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // "default" to the preferred concrete model so both the display and what's sent to the binary agree;
         // null stays null (unset — the Init handler fills it from the binary's reported model).
         val resolved = if (value == RECOMMENDED_ALIAS) preferredDefaultModel() else value
+        val previous = model
         model = resolved
-        if (isRunning()) write(ControlProtocol.setModelRequest(ControlProtocol.newRequestId(), resolved))
+        if (isRunning()) {
+            // Correlated, not fire-and-forget, because "Other models" can offer a model this ACCOUNT cannot
+            // run (the list is curated from ids the binary knows — it cannot know what the plan grants). A
+            // refusal that only changed the pill would leave the tab pointed at a model every later turn
+            // fails on, with nothing saying why.
+            controlClient.send({ id -> ControlProtocol.setModelRequest(id, resolved) }) { res ->
+                if (!res.success) edt { revertModel(previous, resolved, res.error) }
+            }
+        }
+        fireState()
+    }
+
+    /**
+     * Puts the previously selected model back after the binary refused a change, and says so in the transcript.
+     *
+     * EDT-only (it writes session state the UI reads). Silent when a newer selection has raced ahead of this
+     * reply — reverting then would undo a choice the user made after the failure.
+     *
+     * Scope, stated because it is narrower than it looks: this catches a refusal of the `set_model` control
+     * request itself. A binary that ACCEPTS the id and only fails later, when the turn reaches the API, is a
+     * different signal and arrives as an ordinary turn error.
+     */
+    private fun revertModel(previous: String?, attempted: String?, error: String?) {
+        if (model != attempted) return
+        model = previous
+        // Labelled from the curated list, NOT from the UI layer: naming a model is not a rendering decision,
+        // and reaching into `ui.jcef` from here would invert the dependency this package deliberately keeps.
+        val name = attempted?.let { LegacyModels.labelFor(it) ?: it } ?: "That model"
+        val kept = previous?.let { LegacyModels.labelFor(it) ?: it } ?: "the previous model"
+        val reason = error?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+        transcript.add(Speaker.SYSTEM, "$name is not available on this account$reason — kept $kept.")
         fireState()
     }
 
@@ -1626,7 +1658,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             onResult = { report: UsageReport? ->
                 edt {
                     report?.windows?.forEach { (key, w) ->
-                        w.utilization?.let { warnOnQuotaCrossing(key, normalizePercent(it)) }
+                        // Logged at INFO, and not as noise: when this fired a false "quota at 100%" there was
+                        // nothing in idea.log to check it against, because only the EVENT path was traced.
+                        // A wrong number the user can see must leave the raw value behind that produced it.
+                        w.utilizationPercent()?.let { pct ->
+                            log.info("usage window $key: utilization=${w.utilization} -> $pct%")
+                            warnOnQuotaCrossing(key, w.title(key), pct)
+                        }
                     }
                     onResult(report)
                 }
@@ -1646,8 +1684,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * 85% also raises an IDE notification, not just a transcript row. By then the user may be watching the
      * editor rather than the chat, and the point of the second threshold is that the wall is close enough to
      * change what they do next.
+     *
+     * [window] is the record's key and [label] what the user reads: they diverge for the per-model windows,
+     * whose key is synthesised (`model_scoped:Fable`) precisely because the server names them and nothing
+     * else does. Titling from the key would announce that synthetic string verbatim.
      */
-    private fun warnOnQuotaCrossing(window: String, pct: Int) {
+    private fun warnOnQuotaCrossing(window: String, label: String, pct: Int) {
         val announced = quotaWarned[window] ?: 0
         val crossed = QUOTA_THRESHOLDS.lastOrNull { pct >= it } ?: 0
         if (crossed <= announced) {
@@ -1656,7 +1698,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             return
         }
         quotaWarned[window] = crossed
-        val label = RateLimitInfo.windowTitleFor(window)
         val message = "$label quota at $pct%."
         systemNotice(message)
         if (crossed >= QUOTA_THRESHOLD_HIGH) notifyInfo(message)
@@ -1664,10 +1705,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     /** Window → the highest threshold already announced for it. EDT-confined (written from the usage callback). */
     private val quotaWarned = HashMap<String, Int>()
-
-    /** The wire has sent both 0..100 and 0..1; accept either and clamp. */
-    private fun normalizePercent(raw: Double): Int =
-        (if (raw <= 1.0) raw * 100 else raw).toInt().coerceIn(0, 100)
 
     fun requestSessionCost(onResult: (JsonObject?) -> Unit) {
         if (!isRunning()) {
@@ -2153,6 +2190,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 " utilization=${incoming.utilization} -> pct=${incoming.utilizationPercent()}",
         )
         val window = incoming.rateLimitType
+        // Hidden windows are dropped here rather than at each surface: this is the OTHER door into the same
+        // UI (the get_usage report is filtered in parseUsageReport), and it is the one "Nimbus quill 0.0%"
+        // kept coming through. Dropped whole — it must not become `rateLimit` either, which drives the
+        // single-number quota bar.
+        if (isHiddenUsageWindow(window)) return
         // The binary often emits a rate_limit_event without `utilization` (it's optional and only present when
         // the API returns it). Don't lose a previously-known utilization just because a later event omitted
         // it — carry it forward so the quota % stays shown once we've seen it. Carried forward PER WINDOW:

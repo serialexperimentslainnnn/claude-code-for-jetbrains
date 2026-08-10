@@ -18,6 +18,7 @@ import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.context.EditorContextProvider
 import dev.lain.claudejb.context.FilePickerHelper
 import dev.lain.claudejb.diff.DiffPresenter
+import dev.lain.claudejb.protocol.mergedOver
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -404,7 +405,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         lastUsageAt = now
         session.requestUsage { report ->
             if (report != null) {
-                lastUsage = report
+                // Merged, not replaced: when the binary's usage fetch falls back to its header-seeded object
+                // the reply carries only five_hour/seven_day, and taking it literally made the per-model bars
+                // (Fable's among them) blink out on that poll and back on the next. See `mergedOver`.
+                lastUsage = report.mergedOver(lastUsage)
                 // BOTH surfaces, or they disagree. `lastUsage` feeds the dashboard bars (pushSession) AND the
                 // composer's usage dots (pushMetaState → stateJson). Pushing only the dashboard left the dots
                 // blank until some unrelated state change happened to re-push — so the same number appeared in
