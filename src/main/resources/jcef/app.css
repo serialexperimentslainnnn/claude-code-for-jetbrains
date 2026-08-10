@@ -2095,10 +2095,20 @@ mark.cc-hit.active {
    SESSION DASHBOARD — overlay panel + cards  (Sprint 2)
    ════════════════════════════════════════════════════════════════════════════ */
 /* the toggle pill, fixed top-right of the view */
-.dash-toggle {
+/* The four view buttons, stacked top-right: Session, Agents, Subagents, Background tasks. The stack is what
+   is fixed to the viewport now; each button is an ordinary element inside it, so adding or removing one
+   cannot leave the others overlapping the way four independently-positioned buttons would. */
+.dash-toggles {
   position: fixed;
   top: 12px;
   right: 14px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+.dash-toggle {
   z-index: 90;
   display: inline-flex;
   align-items: center;
@@ -2121,6 +2131,13 @@ mark.cc-hit.active {
     border-color 0.14s,
     box-shadow 0.14s,
     background 0.14s;
+}
+/* The view you are looking at. Without this the four buttons say nothing about where the panel is scrolled,
+   which is the one question a stack of view buttons has to answer. */
+.dash-toggle.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: var(--surface2);
 }
 .dash-toggle:hover {
   color: var(--text);

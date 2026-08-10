@@ -3,31 +3,46 @@ package dev.lain.claudejb.ui
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBPanel
-import dev.lain.claudejb.session.AgentNode
+import dev.lain.claudejb.protocol.BackgroundTaskInfo
 import dev.lain.claudejb.session.AgentRegistry
 import java.awt.BorderLayout
 import javax.swing.BoxLayout
 
 /**
- * The two agent rows under the chat tabs: `Agents`, then `Subagents`.
+ * The rows under a chat's tab, as a **stack of levels** rather than a fixed pair of rows.
  *
- * The rule the whole thing follows is "each row shows the children of the row above's selection":
- *  - `Agents` shows the agents of the **selected chat**, so switching chat swaps the row.
- *  - `Subagents` shows the agents spawned by the **selected agent**, so it changes as you move along the row
- *    above, and an agent that spawned nothing leaves it empty.
+ * Drilling down is the whole point: a chat spawns agents, an agent spawns agents of its own, and so can
+ * each of those. So every level you select opens the level below it —
  *
- * Both rows are **always visible**, empty or not, so the transcript below never jumps up and down as agents
- * come and go — on a session that spawns them constantly, a row that appears and disappears is worse than an
- * empty one.
+ * ```
+ * Chat 1
+ * ├─ Agents               [ A ][ B ]        ← agents of the chat
+ * ├─ Background tasks     [ npm run dev ]   ← background tasks of the chat
+ * │  ├─ Subagents         [ A1 ][ A2 ]      ← agents of A, because A is selected
+ * │  └─ Background tasks  [ tail -f log ]   ← background tasks of A
+ * │     └─ Subagents      [ A1a ]           ← agents of A1, because A1 is selected
+ * ```
  *
- * Selection reports **which transcript to paint** ([onShowTranscript]): the chat's own transcript when
- * nothing is selected in either row, otherwise that agent's. One browser, many transcripts — see
- * [AgentStripPanel].
+ * — and selecting elsewhere collapses everything below it. A fixed "Agents + Subagents" pair could only ever
+ * show two levels of a tree the protocol does not bound, and it put background tasks nowhere except the top.
+ *
+ * **A row is drawn only when it has something in it**, so the stack is exactly as tall as the work is deep.
+ * Standing empty rows turned every fresh chat into bars asking a question nobody asked.
  */
-internal class AgentTabsPanel(project: Project, parent: Disposable) : JBPanel<AgentTabsPanel>(BorderLayout()) {
+internal class AgentTabsPanel(
+    private val project: Project,
+    private val parent: Disposable,
+) : JBPanel<AgentTabsPanel>(BorderLayout()) {
 
-    private val agents = AgentStripPanel(project, parent, "Agents")
-    private val subagents = AgentStripPanel(project, parent, "Subagents")
+    /** One level of the drill-down: the agents hanging off [parentId], and the background tasks that do. */
+    private class Level(
+        val parentId: String?,
+        val agents: AgentStripPanel,
+        val background: AgentStripPanel,
+    )
+
+    private val rows = JBPanel<JBPanel<*>>().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+    private val levels = ArrayList<Level>()
 
     /** Told which agent's transcript to show — null means the chat's own. */
     var onShowTranscript: (String?) -> Unit = {}
@@ -35,77 +50,171 @@ internal class AgentTabsPanel(project: Project, parent: Disposable) : JBPanel<Ag
     /** Told that the user closed an agent's tab, so the close can be remembered across restarts. */
     var onTabClosed: (String) -> Unit = {}
 
-    /** The registry currently rendered, so a selection can re-derive the children rows. */
     private var registry: AgentRegistry? = null
+    private var tasks: List<BackgroundTaskInfo> = emptyList()
+    private var ownerOfTask: (String) -> String? = { null }
+    private var hidden: Set<String> = emptySet()
 
     init {
-        val rows = JBPanel<JBPanel<*>>().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-        rows.add(agents)
-        rows.add(subagents)
         add(rows, BorderLayout.CENTER)
+    }
 
-        agents.onEvents(
+    /**
+     * Re-renders the stack.
+     *
+     * [hiddenAgents] are tabs the user closed — hidden, not deleted: the transcript is the binary's file and
+     * the card in the main transcript reopens it. [ownerOf] maps a background task to the agent running it,
+     * when that is knowable at all; `background_tasks_changed` carries no parent, so it often is not, and
+     * those tasks stay at the chat's level rather than being guessed into someone's row.
+     */
+    fun render(
+        registry: AgentRegistry,
+        backgroundTasks: List<BackgroundTaskInfo>,
+        hiddenAgents: Set<String> = emptySet(),
+        ownerOf: (String) -> String? = { null },
+    ) {
+        this.registry = registry
+        this.tasks = backgroundTasks
+        this.ownerOfTask = ownerOf
+        this.hidden = hiddenAgents
+        if (levels.isEmpty()) levels += newLevel(null)
+        // A level whose agent is gone (finished and closed, or never ours) takes its descendants with it.
+        while (levels.size > 1 && levels.last().parentId?.let { registry.nodes.containsKey(it) } == false) {
+            dropLevelsBelow(levels.size - 2)
+        }
+        levels.forEach(::fill)
+        drawBranches()
+    }
+
+    /** Opens (or re-selects) [agentId]'s tab, expanding the levels needed to reach it. */
+    fun reveal(agentId: String) {
+        val reg = registry ?: return
+        val chain = ancestryOf(agentId, reg) ?: return
+        // Walk down from the chat, selecting each ancestor so its level exists before reaching for the next.
+        chain.forEachIndexed { index, id ->
+            val level = levels.getOrNull(index) ?: return
+            level.agents.select(id)
+            if (index < chain.lastIndex) openLevelFor(index, id)
+        }
+    }
+
+    /** Two orange pulses on whichever level's row carries [agentId]. */
+    fun blink(agentId: String) {
+        levels.firstOrNull { it.agents.has(agentId) }?.agents?.blink(agentId)
+    }
+
+    // ── levels ───────────────────────────────────────────────────────────────────────────────────────────
+
+    private fun newLevel(parentId: String?): Level {
+        // The first level's agents hang off the chat, so it is "Agents"; every level below hangs off an
+        // agent, so it is "Subagents" — the word the user reads should say what the row is relative to.
+        val agentsRow = AgentStripPanel(project, parent, if (parentId == null) "Agents" else "Subagents")
+        val backgroundRow = AgentStripPanel(project, parent, "Background tasks")
+        val level = Level(parentId, agentsRow, backgroundRow)
+        agentsRow.onEvents(
             selected = { id ->
-                renderSubagentsOf(id)
-                onShowTranscript(id)
+                val index = levels.indexOf(level)
+                if (id == null) {
+                    dropLevelsBelow(index)
+                } else {
+                    openLevelFor(index, id)
+                }
+                onShowTranscript(id ?: level.parentId)
             },
             closed = { id ->
                 onTabClosed(id)
-                // Its children have no row to live in once the parent is gone, and the transcript falls back
-                // to the chat's own — otherwise the browser would keep painting a tab that is not there.
-                renderSubagentsOf(agents.selectedAgentId)
-                onShowTranscript(agents.selectedAgentId)
+                dropLevelsBelow(levels.indexOf(level))
+                onShowTranscript(level.parentId)
             },
         )
-        subagents.onEvents(
-            selected = { id -> onShowTranscript(id ?: agents.selectedAgentId) },
-            closed = { id ->
-                onTabClosed(id)
-                onShowTranscript(subagents.selectedAgentId ?: agents.selectedAgentId)
+        // A background task has no transcript of its own, so its tab is a POINTER: it shows the transcript of
+        // whoever runs it — the owning agent when the binary let us work that out, else this level's owner.
+        backgroundRow.onEvents(
+            selected = { taskId -> onShowTranscript(taskId?.let(ownerOfTask) ?: level.parentId) },
+            closed = { },
+        )
+        rows.add(agentsRow)
+        rows.add(backgroundRow)
+        return level
+    }
+
+    /** Ensures the level below [index] exists and belongs to [agentId], dropping whatever was there. */
+    private fun openLevelFor(index: Int, agentId: String) {
+        if (levels.getOrNull(index + 1)?.parentId == agentId) {
+            fill(levels[index + 1])
+            drawBranches()
+            return
+        }
+        dropLevelsBelow(index)
+        val level = newLevel(agentId)
+        levels += level
+        fill(level)
+        drawBranches()
+    }
+
+    /** Removes every level deeper than [index] — selecting elsewhere collapses the drill-down below it. */
+    private fun dropLevelsBelow(index: Int) {
+        while (levels.size > index + 1) {
+            val dropped = levels.removeAt(levels.size - 1)
+            rows.remove(dropped.agents)
+            rows.remove(dropped.background)
+        }
+        rows.revalidate()
+        rows.repaint()
+    }
+
+    private fun fill(level: Level) {
+        val reg = registry ?: return
+        level.agents.renderAgents(reg.children(level.parentId).filterNot { it.agentId in hidden })
+        val mine = tasks.filter { ownerOfTask(it.taskId) == level.parentId }
+        level.background.render(
+            mine.map {
+                AgentStripPanel.Item(
+                    id = it.taskId,
+                    label = it.description.ifBlank { it.taskType },
+                    tooltip = "${it.description} · ${it.taskType}",
+                    // Not closable: the plugin does not own a background task's lifetime. Stopping one is a
+                    // deliberate act with its own button in the dashboard, not a tab close.
+                    closable = false,
+                )
             },
         )
     }
 
     /**
-     * Re-renders both rows from [registry], hiding the agents whose tab the user closed ([hidden]).
+     * Draws the visible rows the way `tree` draws a directory: `├─` while more rows follow at that level,
+     * `└─` for the last, and `│` continuing the trunk past every level already opened.
      *
-     * A closed tab is not a deleted agent: its transcript is the binary's file and its card is still in the
-     * main transcript, which is how it comes back. This method only stops drawing it.
+     * Recomputed on every render because it depends on which rows are visible **right now** — rows appear
+     * and vanish as agents spawn and finish, and a `├─` pointing at a row that is no longer drawn is worse
+     * than no tree at all.
      */
-    fun render(registry: AgentRegistry, hidden: Set<String> = emptySet()) {
-        this.registry = registry
-        val roots = registry.children(null).filterNot { it.agentId in hidden }
-        agents.render(roots)
-        renderSubagentsOf(agents.selectedAgentId, hidden)
-    }
-
-    /** Opens (or re-selects) [agentId]'s tab, wherever in the tree it sits. Used by the transcript card. */
-    fun reveal(agentId: String) {
-        val reg = registry ?: return
-        val node = reg.nodes[agentId] ?: return
-        val parent = node.parentAgentId
-        if (parent == null) {
-            agents.select(agentId)
-            return
+    private fun drawBranches() {
+        val visible = levels.flatMap { listOf(it.agents, it.background) }.filter { it.isVisible }
+        visible.forEachIndexed { i, row ->
+            val depth = levels.indexOfFirst { it.agents === row || it.background === row }
+            val connector = if (i == visible.lastIndex) LAST else FORK
+            row.setBranch(TRUNK.repeat(depth) + connector)
         }
-        // A subagent: select its parent first so the Subagents row is showing the right family, then it.
-        agents.select(parent)
-        renderSubagentsOf(parent)
-        subagents.select(agentId)
     }
 
-    /** Two orange pulses on whichever row now carries [agentId]. */
-    fun blink(agentId: String) {
-        if (agents.has(agentId)) agents.blink(agentId) else subagents.blink(agentId)
-    }
-
-    private fun renderSubagentsOf(parentId: String?, hidden: Set<String> = emptySet()) {
-        val reg = registry
-        val children: List<AgentNode> = if (reg == null || parentId == null) {
-            emptyList()
-        } else {
-            reg.children(parentId).filterNot { it.agentId in hidden }
+    /** The chain of agent ids from the chat down to [agentId], or null when it is not in the tree. */
+    private fun ancestryOf(agentId: String, reg: AgentRegistry): List<String>? {
+        val chain = ArrayDeque<String>()
+        val seen = HashSet<String>()
+        var current: String? = agentId
+        while (current != null && seen.add(current)) {
+            val node = reg.nodes[current] ?: return null
+            chain.addFirst(node.agentId)
+            current = node.parentAgentId
         }
-        subagents.render(children)
+        return chain.toList()
+    }
+
+    private companion object {
+        /** `tree`'s own glyphs: a fork, a last child, and the trunk that passes an opened level. */
+        const val FORK = "├─ "
+        const val LAST = "└─ "
+        const val TRUNK = "│  "
     }
 }

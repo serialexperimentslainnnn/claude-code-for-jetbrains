@@ -30,14 +30,21 @@ import javax.swing.Timer
  * placeholder component and the panel reports only the height of the tab labels.
  *
  * Selecting a tab reports the agent id; closing one reports it too, and the caller persists that (a closed
- * tab stays closed across restarts, and the transcript card is the way back). The strip is **always
- * visible**, empty or not, so the layout does not jump as agents come and go.
+ * tab stays closed across restarts, and the transcript card is the way back).
+ *
+ * **A row appears only when it has something in it.** Standing rows on a chat that has never spawned an
+ * agent are two lines of chrome asking a question nobody asked; the design started with them always visible
+ * to keep the layout still, and seeing it proved the opposite — an empty `Agents` row above every fresh chat
+ * reads as broken UI. The header carries the tree connector of its depth, so when a row does appear it says
+ * what it hangs off.
  */
 internal class AgentStripPanel(
     project: Project,
     parent: Disposable,
-    /** `Agents` / `Subagents` — drawn at the left so a row is identifiable when it is empty. */
+    /** `Agents` / `Subagents` / `Background tasks` — the row's own name, drawn at the left. */
     private val title: String,
+    /** How deep this row hangs: 1 = off the chat, 2 = off the selected agent. Drawn as `|_` connectors. */
+    private val depth: Int = 1,
 ) : JBPanel<AgentStripPanel>(BorderLayout()) {
 
     private val tabs: JBTabs = JBTabsFactory.createTabs(project, parent)
@@ -51,9 +58,13 @@ internal class AgentStripPanel(
     /** Suppresses the selection callback while the strip is being rebuilt from a scan. */
     private var rebuilding = false
 
+    /** The row's own header, whose text carries the tree branch (`├─ Agents`, `│  └─ Subagents`). */
+    private val header = JBLabel(title).apply { border = JBUI.Borders.empty(0, 8, 0, 6) }
+
     init {
-        add(JBLabel(title).apply { border = JBUI.Borders.empty(0, 8, 0, 6) }, BorderLayout.WEST)
+        add(header, BorderLayout.WEST)
         add(tabs.component, BorderLayout.CENTER)
+        isVisible = false // nothing in it yet; `render` decides
         // Same presentation as the chat strip, for the "same format as the chat tabs" the design asks for:
         // a single scrolling row whose close buttons are always drawn.
         tabs.presentation.setSingleRow(true)
@@ -86,36 +97,59 @@ internal class AgentStripPanel(
     /** The agent whose tab is selected, or null when the strip is empty. */
     val selectedAgentId: String? get() = agentIdOf(tabs.selectedInfo)
 
+    /** One tab of a strip: an agent, or a background task. Both are "things that hang off this row". */
+    data class Item(val id: String, val label: String, val tooltip: String, val closable: Boolean = true)
+
     /**
-     * Rebuilds the strip to show exactly [nodes], keeping the selection when that agent is still there.
+     * Rebuilds the strip to show exactly [items], keeping the selection when that item is still there, and
+     * **hides the whole row when there is nothing in it**.
      *
      * Rebuilding rather than diffing is deliberate: a scan can add, remove and re-parent agents at once on a
      * heavy session, and a strip of at most a few dozen labels is cheap to lay out. What must NOT be lost is
      * the user's selection, so it is restored explicitly and the listener is muted meanwhile — otherwise
      * every scan would look like the user had clicked a tab and would repaint the transcript underneath.
      */
-    fun render(nodes: List<AgentNode>, depthOf: (AgentNode) -> Int = { 1 }) {
+    fun render(items: List<Item>) {
         val keepSelected = selectedAgentId
         rebuilding = true
         try {
             tabs.removeAllTabs()
             tabOf.clear()
-            for (node in nodes) {
-                val info = TabInfo(JPanel())
-                    .setText(AgentTabLabels.tab(node, depthOf(node)))
-                    .setObject(node.agentId)
-                info.setTabLabelActions(DefaultActionGroup(CloseAgentTabAction(info)), TAB_ACTION_PLACE)
+            for (item in items) {
+                val info = TabInfo(JPanel()).setText(item.label).setObject(item.id)
+                if (item.closable) {
+                    info.setTabLabelActions(DefaultActionGroup(CloseAgentTabAction(info)), TAB_ACTION_PLACE)
+                }
                 tabs.addTab(info)
-                (tabs.getTabLabel(info) as? javax.swing.JComponent)?.toolTipText = AgentTabLabels.tooltip(node)
-                tabOf[node.agentId] = info
+                (tabs.getTabLabel(info) as? javax.swing.JComponent)?.toolTipText = item.tooltip
+                tabOf[item.id] = info
             }
             tabOf[keepSelected]?.let { tabs.select(it, false) }
         } finally {
             rebuilding = false
         }
+        isVisible = items.isNotEmpty()
         revalidate()
         repaint()
     }
+
+    /**
+     * Sets the tree branch drawn before the row's name, e.g. `├─ ` or `│  └─ `.
+     *
+     * Computed by the owner rather than fixed here, because a branch depends on which rows are **currently
+     * visible** — the last one drawn ends the tree with `└─`, and rows come and go as agents spawn and
+     * finish. A row that decided its own branch would draw a `├─` pointing at nothing.
+     */
+    fun setBranch(branch: String) {
+        header.text = branch + title
+    }
+
+    /** Convenience for the agent rows: [Item]s built from the registry's nodes. */
+    fun renderAgents(nodes: List<AgentNode>, relativeDepth: Int = 1) = render(
+        nodes.map {
+            Item(it.agentId, AgentTabLabels.tab(it, relativeDepth), AgentTabLabels.tooltip(it))
+        },
+    )
 
     /** Selects the tab of [agentId], transferring focus like a manual click. No-op when it is not there. */
     fun select(agentId: String) {
