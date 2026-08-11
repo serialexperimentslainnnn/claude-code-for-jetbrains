@@ -29,14 +29,27 @@ import kotlinx.serialization.json.jsonPrimitive
  * The no-arg constructor exists for the project service and for plain unit tests; [project] is null
  * in tests so the trust-flag helpers degrade gracefully (treat the project as untrusted).
  */
+// NB no longer a PersistentStateComponent, and no longer `.idea/claude-code.xml`. The settings are GLOBAL
+// (one set for every project) and live in ~/.claude — see SettingsStore for the three reasons, the one that
+// matters most being that `envVars` is stored in the clear and was sitting in a file people commit.
+// LegacyProjectSettings reads the old file once so nobody loses their configuration on upgrade.
 @Service(Service.Level.PROJECT)
-@State(name = "ClaudeCodeSettings", storages = [Storage("claude-code.xml")])
-class ClaudeSettings(private val project: Project? = null) : PersistentStateComponent<ClaudeSettings.State> {
+class ClaudeSettings(private val project: Project? = null) {
 
+    // Serializable because SettingsStore's JSON document IS this class, field for field: an unknown key
+    // from a newer version is ignored, a missing key falls back to the property's default.
+    @kotlinx.serialization.Serializable
     class State {
         @JvmField var model: String = ClaudeSession.DEFAULT_MODEL
 
-        @JvmField var effort: String = "medium"
+        /**
+         * Reasoning effort on a fresh install (or when no configuration could be read): **high**.
+         *
+         * The pinned model is the top Opus tier, and pairing it with a middling effort is choosing the
+         * expensive model and then asking it not to think. A user who wants cheaper answers changes one
+         * combo; a user who never opens Settings gets the tier they are paying for.
+         */
+        @JvmField var effort: String = "high"
 
         @JvmField var permissionMode: String = "default"
 
@@ -275,10 +288,59 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         return if (fixture.isNotBlank()) mapOf("FAKE_FIXTURE" to fixture) else emptyMap()
     }
 
-    private var state = State()
+    /**
+     * The settings, loaded once from `~/.claude/ide/claude-code-native/settings.json`.
+     *
+     * **Global, not per project, and written by us.** They used to be a `PersistentStateComponent` in
+     * `.idea/claude-code.xml`, which had three problems the move fixes: the platform decided when it reached
+     * disk, deleting `.idea` (or a fresh clone) lost them, and `envVars` — which the settings UI itself warns
+     * is stored in the clear — sat in a file people commit. One model, one permission mode, one set of
+     * allowed tools for every project is also what the user asked for.
+     */
+    private var loaded: State? = null
 
-    override fun getState(): State = state
-    override fun loadState(s: State) = XmlSerializerUtil.copyBean(s, state)
+    val state: State
+        @Synchronized get() = loaded ?: run {
+            // Migration runs before the first read, so an upgrading user never sees defaults: the old
+            // project file is adopted (or dropped, if another project already won) and then removed.
+            project?.let { runCatching { LegacyProjectSettings.getInstance(it).migrate(it) } }
+            SettingsStore.load().also { loaded = it }
+        }
+
+    /**
+     * Replaces the in-memory settings without touching disk.
+     *
+     * For tests, which need a known starting point on a project service the light fixture reuses across
+     * methods. It does NOT save, so a test that wants persistence has to ask for it — and should point
+     * [PluginAgentIndex.homeOverride] at a temp directory first, for the reason `CredentialsVault` learned
+     * the hard way.
+     */
+    @org.jetbrains.annotations.TestOnly
+    @Synchronized
+    fun replaceState(s: State) {
+        loaded = s
+    }
+
+    /**
+     * Mutates the settings and persists them, in one call.
+     *
+     * **This is the only way to change a setting, and that is deliberate.** Nothing saves for us since the
+     * settings became the plugin's own file, so a bare `state.x = y` is a change that silently does not
+     * survive a restart — and six such sites already existed the moment the persistence changed. Making the
+     * mutation and the write one operation removes that failure mode instead of relying on everyone
+     * remembering.
+     */
+    fun update(block: (State) -> Unit) {
+        block(state)
+        save()
+    }
+
+    /** Persists the current settings. Prefer [update]; this is for the settings form, which edits in bulk. */
+    fun save() = SettingsStore.save(state)
+
+    // NB no explicit `getState()`: the `state` property already generates one with that exact JVM
+    // signature, so declaring both is a platform clash. Callers that used `getState()` keep working —
+    // it is the property's own getter.
 
     /** Seeds the session's launch options from persisted defaults (call before start()). */
     fun applyTo(session: ClaudeSession) {
@@ -304,19 +366,17 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
         )
     }
 
-    // --- "Always allow" per tool ----------------------------------------------------------------
-    // Remembers tool names the user opted to auto-approve. Keyed by tool name only; path containment
-    // for reviewable writes is enforced independently by the broker (isWithinRoot), so a remembered
-    // write outside the project root still falls through to a manual card. The [input] param is kept
-    // for future-proofing (e.g. per-command/per-path rules) even though it is currently unused.
+    /** The remembered "Always allow" tool names — see [AlwaysAllowTools], which owns the whole subject. */
+    val alwaysAllow = AlwaysAllowTools(this)
 
-    private fun alwaysAllowSet(): Set<String> =
-        state.alwaysAllowTools.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-
-    /** True when [toolName] was previously marked "Always allow". */
+    /**
+     * True when [toolName] was previously marked "Always allow".
+     *
+     * [input] is kept for future-proofing (per-command / per-path rules) even though it is unused: the
+     * broker's callback signature is the place a narrower rule would arrive.
+     */
     @Suppress("UNUSED_PARAMETER")
-    fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean =
-        toolName.isNotBlank() && toolName in alwaysAllowSet()
+    fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean = toolName in alwaysAllow
 
     /** The active sensitive-path globs: the built-in blacklist **plus** the user's extras (additive, never less). */
     fun sensitiveGlobs(): List<String> {
@@ -352,30 +412,6 @@ class ClaudeSettings(private val project: Project? = null) : PersistentStateComp
             enforceForeignNetworkMounts = state.securityBlockForeignNetworkMounts,
             enforceForeignWslMounts = state.securityBlockForeignWslMounts,
         )
-    }
-
-    /** Adds [toolName] to the remembered "Always allow" set (idempotent) and persists. */
-    fun rememberToolAlwaysAllow(toolName: String) {
-        if (toolName.isBlank()) return
-        val current = alwaysAllowSet()
-        if (toolName in current) return
-        state.alwaysAllowTools = (current + toolName).joinToString(",")
-    }
-
-    /** The remembered "Always allow" tool names: trimmed, non-empty, de-duplicated, order-stable. */
-    fun alwaysAllowedTools(): List<String> =
-        state.alwaysAllowTools.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-
-    /** Replaces the remembered "Always allow" set with [tools] (trimmed, non-empty, de-duplicated) and persists. */
-    fun setAlwaysAllowedTools(tools: List<String>) {
-        state.alwaysAllowTools = tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(",")
-    }
-
-    /** Removes [toolName] from the remembered "Always allow" set and persists. */
-    fun forgetToolAlwaysAllow(toolName: String) {
-        val target = toolName.trim()
-        if (target.isEmpty()) return
-        state.alwaysAllowTools = alwaysAllowSet().filterNot { it == target }.joinToString(",")
     }
 
     // --- Trust gate (trust-on-open) -------------------------------------------------------------

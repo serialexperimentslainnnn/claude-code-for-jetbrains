@@ -302,7 +302,17 @@ object CredentialsVault {
             log.warn("credentials file present but unreadable/empty — leaving it alone")
             return false
         }
-        SecretStore.set(SecretStore.CREDENTIALS_JSON, text)
+        // VERIFIED, not fire-and-forget. `PasswordSafe.set` returns Unit and throws nothing when the OS
+        // store rejects the write — on this machine the IDE logged
+        // `secret_password_store_sync error code 36 — Can't find session …` as its own SEVERE, after our
+        // call had returned. Harvesting is a MOVE: it deletes the file straight afterwards, so a write that
+        // silently did nothing destroyed the user's only credential and the plugin asked them to sign in
+        // again with no idea why. Reading it back is the only honest confirmation available.
+        if (!SecretStore.setVerified(SecretStore.CREDENTIALS_JSON, text)) {
+            log.warn("the password safe did not keep the credential — leaving the file where it is")
+            dev.lain.claudejb.settings.SafeAlarm.storeFailed()
+            return false
+        }
         // Overwrite before unlinking: on a journalling filesystem the blocks may survive a bare delete,
         // and this content is a bearer credential.
         runCatching {

@@ -54,9 +54,30 @@ class NoFileDeletionContractTest {
         "deleteOnExit",
     )
 
-    /** The one file permitted to delete, and the one thing it is permitted to delete. */
+    /**
+     * The files permitted to delete, and the one thing each is permitted to delete.
+     *
+     * `CredentialsVault` removes the plaintext credentials file it has just harvested into the IDE's
+     * PasswordSafe — that removal IS the feature.
+     *
+     * `LegacyProjectSettings` removes the plugin's OWN leftovers in the project's `.idea/` once their
+     * contents have been migrated to `~/.claude` (5.5.0), which the user asked for explicitly: a migration
+     * that leaves the old file behind means the next reader has two sources and no way to tell which is
+     * current. It deletes a file the plugin itself wrote, never a conversation and never anything the user
+     * authored.
+     *
+     * `SettingsStore` removes `~/.claude/ide/claude-code-native/settings.json` after adopting it into the
+     * PasswordSafe — the same shape as the vault's: harvest first, delete second, and only ever the file the
+     * plugin wrote itself. The settings moved into the OS credential store because the env block belongs to
+     * them and an env block holds secrets; leaving the plaintext copy behind would defeat the move.
+     */
     private companion object {
-        const val ALLOWED = "CredentialsVault.kt"
+        val ALLOWED = setOf(
+            "CredentialsVault.kt",
+            "LegacyProjectSettings.kt",
+            "LegacySessionHistory.kt",
+            "SettingsStore.kt",
+        )
     }
 
     @Test
@@ -73,11 +94,11 @@ class NoFileDeletionContractTest {
 
     @Test
     fun `only CredentialsVault deletes a file`() {
-        val offenders = ktFiles().filter { it.name != ALLOWED }.flatMap { file ->
+        val offenders = ktFiles().filterNot { it.name in ALLOWED }.flatMap { file ->
             hits(file, single).map { "${file.name}:${it.first}: ${it.second}" }
         }
         assertTrue(offenders.isEmpty()) {
-            "Only $ALLOWED may delete a file, and only the plaintext credentials file it harvested. " +
+            "Only ${ALLOWED.joinToString()} may delete a file, each for the one purpose documented there. " +
                 "Everything else on the user's disk — conversations above all — is theirs.\n" +
                 offenders.joinToString("\n")
         }
@@ -85,7 +106,7 @@ class NoFileDeletionContractTest {
 
     @Test
     fun `the one permitted deletion targets the credentials file and nothing else`() {
-        val vault = ktFiles().first { it.name == ALLOWED }
+        val vault = ktFiles().first { it.name == "CredentialsVault.kt" }
         // Every deleting line in the vault must act on a `file` resolved from credentialsFile(). Pinned by
         // reading the receiver rather than trusting the filename: the allowlist is per-FILE, so without this
         // the vault would be a hole big enough to delete anything from.

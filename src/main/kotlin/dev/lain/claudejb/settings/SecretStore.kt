@@ -61,10 +61,41 @@ object SecretStore {
      */
     const val AUTH_STATUS = "CLAUDE_AUTH_STATUS"
 
+    /**
+     * The user's own environment variables for the child process, as the `KEY=value` block they typed.
+     *
+     * **They are secrets by construction**: an env block is where people put an API key, a proxy with
+     * credentials in the URL, or a token for a private registry. They used to sit in plaintext in
+     * `.idea/claude-code.xml` — a file that gets committed — and the settings UI warned about exactly that
+     * instead of fixing it. Held here, so they land in the OS keychain like every other secret the plugin
+     * keeps, and so the settings file that replaced that XML never contains them.
+     *
+     * Not in [EXCLUSIVE] (it is not an auth mode and must never evict a credential) and not in [ENV_NAMES]
+     * (the block is parsed by `ClaudeSettings.parseEnv`, which decides how it reaches the child).
+     */
+    const val ENV_VARS = "CLAUDE_ENV_VARS"
+
+    /**
+     * The plugin's whole configuration, as the JSON document [dev.lain.claudejb.settings.SettingsStore]
+     * builds.
+     *
+     * **Why the settings live in the safe and not in a file.** They carry the user's environment block, and
+     * an env block is where an API key, a credentialed proxy URL or a private-registry token ends up. That
+     * was the reason they left `.idea/claude-code.xml` in the first place — a plaintext file people commit —
+     * and writing them to `~/.claude/ide/claude-code-native/settings.json` instead only moved the plaintext
+     * somewhere else. Here the whole document lands in the OS keychain (Keychain / KWallet / DPAPI /
+     * encrypted file, whatever the IDE is configured with), like every other secret the plugin holds, and
+     * there is no settings file on disk at all.
+     *
+     * It is one entry rather than a field-per-entry because the settings are read and written as a whole,
+     * and a partial save is a configuration nobody chose.
+     */
+    const val SETTINGS_JSON = "CLAUDE_SETTINGS_JSON"
+
     /** Auth modes: mutually exclusive by construction — setting one clears the others. */
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
-    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
+    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS + ENV_VARS + SETTINGS_JSON
 
     /** The subset that is injected into the child environment — [CREDENTIALS_JSON] is file-shaped, not env. */
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
@@ -87,6 +118,24 @@ object SecretStore {
         // is in use — clearing the credential every time we learned the user's email would be absurd.
         if (name in EXCLUSIVE) EXCLUSIVE.filter { it != name }.forEach { clear(it) }
     }
+
+    /**
+     * Stores [value] and READS IT BACK. Returns false when the safe did not actually keep it.
+     *
+     * **The read-back is the whole point, and it is not paranoia.** `PasswordSafe.set` returns `Unit` and
+     * throws nothing when the OS store rejects the write: on this very machine the IDE logged
+     * `secret_password_store_sync error code 36 — Can't find session /org/freedesktop/secrets/session/928`
+     * (an expired Secret Service session) as a SEVERE of its own, *after* our call had returned normally.
+     * A caller that then deleted the file it had just "migrated" — which is what both this store and
+     * [dev.lain.claudejb.process.CredentialsVault] do — destroyed the only copy in existence. That is how a
+     * configuration and a login disappeared on a reinstall, with every line of our code behaving as designed.
+     *
+     * So: nothing that deletes an original may call [set]. It must call this, and believe the answer.
+     */
+    fun setVerified(name: String, value: String): Boolean = runCatching {
+        set(name, value)
+        get(name) == value
+    }.getOrElse { false }
 
     fun clear(name: String) {
         PasswordSafe.instance.set(attributes(name), null)

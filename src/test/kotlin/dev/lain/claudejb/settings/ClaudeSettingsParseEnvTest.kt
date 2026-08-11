@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 class ClaudeSettingsParseEnvTest {
 
     private fun settingsWithEnv(env: String): ClaudeSettings =
-        ClaudeSettings().also { it.getState().envVars = env }
+        ClaudeSettings().also { it.state.envVars = env }
 
     @Test
     fun `parses simple KEY=VALUE`() {
