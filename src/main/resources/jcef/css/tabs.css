@@ -109,6 +109,12 @@ body.vibe .composer-card:focus-within {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--bg) 85%, transparent);
   flex: 0 0 auto;
+  /* The bar NEVER grows past the tool window. Every container down to the capsule has to say so, or the
+     overflow escapes the panel instead of landing inside the one box that can scroll — and tabs painted
+     outside the panel cannot be reached by any means at all. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 #tabsbar[hidden] {
   display: none;
@@ -117,6 +123,7 @@ body.vibe .composer-card:focus-within {
 .tab-rows {
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -127,12 +134,20 @@ body.vibe .composer-card:focus-within {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Bounded, like everything above it: this is what makes the capsule's own `overflow-x` the place the
+     extra tabs land, instead of the row quietly growing to fit them off-screen where nothing can reach
+     them. */
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 /* A tab never shrinks to a sliver: past a certain width the label is gone and every tab looks the same.
-   They keep their size and the row scrolls instead. */
+   They keep their size and the row scrolls instead — but they do not GROW without limit either. Since 5.5.0
+   a chat is named after the first thing you asked it, so an untruncated tab is as wide as that sentence, and
+   three of those fill the bar on their own. Capped and ellipsised; the full title is in the tooltip. */
 .tab-capsule .pill {
   flex: 0 0 auto;
+  max-width: 22ch;
 }
 /* The capsule around the chats' pills — the oval that encloses the set. */
 /* The capsule scrolls; the ROW is what bounds it.
@@ -152,13 +167,26 @@ body.vibe .composer-card:focus-within {
   background: color-mix(in srgb, var(--surface2) 55%, transparent);
   overflow-x: auto;
   overflow-y: hidden;
-  /* No scrollbar. The platform one is a grey slab across a rounded capsule, and it appeared under every row
-     — five of them in the screenshot that killed the previous design. The wheel scrolls it (app-tabs.js
-     translates deltaY, which Chromium does not do for a horizontal scroller on its own). */
+  /* NO scrollbar — the platform one is a grey slab across a rounded capsule, and aiming at it to walk a row
+     of tabs is tedious. Three better ways to move the row, none of which need a target to hit: GRAB IT and
+     drag (`dragToScroll`), the wheel, and — the one that covers ordinary use — selecting a chat CENTRES it,
+     so the row moves under you as you switch and its neighbours are always one click away. */
   scrollbar-width: none;
-  /* With the scrollbar gone, the fade IS the affordance: a tab cut off at the edge says "there is more this
-     way", which is what a hidden overflow cannot. Both edges, so it reads the same in either direction. */
+  /* The fade at the edges is the affordance that remains: a tab cut off mid-way says "there is more this
+     way" without anything to click. */
   mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+  scroll-behavior: smooth;
+  cursor: grab;
+}
+.tab-capsule::-webkit-scrollbar {
+  display: none;
+}
+/* While dragging: the row follows the pointer, and it must not also select text or animate towards where it
+   would have smooth-scrolled — both make the grab feel like it is fighting you. */
+.tab-capsule.dragging {
+  cursor: grabbing;
+  scroll-behavior: auto;
+  user-select: none;
 }
 .tab-capsule::-webkit-scrollbar {
   display: none;
@@ -355,8 +383,12 @@ body.vibe .composer-card:focus-within {
   background: var(--accent-soft);
 }
 .pill-label {
+  /* `min-width: 0` is what lets it actually shrink — without it a flex item refuses to go below its content
+     and the ellipsis never appears, however small the cap on the pill. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* State as a dot — the tooltip says it in words, so colour is never the only carrier. */
