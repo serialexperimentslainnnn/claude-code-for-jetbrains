@@ -30,6 +30,23 @@ data class EntryDTO(
     /** For a command-executing tool: the raw command, so a restored card renders the same copyable code block a
      *  live one does (see [dev.lain.claudejb.permission.SensitiveGuard.commandText]). Null on every other row. */
     val commandText: String? = null,
+    /**
+     * A tool call that has no result yet — it was still in flight when this transcript was read.
+     *
+     * The binary writes the `tool_use` when the call starts and its `tool_result` when it comes back, so a
+     * call with no matching result is simply still running. Without this every reconstructed card was drawn
+     * as FINISHED, so a Bash the agent is running RIGHT NOW sat there green and still instead of fading like
+     * its live counterpart.
+     */
+    val inFlight: Boolean = false,
+    /**
+     * The call came back as an error.
+     *
+     * The JSONL marks the failure on the RESULT row, not on the call, so a reconstructed card had no way to
+     * know: a Bash that exited non-zero was drawn green like any other finished call, and the red header the
+     * live transcript gives it never appeared.
+     */
+    val failed: Boolean = false,
 )
 
 /**
@@ -97,7 +114,38 @@ object SessionTranscriptReader {
                 }
             }
         }
-        return capTail(tagCommandOutputs(out), maxEntries)
+        return capTail(markInFlight(tagCommandOutputs(out)), maxEntries)
+    }
+
+    /**
+     * Marks every TOOL call that has no TOOL_OUTPUT as still running.
+     *
+     * The binary writes the `tool_use` when a call starts and its `tool_result` when it returns, so a call
+     * with no matching result was in flight at the moment this file was read. Nothing else in the transcript
+     * says so, which is why a reconstructed card used to be drawn FINISHED unconditionally: a Bash an agent
+     * was running RIGHT NOW came back green and still, while the identical card in the live chat faded.
+     *
+     * A pass over the finished list for the same reason [tagCommandOutputs] is one — the result arrives in a
+     * later message than the call, so at parse time the call's own line cannot know.
+     */
+    private fun markInFlight(entries: List<EntryDTO>): List<EntryDTO> {
+        val answered = HashSet<String>()
+        val failed = HashSet<String>()
+        for (e in entries) {
+            if (e.speaker != "TOOL_OUTPUT") continue
+            val id = e.toolUseId ?: continue
+            answered += id
+            // The failure is recorded on the RESULT ("error" in its meta), so the CALL has to be told.
+            if (e.meta != null && e.meta.contains("error")) failed += id
+        }
+        return entries.map { e ->
+            if (e.speaker != "TOOL" || e.toolUseId == null) return@map e
+            when {
+                e.toolUseId in failed -> e.copy(failed = true)
+                e.toolUseId !in answered -> e.copy(inFlight = true)
+                else -> e
+            }
+        }
     }
 
     /**
@@ -143,17 +191,51 @@ object SessionTranscriptReader {
 
     private fun parseUser(obj: JsonObject, out: MutableList<EntryDTO>) {
         val content = (obj["message"] as? JsonObject)?.get("content") ?: return
+        // The line's own flags, which the binary sets on the scaffolding it injects. `isCompactSummary`
+        // marks the summary a compaction leaves behind: real content, but not something the user said.
+        val isMeta = obj["isMeta"]?.jsonPrimitive?.booleanOrNull == true
+        val isCompactSummary = obj["isCompactSummary"]?.jsonPrimitive?.booleanOrNull == true
         when (content) {
-            is JsonPrimitive -> content.contentOrNull?.takeIf { it.isNotBlank() }?.let { out += EntryDTO("USER", it) }
-            is JsonArray -> content.mapNotNull { it as? JsonObject }.forEach { parseUserBlock(it, out) }
+            is JsonPrimitive -> content.contentOrNull?.let { addUserText(it, isMeta, isCompactSummary, out) }
+
+            is JsonArray -> content.mapNotNull { it as? JsonObject }
+                .forEach { parseUserBlock(it, isMeta, isCompactSummary, out) }
+
             else -> Unit
         }
     }
 
+    /**
+     * Turns one `text` block of a `user` line into the row it really is.
+     *
+     * **Not every `text` block on a `user` line is the user.** The binary records its own scaffolding there —
+     * the local-command caveat, the slash command the user ran, a settled subagent's notification — and
+     * restoring them verbatim, styled as prompts, showed people paragraphs they had never written. See
+     * [SyntheticUserText] for the closed tag set and why it is closed.
+     */
+    private fun addUserText(text: String, isMeta: Boolean, isCompactSummary: Boolean, out: MutableList<EntryDTO>) {
+        if (isCompactSummary) {
+            // The live path narrates a compaction as a system row; a restored one says the same thing.
+            out += EntryDTO("SYSTEM", "Conversation compacted.")
+            return
+        }
+        when (val kind = SyntheticUserText.classify(text, isMeta)) {
+            is SyntheticUserText.Kind.Prompt -> out += EntryDTO("USER", kind.text)
+            is SyntheticUserText.Kind.Command -> out += EntryDTO("USER", kind.text)
+            is SyntheticUserText.Kind.SystemNote -> out += EntryDTO("SYSTEM", kind.text)
+            SyntheticUserText.Kind.Hidden -> Unit
+        }
+    }
+
     /** One content block of a `user` line: the user's own text, or a tool_result the binary attributed to them. */
-    private fun parseUserBlock(block: JsonObject, out: MutableList<EntryDTO>) {
+    private fun parseUserBlock(
+        block: JsonObject,
+        isMeta: Boolean,
+        isCompactSummary: Boolean,
+        out: MutableList<EntryDTO>,
+    ) {
         when (block["type"]?.jsonPrimitive?.contentOrNull) {
-            "text" -> block.text()?.takeIf { it.isNotBlank() }?.let { out += EntryDTO("USER", it) }
+            "text" -> block.text()?.let { addUserText(it, isMeta, isCompactSummary, out) }
 
             "tool_result" -> {
                 val text = toolResultText(block["content"])
