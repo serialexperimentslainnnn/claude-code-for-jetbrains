@@ -1,9 +1,9 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-4.4.1-E07B5A)](CHANGELOG.md)
-[![IDE](https://img.shields.io/badge/JetBrains-2025.1%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
+[![Version](https://img.shields.io/badge/version-5.5.0-E07B5A)](CHANGELOG.md)
+[![IDE](https://img.shields.io/badge/JetBrains-2025.3%20%E2%86%92%20latest%20EAP-000000?logo=jetbrains)](#requirements)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-677%20JVM%20%2B%2044%20frontend-success)](#testing)
+[![Tests](https://img.shields.io/badge/tests-857%20JVM%20%2B%20149%20frontend-success)](#testing)
 
 A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.ai/code) into JetBrains IDEs — not a terminal wrapper, but a first-class GUI client with a modern **web UI** (an embedded Chromium / JCEF chat), native diff review, a deterministic security layer, and full protocol-level access to the `claude` binary.
 
@@ -96,7 +96,7 @@ Separately: jump-to-code links can only ever open inside the project or your own
 
 ## Requirements
 
-- **JetBrains IDE** 2025.1 or newer (build 251+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with **JCEF enabled** (bundled with the IDE's JBR by default; the chat UI is an embedded web view)
+- **JetBrains IDE** 2025.3 or newer (build 253+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with the **embedded browser (JCEF)** available: the whole chat UI is a web view, so the plugin declares a hard dependency on it. 5.5.0 raised the floor from 2025.1 for exactly that reason — since build 262 the platform ships JCEF as a separate bundled plugin (`com.intellij.modules.jcef`), a plugin that does not declare it gets no browser classes at all, and that module id does not exist before 2025.3. Staying on 2025.1/2025.2 means staying on 5.1.1
 - **`claude` CLI** installed and on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code`, or follow [claude.ai/code](https://claude.ai/code)
   - Custom location? Set the executable path (and any environment variables) in **Settings → Tools → Claude Code**
@@ -192,13 +192,15 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and ver
 
 ## Status
 
+**v5.5.0** — every agent gets its own tab. A session running agents under agents used to put all of it in one transcript: consecutive "Thought process" rows belonging to different agents, interleaved, impossible to follow. Now each agent has its own transcript, reachable from a tab bar that shows what you are reading and keeps the whole tree one hover away, and the three dashboard lists became a single **Workloads** diagram of everything that is running, across every chat. A background task keeps its tab and its output after it ends — the binary stops listing a task the moment it finishes, which is precisely when its output is worth reading — and both survive a restart. Your settings moved into the **IDE's password safe**: they used to sit in `.idea/claude-code.xml`, per project and in the clear, which is a file people commit and where an API key in the env block ends up. **It also fixes a plugin that was dead on 2026.2**: the platform moved the embedded browser into a bundled plugin there, and without declaring that dependency no chat could open at all — which is why the minimum IDE is now 2025.3.
+
 **v5.0.0** — the standards-compliance major. Nothing you use changes; the *project* did. The chat UI now speaks to screen readers (a live region announcing when a turn starts, ends, or is waiting on your approval) and every control has a visible focus ring again, including in high-contrast mode. The sensitive-data lock gained a **written** threat model ([ADR 0002](docs/adr/0002-threat-model.md)) that states what it defends against — and admits what it does not: prompt injection is assumed to succeed, not detected, which is why the lock judges the *tool call* and never the model's reasoning. Third-party licence attribution now ships inside the artifact, seven npm-audit findings against never-distributed build tooling are gone (the SDK reference was mis-declared as a runtime dependency), and a released version number is now final.
 
 **v4.4.1** — fixes `/login` always dead-ending on "run this yourself in a terminal": every IDE terminal API the plugin reflected on had been removed after 2025.2, and each lookup failed silently. It now opens a real terminal tab on every supported IDE, with a headless native sign-in as a genuine fallback rather than a dead end.
 
 **v4.4.0** — each rule in the [security lock](#security) is now independently switchable (Settings ▸ Claude Code ▸ Security), all ON by default; disabling one only ever downgrades an automatic block to a permission card, never to a silent allow. Also fixed: several of the CLI's own native tools (background tasks, cron, worktrees, and more) had fallen off the plugin's trusted-tool allowlist as the CLI grew, so they were hard-denied exactly like a blocked third-party MCP call — the allowlist is now current.
 
-Verified **Compatible** on IC-251, IC-252, IU-253, IU-261 and IU-262, with **zero deprecated or internal API**. `untilBuild` is declared `263.*` ahead of the 2026.3 EAP; the verifier picks up a real 263 build automatically once one is published.
+Verified **Compatible** on IU-253, IU-261, IU-262 and PY-262, with **zero deprecated or internal API** — both product families, because how a product bundles the platform is exactly where a classloader problem hides. `untilBuild` is declared `263.*` ahead of the 2026.3 EAP; the verifier picks up a real 263 build automatically once one is published.
 
 Recent highlights: the model picker showing each model's real version (4.3.3); the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); the background-tasks dashboard card (4.2.0); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
 
