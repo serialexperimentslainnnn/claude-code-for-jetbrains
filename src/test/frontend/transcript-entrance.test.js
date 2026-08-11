@@ -5,9 +5,9 @@
 // tool cards and thought-process folds, so what the user saw was a rigid transcript with two smooth
 // exceptions. The rule covers the row-level containers, not their contents: a partial answer reads WORSE than
 // none here, because it is the mix of smooth and abrupt that draws the eye to the seam.
-const fs = require('fs');
+const { readCss } = require('./helpers/load');
 
-const CSS = fs.readFileSync('src/main/resources/jcef/app.css', 'utf8');
+const CSS = readCss();
 
 /** The declaration block of a TOP-LEVEL rule, or null when the selector has no rule of its own. */
 function blockFor(selector) {

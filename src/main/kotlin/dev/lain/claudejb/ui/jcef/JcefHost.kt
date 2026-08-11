@@ -292,12 +292,23 @@ class JcefHost(
 
         // The <style> block is hash-pinned just like the scripts, so the CSP needs no `style-src 'unsafe-inline'`.
         // The hash must be of the EXACT text between <style> and </style>.
-        val styleInner = "\n${readResource("app.css").orEmpty()}\n"
+        //
+        // The stylesheet is SEVERAL files, concatenated IN THIS ORDER. It was one 3.6k-line file; the parts
+        // are the sections it already had. Order is not cosmetic here — later rules win — so the list is the
+        // contract, and a new part goes where its rules belong, not at the end for convenience.
+        val styleInner = "\n" + CSS_PARTS.joinToString("\n") { readResource("css/$it").orEmpty() } + "\n"
         val cssBlock = "<style>$styleInner</style>"
         val styleSrc = "'sha256-" + sha256Base64(styleInner) + "'"
 
         val libNames = listOf("purify.min.js", "marked.min.js", "highlight.min.js")
-        val appNames = listOf("app-core.js", "app-transcript.js", "app-composer.js", "app-permissions.js", "app-session.js")
+        val appNames = listOf(
+            "app-core.js",
+            "app-transcript.js",
+            "app-composer.js",
+            "app-permissions.js",
+            "app-session.js",
+            "app-tabs.js",
+        )
 
         // Read each script once; the hash must be of the EXACT text between <script> and </script>.
         val contents = LinkedHashMap<String, String>()
@@ -330,6 +341,17 @@ class JcefHost(
 
     private companion object {
         private val log = logger<JcefHost>()
+
+        /** The stylesheet, in cascade order — see [buildPage]. */
+        private val CSS_PARTS = listOf(
+            "base.css",
+            "transcript.css",
+            "composer.css",
+            "permissions.css",
+            "dashboard.css",
+            "boot.css",
+            "tabs.css",
+        )
 
         /** How long to wait after load-end for the web app's `ready` before the self-heal reload kicks in. */
         private const val READY_WATCHDOG_MS = 2500

@@ -1,0 +1,351 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   REDUCED MOTION
+   ════════════════════════════════════════════════════════════════════════════ */
+/* inline images from model markdown (only data: URIs pass the CSP img-src) — keep them in-bounds */
+.body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+}
+
+/* responsive: tight panels (the tool window can be narrow) look professional, not cramped */
+@media (max-width: 600px) {
+  #conversation {
+    padding: 16px 12px 24px;
+  }
+  #dock {
+    padding: 8px 12px 12px;
+  }
+  .composer-bar {
+    flex-wrap: wrap;
+  }
+  .dashboard .dash-inner {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   BOOT SCREEN — shown while the `claude` binary launches
+   ════════════════════════════════════════════════════════════════════════════
+   Covers the whole tab rather than sitting inside the transcript: while the agent is booting there is nothing
+   to interact with, and a composer that looks live but silently drops what you type is worse than one that is
+   plainly not ready yet. Input is blocked by `#app.booting` below, so this is not merely a visual cover.
+
+   Opaque, not translucent: a half-visible transcript underneath reads as "something is broken", not "wait". */
+#boot {
+  position: absolute;
+  inset: 0;
+  z-index: 60; /* above the dock and permission cards, below nothing else this app draws */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+#boot[hidden] {
+  display: none;
+}
+.boot-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 0 24px;
+}
+/* The Claude starburst, same glyph as the empty state — a character, not an asset, because the CSP forbids
+   url() and every external resource. Breathes gently so the screen is alive without a spinner competing with
+   the dots for attention. */
+.boot-mark {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--accent);
+  animation: bootBreathe 2.2s ease-in-out infinite;
+}
+@keyframes bootBreathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+.boot-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* Dots cycle . → .. → ... and repeat.
+
+   `steps(1, end)` with content swapped at each third holds each state for a full beat instead of easing
+   between them — the point is a discrete count, not a fade. Rendered in a ::after so the dots are not part of
+   the text node: the element is aria-hidden, so a screen reader announces "Loading Claude Code" once rather
+   than re-reading the phrase three times a second as the content mutates. */
+.boot-dots::after {
+  content: '.';
+  animation: bootDots 1.2s steps(1, end) infinite;
+}
+@keyframes bootDots {
+  0% {
+    content: '.';
+  }
+  33% {
+    content: '..';
+  }
+  66% {
+    content: '...';
+  }
+}
+/* Reduced motion: the universal reset would freeze both at their first frame, leaving a single dot and a
+   half-faded mark that read as "stuck". Show the settled state instead — all three dots, mark at full
+   opacity — which is the honest still image of this screen. */
+body.reduced-motion .boot-mark {
+  animation: none !important;
+  opacity: 1;
+}
+body.reduced-motion .boot-dots::after {
+  animation: none !important;
+  content: '...';
+}
+.boot-sub {
+  font-size: 12px;
+  color: var(--dim);
+}
+/* The wait is real: block interaction rather than letting keystrokes fall on the floor. */
+#app.booting #dock,
+#app.booting #conversation {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── "Claude Code was not found" card (the boot overlay's fourth state) ─────── */
+#boot.missing .boot-dots {
+  display: none; /* nothing is loading — the card asks for a decision, not patience */
+}
+#boot-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  margin-top: 6px;
+  text-align: left;
+}
+#boot-missing[hidden] {
+  display: none;
+}
+.boot-missing-title {
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+.boot-missing-sub {
+  font-size: 12px;
+  color: var(--dim);
+  text-align: center;
+}
+.boot-install {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.boot-install-btn {
+  align-self: flex-start;
+  font-weight: 600;
+}
+.boot-install-btn.installing {
+  opacity: 0.75;
+}
+.boot-install-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.boot-install-hint-label {
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.boot-install-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--code-bg, rgba(128, 128, 128, 0.12));
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.boot-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.boot-path-label,
+.auth-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+.boot-path-controls,
+.auth-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.boot-path-controls input,
+.auth-row input {
+  flex: 1;
+  min-width: 0;
+  /* Same themed field as the elicitation cards — a bare UA-styled white input reads as foreign
+     in every dark theme the IDE ships. */
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  outline: none;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
+}
+.boot-path-controls input:focus,
+.auth-row input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.boot-path-controls input::placeholder,
+.auth-row input::placeholder {
+  color: var(--dim);
+}
+.boot-path-err,
+.auth-error {
+  font-size: 12px;
+  color: var(--error, #d66);
+  min-height: 1em;
+}
+
+/* ── sign-in card ───────────────────────────────────────────────────────────── */
+#auth-card {
+  position: absolute;
+  inset: 0;
+  z-index: 55; /* below #boot (60): no binary beats no login */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+#auth-card[hidden] {
+  display: none;
+}
+.auth-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 440px;
+  padding: 0 24px;
+  text-align: center;
+}
+.auth-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.auth-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.auth-step[hidden] {
+  display: none;
+}
+.auth-primary {
+  font-weight: 600;
+}
+/* The collapsed API-key route. It needs its own display rule (and the [hidden] override that always goes
+   with one) because .auth-step is a flex column and this is a nested group inside it. */
+#auth-key-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+#auth-key-fields[hidden] {
+  display: none;
+}
+.auth-hint {
+  font-size: 11px;
+  color: var(--dim);
+}
+.auth-divider {
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.auth-quiet {
+  background: none;
+  border: none;
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+}
+.auth-wait {
+  font-size: 13px;
+  color: var(--dim);
+}
+.auth-sub-wait {
+  font-size: 13px;
+  font-weight: 600;
+}
+.auth-url-actions {
+  gap: 8px;
+}
+.account-auth-row {
+  margin-top: 6px;
+}
+.account-auth-btn {
+  font-size: 12px;
+}
+
+/* Reduced motion — driven by the HOST (body.reduced-motion), deliberately NOT by
+   `@media (prefers-reduced-motion: reduce)`.
+
+   REGRESSION THIS FIXES (5.0.0): the accessibility pass added exactly this rule set behind that media query,
+   and inside JCEF it killed every animation in the chat for everyone — the tool cards' sky↔amber fade and
+   spinner, the rise/pop of new rows, the permission-card entrance. The UI went rigid, with nothing in any log
+   to explain it. The one animation that survived was Vibe Mode's rainbow, and that is the tell: it is driven
+   by `setInterval` in JS, so no CSS rule can touch it. Everything that was a `@keyframes` died; the one thing
+   that was not, lived.
+
+   The cause is that the browser here cannot answer the question. JCEF renders off-screen: there is no GTK
+   window, and under native Wayland no XSETTINGS bridge either, so Chromium has no desktop preference to read
+   and the query does not reflect what the user actually asked for. Toggling GNOME's animation setting changed
+   nothing, which is what proved it was not the user's preference being honoured.
+
+   So the authority moves to the host, which CAN answer: [JcefTheme] reads the IDE's own animation preference
+   and sends `reducedMotion`. That also makes the behaviour testable and keeps WCAG 2.3.3 intact — motion is
+   still reduced when the user asks for it, just asked of something that knows. */
+body.reduced-motion *,
+body.reduced-motion *::before,
+body.reduced-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+body.reduced-motion #conversation {
+  scroll-behavior: auto;
+}

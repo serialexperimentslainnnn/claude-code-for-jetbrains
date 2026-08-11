@@ -68,4 +68,25 @@ function appJsFiles() {
   return fs.readdirSync(JCEF).filter((f) => /^app-.*\.js$/.test(f));
 }
 
-module.exports = { loadFrontend, readApp, appJsFiles, JCEF };
+/**
+ * The whole stylesheet, as the page sees it: the parts of `css/`, concatenated in CASCADE ORDER.
+ *
+ * Read from `JcefHost.CSS_PARTS`, not from a list kept here, and not from `readdirSync` — order is semantics
+ * in CSS (later rules win), so a harness that sorted alphabetically would be testing a stylesheet the
+ * product never serves, and a part added to the host but not to the tests would go unchecked.
+ */
+function readCss() {
+  const host = fs.readFileSync(
+    path.resolve(__dirname, '../../../main/kotlin/dev/lain/claudejb/ui/jcef/JcefHost.kt'),
+    'utf8'
+  );
+  // The DECLARATION, not the first mention: `CSS_PARTS` is also used in `buildPage` above it.
+  const block = host.slice(host.indexOf('val CSS_PARTS = listOf('));
+  const parts = block.slice(0, block.indexOf(')')).match(/"([\w-]+\.css)"/g);
+  if (!parts) throw new Error('helpers/load: could not read CSS_PARTS from JcefHost.kt');
+  return parts
+    .map((quoted) => fs.readFileSync(path.join(JCEF, 'css', quoted.replace(/"/g, '')), 'utf8'))
+    .join('\n');
+}
+
+module.exports = { loadFrontend, readApp, appJsFiles, readCss, JCEF };

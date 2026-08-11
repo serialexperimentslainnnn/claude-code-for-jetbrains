@@ -1,0 +1,192 @@
+/* Claude Code — JCEF chat stylesheet (A5, the whole visual language).
+ *
+ * Aesthetic target: calm, generous, claude.ai-like. One card radius, hairline borders, a single
+ * coral accent reserved for identity + interaction (never status). Every colour comes from a CSS
+ * variable injected by the Kotlin host (cc.theme) so the UI tracks the live IDE theme; nothing is
+ * hardcoded outside :root. Zero external resources — no @import, no url(), no web fonts. */
+
+:root {
+  /* ── theme tokens (host overrides these; dark-ish defaults below) ───────────── */
+  --bg: #1e1f22; /* app background                         */
+  --surface: #2b2d30; /* cards / raised panels                  */
+  --surface2: #26282b; /* recessed surfaces (tool cards, menus)  */
+  --text: #dfe1e5; /* primary text                          */
+  --dim: #8b8f95; /* secondary / metadata text             */
+  --border: #393b40; /* hairline borders                      */
+  --accent: #d97757; /* coral — identity + interaction ONLY   */
+  --accent-soft: rgba(217, 119, 87, 0.14);
+  --code-bg: #1b1c1e; /* fenced code background                 */
+  --success: #5aa86f; /* status only (never the accent)        */
+  --warning: #d8a657;
+  --danger: #e06c64;
+  --info: #56c2e6; /* sky blue — tool loading/running status */
+  /* Neon orange, for the ONE selected view button and nothing else. Deliberately not `--accent`: the accent
+     is the product's identity colour and is already spread across the UI, so a glow made of it would not
+     read as "you are here". Brighter and more saturated than the warning amber so the two never look alike. */
+  --neon-orange: #ff9a3c;
+  /* The hairline that runs down each level of the Workloads tree. Derived from the border colour so it
+     follows the IDE theme, and deliberately fainter: it guides the eye, it is not a divider. */
+  --tree-guide: color-mix(in srgb, var(--border) 75%, transparent);
+  --font: -apple-system, 'Segoe UI', 'Inter', Roboto, 'Helvetica Neue', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --fs: 13.5px;
+
+  /* ── derived design tokens (one radius, one rhythm) ─────────────────────────── */
+  --radius: 14px; /* THE card radius — used everywhere      */
+  --radius-sm: 9px; /* nested elements (chips, code, options) */
+  --radius-pill: 999px;
+  --gap: 14px;
+  --col: 860px; /* centred conversation column            */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 28px rgba(0, 0, 0, 0.22);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+::selection {
+  background: var(--accent-soft);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The `hidden` attribute must always hide, even on elements whose class/id selectors set
+   an explicit `display:` (those outrank the UA [hidden] rule). JS toggles visibility via
+   the hidden attribute throughout, so enforce it globally. */
+[hidden] {
+  display: none !important;
+}
+
+/* thin, calm scrollbars */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dim) 38%, transparent);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--dim) 60%, transparent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   LAYOUT
+   ════════════════════════════════════════════════════════════════════════════ */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* The work area: transcript + composer, and the two overlays (#boot, #auth-card) that cover them.
+   It is the containing block for those overlays, and that is its whole reason to exist: they used to be
+   `inset: 0` over #app, so a chat that was still starting covered the CHAT TABS too — and switching to
+   another chat while one boots is precisely what you want to do. Input is still blocked (`#app.booting`);
+   navigation no longer is. */
+#work {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#conversation {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+}
+/* centred reading column with generous breathing room */
+#conversation > * {
+  max-width: var(--col);
+  margin-left: auto;
+  margin-right: auto;
+}
+#conversation {
+  padding: 22px clamp(16px, 5vw, 40px) 30px;
+}
+
+/* dock = permissions + composer, pinned to the bottom with a soft blur veil */
+#dock {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  padding: 10px clamp(16px, 5vw, 40px) 16px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  backdrop-filter: blur(14px) saturate(1.1);
+}
+#dock > * {
+  max-width: var(--col);
+  margin: 0 auto;
+}
+
+#permissions:not(:empty) {
+  margin-bottom: 10px;
+}
+#permissions > * + * {
+  margin-top: 10px;
+}
+/* Cap the request-cards stack (permission / question / elicitation / plan all live here) at half
+   the height; beyond that it scrolls within itself, so the transcript always keeps ≥50% and the
+   dock never eats the view. */
+#permissions {
+  max-height: 50vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ── empty state ──────────────────────────────────────────────────────────── */
+#empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--dim);
+  padding: clamp(60px, 22vh, 160px) 16px 0;
+  text-align: center;
+  animation: fade 0.5s var(--ease);
+}
+#empty h1,
+#empty .empty-title {
+  margin: 4px 0 0;
+  font-size: 1.18em;
+  color: var(--text);
+  font-weight: 600;
+}
+#empty p {
+  margin: 0;
+  max-width: 30em;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

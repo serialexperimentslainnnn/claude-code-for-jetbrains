@@ -4,11 +4,9 @@
 // `.open`, yet a reported screenshot showed the error visible on a collapsed card — so either failed cards
 // auto-open, or the text renders somewhere else entirely. Guessing at an unobservable DOM has cost this project
 // three wrong diagnoses before; this measures it instead.
-const fs = require('node:fs');
-const path = require('node:path');
-const { loadFrontend, JCEF } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
-const css = () => fs.readFileSync(path.join(JCEF, 'app.css'), 'utf8');
+const css = () => readCss();
 
 function row(id, order, speaker, text, extra = {}) {
   return { id, order, speaker, text, state: 'FINISHED', elapsed: 0, ...extra };

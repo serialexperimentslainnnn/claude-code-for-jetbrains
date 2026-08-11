@@ -7,9 +7,9 @@
 // Conformance still requires keyboard-only and screen-reader passes by a person.
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadFrontend, JCEF } = require('./helpers/load');
+const { loadFrontend, readCss, JCEF } = require('./helpers/load');
 
-const css = () => fs.readFileSync(path.join(JCEF, 'app.css'), 'utf8');
+const css = () => readCss();
 const shell = () => fs.readFileSync(path.join(JCEF, 'shell.html'), 'utf8');
 
 describe('a11y — status messages (WCAG 4.1.3, Level AA)', () => {
@@ -72,6 +72,17 @@ describe('a11y — visible focus (WCAG 2.4.7 / 1.4.11, Level AA)', () => {
   it('the focus ring is honoured under forced-colors instead of being overridden', () => {
     // Overriding system colours in Windows high-contrast mode defeats the accommodation entirely.
     expect(css()).toMatch(/@media \(forced-colors: active\)/);
+  });
+
+  it('nothing in the tab bar is laid over the tabs (SC 2.4.11 Focus Not Obscured)', () => {
+    // The dashboard's view switcher sits in the tab bar. As an absolutely-positioned overlay it covered the
+    // last chat tab: tab to it and the focused control is underneath the buttons — focused and invisible,
+    // which is exactly what 2.4.11 forbids. Both are flex ITEMS, so overlap is impossible by construction
+    // rather than by keeping a `padding-right` in sync with the width of the words.
+    const sheet = css();
+    const rule = sheet.slice(sheet.indexOf('.dash-toggles'), sheet.indexOf('.dash-toggle {'));
+    expect(rule).not.toMatch(/position:\s*(absolute|fixed)/);
+    expect(rule).toMatch(/flex:\s*0 0 auto/);
   });
 
   it('the visually-hidden helper keeps the node in the accessibility tree', () => {
@@ -139,9 +150,7 @@ describe('accessibility — reduced motion is host-driven', () => {
   it('the motion kill is gated on body.reduced-motion, never on a media query', () => {
     // Comments are stripped first: the block above EXPLAINS the media query at length, and matching raw text
     // would fail on the explanation rather than on the rule — a test that reads prose instead of code.
-    const rules = require('fs')
-      .readFileSync('src/main/resources/jcef/app.css', 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
     expect(rules).toContain('body.reduced-motion *');
     expect(rules).not.toContain('@media (prefers-reduced-motion');
   });
