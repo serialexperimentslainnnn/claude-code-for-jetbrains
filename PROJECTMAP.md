@@ -14,13 +14,14 @@
 | Send a host→binary control request | `protocol/ControlProtocol.kt` (builder) + `session/SessionControlClient.kt` (correlation, watchdog) | Every request is correlated by `request_id`; never block on the reply |
 | Change how a turn is orchestrated | `session/ClaudeSession.kt` | **Thin orchestrator**: new behaviour goes to a collaborator, not here |
 | Change transcript rows / streaming | `session/TranscriptReconciler.kt` + `session/TranscriptModel.kt` | Assumes EDT. `parentOf`/`isDescendantOf` model subagent nesting |
-| Change what the chat renders | `resources/jcef/app-transcript.js` (rows), `app-composer.js` (input + readout), `app-permissions.js` (cards), `app-session.js` (dashboard) | Inlined ES2019, no bundler. CSS class names are a tested contract |
-| Add a field to the web payload | `ui/jcef/JcefState.kt` (composer state) or `ui/jcef/JcefSessionData.kt` (dashboard) | kotlinx `buildJsonObject`; null-safe so a card omits cleanly |
+| Change what the chat renders | `resources/jcef/app-transcript.js` (rows), `app-composer.js` (input + readout), `app-permissions.js` (cards), `app-session.js` (dashboard), `app-tabs.js` (tab bar) | Inlined ES2019, no bundler. CSS class names are a tested contract |
+| Change a style | `resources/jcef/css/<part>.css` | Concatenated **in cascade order** by `JcefHost.CSS_PARTS`; the tests read that same list |
+| Add a field to the web payload | `ui/jcef/JcefState.kt` (composer state), `ui/jcef/JcefSessionData.kt` (dashboard) or `ui/jcef/JcefTabsData.kt` (tab bar) | kotlinx `buildJsonObject`; null-safe so a card omits cleanly. A running/finished state uses `JcefStatus` |
 | Add a web→host message | `ui/jcef/JcefBridge.kt` (pure parse) + `ui/JcefChatPanel.kt` (dispatch) | `JcefBridge` has no IDE deps so it unit-tests on plain JVM |
-| Change tabs / tool window | `ui/ClaudeToolWindowFactory.kt` + `ui/ChatTabsPanel.kt` | One tool-window content holds the whole `JBTabs` strip |
+| Change tabs / tool window | `ui/ClaudeToolWindowFactory.kt` + `ui/ChatTabsPanel.kt` (host) and `resources/jcef/app-tabs.js` (the bar itself) | The bar is drawn by the WEB app, not by Swing |
 | Change permission behaviour | `permission/PermissionBroker.kt`; hard rules in `permission/SensitiveGuard.kt` | `SensitiveGuard` runs **before** any auto-approval |
 | Change what a diff shows / writes | `diff/DiffPresenter.kt`, `diff/HunkSelection.kt`, `session/DiffLifecycleManager.kt` | The **binary** writes the file; the IDE only reviews and refreshes VFS |
-| Add a setting | `settings/ClaudeSettings.kt` + `ui/ClaudeSettingsConfigurable.kt` | Persisted in `claude-code.xml`; `applyTo(session)` seeds launch options |
+| Add a setting | `settings/ClaudeSettings.kt` (a field on `State`) + `ui/ClaudeSettingsConfigurable.kt` | Persisted as the `@Serializable State` document in the **PasswordSafe** (`settings/SettingsStore.kt`); mutate through `update {}` or it does not survive a restart. `applyTo(session)` seeds launch options |
 | Change launch flags | `session/SessionLauncher.kt` (`buildArgs`) | Immutable `LaunchOptions` snapshot; `--print` is mandatory |
 | Touch auth / credentials | `process/CredentialsVault.kt`, `process/AuthCli.kt`, `session/LoginCoordinator.kt`, `settings/SecretStore.kt` | Credentials reach the binary **by env only**, never argv, never logs |
 | Read a past session | `session/SessionStore.kt` (paths, traversal guard) + `session/SessionTranscriptReader.kt` (JSONL → entries) | The binary's files are the source of truth; the plugin persists no transcripts |
@@ -34,13 +35,17 @@
   - `session/` — one `ClaudeSession` per chat tab plus its single-responsibility collaborators
     (`TokenAccountant`, `TaskTracker`, `TranscriptReconciler`, `DiffLifecycleManager`,
     `SessionControlClient`, `PermissionCardManager`, `HookBroker`, `HookActivityNarrator`,
-    `LoginCoordinator`), and the session-history readers.
+    `LoginCoordinator`), the agent tree (`AgentRegistry`, `AgentMeta`, `PluginAgentIndex`), the background
+    tasks (`BackgroundTaskRegistry`, `BackgroundTaskReplay`, `TaskOutputFile`, `LiveOutputTail`), and the
+    session-history readers.
   - `permission/` — the `can_use_tool` broker and the deterministic sensitive-data lock.
   - `diff/` — native diff presentation, hunk selection, edit snapshots, rollback.
-  - `ui/` — tool window, tab strip, settings, dialogs; `ui/jcef/` is the host↔web bridge.
-  - `context/`, `actions/`, `settings/`, `util/`.
-- `src/main/resources/jcef/` — the inlined web app: `shell.html`, `app-*.js`, `app.css`, vendored
-  `marked`/`purify`/`highlight`. Served under a hash-pinned CSP.
+  - `ui/` — tool window, tab strip, settings, dialogs, and the panel's collaborators (`LinkNavigator`,
+    `SessionFeed`, `AttachmentTray`, `BackgroundTaskView`); `ui/jcef/` is the host↔web bridge.
+  - `context/`, `actions/`, `settings/` (`SettingsStore` = the PasswordSafe document, `AlwaysAllowTools`),
+    `util/`.
+- `src/main/resources/jcef/` — the inlined web app: `shell.html`, `app-*.js`, `css/*.css`, vendored
+  `marked`/`purify`/`highlight`. Served under a hash-pinned CSP, as ONE document assembled by `JcefHost`.
 - `src/test/kotlin/` — unit + `headless/` (`BasePlatformTestCase`) + `integration/` (drives `bin/fake-claude`).
 - `src/test/frontend/` — vitest + jsdom over the **real** `resources/jcef/*.js`.
 - `src/uiTest/` — RemoteRobot, off by default (`-PuiTest.enabled=true`).
@@ -68,6 +73,7 @@
 | Frontend lint/format | `npm run lint` · `npm run format:check` · `npm run format` | 2026-08-11 |
 | Production dependency audit | `npm audit --omit=dev` | 2026-08-11 |
 | Protocol drift | `./gradlew checkDrift -PclaudeBinary=/usr/bin/claude` | 2026-08-11 |
+| Unreachable CSS rules | `python3 scripts/css-usage.py` | 2026-08-11 |
 | Verify against local IDEs | `./gradlew verifyPlugin -PlocalIdePath=<dir>[,<dir>…]` | unverified here |
 | Run a sandbox IDE | `./gradlew runIde` | unverified here |
 
@@ -81,19 +87,26 @@ On this machine only: `node` needs `OPENSSL_CONF=/dev/null`, and `claude` is a s
 - Threading: I/O and parsing off-EDT; every UI mutation on the EDT via the session's `edt {}` dispatcher.
 - `protocol/` stays free of IDE classes so it unit-tests on a plain JVM. Same for `ui/jcef/JcefBridge.kt`.
 - Frontend: no bundler, no CDN; a new CSS class used from JS needs a real rule or `css-contract.test.js`
-  fails.
+  fails. The stylesheet is several files concatenated **in cascade order** (`JcefHost.CSS_PARTS`) — order is
+  semantics, so a part goes where its rules belong, not at the end.
+- **One state vocabulary** for everything the page colours: `running` · `completed` · `failed` · `stopped`,
+  decided in `ui/jcef/JcefStatus.kt`. The page paints the word the host sends; it never derives one.
 - Tests live under the mirrored package path; headless and integration tests must run inside the `test`
   task (the platform runtime is only wired there).
 
 ## Minefields
 
-- `session/ClaudeSession.kt` (~2.8k lines, most-churned source file) — property/`init` **declaration order
+- `session/ClaudeSession.kt` (~3.1k lines, most-churned source file) — property/`init` **declaration order
   matters**: `InitOrderContractTest` scans the sources because the compiler only catches the direct case.
+  The same applies to `ui/JcefChatPanel.kt`, whose `init` reads fields declared above it on purpose.
 - `permission/SensitiveGuard.kt` — walks every string leaf of a tool input as a path candidate. Two live
   false positives came from that (`// comment` read as UNC; `$` in a shell value read as a regex
   replacement). Change `pathCandidates`/`foreignHome` with tests first.
-- `ui/jcef/JcefHost.kt` — the CSP is hash-pinned over the exact bytes of each inline script. Editing
-  `shell.html`'s inline blocks changes the hash; anything that would need `unsafe-inline` is a no.
+- `ui/jcef/JcefHost.kt` — the CSP is hash-pinned over the exact bytes of each inline script AND of the
+  concatenated stylesheet. Editing `shell.html`'s inline blocks changes the hash; anything that would need
+  `unsafe-inline` is a no, and so is loading an asset by URL (the scheme handler serves ONE document).
+- `resources/jcef/shell.html` — `#boot` and `#auth-card` live inside `#work`, which is what keeps them off
+  the tab bar. Moving them back under `#app` re-covers the chat tabs while a chat is starting.
 - `.github/workflows/release.yml` — merging to `main` publishes. The `guard` job refuses to re-release a
   version whose tag already exists; the tagging step is deliberately idempotent.
 - `session/SessionTranscriptReader.kt` — restoring a transcript from the binary's JSONL. Synthetic `user`
