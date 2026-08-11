@@ -8,7 +8,7 @@
 //  - a chat that started nothing has no ⋮ and no second row;
 //  - going back to the chat's own transcript says so with an EMPTY agentId — the host reads a blank id as
 //    "the chat", never as an agent whose id is the empty string.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('tab bar', () => {
   let win;
@@ -179,6 +179,28 @@ describe('tab bar', () => {
     expect(subtab()).toBe(null);
   });
 
+  it('a repaint keeps the hovered chat’s menu, not the selected chat’s', () => {
+    // The host rebuilds the bar several times a turn. The reopen used to re-anchor to the FIRST ⋮ with no
+    // chat id, i.e. the selected chat — so hovering another tab showed you your own agents a fraction of a
+    // second later, which is exactly what was reported.
+    const other = {
+      id: '2',
+      title: 'Chat 2',
+      selected: false,
+      tree: [{ id: 'z', parent: null, label: 'Suyo' }],
+    };
+    win.cc.tabs({ chats: [CHATS[0], other], tree: TREE, tasks: TASKS });
+    const otherPill = Array.from(bar().querySelectorAll('.pill')).find((p) =>
+      p.textContent.includes('Chat 2')
+    );
+    click(otherPill.querySelector('.pill-more'));
+    expect(cardText().join(' ')).toContain('Suyo');
+    // A push arrives while the menu is open — with something changed, so the bar really is rebuilt.
+    win.cc.tabs({ chats: [{ ...CHATS[0], attention: true }, other], tree: TREE, tasks: TASKS });
+    expect(cardText().join(' ')).toContain('Suyo');
+    expect(cardText().join(' ')).not.toContain('Inventario de dependencias');
+  });
+
   it('a push that changes nothing visible does not rebuild the bar', () => {
     // The host pushes the whole bar on every agent event, several times a turn, and nearly all of those
     // change nothing you can see — an agent's transcript grew. Rebuilding anyway made the row flicker under
@@ -200,6 +222,67 @@ describe('tab bar', () => {
     bar().appendChild(stack);
     win.cc.tabs({ chats: CHATS, tree: TREE, tasks: TASKS });
     expect(bar().querySelector('.dash-toggles')).not.toBe(null);
+  });
+
+  it('the overflow is bounded and reachable — the CSS contract that kept breaking', () => {
+    // Reported twice, and jsdom lays nothing out, so only the stylesheet can be asserted. Two ways this
+    // failed in practice, both invisible to every other test:
+    //   1. A container that does not bound its width lets the capsule GROW instead of overflowing, so the
+    //      extra tabs are painted outside the tool window and no amount of scrolling reaches them.
+    //   2. The scrollbar was hidden (`scrollbar-width: none`) on the grounds that the wheel would do — and
+    //      when the wheel did not, there was no way left to even see that there was more.
+    // Comments stripped first: the rules below are EXPLAINED at length right above them, and matching raw
+    // text would assert against the explanation rather than against the code.
+    const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = (selector) => {
+      const at = css.indexOf(selector + ' {');
+      return at < 0 ? '' : css.slice(at, css.indexOf('}', at));
+    };
+    for (const sel of ['#tabsbar', '.tab-rows', '.tab-row']) {
+      expect(block(sel), `${sel} must bound its width`).toMatch(/max-width:\s*100%/);
+    }
+    expect(block('.tab-capsule')).toMatch(/overflow-x:\s*auto/);
+    // No scrollbar to aim at — the row is grabbed, wheeled, or moved by centring the chat you select. The
+    // grab needs a cursor that says so, and the drag must not fight the smooth scrolling.
+    expect(block('.tab-capsule')).toMatch(/cursor:\s*grab/);
+    expect(block('.tab-capsule.dragging')).toMatch(/scroll-behavior:\s*auto/);
+    // A tab is capped, or one named after a long first prompt fills the bar on its own.
+    expect(block('.tab-capsule .pill')).toMatch(/max-width:/);
+  });
+
+  it('the row is dragged by grabbing it, and the drag does not switch chat on release', () => {
+    const capsule = bar().querySelector('.tab-capsule');
+    capsule.scrollLeft = 0;
+    const at = (type, x) =>
+      new win.MouseEvent(type, { clientX: x, button: 0, bubbles: true, cancelable: true });
+    capsule.dispatchEvent(at('mousedown', 300));
+    win.document.dispatchEvent(at('mousemove', 200)); // 100px to the left
+    expect(capsule.scrollLeft).toBe(100);
+    expect(capsule.classList.contains('dragging')).toBe(true);
+    win.document.dispatchEvent(at('mouseup', 200));
+    expect(capsule.classList.contains('dragging')).toBe(false);
+
+    // Releasing over a tab must NOT also select that chat: the click that ends a drag is swallowed.
+    sent.length = 0;
+    click(bar().querySelector('.pill'));
+    expect(sent).toEqual([]);
+    // ...and the very next click, with no drag before it, works normally again.
+    click(bar().querySelector('.pill'));
+    expect(sent.length).toBe(1);
+  });
+
+  it('a movement below the threshold is a click, not a drag', () => {
+    const capsule = bar().querySelector('.tab-capsule');
+    capsule.scrollLeft = 0;
+    const at = (type, x) =>
+      new win.MouseEvent(type, { clientX: x, button: 0, bubbles: true, cancelable: true });
+    capsule.dispatchEvent(at('mousedown', 300));
+    win.document.dispatchEvent(at('mousemove', 298)); // 2px — a hand resting, not a drag
+    win.document.dispatchEvent(at('mouseup', 298));
+    expect(capsule.scrollLeft).toBe(0);
+    sent.length = 0;
+    click(bar().querySelector('.pill'));
+    expect(sent.length).toBe(1); // the chat still selects
   });
 
   it('the wheel scrolls the chats, because a vertical wheel does not move a horizontal row', () => {

@@ -361,7 +361,11 @@
     document.body.appendChild(panel);
     placeMenu(panel, anchor);
     anchor.classList.add('tab-open');
-    openPanel = { el: panel, anchor: anchor };
+    // WHAT it is showing, not just where it hangs: the bar is rebuilt on every push from the host, several
+    // times a turn, and the re-anchor below has to reopen THE SAME menu. Without these it reopened with no
+    // root and no chat — i.e. the selected chat's tree — so hovering another tab showed you your own agents
+    // a fraction of a second later.
+    openPanel = { el: panel, anchor: anchor, rootId: rootId || null, chatId: chatId == null ? null : chatId };
     requestAnimationFrame(function () {
       if (openPanel && openPanel.el === panel) panel.classList.add('open');
     });
@@ -472,6 +476,8 @@
       },
       kids
     );
+    // Which chat this pill IS, so a repaint can put an open menu back on the same tab (see `render`).
+    btn.__chatId = opts.menuChat == null ? null : opts.menuChat;
     if (opts.onMenu) attachMenu(btn, opts.menuRoot || null, opts.menuChat || null);
     // The pin: turn what you are reading into a chat tab of its own.
     //
@@ -575,6 +581,56 @@
     host.addEventListener('mouseleave', scheduleClose);
   }
 
+  /** Past this many pixels the gesture is a DRAG, not a click on the tab you happened to press. */
+  var DRAG_SLOP = 4;
+
+  /**
+   * Grab the row and move it, the way you would move a physical row of tabs.
+   *
+   * There is no scrollbar to aim at (the platform one is a grey slab across a rounded capsule), the wheel
+   * is not discoverable, and clicking your way along a row of twenty is tedious — so the row itself is the
+   * handle. Selecting a chat also centres it (see `render`), which means ordinary use keeps the row roughly
+   * where you can reach it and dragging is for the rest.
+   *
+   * The click that ENDS a drag is swallowed: releasing over a tab must not also switch to that chat. Mouse
+   * events rather than pointer events on purpose — `setPointerCapture` does not exist in jsdom, and a
+   * gesture nobody can test is a gesture that breaks silently.
+   */
+  function dragToScroll(el) {
+    var from = null;
+    var moved = false;
+    el.addEventListener('mousedown', function (ev) {
+      if (ev.button !== 0) return;
+      from = { x: ev.clientX, scroll: el.scrollLeft };
+      moved = false;
+    });
+    document.addEventListener('mousemove', function (ev) {
+      if (!from) return;
+      var dx = ev.clientX - from.x;
+      if (!moved && Math.abs(dx) < DRAG_SLOP) return;
+      moved = true;
+      el.classList.add('dragging');
+      el.scrollLeft = from.scroll - dx;
+      ev.preventDefault();
+    });
+    document.addEventListener('mouseup', function () {
+      from = null;
+      el.classList.remove('dragging');
+    });
+    // Capture phase, so it runs before the pill's own handler. `moved` is cleared here rather than on
+    // mouseup: the click arrives after it, and clearing it early would let the chat switch anyway.
+    el.addEventListener(
+      'click',
+      function (ev) {
+        if (!moved) return;
+        moved = false;
+        ev.stopPropagation();
+        ev.preventDefault();
+      },
+      true
+    );
+  }
+
   /** True when this chat has started anything at all — i.e. when there is a tree to show. */
   function hasWork() {
     return state.tree.length > 0 || state.tasks.length > 0;
@@ -660,7 +716,9 @@
     // panel each time — so the popup vanished from under the pointer while you were reading it, and the
     // longer the tree the more certain that was. The bar is rebuilt (the old ⋮ is gone with it), so the
     // panel is re-anchored to the new one afterwards rather than kept pointing at a detached node.
-    var reopen = !!openPanel;
+    // Was the tree open, and on WHAT? Both, or the reopen below silently changes which chat you are looking
+    // at. The panel is captured before `closeTree` clears it.
+    var reopen = openPanel && { rootId: openPanel.rootId, chatId: openPanel.chatId };
     closeTree(true);
     // Our rows live in their OWN container: the dashboard's view switcher is a sibling in this bar
     // (app-session.js puts it there so it stops floating over the transcript), and a blanket clear of the
@@ -706,10 +764,15 @@
       // gesture is the whole fix; `preventDefault` stops the page from scrolling underneath instead.
       capsule.addEventListener('wheel', function (ev) {
         var delta = Math.abs(ev.deltaY) > Math.abs(ev.deltaX) ? ev.deltaY : ev.deltaX;
-        if (!delta || capsule.scrollWidth <= capsule.clientWidth) return;
-        ev.preventDefault();
+        if (!delta) return;
+        // No overflow check: a measurement that says "nothing to scroll" when there is leaves the row inert
+        // with no way to tell why. Scrolling a box that cannot scroll costs nothing — `scrollLeft` simply
+        // does not move — so `preventDefault` is conditioned on it having actually moved instead.
+        var before = capsule.scrollLeft;
         capsule.scrollLeft += delta;
+        if (capsule.scrollLeft !== before) ev.preventDefault();
       });
+      dragToScroll(capsule);
       // A tab that TAKES FOCUS is scrolled into view. Without this, tabbing along a row wider than the
       // window moves focus onto pills that are scrolled out of sight or half-covered by the edge fade —
       // WCAG 2.2 SC 2.4.7 (Focus Visible) and 2.4.11 (Focus Not Obscured). One listener on the container,
@@ -719,11 +782,13 @@
           ev.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       });
       host.appendChild(h('div', { class: 'tab-row' }, capsule));
-      // The selected tab is brought into view after the row is in the document (it has no width before
-      // that): selecting a chat from the host, or closing one, must never leave you looking at a gap.
+      // The selected tab is CENTRED, after the row is in the document (it has no width before that).
+      // Centring rather than "bring it barely into view" is what makes a long row usable without a
+      // scrollbar: whichever chat you pick lands in the middle, so its neighbours on both sides are one
+      // click away and the row moves under you as you work. Dragging covers the rest.
       requestAnimationFrame(function () {
         var open = capsule.querySelector('.pill.selected');
-        if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'center' });
       });
     }
 
@@ -743,11 +808,20 @@
 
     bar().hidden = !chatPills.length && !current;
 
-    // Re-anchor the panel to the ⋮ this repaint just created. Rebuilt in place, with its content refreshed —
-    // which is the point: an agent that finished while you were looking at the tree should say so.
+    // Re-anchor the panel to the ⋮ this repaint just created, showing THE SAME THING. Rebuilt in place, with
+    // its content refreshed — which is the point: an agent that finished while you were looking at the tree
+    // should say so. The anchor is the ⋮ of the chat the menu belongs to, not simply the first one in the
+    // bar: those differ the moment you hover a tab that is not the selected one.
     if (reopen) {
-      var anchor = host.querySelector('.pill-more');
-      if (anchor) openTree(anchor, true);
+      var anchor = null;
+      if (reopen.chatId != null) {
+        var pills = rows.querySelectorAll('.tab-capsule .pill');
+        for (var pi = 0; pi < pills.length; pi++) {
+          if (pills[pi].__chatId === reopen.chatId) anchor = pills[pi].querySelector('.pill-more');
+        }
+      }
+      if (!anchor) anchor = rows.querySelector('.pill-more');
+      if (anchor) openTree(anchor, true, reopen.rootId, reopen.chatId);
     }
   }
 
