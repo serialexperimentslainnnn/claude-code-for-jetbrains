@@ -23,7 +23,9 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Command calls read like a terminal you can copy** — a `Bash`/PowerShell/MCP-exec call shows the exact command as its own copyable code block right under the header, visible without expanding the card, and the card gets its own accent. Detection is by input *shape*, not tool name, so any command-executing tool is covered.
 - **Syntax highlighting** — code blocks, `Read`/`Write`/`Edit` output and coloured diffs are highlighted from the file's extension (~35 languages), painted in the IDE's own syntax colours.
 - **Collapsible tool calls** — each card folds its output; outputs anchor under their own call. Live state by colour: sky-blue in flight (pulsing while working), green finished, red on error, with elapsed time.
-- **Nested subagents** — `Task`/Agent activity (its tool calls, outputs and text) nests and indents under the Agent, collapsing hierarchically.
+- **A tab per agent** — an agent's work does not land in the chat's transcript: it gets its own, reachable from the bar under the chats, with the whole tree (agents, their agents, background tasks) one hover away. A finished agent keeps its tab, closing one only hides a view, and any subtab can be pinned as a tab of its own.
+- **Workloads** — everything running across *every* open chat as one diagram: chats at the root, agents beneath them, tasks under whoever started them. Every node goes somewhere, and a running task can be stopped from it.
+- **Background tasks that outlive themselves** — the binary stops listing a task the moment it ends, which is exactly when its output matters; the plugin keeps the task, its command and its output, live-tailed from the file the binary writes and rebuilt after a restart.
 - **Multi-prompt queue** — send follow-ups while the agent is still working; queued messages are shown and reorderable.
 - **Find in transcript** (Ctrl/Cmd+F) with hit navigation, **output-follow toggle**, and **Markdown** with tables, strikethrough, GFM task lists and nested lists.
 
@@ -42,7 +44,9 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Live VFS refresh** — every successful write refreshes the IDE immediately (by exact path for `Edit`/`Write`, re-scanning the tree after `Bash` or a mutating MCP tool), including newly created files.
 
 ### Sessions
-- **Session history from the binary's own files** — the source of truth. "Open Previous Session…" lists the project's past chats by their real title; on startup your open tabs (or the most recent session) are re-attached via `--resume`. The plugin stores **no transcripts** — only which tabs were open, in `workspace.xml`.
+- **Session history from the binary's own files** — the source of truth. "Open Previous Session…" lists the project's past chats by their real title; on startup your open tabs (or the most recent session) are re-attached via `--resume`. The plugin stores **no transcripts** — only which tabs were open.
+- **A restored transcript shows what you actually said** — the binary writes its own bookkeeping (task notifications, caveats, command output) on the same `user` lines your prompts use, and those are no longer replayed in your voice.
+- **Settings in the OS keychain** — one encrypted document in the IDE's password safe, shared by every project, instead of a plaintext per-project file that people commit with an API key in its env block. Existing settings are adopted on first run.
 - **Session management** — rename, fork and delete past sessions.
 - **Attention notifications + tab badge** — a background session needing you (permission, finished turn, error) notifies and badges its tab; suppressed for the chat already on screen.
 
@@ -55,7 +59,8 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 - **Plan mode**, **native hooks** (each hook run shows as one transcript row that evolves to ✓/✗), and a **predicted next prompt** chip you review before sending.
 
 ### Usage & diagnostics
-- **Session dashboard** — an overlay with the context breakdown by category, usage & cost (in / out / cache, USD when the binary reports it), account (email / org / plan / provider), active model, **background tasks** and in-flight **subagents** (both with Stop), and MCP server health with per-server reconnect / enable-disable.
+- **Session dashboard** — the context breakdown by category, usage & cost (in / out / cache, USD when the binary reports it), your plan's limit windows with the time left on each, account (email / org / plan / provider), active model, working directory, binary version, and MCP server health with per-server reconnect / enable-disable. What is *running* lives in its own **Workloads** view.
+- **Plan limits where you can see them** — one bar per window under the composer (blue < 65%, amber < 85%, red above), refreshed on a timer whether or not the chat is on screen: a window can reset, or fill up from another device, with you looking elsewhere.
 - **Live token counter** — a reasoning-token estimate and output count in the composer readout mid-turn.
 - **Memory recall** — a collapsible "Recalled N memories" row showing which memories (scope · path · snippet) influenced the turn.
 - **Account & diagnostics** — Account info, Binary Version, Effective Settings and an interactive MCP-runtime dialog in the gear menu.
@@ -114,26 +119,71 @@ The Marketplace listing tracks the latest release. This repository is the **sour
 
 **From source:** see [Build from source](#build-from-source).
 
-## Usage
+## User guide
 
-Open the **Claude Code** tool window (right side panel, same area as AI Assistant). Each tab is an independent chat session backed by its own `claude` process.
+### First run
+
+Open the **Claude Code** tool window (right side panel, same area as AI Assistant). What you see first depends on what the plugin finds:
+
+- **"Claude Code was not found"** — the `claude` binary is not installed or not where the plugin looks. The card offers the official install command for your OS (it runs in the IDE terminal, or you copy it and run it yourself), plus a field to point at an existing binary. The tab starts on its own once the binary appears; you do not have to close and reopen it.
+- **Sign in** — you are not signed in yet. One button, one browser round-trip, and the card walks you through it. If your browser shows you a code instead of returning automatically, paste it in the same card.
+- **Loading** — the binary is starting. You can still switch to another chat while it does.
+
+Your login is stored in the **IDE's password safe** (the OS keychain), not in a file on disk. The plugin deliberately removes `~/.claude/.credentials.json` after taking custody of it, and hands the credential to the binary through the environment — never on the command line, never in a log. **Log out** clears only what the plugin holds; your terminal `claude` login is left alone.
+
+### The chat
+
+Each chat tab is an independent session with its own `claude` process. Type in the composer, `Enter` to send.
 
 | Shortcut | Action |
 |---|---|
-| `Enter` | Send message |
-| `Shift+Enter` | New line in composer |
+| `Enter` | Send |
+| `Shift+Enter` | New line |
 | `Shift+Tab` | Cycle permission mode |
+| `Tab` (empty composer) | Accept the suggested next prompt |
 | `Esc` | Interrupt the running turn |
-| `Ctrl/Cmd+F` | Find in transcript |
+| `Ctrl/Cmd+F` | Find in transcript (`Enter` / `Shift+Enter` to walk the hits) |
 | `Ctrl/Cmd+O` | Collapse / expand reasoning ("Thought process") |
-| `/` in an empty composer | Slash-command palette (also the **Commands** toolbar button) |
-| `Tab` | Accept the predicted-prompt suggestion into the composer |
+| `/` (empty composer) | Slash-command palette |
 
-- **Chips** (model · mode · effort · thinking) — click to change at any time, no restart
-- **Toolbar** — New Chat, Interrupt, Commands, Diff History, Close All Diffs
-- **Gear menu** — settings, account & diagnostics, the formatted session dashboard
+The row of **chips** under the composer — provider · model · permission mode · effort · thinking — changes any of them mid-conversation. Model and mode apply immediately; the thinking toggle restarts the session behind the scenes (with `--resume`, so nothing is lost).
 
-File edit proposals open as an editable diff tab in the editor, with an inline Accept/Reject card in the chat so you review without leaving the conversation.
+**Attach context** with the 📎 button: files, a directory, an image, your current selection or the open file, plus a filterable list of recently-opened files. You can also drag an image in, or paste one. From the editor, right-click gives you *Explain with Claude*, *Add Selection to Claude Context* and *Add File to Claude Context*.
+
+Paths and symbols in Claude's answers become links **only when the IDE can confirm they exist**, so a link never dead-ends; clicking one opens the file at the line, or reveals a directory in the Project view.
+
+### When Claude wants to change a file
+
+Nothing is written without you seeing it first. An edit proposal opens as an **editable diff tab** in the editor — Current | Proposed — with an inline **Accept / Reject** card in the chat.
+
+- **Edit the proposed side before accepting.** What gets written is your edited version, not the original proposal.
+- **Accept / Reject the change as a whole.** Per-line acceptance was removed in 4.0.5 because it produced code that did not hold together.
+- The diff closes when you accept, reject, stop or interrupt.
+- **View diff** on any past tool card reopens what that call actually wrote, at any time.
+- **Restore** asks Claude Code to rewind the files to that point in the conversation; if the binary cannot, the plugin offers to revert them itself, with confirmation.
+
+The **permission mode** chip decides how often you are asked: ask each time, accept edits automatically, plan mode (Claude proposes a plan and waits), or bypass. Whatever the mode, the [security lock](#security) is checked first and cannot be turned off — at most, a rule you disable in Settings turns an automatic block into a card you have to answer.
+
+### Agents and background tasks
+
+When Claude spawns agents, each one gets **its own tab and its own transcript**, so its thinking and its tool calls stay out of the main conversation. The bar under the chat tabs shows the one you are reading; hovering a chat's `⋮` opens the whole tree at once — agents, their agents, and the background tasks each of them started — and clicking any row goes there.
+
+- **A finished agent keeps its tab**, marked as finished. Reading *why* something failed is the point.
+- **Closing a subtab hides a view, it destroys nothing.** The card that spawned it reopens it.
+- **Pin** (⇱) turns the subtab you are reading into a tab of its own, next to the chats.
+- **Background tasks** keep their tab and their output *after* they end, and both come back after a restart.
+
+The **Workloads** view (top-right of the tab bar) draws everything that is running across *every* open chat as one diagram: chats at the root, agents under them, tasks under whoever started them. Every node is a destination, and a running task can be stopped from there.
+
+### The dashboard
+
+The **Session** view shows what the current session is costing you: context breakdown, tokens and cost, your plan's limit windows with the time left on each, the account you are signed in as, the model, the working directory and the binary version — plus the MCP servers, which can be reconnected or toggled from there.
+
+Your plan limits also sit as small bars under the composer, so you can see them without opening anything: blue below 65%, amber below 85%, red above.
+
+### Sessions
+
+Chats are the binary's own sessions, so they are yours in every tool: **Open Previous Session…** lists what exists on disk, with the titles Claude gave them, and reopens one with its transcript. Chats you had open are restored when the IDE starts (Settings ▸ Claude Code). The plugin stores **no transcripts of its own** — only which tabs were open.
 
 ### IDE tools (MCP) — optional
 
@@ -146,13 +196,26 @@ You can also register **custom MCP servers** as a JSON object of `name → serve
 
 > ⚠ **Security:** `sse`/`streamable-http` use JetBrains' localhost endpoint, which any process on your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you trust. Every IDE tool call is still gated by the permission prompt *and* by the [sensitive-data lock](#security).
 
+### When something goes wrong
+
+| Symptom | What it usually is |
+|---|---|
+| The chat never loads, or the tool window is blank | The IDE's embedded browser (JCEF) is unavailable. On **2025.1 / 2025.2** this plugin no longer runs at all — see [Requirements](#requirements). Otherwise check Help ▸ Find Action ▸ *Registry* for a disabled `ide.browser.jcef.enabled` |
+| "Claude Code was not found" with the binary installed | It is somewhere the plugin does not look. Paste the full path into the card, or set it in **Settings ▸ Claude Code** |
+| Signed out again after a restart | Expected only if the stored credential could not be renewed — it renews itself silently on launch. If it keeps happening, sign in again from the card and check the IDE can reach your keychain |
+| A tool call is refused with no card to override it | The [sensitive-data lock](#security) blocked it. The message names the rule and the Settings path; foreign-territory blocks are absolute by design |
+| A chat is empty after reopening it | The session's file is gone from `~/.claude/projects/…` (deleted, or a different working directory). The plugin keeps no transcripts of its own |
+| The agent seems stuck | `Esc` interrupts the turn. If a tool card sits running for ever, its agent's tab shows what it was actually doing |
+
+Deeper cases, with logs and commands: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and [`docs/FAQ.md`](docs/FAQ.md).
+
 ## Build from source
 
 Requires **JDK 21** (the IDE runs on JBR 21). The Gradle wrapper is included.
 
 ```bash
 JAVA_HOME=~/.jdks/jbr-21.0.11 ./gradlew buildPlugin
-# → build/distributions/claude-code-native-4.3.3.zip
+# → build/distributions/claude-code-native-5.5.0.zip
 ```
 
 Install it with **Settings → Plugins → ⚙ → Install Plugin from Disk**.
@@ -174,7 +237,7 @@ npm test                 # frontend suite (vitest + jsdom)
 
 ### Testing
 
-The suite is a real pyramid — **677 JVM tests + 44 frontend**, 0 failures:
+The suite is a real pyramid — **857 JVM tests + 149 frontend**, 0 failures:
 
 - **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker` and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
 - **headless component** — `BasePlatformTestCase` in-process, for the project services and the settings UI;
@@ -202,15 +265,18 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and ver
 
 Verified **Compatible** on IU-253, IU-261, IU-262 and PY-262, with **zero deprecated or internal API** — both product families, because how a product bundles the platform is exactly where a classloader problem hides. `untilBuild` is declared `263.*` ahead of the 2026.3 EAP; the verifier picks up a real 263 build automatically once one is published.
 
-Recent highlights: the model picker showing each model's real version (4.3.3); the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); the background-tasks dashboard card (4.2.0); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
+Recent highlights: the plan-limits panel with per-window reset times (5.0.0–5.1.1); the model picker showing each model's real version (4.3.3); the executed command as a copyable code block plus syntax-highlighted diffs and file output (4.3.2); the [deterministic sensitive-data lock](#security), jump-to-code links and per-write VFS refresh (4.3.1); editable diff review (4.1.0); and the full JCEF UI rebuild (4.0.0).
 
 Full history in [`CHANGELOG.md`](CHANGELOG.md) and [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 ## Documentation
 
+Using the plugin is covered above, in [User guide](#user-guide). Everything below is for working *on* it.
+
 | Document | What it covers |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Architecture, protocol, empirical binary behaviour |
+| [`PROJECTMAP.md`](PROJECTMAP.md) | Where things live — the "I want to change X → go to Y" index |
 | [`AGENTS.md`](AGENTS.md) | Runbook for working on this repo with a coding agent — commands, gates, boundaries |
 | [`SECURITY.md`](SECURITY.md) | The sensitive-data lock, triage scope, reporting policy |
 | [`docs/adr/`](docs/adr/README.md) | Architecture Decision Records — release process, threat model, i18n deferral |
