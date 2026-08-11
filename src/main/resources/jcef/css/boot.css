@@ -28,19 +28,29 @@
 /* ════════════════════════════════════════════════════════════════════════════
    BOOT SCREEN — shown while the `claude` binary launches
    ════════════════════════════════════════════════════════════════════════════
-   Covers the whole tab rather than sitting inside the transcript: while the agent is booting there is nothing
-   to interact with, and a composer that looks live but silently drops what you type is worse than one that is
-   plainly not ready yet. Input is blocked by `#app.booting` below, so this is not merely a visual cover.
+   CONTENT OF THE TRANSCRIPT, not an overlay on top of it. It used to be `position: absolute; inset: 0`,
+   which meant it covered whatever it was laid over: first the chat tabs (so you could not switch chats while
+   one was starting), then — once that was fixed — the composer, and it painted a full-window panel that
+   vanished again whenever the binary started quickly, which reads as the whole plugin flashing. A row cannot
+   cover anything it does not own, so all three of those go away by construction rather than by tuning.
 
-   Opaque, not translucent: a half-visible transcript underneath reads as "something is broken", not "wait". */
+   The composer stays usable: a prompt typed while the binary starts is queued and sent when it is ready
+   (`ClaudeSession.send` starts the process and enqueues; `pump` writes once there is a session). */
 #boot {
-  position: absolute;
-  inset: 0;
-  z-index: 60; /* above the dock and permission cards, below nothing else this app draws */
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg);
+  padding: clamp(24px, 12vh, 90px) 0;
+  /* A short grace before it draws. The screen is visible by default — the honest initial state is "waiting",
+     not "idle" — but a start that takes 100 ms does not deserve a panel: `both` holds it at opacity 0 for
+     the delay, so a fast start never draws it and a slow one still says "wait" immediately after. The wait
+     itself is unchanged; only whether it is worth showing. */
+  animation: fade 0.14s var(--ease) 0.35s both;
+}
+/* The empty state and a waiting screen are two answers to the same question, so only one shows. */
+#conversation:has(#boot:not([hidden])) #empty,
+#conversation:has(#auth-card:not([hidden])) #empty {
+  display: none;
 }
 #boot[hidden] {
   display: none;
@@ -115,11 +125,9 @@ body.reduced-motion .boot-dots::after {
   color: var(--dim);
 }
 /* The wait is real: block interaction rather than letting keystrokes fall on the floor. */
-#app.booting #dock,
-#app.booting #conversation {
-  pointer-events: none;
-  user-select: none;
-}
+/* NB `#app.booting` used to make the transcript and the dock inert while the binary came up. It went with
+   the overlay: the composer is usable now, because a prompt typed during those few seconds is queued and
+   sent the moment there is a session — which is better than a field that looks live and refuses you. */
 
 /* ── "Claude Code was not found" card (the boot overlay's fourth state) ─────── */
 #boot.missing .boot-dots {
@@ -236,14 +244,14 @@ body.reduced-motion .boot-dots::after {
 }
 
 /* ── sign-in card ───────────────────────────────────────────────────────────── */
+/* A row of the transcript, like the boot screen and for the same reasons. The two are still mutually
+   exclusive — no binary beats no login — but that is decided by the host (`cc.state`), which shows exactly
+   one, rather than by stacking one over the other and trusting a z-index. */
 #auth-card {
-  position: absolute;
-  inset: 0;
-  z-index: 55; /* below #boot (60): no binary beats no login */
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg);
+  padding: clamp(24px, 10vh, 70px) 0;
 }
 #auth-card[hidden] {
   display: none;

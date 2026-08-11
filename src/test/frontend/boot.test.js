@@ -51,16 +51,17 @@ describe('boot screen', () => {
     expect(boot().hidden).toBe(false);
   });
 
-  it('the overlays cover the work area, never the chat tabs', () => {
-    // A chat that is still starting used to hide the tab bar with it, so you could not switch to another
-    // chat while one booted — and switching is exactly what you do while you wait. Both overlays live
-    // inside #work (the transcript + composer), which is the containing block their `inset: 0` resolves
-    // against; #tabsbar is a sibling ABOVE it.
-    const work = win.document.getElementById('work');
-    expect(work).not.toBe(null);
-    expect(work.contains(boot())).toBe(true);
-    expect(work.contains(win.document.getElementById('auth-card'))).toBe(true);
-    expect(work.contains(win.document.getElementById('tabsbar'))).toBe(false);
+  it('the waiting screens are transcript content, never overlays', () => {
+    // They used to be `position: absolute; inset: 0`, and covered whatever they were laid over: first the
+    // chat tabs (so you could not switch chats while one started), then the composer — and a binary that
+    // comes up in a fraction of a second painted a full-window panel and removed it, which reads as the
+    // whole plugin flashing. As rows of the transcript none of that is possible.
+    const conv = win.document.getElementById('conversation');
+    expect(conv.contains(boot())).toBe(true);
+    expect(conv.contains(win.document.getElementById('auth-card'))).toBe(true);
+    // And the things they must never contain, or they would be covering them again.
+    expect(conv.contains(win.document.getElementById('dock'))).toBe(false);
+    expect(conv.contains(win.document.getElementById('tabsbar'))).toBe(false);
   });
 
   it('the sign-in screen replaces the spinner instead of being covered by it', () => {
