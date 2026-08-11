@@ -49,6 +49,38 @@ class SessionTranscriptReaderParseTest {
         assertEquals(listOf("THINKING" to "weighing it up", "ASSISTANT" to "the answer"), entries.map { it.speaker to it.text })
     }
 
+    /**
+     * A restored card knows whether its call is STILL RUNNING or FAILED — the two states the JSONL records
+     * on the result row rather than on the call.
+     *
+     * Without this every reconstructed card was FINISHED: a Bash an agent was running right now came back
+     * green and still instead of fading like its live twin, and one that had exited in error came back green
+     * too, with the failure visible only if you expanded its output.
+     */
+    @Test
+    fun `a call with no result is in flight, and one with a failed result is marked failed`() {
+        val entries = SessionTranscriptReader.parseEntries(
+            listOf(
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"live","name":"Bash","input":{"command":"sleep 60"}}]}}""".replace("\n", ""),
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"boom","name":"Bash","input":{"command":"false"}}]}}""".replace("\n", ""),
+                """{"type":"user","message":{"role":"user","content":[
+                   {"type":"tool_result","tool_use_id":"boom","is_error":true,"content":"exit 1"}]}}""".replace("\n", ""),
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"ok","name":"Read","input":{"file_path":"/tmp/x"}}]}}""".replace("\n", ""),
+                """{"type":"user","message":{"role":"user","content":[
+                   {"type":"tool_result","tool_use_id":"ok","content":"contents"}]}}""".replace("\n", ""),
+            ),
+        )
+        val calls = entries.filter { it.speaker == "TOOL" }.associateBy { it.toolUseId }
+        assertTrue(calls["live"]!!.inFlight, "a call with no result is still running")
+        assertTrue(!calls["live"]!!.failed)
+        assertTrue(calls["boom"]!!.failed, "a call whose result is an error has failed")
+        assertTrue(!calls["boom"]!!.inFlight)
+        assertTrue(!calls["ok"]!!.inFlight && !calls["ok"]!!.failed, "a call that returned is simply done")
+    }
+
     @Test
     fun `a tool_result is attributed to TOOL_OUTPUT and carries its error flag`() {
         val entries = SessionTranscriptReader.parseEntries(
