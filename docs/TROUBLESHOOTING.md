@@ -71,6 +71,22 @@ Diffs opened for review are real editor tabs, not modal dialogs, so they
 remain until you close them. Right-click any editor tab → **Close All
 Diffs**, or use the standard close shortcut on each one.
 
+## The chat never loads, or `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp`
+
+The whole chat UI is the IDE's embedded browser (JCEF), so without it there is nothing to
+show.
+
+- **On 2025.1 or 2025.2**: this plugin no longer runs there at all. From build 262 the
+  platform ships JCEF as a separate bundled plugin (`com.intellij.modules.jcef`), and a
+  plugin that does not declare a dependency on it gets no browser classes; that module id
+  does not exist before 2025.3, so declaring it raised the minimum IDE. **Stay on 5.1.1** on
+  those versions.
+- **On 2025.3 or newer**: check that the IDE's embedded browser is available — Help ▸ Find
+  Action ▸ *Registry*, key `ide.browser.jcef.enabled`. Some stripped or remote-development
+  setups ship without it.
+- The stack trace names `JcefHost.<init>`; anything else with the same symptom belongs in an
+  issue, with the log.
+
 ## Tool window does not appear
 
 - Make sure the plugin is enabled: Settings → Plugins → Installed →
