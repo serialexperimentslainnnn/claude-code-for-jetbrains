@@ -1,0 +1,413 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   🌈 VIBE MODE  (the colours themselves are animated from JS via the theme vars)
+   ════════════════════════════════════════════════════════════════════════════ */
+/* go full gag: every bit of text bold + italic + underlined while vibing */
+body.vibe,
+body.vibe .body,
+body.vibe .composer-input,
+body.vibe .pill,
+body.vibe .name,
+body.vibe .msg,
+body.vibe .notice {
+  font-weight: 700;
+  font-style: italic;
+  text-decoration: underline;
+}
+body.vibe .body * {
+  text-decoration: underline;
+}
+/* Nyan Cat for the Vibe toggle icon + the assistant avatar */
+.vibe-emoji {
+  display: inline-flex;
+  align-items: center;
+}
+.vibe-emoji svg {
+  width: 30px;
+  height: 22px;
+  display: block;
+}
+.avatar-nyan {
+  display: none;
+}
+.avatar-nyan svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+body.vibe .msg.assistant .avatar {
+  background: transparent;
+  box-shadow: none;
+}
+body.vibe .msg.assistant .avatar .avatar-star {
+  display: none;
+}
+body.vibe .msg.assistant .avatar .avatar-nyan {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* a gentle rainbow ring on the cards/composer so the whole UI joins in */
+body.vibe .composer-card:focus-within {
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px var(--accent-soft);
+}
+
+/* ── Accessibility: visible keyboard focus (WCAG 2.2 AA — 2.4.7, 1.4.11) ─────────────────────────────────────
+   Baseline for EVERY interactive element, including the ones built as <span role="button"> (the code-block
+   Copy control, menu items, tool cards). Those are not native buttons, so nothing gives them a focus ring for
+   free — without this, a keyboard user cannot see where they are.
+
+   `:focus-visible` rather than `:focus` on purpose: it shows the ring for keyboard interaction and keeps it
+   away from mouse clicks, which is exactly what makes designers reach for `outline: none` in the first place.
+
+   Two layers so it is visible on ANY background: a solid outline plus a contrasting offset ring. 1.4.11 asks
+   for 3:1 against adjacent colours for the focus indicator itself, and a single hairline in the accent colour
+   does not reliably clear that over the card backgrounds used here. `outline-offset` keeps it from being
+   clipped by the element's own border-radius. */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible,
+.copy:focus-visible,
+.menu-item:focus-visible,
+.tool-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The find bar's input suppressed its outline with no replacement — focus was simply invisible there.
+   It sits inside a floating bar, so it gets the ring treatment its siblings already had via :focus-within. */
+.find-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Windows/forced-colors mode: honour the system's own focus colour instead of ours (3.8 — the interface must
+   stay usable under prefers-contrast / forced colours, and overriding system colours defeats the point). */
+@media (forced-colors: active) {
+  :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible,
+  .copy:focus-visible,
+  .menu-item:focus-visible,
+  .tool-head:focus-visible,
+  .find-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
+/* ── tab bar: the chats, and a breadcrumb of where you are inside one ────────────────────────────────
+   Drawn by app-tabs.js. Two rows at most, both of fixed height: the chats' capsule, and the trail
+   (`Chat › Agent › Subagent`). It replaced a stack of one capsule per level tied together by an <svg>
+   thread — see the module header for why. Nothing here wraps or grows: a bar that changes height as the
+   agent tree deepens moves the transcript under the pointer while you are reading it. */
+/* One ROW: the tab rows on the left, the dashboard's view switcher on the right. Side by side as flex
+   items rather than one overlaying the other — see `.dash-toggles` for the conformance reason. */
+#tabsbar {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  flex: 0 0 auto;
+}
+#tabsbar[hidden] {
+  display: none;
+}
+/* The chats' row and the open subtab's row, stacked; they take whatever the switcher leaves. */
+.tab-rows {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tab-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* A tab never shrinks to a sliver: past a certain width the label is gone and every tab looks the same.
+   They keep their size and the row scrolls instead. */
+.tab-capsule .pill {
+  flex: 0 0 auto;
+}
+/* The capsule around the chats' pills — the oval that encloses the set. */
+/* The capsule scrolls; the ROW is what bounds it.
+   `min-width: 0` alone was not enough: the row is a flex container, and a flex item refuses to shrink below
+   its content unless the row lets it — so with enough tabs the capsule grew past the tool window, pushed the
+   last tabs under the dashboard buttons, and there was no way to reach them. `max-width: 100%` plus the row's
+   own `min-width: 0` (below) is what makes the overflow land INSIDE the capsule, where the wheel can move it. */
+.tab-capsule {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface2) 55%, transparent);
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* No scrollbar. The platform one is a grey slab across a rounded capsule, and it appeared under every row
+     — five of them in the screenshot that killed the previous design. The wheel scrolls it (app-tabs.js
+     translates deltaY, which Chromium does not do for a horizontal scroller on its own). */
+  scrollbar-width: none;
+  /* With the scrollbar gone, the fade IS the affordance: a tab cut off at the edge says "there is more this
+     way", which is what a hidden overflow cannot. Both edges, so it reads the same in either direction. */
+  mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
+.tab-capsule::-webkit-scrollbar {
+  display: none;
+}
+
+/* The trail sits a hair further left than the capsule above it, so the first segment's text lines up with
+   the first chat pill's rather than with the capsule's border. */
+.tab-row.trail {
+  padding-left: 2px;
+}
+
+/* The row holding the ONE open subtab, with its little caption. */
+.trail-label {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* The ⋮ on a chat tab (and on the open subtab): the control that shows the whole tree. Sits inside the pill,
+   next to the ×, with a real hit area — the version before this was a bare glyph a few pixels wide. */
+.pill-more {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pill-more:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The pin, on the open subtab: promote what you are reading to a tab of its own. */
+.pill-pin {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pill-pin:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.pill.tab-open .pill-more {
+  color: var(--accent);
+}
+
+/* ── the subtab popup: the whole diagram, on hover ───────────────────────────
+   A popup rather than rows in the bar: the bar stays two rows tall whatever the tree does, while the diagram
+   is free to be as large as it needs. It slides out from under its anchor and slides back when the pointer
+   leaves — the `.open` class lands on the frame AFTER insertion so the transition has a start state. */
+/* The subtab diagram, hanging off its chat tab.
+   NO PANEL: no background, no border, no shadow. The tree floats over the page and each card carries its
+   own surface, so what you see is the diagram and nothing around it. Its size comes from the CONTENT (see
+   `position` in app-tabs.js) rather than from a fixed box, which either wasted half its area on a small
+   tree or shrank a big one to nothing. Flush against the tab, so the pointer can travel from one to the
+   other without crossing a strip of "outside" that would arm the close. */
+.tab-tree {
+  z-index: 40;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.985);
+  transform-origin: top left;
+  transition:
+    opacity 0.16s var(--ease),
+    transform 0.16s var(--ease);
+}
+/* ── the tab menu ────────────────────────────────────────────────────────────
+   What a chat tab's ⋮ opens: its agents, subagents and background tasks as ONE list, indented by depth.
+   A list because a list cannot be clipped — every diagram-in-a-popup version of this was cut off by the
+   embedded browser's own bounds, which no CSS can escape. The diagram lives in Workloads, where it has room.
+   Opens on click or after a second of hover; stays three seconds after the pointer leaves. */
+.tab-menu {
+  z-index: 60;
+  min-width: 240px;
+  max-width: min(460px, calc(100vw - 20px));
+  overflow-y: auto;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow:
+    0 14px 36px rgba(0, 0, 0, 0.45),
+    0 2px 6px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.12s var(--ease),
+    transform 0.12s var(--ease);
+}
+.tab-menu.open {
+  opacity: 1;
+  transform: translateY(0);
+}
+.tab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px 5px 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab-menu-item:hover {
+  background: var(--surface2);
+}
+.tab-menu-item.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+.tab-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-menu-meta {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+/* Transparent canvas too: no sheet, no dot grid — the cards ARE the diagram. */
+.tab-tree .dg-view {
+  border: 0;
+  background: none;
+}
+/* Floating over a transcript instead of over a panel, the cards have to lift themselves off it: an opaque
+   surface and a real shadow, or the text underneath reads straight through the gaps between them. */
+.tab-tree .dg-card {
+  background: var(--surface);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.4),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+}
+/* Same for the connectors: a hairline that was tuned against a panel disappears over body text. */
+.tab-tree .dg-edge {
+  stroke: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
+  stroke-width: 1.8;
+}
+.tab-tree.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* A pill: the IDE's own surface colour, a hairline outline, and the accent only when selected — where it
+   carries the outline AND the text AND the weight, so selection never rests on colour alone. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--text) 26%, transparent);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 0.14s var(--ease),
+    background 0.14s var(--ease),
+    color 0.14s var(--ease);
+}
+.pill:hover {
+  background: color-mix(in srgb, var(--surface) 70%, var(--text) 8%);
+}
+/* The open tab wears the product's OWN accent (the coral), not the neon orange.
+   `--neon-orange` exists for exactly one thing — the selected dashboard view button — and spending it on the
+   tab bar as well made two unrelated "you are here" markers compete in the same corner of the screen, in a
+   colour that belongs to neither. The coral is the identity colour the composer, the links and the cards
+   already use, so a selected tab now looks like part of the same product. */
+.pill.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+}
+.pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* State as a dot — the tooltip says it in words, so colour is never the only carrier. */
+.pill-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--dim);
+}
+.pill-dot.running {
+  background: var(--info);
+}
+.pill-dot.completed {
+  background: var(--success);
+}
+/* Interrupted reads as a failure, not as a warning: the work did not finish and nothing will finish it. */
+.pill-dot.failed,
+.pill-dot.stopped {
+  background: var(--danger);
+}
+.pill-dot.attention {
+  background: var(--neon-orange);
+}
+
+.pill-x {
+  flex: 0 0 auto;
+  margin-right: -4px;
+  padding: 0 3px;
+  border-radius: 999px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pill-x:hover {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: var(--text);
+}
+
+/* Visually hidden but present for assistive technology. NOT `display:none` or `visibility:hidden` — both
+   remove the node from the accessibility tree, which would silence the live region entirely. The clip-path
+   technique keeps it rendered (and therefore announced) while occupying no visible space. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}

@@ -1,14 +1,14 @@
 // JS↔CSS class contract. Every class the web app emits from a `class: '...'` literal should have a matching rule
-// in app.css. This is exactly the check that would have caught `.mcp-actions` (a class the JS emitted with NO css
-// rule, so the MCP row's buttons wrapped and overlapped). It guards against NEW un-styled classes; the classes
-// that exist today without a dedicated rule (they inherit, or are covered by descendant selectors) are an explicit
-// grandfathered baseline below — tightening that list is fine, growing it should require a deliberate edit.
+// in the stylesheet. This is exactly the check that would have caught `.mcp-actions` (a class the JS emitted with
+// NO css rule, so the MCP row's buttons wrapped and overlapped). It guards against NEW un-styled classes; the
+// classes that exist today without a dedicated rule (they inherit, or are covered by descendant selectors) are an
+// explicit grandfathered baseline below — tightening that list is fine, growing it should require a deliberate edit.
 const fs = require('node:fs');
 const path = require('node:path');
-const { JCEF, appJsFiles } = require('./helpers/load');
+const { JCEF, appJsFiles, readCss } = require('./helpers/load');
 
 // Classes emitted by the JS that intentionally have no dedicated `.<class>{...}` rule today. A NEW class not in
-// this set and not in app.css fails the test.
+// this set and not in the stylesheet fails the test.
 const GRANDFATHERED = new Set([
   'dash-empty',
   'elicit-desc',
@@ -30,15 +30,15 @@ const GRANDFATHERED = new Set([
   'q-block',
   'q-header',
   'queue-text',
-  'subagent-desc',
-  'subagent-main',
-  'subagent-meta',
+  // NB `subagent-desc` / `subagent-main` / `subagent-meta` lived here until 5.5.0. They were not
+  // exceptions: the CSS defined `.sub-desc` / `.sub-main` / `.sub-meta` and the JS emitted the longer
+  // names, so the rules never applied and the rows rendered as one run-on line. Grandfathering them turned
+  // a rendering bug into an approved exception — exactly what this list must not be used for.
   'tool-output',
 ]);
 
 function cssClassNames() {
-  const css = fs.readFileSync(path.join(JCEF, 'app.css'), 'utf8');
-  return new Set([...css.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+  return new Set([...readCss().matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
 }
 
 function jsEmittedClasses() {
@@ -76,7 +76,7 @@ describe('JS↔CSS class contract', () => {
    * coral while the identical ones on tool cards (outside `.body`) rendered blue. The override must stay.
    */
   it('jump-to-code links out-specify the generic .body a rule', () => {
-    const css = fs.readFileSync(path.join(JCEF, 'app.css'), 'utf8');
+    const css = readCss();
     if (/\.body\s+a\s*\{[^}]*color\s*:/.test(css)) {
       expect(css).toMatch(/\.body\s+a\.jb-link/); // the more specific override that beats it
     }
