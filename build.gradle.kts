@@ -19,7 +19,7 @@ plugins {
     // differ by package. (Until 5.0.0 this comment claimed a "≥90% target documented in
     // docs/RELEASE_CHECKLIST.md". That document says nothing about coverage, and the real figure was 53%. A
     // number nobody measured, pointing at a requirement that did not exist.)
-    id("org.jetbrains.kotlinx.kover") version "0.9.2"
+    id("org.jetbrains.kotlinx.kover") version "0.9.9"
     // Static analysis (detekt) and formatting (ktlint via Spotless). Added in 5.0.0: until then the whole
     // quality bar rested on review, which is exactly the thing the standards say to mechanise — "if format
     // is being discussed in a review, a formatter is missing".
@@ -63,10 +63,23 @@ configurations {
 
 dependencies {
     intellijPlatform {
-        // Compile against IntelliJ IDEA Community 2025.2 — the declared since-build floor (252), so we build
+        // Compile against IntelliJ IDEA Community 2025.3 — the declared since-build floor (253), so we build
         // against the oldest IDE we support (never below it) and the plugin still loads in newer IDEs because
         // untilBuild is widened below.
-        create("IC", "2025.2")
+        //
+        // Raised from 2025.2 together with the floor: `com.intellij.modules.jcef`, which the descriptor now
+        // declares, does not exist in 252 at all — compiling against an IDE that cannot satisfy the plugin's
+        // own dependencies makes `runIde` a sandbox the plugin refuses to load in, and the "build against the
+        // floor" rule stops meaning anything.
+        // By BUILD NUMBER, not "2025.3": that marketing version is not published in the Maven repository the
+        // plugin resolves from (only the point releases are), so the plain name fails to resolve.
+        // 253.28294.334 is the first 2025.3 release — i.e. the floor itself, not a point release above it.
+        // `useInstaller = false` resolves the Maven artifact instead of the `.tar.gz` installer. The installer
+        // for this build is not on the CDN (`ideaIC-2025.3.tar.gz` → 404), while the repository does carry
+        // `com.jetbrains.intellij.idea:ideaIC:253.28294.334`.
+        create(IntelliJPlatformType.IntellijIdeaCommunity, "253.28294.334") {
+            useInstaller = false
+        }
         // Bundled IDE Terminal: used to open an interactive `claude login` session (the OAuth flow needs a
         // TTY, which the stream-json process doesn't have). Compile-only coupling; TerminalLauncher guards
         // its use behind PluginManager.isPluginInstalled so a disabled Terminal plugin degrades gracefully.
@@ -280,17 +293,24 @@ intellijPlatform {
     pluginConfiguration {
         // id/name/vendor/description live in META-INF/plugin.xml; only compatibility range is set here.
         ideaVersion {
-            // Floor 251 (2025.1): as far back as the plugin reaches WITHOUT shipping a deprecated API — the hard
-            // limit is `FileChooserDescriptorFactory.multiFiles()/singleDir()` in FilePickerHelper, which does not
-            // exist before 251 (verified: NoSuchMethodError on IC-242/IC-243), and whose pre-251 equivalents are
-            // deprecated on current IDEs. A runtime `if` would not help — the verifier reads bytecode, so the
-            // broken reference ships either way. Users pinned to 2024.x would need a separate 242-targeted build
-            // (JetBrains' documented approach for a range where the API actually changed).
-            // Ceiling widened to 263.* ahead of the 2026.3 EAP: the API is stable and clean across 251→262
-            // (all Compatible, zero deprecations), so we declare the next branch preemptively. verifyPlugin's
-            // select block (below) already reaches 263.* and will verify against a real 263 build as soon as one
-            // ships — until then it resolves to the latest 262 EAP, which is Compatible.
-            sinceBuild = "251"
+            // Floor 253 (2025.3), raised from 251 in 5.5.0 — and it is JCEF that raises it, not an API tidy-up.
+            //
+            // Since 262 the platform ships the embedded browser as a separate bundled plugin, so a plugin that
+            // wants `com.intellij.ui.jcef.*` in its classloader must declare `com.intellij.modules.jcef` (see
+            // META-INF/plugin.xml). That id does not exist on 251/252 — verified in the IDE distributions
+            // themselves: on 251/252 `JBCefApp` sits in `lib/app-client.jar` and nothing declares the module;
+            // on 253 and 261 the platform declares `<module value="com.intellij.modules.jcef"/>` in
+            // `product-backend.jar`; on 262 it is the plugin. Declaring it therefore costs 2025.1 and 2025.2,
+            // and the alternative was leaving the plugin DEAD on 2026.2 — the whole UI is that browser, so
+            // there is nothing to degrade to.
+            //
+            // (The previous floor note still holds for the API: `FileChooserDescriptorFactory.multiFiles()`
+            // does not exist before 251. It is simply no longer the binding constraint.)
+            //
+            // Ceiling 263.*: declared ahead of the 2026.3 branch on purpose, so an EAP user is never locked out
+            // by a range we forgot to widen. It is not a guess — `verifyPlugin` verifies against the EAP and RC
+            // channels up to that bound (see the `select` block below), so the claim is checked on every run.
+            sinceBuild = "253"
             untilBuild = "263.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
@@ -363,12 +383,21 @@ intellijPlatform {
             } else {
                 // Online (CI, or no local installs): recommended() spans the plugin's whole declared range
                 // including the since-build FLOOR — the gate that catches a too-new API — and select() adds the
-                // NEWEST EAP/RC. The range upper bound (263.*) matches the declared untilBuild, widened
-                // preemptively because the API is clean across 251→262; until a 2026.3/263 EAP ships this
-                // resolves to the latest 262 build, and picks up a real 263 automatically once one exists.
+                // NEWEST EAP/RC. The upper bound matches the declared untilBuild; as of Aug 2026 the newest
+                // build on either channel is 262.9437.65 (2026.2.1 RC), so this resolves there today and picks
+                // up a real 263 automatically the day one ships.
+                //
+                // BOTH families, not just IDEA. The plugin is used in PyCharm as much as in IDEA, and the
+                // packaging differences between products are exactly where a classloader problem hides — 5.1.1
+                // shipped unusable on 2026.2 because JCEF moved into a bundled plugin there, and verifying one
+                // product tells you nothing about how another bundles the same platform.
                 recommended()
                 select {
-                    types = listOf(IntelliJPlatformType.IntellijIdeaCommunity)
+                    types =
+                        listOf(
+                            IntelliJPlatformType.IntellijIdeaCommunity,
+                            IntelliJPlatformType.PyCharmCommunity,
+                        )
                     channels = listOf(ProductRelease.Channel.EAP, ProductRelease.Channel.RC)
                     sinceBuild = "262"
                     untilBuild = "263.*"
@@ -471,7 +500,8 @@ kover {
             }
         }
         verify {
-            // NB: Kover 0.9.2's KoverVerifyRule has no per-rule `filters` (verified against the plugin jar), so
+            // NB: `KoverVerifyRule` still has no per-rule `filters` — re-checked at 0.9.9 (the latest release
+            // as of Aug 2026) against the DSL reference and the release notes, not just the jar. So
             // the per-package thresholds this project wants — permission ≥95, protocol ≥80, session ≥65 — are
             // not expressible one-by-one. What IS expressible is a FLOOR applied to every package
             // individually, plus an aggregate. Both are real gates: the floor catches any single package

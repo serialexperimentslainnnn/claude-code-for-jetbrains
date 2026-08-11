@@ -131,6 +131,21 @@
 
     <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
     <depends>com.intellij.modules.platform</depends>
+    <!-- The embedded browser. NOT optional and NOT a nicety: the entire chat UI is a JCEF page since 4.0.0,
+         so without it this plugin has no interface at all.
+
+         REQUIRED since 262, where the platform moved JCEF OUT of the core and into a bundled plugin of its
+         own (`plugins/jcef-plugin`, id `com.intellij.modules.jcef`, "Web Browser (JCEF)"). A plugin that does
+         not declare it no longer gets those classes in its classloader, and every chat dies on
+         `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp` at `JcefHost.<init>` — reported against 5.1.1 on
+         IU-262.9437.185, and the same break hit AsciiDoc, Cline and others on the 2026.2 line.
+
+         Verified build by build, because this is exactly what decides the floor: on 251/252 the id does not
+         exist at all (JBCefApp ships inside `lib/app-client.jar`), on 253 and 261 the platform declares
+         `<module value="com.intellij.modules.jcef"/>` in `product-backend.jar`, and on 262 it is the bundled
+         plugin. So declaring it costs 2025.1 and 2025.2 — see `sinceBuild` in build.gradle.kts — and buys back
+         2026.2, where the plugin is currently unusable rather than degraded. -->
+    <depends>com.intellij.modules.jcef</depends>
     <!-- Bundled IDE Terminal: grants runtime classloader access to TerminalToolWindowManager so we can open an
          interactive `claude login` session (the OAuth flow needs a TTY the stream-json process doesn't have).
          Optional + config-file so the plugin still loads on a (hypothetical) IDE without Terminal; TerminalLauncher
