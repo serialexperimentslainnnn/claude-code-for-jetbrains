@@ -318,7 +318,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
             addDirsArea.text != s.addDirs,
             betasField.text.trim() != s.betas,
             strictMcpCheck.isSelected != s.strictMcpConfig,
-            alwaysAllowModel.items != settings.alwaysAllowedTools(),
+            alwaysAllowModel.items != settings.alwaysAllow.all(),
         )
     }
 
@@ -348,7 +348,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.provider = provider.id
         // Save only the selected provider's own key (Anthropic has none; leave other providers' keys intact).
         if (provider.requiresApiKey) settings.setProviderApiKey(provider, apiKey)
-        s.model = modelText()
+        s.model = modelToSave(s.model)
         s.effort = effortText()
         s.permissionMode = modeText()
         s.thinkingTokens = if (thinkingCheck.isSelected) ClaudeSession.THINKING_ON else 0
@@ -377,7 +377,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         s.addDirs = addDirsArea.text
         s.betas = betasField.text.trim()
         s.strictMcpConfig = strictMcpCheck.isSelected
-        settings.setAlwaysAllowedTools(alwaysAllowModel.items.toList())
+        settings.alwaysAllow.replace(alwaysAllowModel.items.toList())
+        // The form edits the whole state in bulk, so it saves once at the end rather than through
+        // `update {}` per field. Since 5.5.0 nothing persists for us: without this, everything above is
+        // in memory only and gone at the next restart.
+        settings.save()
         settings.applyTo(session)
     }
 
@@ -387,7 +391,8 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         onProviderSelectionChanged()
         // A legacy install may still have the removed "default" alias persisted — show the concrete tier it now
         // resolves to, so the dialog never displays an option we no longer offer (saving then pins it).
-        modelCombo.selectedItem = if (s.model == ClaudeSession.RECOMMENDED_ALIAS) ClaudeSession.DEFAULT_MODEL else s.model
+        shownModel = if (s.model == ClaudeSession.RECOMMENDED_ALIAS) ClaudeSession.DEFAULT_MODEL else s.model
+        modelCombo.selectedItem = shownModel
         effortCombo.selectedItem = s.effort
         modeCombo.selectedItem = s.permissionMode
         thinkingCheck.isSelected = s.thinkingTokens > 0
@@ -416,7 +421,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         addDirsArea.text = s.addDirs
         betasField.text = s.betas
         strictMcpCheck.isSelected = s.strictMcpConfig
-        alwaysAllowModel.replaceAll(settings.alwaysAllowedTools())
+        alwaysAllowModel.replaceAll(settings.alwaysAllow.all())
     }
 
     /** Repopulate the model combo from the active session's `modelOptions()`, preserving the current selection
@@ -470,6 +475,28 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     }
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
+
+    /**
+     * The model to persist: [current], unless the user actually changed it in this dialog.
+     *
+     * **Saving whatever the widget happens to hold is not safe here, and that is not hypothetical.** The
+     * combo is repopulated from the binary's catalogue, asynchronously, while the page is open — the
+     * `initialize` reply lands seconds after the dialog does — and a freshly populated `DefaultComboBoxModel`
+     * selects its own first entry. Any moment where that lands on the widget without [shownModel] following
+     * turns a plain OK on an unrelated setting (the binary path, a security toggle) into a silent change of
+     * model. A user's pinned Opus came back as `haiku`, which is simply what that catalogue lists first.
+     *
+     * Comparing against what [reset] PUT on screen — rather than trusting the widget — makes the write
+     * deliberate by construction: no edit, no write. A blank field is never a choice either.
+     */
+    private fun modelToSave(current: String): String {
+        val typed = modelText()
+        if (typed.isBlank()) return current
+        return if (typed == shownModel) current else typed
+    }
+
+    /** What [reset] last displayed in the model combo — the baseline [modelToSave] compares against. */
+    private var shownModel: String = ""
     private fun effortText() = (effortCombo.selectedItem as? String).orEmpty()
     private fun modeText() = (modeCombo.selectedItem as? String) ?: "default"
     private fun mcpTransportText() = (ideMcpTransportCombo.selectedItem as? String) ?: "sse"
