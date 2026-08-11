@@ -73,7 +73,7 @@ A native IntelliJ Platform plugin that integrates [Claude Code](https://claude.a
 
 ## Security
 
-The plugin ships a **deterministic sensitive-data lock** (`permission/SensitiveGuard`). It is not a model-side guardrail: the classification is out-of-band Kotlin with no model input, evaluated in `PermissionBroker.handle` **before any auto-approval branch**. Because the binary is always launched in `default` mode, every call arrives as a control request — so the verdict is the plugin's to make, and it holds under `acceptEdits` and `bypassPermissions` alike.
+The plugin ships a **deterministic sensitive-data lock** (`permission/SensitiveGuard`). It is not a model-side guardrail: the classification is out-of-band Kotlin with no model input, evaluated in `PermissionBroker.handle` **before any auto-approval branch**. The permission mode you pick is the *plugin's*, never the binary's — `acceptEdits` and `bypassPermissions` are translated to `default` on the command line, so every call still arrives as a control request and the verdict stays the plugin's to make. Auto-approval is something the plugin then chooses to do, which is what lets the lock hold in the modes whose whole point is not being asked.
 
 **What it classifies**
 
@@ -104,7 +104,7 @@ Separately: jump-to-code links can only ever open inside the project or your own
 - **JetBrains IDE** 2025.3 or newer (build 253+) — IntelliJ IDEA, PyCharm, GoLand, WebStorm, … — with the **embedded browser (JCEF)** available: the whole chat UI is a web view, so the plugin declares a hard dependency on it. 5.5.0 raised the floor from 2025.1 for exactly that reason — since build 262 the platform ships JCEF as a separate bundled plugin (`com.intellij.modules.jcef`), a plugin that does not declare it gets no browser classes at all, and that module id does not exist before 2025.3. Staying on 2025.1/2025.2 means staying on 5.1.1
 - **`claude` CLI** installed and on `PATH` or a typical location (Linux/macOS: `~/.local/bin`; Windows: npm, scoop, volta, chocolatey, `~\.local\bin`)
   - Install: `npm install -g @anthropic-ai/claude-code`, or follow [claude.ai/code](https://claude.ai/code)
-  - Custom location? Set the executable path (and any environment variables) in **Settings → Tools → Claude Code**
+  - Custom location? Set the executable path (and any environment variables) in **Settings ▸ Claude Code**
 - **Auth** reused from the binary (Claude subscription / OAuth, or `ANTHROPIC_API_KEY`)
 
 ## Installation
@@ -221,13 +221,18 @@ JAVA_HOME=~/.jdks/jbr-21.0.11 ./gradlew buildPlugin
 Install it with **Settings → Plugins → ⚙ → Install Plugin from Disk**.
 
 ```bash
-./gradlew runIde         # sandbox IDE with the plugin loaded
-./gradlew test           # unit + headless + integration (JVM)
-./gradlew verifyPlugin   # IntelliJ plugin verifier across the declared range
-./gradlew checkDrift     # protocol drift vs. the latest SDK + binary
-./gradlew koverHtmlReport
-npm test                 # frontend suite (vitest + jsdom)
+./gradlew runIde          # sandbox IDE with the plugin loaded
+./gradlew test            # unit + headless + integration (JVM)
+./gradlew koverVerify     # coverage gates (blocking in CI)
+./gradlew detekt spotlessCheck
+./gradlew verifyPlugin    # IntelliJ plugin verifier across the declared range
+./gradlew checkDrift      # protocol drift vs. the latest SDK + binary
+npm test                  # frontend suite (vitest + jsdom)
+npm run lint && npm run format:check
+npm audit --omit=dev      # the distributed scope; must be clean
 ```
+
+`checkDrift` needs a real `claude` binary and looks in `~/.local/bin` by default — point it elsewhere with `-PclaudeBinary=/usr/bin/claude` (or the `CLAUDE_BINARY` env var). It is **not** wired into `check`: it updates the SDK and the binary to latest, which is a deliberate act, not a side effect of running the tests.
 
 `verifyPlugin` can run **fully offline** against locally extracted IDEs:
 
@@ -256,6 +261,8 @@ See [`CLAUDE.md`](CLAUDE.md) for the full architecture, protocol details and ver
 ## Status
 
 **v5.5.0** — every agent gets its own tab. A session running agents under agents used to put all of it in one transcript: consecutive "Thought process" rows belonging to different agents, interleaved, impossible to follow. Now each agent has its own transcript, reachable from a tab bar that shows what you are reading and keeps the whole tree one hover away, and the three dashboard lists became a single **Workloads** diagram of everything that is running, across every chat. A background task keeps its tab and its output after it ends — the binary stops listing a task the moment it finishes, which is precisely when its output is worth reading — and both survive a restart. Your settings moved into the **IDE's password safe**: they used to sit in `.idea/claude-code.xml`, per project and in the clear, which is a file people commit and where an API key in the env block ends up. **It also fixes a plugin that was dead on 2026.2**: the platform moved the embedded browser into a bundled plugin there, and without declaring that dependency no chat could open at all — which is why the minimum IDE is now 2025.3.
+
+**v5.1.x** — your plan's limits, in the plugin: every window with the time left on it, refreshed whether or not the chat is on screen. And the older model generations are selectable again, behind an **Other models** group that stays out of the way.
 
 **v5.0.0** — the standards-compliance major. Nothing you use changes; the *project* did. The chat UI now speaks to screen readers (a live region announcing when a turn starts, ends, or is waiting on your approval) and every control has a visible focus ring again, including in high-contrast mode. The sensitive-data lock gained a **written** threat model ([ADR 0002](docs/adr/0002-threat-model.md)) that states what it defends against — and admits what it does not: prompt injection is assumed to succeed, not detected, which is why the lock judges the *tool call* and never the model's reasoning. Third-party licence attribution now ships inside the artifact, seven npm-audit findings against never-distributed build tooling are gone (the SDK reference was mis-declared as a runtime dependency), and a released version number is now final.
 
