@@ -20,7 +20,6 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.content.ContentFactory
-import com.intellij.ui.tabs.TabInfo
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
@@ -50,7 +49,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     // projects. The tool window, however, must be resolved per-project on demand ([resolveToolWindow]) — caching
     // it in a field would make a second project's window overwrite the first's and misdirect attention checks.
     /** Maps each live session to its tab, so a background session can target its own badge/notification. */
-    private val tabOf = HashMap<ClaudeSession, TabInfo>()
+    private val tabOf = HashMap<ClaudeSession, ChatTabsPanel.ChatTab>()
 
     /** Per-session throttle for attention notifications (badge is never throttled). */
     private val lastNotified = HashMap<ClaudeSession, Long>()
@@ -59,11 +58,11 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val manager = ChatSessionManager.getInstance(project)
         val cm = toolWindow.contentManager
 
-        val tabs = ChatTabsPanel(project, toolWindow.disposable)
+        val tabs = ChatTabsPanel()
         tabs.onEvents(
-            selected = { info -> (info?.component as? JcefChatPanel)?.let { manager.setActive(it.session) } },
-            closed = { info ->
-                (info.component as? JcefChatPanel)?.let {
+            selected = { tab -> (tab?.component as? JcefChatPanel)?.let { manager.setActive(it.session) } },
+            closed = { tab ->
+                (tab.component as? JcefChatPanel)?.let {
                     manager.remove(it.session)
                     tabOf.remove(it.session)
                     lastNotified.remove(it.session)
@@ -139,7 +138,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val onScreen = tw != null && tw.isVisible && tabs.selected === tab
         if (onScreen) return
 
-        tabs.badge(tab, AllIcons.General.Modified)
+        // A flag, not an icon: the bar is drawn by the page now, which shows it as a dot on the chat's pill.
+        tabs.badge(tab, true)
 
         val now = System.currentTimeMillis()
         if (now - (lastNotified[session] ?: 0L) <= NOTIFY_THROTTLE_MS) return

@@ -17,19 +17,19 @@ class AgentTabLabelsTest {
     ) = AgentNode(AgentMeta("agent-1", agentType = type, description = label), status = status)
 
     @Test
-    fun `a tab shows one connector per level below its strip`() {
-        assertEquals("|_ Translate the SAP…", AgentTabLabels.tab(node(), relativeDepth = 1))
-        assertTrue(AgentTabLabels.tab(node(), relativeDepth = 2).startsWith("|_ |_ "))
-        // Depth within the STRIP, not spawnDepth: the Subagents strip shows children of the selected agent,
-        // so its first level is one connector however deep that agent sits in the whole tree.
-        assertTrue(AgentTabLabels.tab(node(), relativeDepth = 0).startsWith("|_ "))
+    fun `a tab carries the label and nothing else`() {
+        // The tree is drawn by the ROW's header, as icons (TreeBranchIcon). It used to be repeated as box
+        // characters on every tab too, which drew the same tree twice in two different styles — "|_ Mapa de
+        // tests" sitting inside a row already headed by a fork. Tabs are siblings inside their row; what
+        // they hang off is what the header says.
+        assertEquals("Translate the SAP sta…", AgentTabLabels.tab(node(), relativeDepth = 1))
+        assertEquals("Translate the SAP sta…", AgentTabLabels.tab(node(), relativeDepth = 4))
     }
 
     @Test
-    fun `a very deep chain stops indenting instead of losing the label`() {
+    fun `the label is truncated to the same width the chat tabs use`() {
         val deep = AgentTabLabels.tab(node("Short"), relativeDepth = 12)
-        assertTrue(deep.endsWith("Short"))
-        assertTrue(deep.count { it == '_' } <= 4, "connectors must be capped, got: $deep")
+        assertEquals("Short", deep)
     }
 
     @Test
@@ -52,6 +52,6 @@ class AgentTabLabelsTest {
     @Test
     fun `a nameless agent still gets a navigable tab`() {
         val anonymous = AgentNode(AgentMeta("agent-xyz"))
-        assertEquals("|_ agent-xyz", AgentTabLabels.tab(anonymous))
+        assertEquals("agent-xyz", AgentTabLabels.tab(anonymous))
     }
 }

@@ -57,8 +57,14 @@ class AgentMetaTest {
     }
 
     @Test
-    fun `only the binary's own sidecar names are recognised`() {
-        assertEquals("agent-abc", AgentMeta.agentIdOfMetaFile("agent-abc.meta.json"))
+    fun `the id is the bare one, matching what parentAgentId uses`() {
+        // THE BUG THIS PINS: the binary names the file `agent-<id>` but writes `parentAgentId` WITHOUT the
+        // prefix. Taking the file name as the identity meant no parent ever matched a node, so every nested
+        // agent hung off something that did not exist — invisible rows, dead links, chains that stopped at
+        // the chat. Verified against real sidecars: file `agent-a6798878f17f074e4`, parent
+        // `a291206126b2a76c9`.
+        assertEquals("abc", AgentMeta.agentIdOfMetaFile("agent-abc.meta.json"))
+        assertEquals("agent-abc.jsonl", AgentMeta.transcriptFile("abc"))
         assertNull(AgentMeta.agentIdOfMetaFile("agent-abc.jsonl"))
         assertNull(AgentMeta.agentIdOfMetaFile("notes.meta.json"))
     }

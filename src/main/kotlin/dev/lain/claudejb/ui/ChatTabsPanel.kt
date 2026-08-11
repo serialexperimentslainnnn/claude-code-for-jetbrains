@@ -1,97 +1,80 @@
 package dev.lain.claudejb.ui
 
-import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.actionSystem.ActionUpdateThread
-import com.intellij.openapi.actionSystem.AnAction
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.DefaultActionGroup
-import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
-import com.intellij.ui.tabs.JBTabs
-import com.intellij.ui.tabs.JBTabsFactory
-import com.intellij.ui.tabs.TabInfo
-import com.intellij.ui.tabs.TabsListener
-import com.intellij.util.ui.TimedDeadzone
+import dev.lain.claudejb.ui.jcef.JcefSessionData
+import dev.lain.claudejb.ui.jcef.JcefTabsData
 import java.awt.BorderLayout
-import javax.swing.Icon
+import java.awt.CardLayout
 import javax.swing.JComponent
+import javax.swing.JPanel
 
 /**
- * The chat tab strip, owned by the plugin instead of by the tool window.
+ * Holds the chats and switches between them. **It draws nothing.**
  *
- * **Why not the tool window's own tabs.** The platform lays tool-window content tabs out with
- * `TabContentLayout`, which does not scroll: once the labels no longer fit it simply stops drawing the
- * earliest ones and buries them behind a `⌄` popup. With a handful of chats open the first ones vanish, which
- * is the bug this class exists to fix. `JBTabs` — the same widget the editor uses — does scroll: its
- * `createRowLayout()` returns a `ScrollableSingleRowLayout` whenever the tab list is single-row (verified
- * against the platform, IU-262). So the tool window now holds ONE content, and every chat is a [TabInfo] in
- * here.
+ * The tab bar itself is part of the web app ([JcefChatPanel] → `app-tabs.js`), which is where the whole chat
+ * UI has lived since 4.0.0. A Swing strip above the page cannot share its accent, type scale, transitions or
+ * SVG, so keeping one meant approximating the page's look by hand in another toolkit — and looking like it.
+ * What remains here is the part that genuinely is not UI: which chats exist, which one is on screen, and the
+ * disposal contract.
  *
- * The surface is deliberately the small subset of `ContentManager` the tool window factory actually used
- * (add / select / selected / list / listen), so the factory's logic — restore, attention badges, rename,
- * fork — reads exactly as it did before and only the object it talks to changed.
+ * Every chat's page renders the whole chat list and marks its own entry ([pushChats]); a click comes back as
+ * a `selectChat` message and lands in [selectById]. Switching swaps browsers, and because both pages draw
+ * the same bar the swap is invisible.
+ *
+ * The content is switched with a [CardLayout] rather than by adding and removing components: a chat's JCEF
+ * browser stays in the hierarchy for the whole life of its tab, which is the cheapest possible answer to
+ * "does switching tabs disturb Chromium".
  *
  * Disposal: each tab's panel is disposed when its tab is closed, and all of them when this panel is
  * ([Disposable] — registered as the single content's disposer).
  */
-internal class ChatTabsPanel(project: Project, parent: Disposable) :
-    JBPanel<ChatTabsPanel>(BorderLayout()), Disposable {
+internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposable {
 
-    private val tabs: JBTabs = JBTabsFactory.createTabs(project, parent)
+    /** One chat: its stable id, its component, its title and whatever must be disposed with it. */
+    internal class ChatTab(
+        val id: String,
+        val component: JComponent,
+        var title: String,
+        var tooltip: String,
+        val disposer: Disposable?,
+    ) {
+        /** The attention badge, as a flag rather than an icon — the page decides how to draw it. */
+        var attention: Boolean = false
 
-    /** What to run when a tab is closed by the user — the factory drops the session there. */
-    private var onClosed: (TabInfo) -> Unit = {}
+        /**
+         * What this tab is PINNED to: an agent id, a background-task id, or neither (an ordinary chat).
+         *
+         * Selecting a chat means "show me the chat", so [select] resets its panel to the chat's own
+         * transcript — which would immediately undo a pin. This is what makes the exception explicit rather
+         * than making the reset conditional on something the tab does not know.
+         */
+        var pinnedAgent: String? = null
+        var pinnedTask: String? = null
+    }
 
-    private var onSelected: (TabInfo?) -> Unit = {}
+    private val cards = CardLayout()
+    private val content = JPanel(cards)
 
-    val selected: TabInfo? get() = tabs.selectedInfo
+    private val tabs = ArrayList<ChatTab>()
+    private var selectedTab: ChatTab? = null
+    private var seq = 0
+
+    private var onClosed: (ChatTab) -> Unit = {}
+    private var onSelected: (ChatTab?) -> Unit = {}
+
+    val selected: ChatTab? get() = selectedTab
 
     /** The selected tab's chat panel, or null when the selected tab is not a chat (e.g. Diff History). */
-    val selectedChat: JcefChatPanel? get() = tabs.selectedInfo?.component as? JcefChatPanel
+    val selectedChat: JcefChatPanel? get() = selectedTab?.component as? JcefChatPanel
 
     init {
-        // NB no Disposer.register here: this panel is the single content's disposer
-        // (`Content.setDisposer`), and registering it under the tool window as well would give one object two
-        // parents. [parent] is only what the tab widget itself is tied to.
-        add(tabs.component, BorderLayout.CENTER)
-        tabs.presentation.setSingleRow(true) // the scrolling layout; see the class doc
-        // The close button, ALWAYS drawn. `JBTabs` hides per-tab actions until the pointer is over the label by
-        // default, which on a chat strip reads as "the tabs have no close button" — you have to already know it
-        // is there to find it. The editor's own tabs show theirs unconditionally; so do these.
-        tabs.presentation.setTabLabelActionsAutoHide(false)
-        tabs.presentation.setTabLabelActionsMouseDeadzone(TimedDeadzone.NULL)
-        tabs.presentation.setTabDraggingEnabled(true)
-        // Compression OFF so a full strip cannot take the button away: `TabLabelLayout` drops the EAST component
-        // — which IS the action panel — whenever it has to fit a label into less than its preferred width
-        // (`layoutCompressible` bounds it to 0×0). Without compression the single-row layout scrolls instead,
-        // which is the whole reason this class uses `JBTabs`; see the class doc.
-        tabs.presentation.setSupportsCompression(false)
-        tabs.addListener(
-            object : TabsListener {
-                override fun selectionChanged(oldSelection: TabInfo?, newSelection: TabInfo?) {
-                    // A selected chat has no badge to show, and the keyboard focus belongs in its composer.
-                    // The ContentManager used to do both as part of the selection; here it is explicit.
-                    newSelection?.setIcon(null)
-                    (newSelection?.component as? JcefChatPanel)?.focusInput()
-                    onSelected(newSelection)
-                }
-            },
-        )
-        // Middle-click closes, the way every other tab strip in the IDE behaves.
-        tabs.addTabMouseListener(
-            object : java.awt.event.MouseAdapter() {
-                override fun mousePressed(e: java.awt.event.MouseEvent) {
-                    if (e.button != java.awt.event.MouseEvent.BUTTON2) return
-                    tabs.findInfo(e)?.let { close(it) }
-                }
-            },
-        )
+        add(content, BorderLayout.CENTER)
     }
 
     /** Registers the selection/close callbacks. Called once, by the factory, right after construction. */
-    fun onEvents(selected: (TabInfo?) -> Unit, closed: (TabInfo) -> Unit) {
+    fun onEvents(selected: (ChatTab?) -> Unit, closed: (ChatTab) -> Unit) {
         onSelected = selected
         onClosed = closed
     }
@@ -102,71 +85,141 @@ internal class ChatTabsPanel(project: Project, parent: Disposable) :
      * [disposer] is disposed when the tab is closed — the same contract as `Content.setDisposer`, and the
      * reason a closed chat's JCEF browser and session actually go away instead of leaking.
      */
-    fun add(component: JComponent, title: String, tooltip: String, disposer: Disposable?): TabInfo {
-        val info = TabInfo(component).setText(title)
-        info.setObject(disposer)
-        info.setTabLabelActions(DefaultActionGroup(CloseTabAction(info)), TAB_ACTION_PLACE)
-        tabs.addTab(info)
-        applyTooltip(info, tooltip)
-        return info
+    fun add(component: JComponent, title: String, tooltip: String, disposer: Disposable?): ChatTab {
+        val tab = ChatTab("chat-${seq++}", component, title, tooltip, disposer)
+        tabs += tab
+        content.add(component, tab.id)
+        pushChats()
+        return tab
     }
 
-    /** Selects [info], moving the keyboard focus into it (the selection listener does the focus transfer). */
-    fun select(info: TabInfo) {
-        tabs.select(info, true)
-    }
+    /** Selects [tab], shows its component and moves the keyboard focus into it. */
+    fun select(tab: ChatTab) {
+        if (tab !in tabs) return
+        selectedTab = tab
+        tab.attention = false
+        cards.show(content, tab.id)
+        (tab.component as? JcefChatPanel)?.let {
+            when {
+                // A PINNED tab is that agent's (or task's) tab: selecting it shows what it is pinned to.
+                tab.pinnedAgent != null -> it.showTranscript(tab.pinnedAgent)
 
-    /** Closes [info]: removes the tab, fires the close callback and disposes whatever it carried. */
-    fun close(info: TabInfo) {
-        tabs.removeTab(info)
-        onClosed(info)
-        (info.`object` as? Disposable)?.let { Disposer.dispose(it) }
-    }
+                tab.pinnedTask != null -> it.showBackgroundTask(tab.pinnedTask!!)
 
-    fun all(): List<TabInfo> = tabs.tabs
-
-    fun relabel(info: TabInfo, title: String, tooltip: String) {
-        info.setText(title)
-        applyTooltip(info, tooltip)
+                // Selecting a chat means "show me this chat" — including when an agent's transcript is what
+                // is currently painted in it. Without this there is NO WAY BACK from an agent tab.
+                else -> it.showTranscript(null)
+            }
+            it.focusInput()
+        }
+        pushChats()
+        onSelected(tab)
     }
 
     /**
-     * The full title, on the tab's own label rather than through `TabInfo.setTooltipText`.
+     * Opens [agentId] (or [taskId]) as a tab of its own, on the SAME session, and selects it.
      *
-     * That setter has two overloads and neither is usable across the supported range: the `String` one is
-     * DEPRECATED from 262, and the `HtmlChunk` one does not exist at the 251 floor — calling it would be a
-     * `NoSuchMethodError` on the oldest IDEs we claim to support. `TabLabel` falls through to
-     * `JPanel.getToolTipText`, so setting the label's own tooltip is the same result by a supported route.
+     * Same session on purpose: an agent is not a separate conversation, it is part of this one — it shares
+     * the process, the credentials and the transcript store. What the new tab owns is a second view of it,
+     * pinned so that selecting the tab always lands on that transcript. [panel] is built by the caller, which
+     * is the only place that holds the `Project` a JCEF panel needs.
+     *
+     * Pinning the same thing twice just selects the tab that already exists; two tabs showing one agent
+     * would be two things to close and no way to tell them apart.
      */
-    private fun applyTooltip(info: TabInfo, tooltip: String) {
-        (tabs.getTabLabel(info) as? JComponent)?.toolTipText = tooltip
+    fun pin(panel: JcefChatPanel, agentId: String?, taskId: String?, title: String): ChatTab {
+        tabs.firstOrNull { it.pinnedAgent == agentId && it.pinnedTask == taskId && (agentId ?: taskId) != null }
+            ?.let {
+                select(it)
+                return it
+            }
+        val tab = add(panel, title, title, panel)
+        tab.pinnedAgent = agentId
+        tab.pinnedTask = taskId
+        select(tab)
+        return tab
     }
 
-    /** The attention badge. Ignored for the tab that is already on screen — it has nothing to catch up on. */
-    fun badge(info: TabInfo, icon: Icon?) {
-        if (info !== tabs.selectedInfo) info.setIcon(icon)
+    /** The chat panel behind tab [id], for a message that names the chat it belongs to (Workloads does). */
+    fun panelOf(id: String): JcefChatPanel? =
+        tabs.firstOrNull { it.id == id }?.component as? JcefChatPanel
+
+    fun selectById(id: String) {
+        tabs.firstOrNull { it.id == id }?.let { select(it) }
+    }
+
+    fun closeById(id: String) {
+        tabs.firstOrNull { it.id == id }?.let { close(it) }
+    }
+
+    /** Closes [tab]: removes it, fires the close callback and disposes whatever it carried. */
+    fun close(tab: ChatTab) {
+        if (!tabs.remove(tab)) return
+        onClosed(tab)
+        content.remove(tab.component)
+        tab.disposer?.let { Disposer.dispose(it) }
+        if (selectedTab === tab) {
+            selectedTab = null
+            // Never leave the area blank: show whatever is left.
+            tabs.firstOrNull()?.let { select(it) } ?: pushChats()
+        } else {
+            pushChats()
+        }
+        content.revalidate()
+        content.repaint()
+    }
+
+    fun all(): List<ChatTab> = tabs.toList()
+
+    fun relabel(tab: ChatTab, title: String, tooltip: String) {
+        tab.title = title
+        tab.tooltip = tooltip
+        pushChats()
+    }
+
+    /** The attention badge. Ignored for the tab already on screen — it has nothing to catch up on. */
+    fun badge(tab: ChatTab, attention: Boolean) {
+        if (tab === selectedTab) return
+        tab.attention = attention
+        pushChats()
+    }
+
+    /**
+     * Pushes the chat list into EVERY chat's page.
+     *
+     * All of them, not just the selected one: a page that is off screen now is the page that will be on
+     * screen the moment the user switches to it, and re-rendering it only then would show a stale bar for a
+     * frame — or, if the switch is what changed the list, the wrong bar entirely.
+     */
+    private fun pushChats() {
+        val list = tabs.map {
+            JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention, it.pinnedAgent)
+        }
+        tabs.forEach { (it.component as? JcefChatPanel)?.setChats(list) }
+    }
+
+    /**
+     * Every open chat with the session behind it, for the dashboard's Workloads diagram.
+     *
+     * Workloads is about what is RUNNING, and what is running does not belong to the chat you happen to be
+     * looking at: agents and background tasks keep going in the other tabs, and a view that showed only the
+     * selected one answered "what is running?" with a fraction of the truth. The bar's own popup is the
+     * per-chat view; this is the whole picture.
+     *
+     * Ordered as the tabs are, so the diagram reads in the same order as the bar above it.
+     *
+     * EVERY tab, pinned ones included: the tab bar needs each tab's tree to answer its own ⋮. The diagram
+     * is the one that must not draw the same chat twice — [pin] adds a second tab over the SAME panel, a
+     * VIEW of one agent rather than another workload — and that is deduplicated by session where it is
+     * drawn ([JcefSessionData.sessionJson]).
+     */
+    fun workloads(): List<JcefSessionData.Workload> = tabs.mapNotNull { tab ->
+        (tab.component as? JcefChatPanel)?.let { panel ->
+            JcefSessionData.Workload(tab.id, tab.title, tab === selectedTab, panel.session)
+        }
     }
 
     override fun dispose() {
-        tabs.tabs.forEach { info -> (info.`object` as? Disposable)?.let { Disposer.dispose(it) } }
-    }
-
-    private inner class CloseTabAction(private val info: TabInfo) :
-        AnAction("Close Chat", "Close this conversation", AllIcons.Actions.Close) {
-        override fun actionPerformed(e: AnActionEvent) = close(info)
-
-        /**
-         * EDT, and NOT because this action is slow: `ActionPanel` — the thing that turns a tab's action group
-         * into the little button — builds its buttons through a traverser that
-         * `filter { it.actionUpdateThread == ActionUpdateThread.EDT }`. `AnAction` answers `BGT` by default, so
-         * an action that does not say this is dropped on the floor and the tab is simply drawn without a close
-         * button, at any width, hovered or not. The platform's own editor-tab `CloseTab` declares it too.
-         */
-        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
-    }
-
-    private companion object {
-        /** Action place for the per-tab close button; any stable, plugin-owned string will do. */
-        const val TAB_ACTION_PLACE = "ClaudeChatTabs"
+        tabs.forEach { tab -> tab.disposer?.let { Disposer.dispose(it) } }
     }
 }
