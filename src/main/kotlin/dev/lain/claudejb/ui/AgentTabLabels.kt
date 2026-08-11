@@ -19,17 +19,19 @@ object AgentTabLabels {
     /** Max characters on a tab before ellipsis — mirrors the chat tabs' own cap so the strips look alike. */
     const val TAB_TITLE_MAX = 22
 
-    /** The tree connector repeated per level of depth below the strip's root. */
-    private const val CONNECTOR = "|_ "
-
     /**
-     * The tab's text: tree connector, then the agent's own label, truncated.
+     * The tab's text: just the agent's label, truncated.
      *
-     * [relativeDepth] is depth **within the strip**, not the absolute `spawnDepth` — the Subagents strip
-     * shows children of the selected agent, so its first level is one connector, not three.
+     * **No tree connector here, and that is the fix rather than the omission.** The row's own header already
+     * draws the branch (`├─ Agents`, `│  └─ Subagents`), so repeating a connector on every tab drew the tree
+     * twice in two different styles — `|_ Mapa de tests` sitting inside a row headed `├─ Agents`. The tabs
+     * are siblings inside their row; what they hang off is what the header says.
+     *
+     * [relativeDepth] is kept in the signature because callers know it and a future compact mode may want
+     * it, but it deliberately does not change the text today.
      */
-    fun tab(node: AgentNode, relativeDepth: Int = 1): String =
-        CONNECTOR.repeat(relativeDepth.coerceIn(1, MAX_CONNECTORS)) + truncate(node.meta.label())
+    @Suppress("UNUSED_PARAMETER")
+    fun tab(node: AgentNode, relativeDepth: Int = 1): String = truncate(node.meta.label())
 
     /**
      * The tooltip: the full label, the agent type, and how it ended.
@@ -55,7 +57,4 @@ object AgentTabLabels {
         val clean = s.trim().ifBlank { "Agent" }
         return if (clean.length <= TAB_TITLE_MAX) clean else clean.take(TAB_TITLE_MAX - 1) + "…"
     }
-
-    /** Beyond this the connectors would eat the whole label; deep chains stop indenting, not the tree. */
-    private const val MAX_CONNECTORS = 4
 }
