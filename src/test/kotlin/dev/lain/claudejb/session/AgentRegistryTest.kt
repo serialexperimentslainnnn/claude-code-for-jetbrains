@@ -41,6 +41,17 @@ class AgentRegistryTest {
 
     private fun registry() = AgentRegistry(subagentsDir = { dir })
 
+    /** Writes an agent whose transcript ENDS the way a real one does — see [AgentEnding]. */
+    private fun agentEnding(id: String, stopReason: String?) {
+        agent(id, depth = 1)
+        val line = if (stopReason == null) {
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}"""
+        } else {
+            """{"type":"assistant","message":{"role":"assistant","stop_reason":"$stopReason","content":[]}}"""
+        }
+        Files.writeString(dir.resolve(AgentMeta.transcriptFile(id)), line)
+    }
+
     @Test
     fun `an agent whose Task call we never saw is not shown`() {
         // THE POINT: these files exist on disk and belong to a terminal run. Showing "whatever is in the
@@ -130,6 +141,48 @@ class AgentRegistryTest {
         // Down the whole chain: a subagent cannot outlive the turn that spawned it.
         assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a2").status)
         assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a3").status)
+    }
+
+    @Test
+    fun `an agent launched in a RESTORED chat is running, not cut off`() {
+        // THE BUG, reported live: `restoring` is set when a chat comes back from disk and is never cleared —
+        // it is what admits that chat's own subagents. So every agent launched AFTERWARDS in that chat fell
+        // into the "belongs to a previous run" branch and came up STOPPED, which the UI paints RED. Restoring
+        // open chats is the default, so this was every agent in a freshly reopened IDE.
+        agent("old", depth = 1) // was on disk before the restore, nobody watched it start
+        val reg = registry()
+        reg.markRestored()
+        reg.scan()
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("old").status)
+
+        agent("fresh", toolUseId = "toolu_now", depth = 1)
+        agent("fresh-child", parent = "fresh", depth = 2)
+        reg.observeSpawn("toolu_now") // we watched THIS one start
+        reg.scan()
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("fresh").status)
+        // And its subagent belongs to that same live turn.
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("fresh-child").status)
+        // The old one is untouched by any of it.
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("old").status)
+    }
+
+    @Test
+    fun `a restored agent that finished is not painted as a failure`() {
+        // THE BUG, reported live after a restart: a settled status is per-process memory, so restoring a chat
+        // left the plugin knowing nothing about its agents — and calling all of them "cut off" turned every
+        // agent of every past session RED. That does not merely look wrong: red ASSERTS THAT THEY FAILED,
+        // and most had finished perfectly. The binary had already written the answer down.
+        agentEnding("finished", "end_turn") // said its piece and stopped
+        agentEnding("midflight", "tool_use") // waiting on a tool that never came back
+        agentEnding("unanswered", null) // handed a result it never answered
+        agent("nothing-written") // meta on disk, transcript not there yet
+        val reg = registry()
+        reg.markRestored()
+        reg.scan()
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("finished").status)
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("midflight").status)
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("unanswered").status)
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("nothing-written").status)
     }
 
     @Test
