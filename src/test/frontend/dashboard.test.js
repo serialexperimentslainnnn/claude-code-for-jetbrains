@@ -65,10 +65,23 @@ describe('dashboard — MCP servers card', () => {
 });
 
 describe('dashboard — wide cards', () => {
-  it('row-based cards (MCP, subagents, background tasks) span the full grid row via .wide', () => {
+  // 5.5.0 moved agents and background tasks OUT of the Session view and into views of their own, so the
+  // Session view's only row-based card is MCP. These assertions were updated rather than deleted: the
+  // separation is the feature, and a test still expecting Subagents here would be asserting the old bug.
+  it('the Session view keeps only its own row-based card wide', () => {
     const win = loadFrontend(['app-session.js']);
     win.cc.session({
-      subagents: [{ id: 't1', desc: 'search', type: 'Explore', status: 'running', tokens: 10, tools: 1 }],
+      agentTree: [
+        {
+          agentId: 'a1',
+          label: 'search',
+          type: 'Explore',
+          status: 'running',
+          depth: 1,
+          parent: null,
+          running: true,
+        },
+      ],
       backgroundTasks: [{ id: 'b1', desc: 'long build', type: 'bash' }],
     });
     win.cc.mcp({ servers: [{ name: 'srv', status: 'connected' }] });
@@ -76,18 +89,24 @@ describe('dashboard — wide cards', () => {
 
     const titleOf = (el) => el.querySelector('.dash-title')?.textContent;
     const cards = [...win.document.querySelectorAll('.dash-card')];
-    const wideTitles = cards.filter((c) => c.classList.contains('wide')).map(titleOf);
-    expect(wideTitles).toEqual(expect.arrayContaining(['Subagents', 'Background tasks', 'MCP servers']));
+    const titles = cards.map(titleOf);
+    expect(cards.filter((c) => c.classList.contains('wide')).map(titleOf)).toContain('MCP servers');
+    expect(titles).not.toContain('Agents');
+    expect(titles).not.toContain('Background tasks');
   });
 
-  it('renders a Background tasks card from the level signal, with a Stop control', () => {
+  it('the Workloads view renders background tasks, with a Stop control', () => {
     const win = loadFrontend(['app-session.js']);
     win.cc.session({ backgroundTasks: [{ id: 'b1', desc: 'indexing', type: 'agent' }] });
     openDashboard(win);
+    // One view now: agents, their subagents and their tasks are one tree, not three windows onto it.
+    win.document.querySelector('.dash-toggle[data-view="workloads"]').click();
+
     const card = [...win.document.querySelectorAll('.dash-card')].find(
-      (c) => c.querySelector('.dash-title')?.textContent === 'Background tasks'
+      (c) => c.querySelector('.dash-title')?.textContent === 'Workloads'
     );
     expect(card).toBeTruthy();
+    expect(card.classList.contains('wide')).toBe(true);
     expect(card.textContent).toContain('indexing');
 
     const sent = [];

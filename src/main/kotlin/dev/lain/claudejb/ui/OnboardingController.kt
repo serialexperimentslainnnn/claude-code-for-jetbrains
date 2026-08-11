@@ -141,7 +141,8 @@ internal class OnboardingController(
             ApplicationManager.getApplication().invokeLater {
                 when (verdict) {
                     is BinaryInstall.Validation.Ok -> {
-                        ClaudeSettings.getInstance(project).state.claudePath = verdict.binary.absolutePath
+                        ClaudeSettings.getInstance(project)
+                            .update { it.claudePath = verdict.binary.absolutePath }
                         session.start()
                     }
 
@@ -221,7 +222,7 @@ internal class OnboardingController(
                 // Its own provider slot — the same one Settings ▸ Provider uses, so the card and that field
                 // are two doors onto one credential. A DeepSeek key lives under its own id and is untouched.
                 ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, trimmed)
-                ClaudeSettings.getInstance(project).state.signedOut = false
+                ClaudeSettings.getInstance(project).update { it.signedOut = false }
                 session.dismissLoginCard()
                 session.restart()
             }
@@ -247,7 +248,7 @@ internal class OnboardingController(
         //
         // The flag goes first and synchronously: the boot watcher ticks every few seconds and would happily
         // relaunch the session in the window between stopping it and the credential actually being cleared.
-        ClaudeSettings.getInstance(project).state.signedOut = true
+        ClaudeSettings.getInstance(project).update { it.signedOut = true }
         session.stop()
         ApplicationManager.getApplication().executeOnPooledThread {
             SecretStore.clearAll()

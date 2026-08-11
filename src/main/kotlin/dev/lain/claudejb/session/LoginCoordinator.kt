@@ -372,7 +372,7 @@ class LoginCoordinator(
             val verified = AuthCli.status(binary, env)?.loggedIn == true
             val vaulted = if (verified) {
                 dev.lain.claudejb.process.AccountProfile.capture()
-                ClaudeSettings.getInstance(project).state.signedOut = false
+                ClaudeSettings.getInstance(project).update { it.signedOut = false }
                 takeCustodyOfCredential()
             } else {
                 log.warn("'auth login' exited 0 but 'auth status' reports no login — not banking a credential")

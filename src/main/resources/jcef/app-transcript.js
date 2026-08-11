@@ -435,7 +435,9 @@
       // the ERROR — lives behind that collapse, so a red header was the entire message: you had to know to
       // expand a card to find out what went wrong. Opened ONCE, tracked on the node, so this never fights a
       // user who deliberately collapsed it (applyToolState runs again on every state push).
-      if (!node.__autoOpenedOnError) {
+      // Not for an agent card: it holds nothing but a link, so opening it reveals an empty body — what
+      // happened is in its own transcript.
+      if (!node.__autoOpenedOnError && !node.__isAgentCard) {
         node.__autoOpenedOnError = true;
         node.classList.add('open');
       }
@@ -583,6 +585,11 @@
       if (entry.meta === 'Task' || entry.meta === 'Agent') {
         rec.el.__isAgentCard = true;
         rec.el.classList.add('agent-link');
+      }
+      // The host can ask for a card to start OPEN. A background task's view is nothing but its command and
+      // its output, so shipping it collapsed hides the one thing the tab was opened for.
+      if (entry.open) {
+        rec.el.classList.add('open');
       }
     }
     if (entry.speaker === 'TOOL') {
@@ -839,7 +846,12 @@
 
   function updateRow(rec, entry) {
     // refresh body text (tool name for TOOL). A file tool renders its path as a jump-to-code link.
-    if (rec.speaker === 'TOOL' && entry.command) {
+    if (rec.speaker === 'TOOL' && entry.title) {
+      // A label the host worked out AFTER the row existed: an Agent card starts life saying "Agent" and
+      // gains "Agent (Inventory of dependencies)" once the binary has written that agent's sidecar. `meta`
+      // stays the tool's NAME — it is what the icon and the reviewable/command checks read.
+      setBody(rec, entry.title);
+    } else if (rec.speaker === 'TOOL' && entry.command) {
       // Command-executing tools show the command in their own code block (.tool-cmd, see createRow) — the
       // title just names the tool, it doesn't also cram the raw command text in there.
       setBody(rec, entry.meta || entry.text);
