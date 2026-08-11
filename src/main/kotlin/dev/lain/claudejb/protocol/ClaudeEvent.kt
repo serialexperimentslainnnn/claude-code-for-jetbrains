@@ -72,7 +72,35 @@ sealed interface ClaudeEvent {
         val content: String,
         val isError: Boolean,
         val parentToolUseId: String?,
+        /** The tool's STRUCTURED output, when it carried anything this plugin acts on. See [ToolOutputInfo]. */
+        val output: ToolOutputInfo? = null,
     ) : Conversation
+
+    /**
+     * The fields of `tool_use_result` — the tool's own Output object — that the plugin actually uses.
+     *
+     * The SDK is explicit that this is the thing to render from: *"Structured tool output — the tool's full
+     * Output object, not the string content sent to the model […] render from it instead of parsing the
+     * tool_result text"* (`SDKUserMessageReplay.tool_use_result`, SDK 0.3.223). It is also the ONLY place the
+     * link between a background task and the tool call that started it exists: `background_tasks_changed`
+     * carries `{task_id, task_type, description}` and nothing else, and the SDK forbids pairing that level
+     * signal with the edge stream. Without [backgroundTaskId] a background task has no owner, no card to jump
+     * to and no output to show — which is exactly how its tabs behaved before 5.5.0 wired this up.
+     *
+     * Only these four fields are lifted, deliberately: the object is per-tool and open-ended, and carrying it
+     * whole would be state nothing reads.
+     */
+    data class ToolOutputInfo(
+        /** `Bash` with `run_in_background`, or any call the user backgrounded: the task's id. */
+        val backgroundTaskId: String? = null,
+        /** A backgrounded agent's progress file (`AgentOutput.outputFile`) — the one tailable live output. */
+        val outputFile: String? = null,
+        val stdout: String? = null,
+        val stderr: String? = null,
+    ) {
+        fun isEmpty(): Boolean =
+            backgroundTaskId == null && outputFile == null && stdout.isNullOrEmpty() && stderr.isNullOrEmpty()
+    }
 
     // ── Stream ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -472,8 +500,12 @@ object ProtocolParser {
         val message = root["message"] as? JsonObject ?: return emptyList()
         val content = message["content"] as? JsonArray ?: return emptyList()
         val parentToolUseId = root.str("parent_tool_use_id")
-        return content.filterIsInstance<JsonObject>().mapNotNull { block ->
-            if (block.str("type") != "tool_result") return@mapNotNull null
+        val blocks = content.filterIsInstance<JsonObject>().filter { it.str("type") == "tool_result" }
+        // `tool_use_result` sits at the line's ROOT and describes ONE tool call, so it is only attached when
+        // this message carries exactly one result. With two, there is no field saying which one it belongs to,
+        // and attaching it to both would invent a background-task link that the protocol never stated.
+        val output = blocks.singleOrNull()?.let { parseToolOutput(root["tool_use_result"] as? JsonObject) }
+        return blocks.mapNotNull { block ->
             val toolUseId = block.str("tool_use_id") ?: return@mapNotNull null
             val isError = (block["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false
             val text = when (val c = block["content"]) {
@@ -481,8 +513,25 @@ object ProtocolParser {
                 is JsonArray -> c.filterIsInstance<JsonObject>().mapNotNull { it.str("text") }.joinToString("\n")
                 else -> ""
             }
-            ClaudeEvent.ToolResult(toolUseId, unwrapToolError(text), isError, parentToolUseId)
+            ClaudeEvent.ToolResult(toolUseId, unwrapToolError(text), isError, parentToolUseId, output)
         }
+    }
+
+    /**
+     * Lifts the handful of `tool_use_result` fields the plugin acts on; null when there is nothing in it.
+     *
+     * The field name differs between the two places this object appears — `tool_use_result` on the stream,
+     * `toolUseResult` in the session's own JSONL (verified against `claude` 2.1.226) — so the caller passes
+     * whichever it has and this stays about the contents.
+     */
+    internal fun parseToolOutput(obj: JsonObject?): ClaudeEvent.ToolOutputInfo? {
+        if (obj == null) return null
+        return ClaudeEvent.ToolOutputInfo(
+            backgroundTaskId = obj.str("backgroundTaskId"),
+            outputFile = obj.str("outputFile"),
+            stdout = obj.str("stdout"),
+            stderr = obj.str("stderr"),
+        ).takeUnless { it.isEmpty() }
     }
 
     private fun parseControlRequest(root: JsonObject): List<ClaudeEvent> {
