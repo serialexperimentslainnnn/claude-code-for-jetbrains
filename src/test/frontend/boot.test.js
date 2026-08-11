@@ -51,6 +51,18 @@ describe('boot screen', () => {
     expect(boot().hidden).toBe(false);
   });
 
+  it('the overlays cover the work area, never the chat tabs', () => {
+    // A chat that is still starting used to hide the tab bar with it, so you could not switch to another
+    // chat while one booted — and switching is exactly what you do while you wait. Both overlays live
+    // inside #work (the transcript + composer), which is the containing block their `inset: 0` resolves
+    // against; #tabsbar is a sibling ABOVE it.
+    const work = win.document.getElementById('work');
+    expect(work).not.toBe(null);
+    expect(work.contains(boot())).toBe(true);
+    expect(work.contains(win.document.getElementById('auth-card'))).toBe(true);
+    expect(work.contains(win.document.getElementById('tabsbar'))).toBe(false);
+  });
+
   it('the sign-in screen replaces the spinner instead of being covered by it', () => {
     // #boot is z-index 60 and the auth card 55, so "both up" means the user stares at a spinner while the
     // card they need is underneath it. Exactly one screen at a time.
