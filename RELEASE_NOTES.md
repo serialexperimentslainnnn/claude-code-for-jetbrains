@@ -1,3 +1,37 @@
+## v5.5.0 — 2026-08-11
+
+**This release requires IntelliJ Platform 2025.3 or newer, and it is not optional.** From build 262 the IDE
+ships its embedded browser as a separate bundled plugin, and a plugin that does not declare a dependency on it
+no longer gets those classes at all. The whole chat UI is that browser, so on 2026.2 nothing opened —
+`NoClassDefFoundError: com.intellij.ui.jcef.JBCefApp`, every chat, every time. Declaring the dependency fixes
+it, and that dependency does not exist before 2025.3. On 2025.1 or 2025.2, stay on 5.1.1.
+
+**Every agent gets its own tab, with its own transcript.** A session running agents under agents used to put
+all of it in one place: consecutive "Thought process" rows belonging to different agents, interleaved, with no
+way to follow any single one. The bar under the chats shows what you are reading and keeps the whole tree —
+agents, their agents, background tasks — one hover away. Closing a tab hides a view; it destroys nothing, and
+the card that started it opens it again.
+
+**Everything that is running, in one diagram.** The Agents, Subagents and Background tasks lists were three
+views of the same tree, so finding out whether an agent had spawned anything meant switching view and losing
+the parent. They are now a single **Workloads** diagram spanning every open chat, and every node in it is
+somewhere you can go.
+
+**A background task keeps its tab and its output after it ends.** The binary stops listing a task the moment
+it finishes — which is exactly when its output is worth reading — so the row, the tab and everything it had
+printed used to vanish at that instant. Both now survive, and they come back after a restart.
+
+**Your settings moved into the IDE's password safe.** They lived in `.idea/claude-code.xml`: per project, in
+the clear, and committable — including the environment block, which is where an API key or a credentialed
+proxy URL ends up. They are now one encrypted document in the same store as your sign-in, shared by every
+project. Existing settings are adopted automatically on first run.
+
+**Fixes:** with many chats open the tabs could not be scrolled at all (a vertical wheel does not move a
+horizontal row); the loading screen covered the chat tabs, so you could not switch chats while one was
+starting; a chat pinned to a subagent was drawn twice in the diagram; a nested subagent showed as running for
+ever; the same finished task was green in one view and grey in another; and the Chat / Session / Workloads
+buttons floated over the transcript you were reading.
+
 ## v5.1.1 — 2026-08-10
 
 **The plan limits kept updating only when you talked to the agent.** The poll stopped whenever the chat was
