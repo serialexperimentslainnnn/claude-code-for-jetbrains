@@ -432,16 +432,31 @@
 .readout {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   flex-wrap: wrap;
   margin: 2px 4px 8px;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--dim);
 }
 .readout .ro-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  /* The counters update several times a second. Proportional digits make every item after them shuffle
+     sideways on each tick — the line never settles, which is what made a row of four small numbers read as
+     busy. Tabular figures are the same width whatever the digit, so only the number changes. */
+  font-variant-numeric: tabular-nums;
+}
+/* A separator between metrics, so the line reads as one status line rather than four loose phrases. It is a
+   pseudo-element and not markup: it must never be selected, copied or announced by a screen reader. */
+.readout .ro-item:not(:last-child)::after {
+  content: '·';
+  margin-left: 10px;
+  color: color-mix(in srgb, var(--dim) 55%, transparent);
+}
+/* What the session is DOING leads the line; the numbers qualify it. */
+.readout .ro-item:first-child {
+  color: var(--text);
 }
 .readout .ro-dot {
   width: 7px;
