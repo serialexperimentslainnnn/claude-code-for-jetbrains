@@ -3,7 +3,7 @@
 // These items used to be hidden until they were non-zero, which made a fresh tab show a lone "Idle" with no
 // numbers — indistinguishable from a readout that failed to load. That ambiguity cost real debugging time, so
 // the settled-at-zero behaviour is pinned here rather than left as a style someone tidies away.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('composer readout', () => {
   let win;
@@ -12,6 +12,18 @@ describe('composer readout', () => {
   });
 
   const readoutText = () => win.document.querySelector('.readout').textContent;
+
+  it('the separators are decoration, and the digits do not shuffle', () => {
+    // The counters tick several times a second. With proportional digits every item after a number shifts
+    // sideways on each tick, which is what made four small metrics read as a busy line.
+    const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = css.slice(css.indexOf('.readout .ro-item {'));
+    expect(block.slice(0, block.indexOf('}'))).toMatch(/font-variant-numeric:\s*tabular-nums/);
+    // The separator is a pseudo-element ON PURPOSE: as markup it would be selectable, copyable, and read
+    // aloud between every metric by a screen reader.
+    expect(css).toMatch(/\.readout \.ro-item:not\(:last-child\)::after/);
+    expect(readoutText()).not.toContain('·');
+  });
 
   it('shows context, output and reasoning at 0 before any data arrives', () => {
     win.cc.state({ running: true, starting: false });
