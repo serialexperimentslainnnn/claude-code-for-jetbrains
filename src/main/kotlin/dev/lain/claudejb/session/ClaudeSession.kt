@@ -220,6 +220,42 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     /** Guards against piling scans on top of each other while one is already walking the directory. */
     private val agentScanInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** A scan was asked for while one was already running: run exactly one more when it finishes. */
+    private val agentRescanRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Every background task seen this process — live and finished — with its owner, its card and its output.
+     *
+     * Kept alongside [backgroundTasks] rather than instead of it: that one is the binary's LEVEL signal and
+     * answers "what is running now", which is what it is for. It is also why a finished task used to vanish
+     * from the rows, the tabs and the dashboard the instant it ended, taking its output with it. See
+     * [BackgroundTaskRegistry].
+     */
+    val backgroundTaskRegistry = BackgroundTaskRegistry()
+
+    /** Reads what a backgrounded agent's progress file has gained since the last scan. */
+    private val outputTail = LiveOutputTail()
+
+    /**
+     * The agent running background task [taskId], or null when it belongs to the chat's own turn (or when the
+     * binary never gave us enough to say).
+     *
+     * ONE resolution rule, in one place, because there are two sources and they must not be allowed to
+     * disagree on screen: the structured tool output ([backgroundTaskRegistry]) is authoritative — it is the
+     * call that actually started the task — and the edge stream ([subagentTasks]) is the fallback for a task
+     * seen as a subagent bookend. Whatever cannot be resolved is left unclaimed rather than guessed: a wrong
+     * ownership chain is worse than an honest gap.
+     */
+    fun ownerAgentOfTask(taskId: String): String? {
+        val fromLink = backgroundTaskRegistry.taskOf(taskId)?.ownerToolUseId
+        val fromEdge = subagentTasks[taskId]?.toolUseId
+        val tool = fromLink ?: fromEdge ?: return null
+        return runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
+    }
+
+    /** The `tool_use_id` of the call that started background task [taskId] — the card to jump back to. */
+    fun toolUseOfTask(taskId: String): String? = backgroundTaskRegistry.taskOf(taskId)?.toolUseId
+
     /**
      * The live background-task set from `system/background_tasks_changed` — a LEVEL signal (REPLACE semantics),
      * deliberately independent of [subagentTasks] (the SDK forbids correlating the level with the edge stream).
@@ -773,7 +809,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
         // Persist a freshly-installed binary's path here too, not only in resolveBinary: the install card's
         // "it appeared" path went through a start() that could return before ever writing it down.
-        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
+        if (settings.claudePath != binary.absolutePath) {
+            settings.update { it.claudePath = binary.absolutePath }
+        }
         val credentialed = hasCredential(settings)
         edt {
             if (starting) return@edt
@@ -867,7 +905,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         binaryMissing = false
         // Persist the auto-detected path so later launches are stable and the user can see/edit it
         // (also refreshes a stale saved path that fell back to auto-detection).
-        if (settings.claudePath != binary.absolutePath) settings.state.claudePath = binary.absolutePath
+        if (settings.claudePath != binary.absolutePath) {
+            settings.update { it.claudePath = binary.absolutePath }
+        }
         return binary
     }
 
@@ -1089,6 +1129,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         controlClient.failAll("process gone")
         taskTracker.clear()
         hookNarrator.clear()
+        // Both are per-PROCESS state, exactly like the task set: a restarted binary re-announces whatever is
+        // still alive, and keeping a dead task's output would show a finished thing as if it were running.
+        backgroundTaskRegistry.clear()
+        outputTail.clear()
         edt {
             cards.clear()
             diffs.clearReviewDiffs()
@@ -1327,6 +1371,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     fun restore(savedSessionId: String, dtos: List<EntryDTO>) {
         sessionId = savedSessionId
+        // The agents come back HERE, not when the binary first speaks. They live in files on disk and the
+        // index already says which are ours, so nothing about them needs a running process — and waiting for
+        // `system/init` meant a restored chat showed no agent rows at all until the user sent a prompt, which
+        // is exactly the "they are always lost" report. Off-EDT inside.
+        restoreAdmittedAgents()
         // A restored transcript is a different timeline — drop any rewind turn-anchors from before.
         toolUseTurn.clear()
         currentUserMessageId = null
@@ -1344,6 +1393,27 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                     // Without this a restored command card fell back to the pre-4.3.2 plain-text rendering:
                     // no code block, nothing to copy. Restore must produce the SAME row a live turn does.
                     commandText = dto.commandText,
+                    // …and the same STATE. The default is FINISHED, which drew every restored card green:
+                    // a call still in flight looked done, and one that had failed looked fine. The reader
+                    // works both out by pairing each `tool_use` with its `tool_result` (see EntryDTO).
+                    toolState = when {
+                        dto.failed -> ToolState.ERROR
+
+                        // No result AND this transcript comes from disk: the process that would have
+                        // returned it is gone, so the call was CANCELLED, not running. Fading it forever
+                        // was worse than the green it replaced — a ToolSearch cut off hours ago sat there
+                        // pulsing as if the IDE were still waiting for it.
+                        dto.inFlight -> ToolState.ERROR
+
+                        // A Task/Agent row is the AGENT, and a Task call returns as soon as it has spawned
+                        // one — so its result says nothing about how the agent ended. Restored, the honest
+                        // default is stopped: the run that owned it is over. The scan upgrades it to green
+                        // (completed) or blue (still running, resumed) when the sidecars say so; starting
+                        // green meant a killed subagent stayed green if that scan never reached this row.
+                        dto.meta == "Task" || dto.meta == "Agent" -> ToolState.ERROR
+
+                        else -> ToolState.FINISHED
+                    },
                 )
             }
         }
@@ -1517,7 +1587,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     fun changePermissionMode(mode: String) {
         permissionMode = mode
         // Persist so new tabs / restarts launch in this mode instead of falling back to "default".
-        ClaudeSettings.getInstance(project).getState().permissionMode = mode
+        // `save()` is explicit since 5.5.0: the settings are the plugin's own file now, so nothing writes
+        // them for us and a mutation without it is a setting that silently does not stick.
+        ClaudeSettings.getInstance(project).update { it.permissionMode = mode }
         if (isRunning()) {
             val wire = SessionLauncher.binaryPermissionMode(permissionMode)
             write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), wire))
@@ -1551,7 +1623,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             return
         }
         val wasRunning = isRunning()
-        settings.getState().provider = target.id
+        settings.update { it.provider = target.id }
         cachedEnv = null // provider env changed → re-resolve on next start
         fireState()
         if (wasRunning) {
@@ -2044,7 +2116,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // below preserves the change visually in the tool card, and "View diff" can re-open it from the
         // snapshot at any time, so leaving the editor tab pinned just clutters the workspace. The manager
         // closes the tab and hands back the persisted pre-write snapshot for the inline diff below.
-        transcript.setToolState(event.toolUseId, if (event.isError) ToolState.ERROR else ToolState.FINISHED)
+        // A Task call returns the moment it has SPAWNED its agent, not when the agent is done — so marking
+        // it FINISHED here painted the card green while its agent was still working, and left it green
+        // forever if the agent was later stopped. That card stands for the agent, so its state is the
+        // agent's: [labelAgentCards] owns it from here on, and this must not overwrite that.
+        if (runningAgents.nodes.values.none { it.meta.toolUseId == event.toolUseId }) {
+            transcript.setToolState(
+                event.toolUseId,
+                if (event.isError) ToolState.ERROR else ToolState.FINISHED,
+            )
+        }
+        // A backgrounded call names its task here and NOWHERE else: this is what gives a background task an
+        // owner, a card to jump to and an output to show (see BackgroundTaskLinks). Done for a subagent's
+        // result too, which returns below — the task belongs to that agent precisely.
+        if (backgroundTaskRegistry.observe(event)) fireState()
         val snap = diffs.onToolResult(event.toolUseId)
         // Refresh the VFS NOW, on each successful write — not once at the end of the turn. Until the IDE
         // sees the file on disk it does not exist for it: the editor shows stale contents, and a
@@ -2181,6 +2266,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // Settled: the tab KEEPS its transcript and gains a status — reading why an agent failed is
                 // the case this feature came from. Only the live task map drops it.
                 runningAgents.observeSettled(event.info.toolUseId, agentStatusOf(event.info.status))
+                // `output_file` has been modelled since 3.0.0 and never read. It is where the binary writes a
+                // background task's output — so with it a task's tab shows what it actually printed, live and
+                // after a restart, instead of "this task reported no output".
+                backgroundTaskRegistry.observeOutputFile(event.info.taskId, event.info.outputFile)
                 scanAgents()
                 if (taskTracker.onNotification(event.info)) {
                     val label = event.info.summary.ifBlank { "Subagent ${event.info.status}" }
@@ -2203,6 +2292,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // LEVEL signal: swap the tracked set for the payload. Never paired with the task_* edge stream
                 // (the SDK leaves their relative ordering unspecified), so it can't wedge a stale running indicator.
                 taskTracker.replaceBackgroundTasks(event.info.tasks)
+                // …and remember it. REPLACE semantics mean a finished task simply stops being listed, which is
+                // right for "what is running" and wrong for a tab: its row, its tab and its output all vanished
+                // the instant it ended. The registry keeps it, marked finished — the same contract a finished
+                // agent's tab already has.
+                backgroundTaskRegistry.observeLevel(event.info.tasks)
                 fireState()
             }
         }
@@ -2524,26 +2618,113 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     /**
      * Re-reads the agent directory off the EDT and tells the UI, if anything came of it.
      *
-     * Coalesced rather than queued: while a scan is walking the directory, further requests are dropped —
-     * a burst of task events on a heavy session (dozens of agents spawning at once, which is the case this
-     * feature exists for) would otherwise queue one directory walk per event.
+     * Coalesced rather than queued: while a scan is walking the directory, further requests **set a flag**
+     * instead of queueing another walk — a burst of task events on a heavy session (dozens of agents
+     * spawning at once, which is the case this feature exists for) would otherwise queue one directory walk
+     * per event.
+     *
+     * The flag matters, and dropping the request outright was a real bug: on a restored chat the panel asks
+     * for a scan as it is built, which is exactly when the restore's own scan is usually still walking. The
+     * request was discarded, the panel had not yet subscribed when that scan finished, and the result was a
+     * chat whose agents were in memory and whose rows stayed empty until the user sent a prompt.
      */
     fun scanAgents() {
-        if (!agentScanInFlight.compareAndSet(false, true)) return
+        if (!agentScanInFlight.compareAndSet(false, true)) {
+            agentRescanRequested.set(true)
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
-            val fresh = runCatching { runningAgents.scan() }.getOrDefault(emptyList())
+            // Logged, not just swallowed. A failing scan means the agent rows silently stop updating, which
+            // from outside is indistinguishable from "no agents ran" — the one failure mode this feature
+            // must not have without a trace. The IO itself tolerates a missing directory on its own, so
+            // anything reaching here is a real defect.
+            val fresh = runCatching { runningAgents.scan() }
+                .onFailure { log.warn("agent scan failed; the agent rows will be stale", it) }
+                .getOrDefault(emptyList())
+            val tailed = runCatching { tailBackgroundOutput() }
+                .onFailure { log.warn("background-task tail failed; its output will be stale", it) }
+                .getOrDefault(false)
             // Persist what was admitted, so a later run of the plugin still counts these as ours while a
             // terminal-spawned agent in the same directory never does. Done here rather than at task_started
             // because the tool_use_id → agent id mapping only exists once the binary has written the sidecar.
             sessionId?.let { id ->
                 runCatching {
                     val index = PluginAgentIndex.getInstance(project)
-                    runningAgents.nodes.keys.forEach { index.admit(id, it) }
+                    // The whole shape, not just the id: parent, type and depth, so the record describes the
+                    // tree it is claiming instead of pointing at files and hoping.
+                    runningAgents.nodes.values.forEach { index.admit(id, it) }
+                    // And the background tasks, which have no sidecar at all — this is the ONLY place the
+                    // plugin can say "this task was mine, and this agent ran it".
+                    backgroundTaskRegistry.all.forEach { task ->
+                        index.recordTask(id, task.taskId, task.toolUseId, ownerAgentOfTask(task.taskId))
+                    }
                 }
             }
             agentScanInFlight.set(false)
-            edt { fireAgents(fresh) }
+            edt {
+                labelAgentCards()
+                fireAgents(fresh)
+                // A task whose file grew has no agent news to report, so it needs its own repaint — the tab
+                // is showing that output live.
+                if (tailed) fireState()
+            }
+            // Someone asked while this one was walking: honour it now, so a request made during a scan is
+            // never silently lost (see the doc above — that is how a restored chat lost its rows).
+            if (agentRescanRequested.compareAndSet(true, false)) scanAgents()
         }
+    }
+
+    /**
+     * Names each Agent card after the agent it spawned: `Agent (Inventory of dependencies)`.
+     *
+     * The description is the binary's own, model-written summary of the task, and it does not exist when the
+     * card is created — it appears in the agent's sidecar afterwards. So the card says "Agent" until a scan
+     * has read it, and a transcript with six of them was six identical rows. EDT: it notifies transcript
+     * listeners.
+     */
+    private fun labelAgentCards() {
+        runningAgents.nodes.values.forEach { node ->
+            val toolUseId = node.meta.toolUseId ?: return@forEach
+            transcript.toolNameOf(toolUseId) ?: return@forEach
+            // STATE FIRST, and unconditionally. It used to sit after the description lookup below and share
+            // its early return, so an agent the binary never wrote a description for kept whatever state its
+            // tool call had — which is exactly how a STOPPED subagent came back green, or fading.
+            //
+            // The state follows the AGENT, not its tool call: while it works the card fades like any other
+            // live call, when it finishes it goes green, and when it was cut off it is red.
+            transcript.setToolState(
+                toolUseId,
+                when (node.status) {
+                    AgentStatus.RUNNING -> ToolState.RUNNING
+                    AgentStatus.COMPLETED -> ToolState.FINISHED
+                    else -> ToolState.ERROR // failed or stopped: it did not finish, and nothing will finish it
+                },
+            )
+            // The card is named after WHAT it is, not after the tool that happened to spawn it: an agent
+            // started by another agent reads `Subagent (…)` here exactly as it does in the two diagrams.
+            // [AgentNode.kindLabel] is the single place that decides the word.
+            val label = node.meta.description?.takeIf { it.isNotBlank() } ?: return@forEach
+            transcript.setToolTitle(toolUseId, "${node.kindLabel} ($label)")
+        }
+    }
+
+    /**
+     * Reads whatever each backgrounded agent's progress file has gained since the last scan.
+     *
+     * Only agents publish one (`AgentOutput.outputFile`); a backgrounded shell command publishes no file at
+     * all, and its output only ever arrives as a tool result when the binary is asked for it. Rather than
+     * inventing a path for it, the task's view says so — see [BackgroundTaskLinks].
+     *
+     * Blocking IO: runs inside the pooled scan, never on the EDT.
+     */
+    private fun tailBackgroundOutput(): Boolean {
+        var changed = false
+        backgroundTaskRegistry.all.forEach { task ->
+            val file = task.outputFile?.takeIf { it.isNotBlank() } ?: return@forEach
+            val text = outputTail.readNew(java.nio.file.Paths.get(file))
+            if (text.isNotEmpty() && backgroundTaskRegistry.appendTailedOutput(task.taskId, text)) changed = true
+        }
+        return changed
     }
 
     /**
@@ -2555,20 +2736,49 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private fun restoreAdmittedAgents() {
         val id = sessionId ?: return
+        // A restored chat admits what is in ITS OWN subagents directory. The index is a memory of what this
+        // plugin witnessed live, and it is demonstrably incomplete — sessions on disk carry subagents whose
+        // level-1 parent was never recorded — so relying on it alone brought chats back with no agents.
+        runningAgents.markRestored()
         ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching { PluginAgentIndex.getInstance(project).admittedAgents(id) }
+            // The background tasks and their output come back from the binary's own transcript: the plugin
+            // records that a task was ours (and whose), the transcript records what it ran and what it
+            // printed. Without this a restart came back with the agents and no tasks at all — no tabs, no
+            // commands, and every line they had produced gone.
+            runCatching {
+                val replayed = SessionStore.readLines(id)?.let { BackgroundTaskReplay.parse(it) }.orEmpty()
+                // Every task in THIS session's transcript is this chat's. The index used to filter them, and
+                // it is a record of what the plugin saw live — so anything started before the last restart,
+                // or in a run whose index entry is thin, was dropped along with its command and its output.
+                // The transcript is per-session and it is the binary's own: it cannot contain another chat's
+                // work, which is the only thing that filter was ever protecting against.
+                val mine = replayed
+                if (backgroundTaskRegistry.seed(mine)) edt { fireState() }
+            }.onFailure { log.warn("could not replay background tasks for $id", it) }
+            val admitted = runCatching { PluginAgentIndex.getInstance(project).admittedAgents(id) }
                 .getOrDefault(emptyList())
-                .takeIf { it.isNotEmpty() }
-                ?.let { runningAgents.preAdmit(it) }
+            // Debug rather than silent: a restore that produces no tabs throws nothing anywhere, so without
+            // these two numbers "my agents did not come back" is indistinguishable from "there were none".
+            // That is not hypothetical — it is how the legacy-id mismatch was found (see AgentMeta.bareAgentId).
+            log.debug("agent restore: session=$id indexed=${admitted.size}")
+            admitted.takeIf { it.isNotEmpty() }?.let { runningAgents.preAdmit(it) }
             scanAgents()
         }
     }
 
-    /** `task_notification`'s status string → the agent lifecycle the tab shows. */
+    /**
+     * `task_notification`'s status string → the agent lifecycle the tab shows.
+     *
+     * **Only the endings end it.** This used to send everything that was not `completed`/`failed` to STOPPED,
+     * which swept up every LIVE status the binary emits — `started`, `running`, `in_progress` — and once
+     * STOPPED became red, an agent that had just been launched was drawn as a dead one. Endings are named
+     * explicitly; anything else is a notification about work in progress, so the agent is still running.
+     */
     private fun agentStatusOf(status: String): AgentStatus = when (status.lowercase()) {
-        "completed" -> AgentStatus.COMPLETED
-        "failed" -> AgentStatus.FAILED
-        else -> AgentStatus.STOPPED
+        "completed", "complete", "done", "finished", "success", "succeeded" -> AgentStatus.COMPLETED
+        "failed", "failure", "error" -> AgentStatus.FAILED
+        "stopped", "cancelled", "canceled", "interrupted", "aborted", "killed" -> AgentStatus.STOPPED
+        else -> AgentStatus.RUNNING
     }
 
     private fun fireAgents(fresh: List<String>) = listeners.forEach { it.onAgentsChanged(fresh) }
@@ -2730,10 +2940,23 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          */
         fun preferredDefault(models: List<ModelInfo>, pinned: String = DEFAULT_MODEL): String = when {
             models.isEmpty() -> pinned
+
             models.any { it.value == pinned } -> pinned
+
             models.any { it.value == RECOMMENDED_ALIAS } -> RECOMMENDED_ALIAS
-            else -> models.first().value
+
+            // By TIER, not by position. `models.first()` looked harmless and was the bug the user hit: the
+            // catalogue's order is the binary's, not a ranking, so a session whose catalogue did not carry
+            // the pinned id silently landed on whatever happened to be listed first — Haiku — and the
+            // composer then showed a model nobody had chosen. Falling to the strongest tier the binary DOES
+            // offer is the only fallback that cannot surprise, and it stays inside what the binary listed.
+            else -> TIER_ORDER.firstNotNullOfOrNull { tier ->
+                models.firstOrNull { it.value.contains(tier, ignoreCase = true) }?.value
+            } ?: models.first().value
         }
+
+        /** Strongest first. Matched against the id the binary lists, never against a hardcoded model id. */
+        private val TIER_ORDER = listOf("opus", "sonnet", "haiku")
 
         /** Sentinel "extended thinking on" value: adaptive thinking is on/off, so any positive budget means on. */
         const val THINKING_ON = 1

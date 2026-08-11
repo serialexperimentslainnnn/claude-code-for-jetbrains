@@ -36,6 +36,8 @@
 
   // ---- DOM handles (created on build) ----------------------------------------
   var toggleBtn = null;
+  /** The way out, above the views. Only present while the panel is open (see applyVisibility). */
+  var chatBtn = null;
   var panel = null;
   var shown = false;
   var built = false;
@@ -312,129 +314,211 @@
   }
 
   /**
-   * One row of the Agents / Subagents windows.
+   * Goes to that agent's tab AND leaves the dashboard.
    *
-   * The whole row is the link: clicking it goes to that agent's tab, reopening it when the user had closed
-   * it. The ownership chain (`Chat |_ Agent A |_ Agent B`) is built by the host, because parentage is a
-   * property of the data rather than of how it is drawn — and it is the same string the Background tasks
-   * window shows, so "where does this hang from" reads identically everywhere.
+   * Leaving is half the action: selecting a tab behind an open panel changes something the user cannot see,
+   * so the link appeared to do nothing. What you asked for was to go and read it, and reading happens in the
+   * chat area the panel is covering.
+   *
+   * An empty [agentId] means the chat's own transcript — a background task the binary never attributed to
+   * an agent still ran somewhere, and that somewhere is the chat.
    */
-  function agentRow(a) {
-    var label = a.label != null ? String(a.label) : 'Agent';
-    var metaBits = [];
-    if (a.type) metaBits.push(String(a.type));
-    if (a.status) metaBits.push(String(a.status));
-    var depth = typeof a.depth === 'number' ? a.depth : 1;
-    return h(
-      'div',
-      {
-        class: 'subagent-row agent-row' + (a.running ? ' running' : ''),
-        attrs: { role: 'button', tabindex: '0', title: a.chain || label },
-        on: {
-          click: (function (agentId) {
-            return function () {
-              if (agentId) send({ type: 'revealAgent', agentId: agentId });
-            };
-          })(a.agentId),
-        },
-      },
-      h(
-        'div',
-        { class: 'subagent-main' },
-        h('span', { class: 'subagent-desc', text: treePrefix(depth) + label }),
-        h('span', { class: 'subagent-meta', text: metaBits.join(' · ') }),
-        a.chain ? h('span', { class: 'agent-chain', text: a.chain }) : null
-      )
-    );
+  function revealAndLeave(agentId, chatId) {
+    // The chat it belongs to travels WITH it: this diagram spans every chat, but the message lands on the
+    // panel that is on screen. Without the id that panel searched its own session for somebody else's agent,
+    // found nothing, and the click did nothing at all.
+    send({ type: 'revealAgent', agentId: agentId || '', chatId: chatId == null ? '' : String(chatId) });
+    if (shown) toggle();
   }
 
-  /** `|_ ` per level, capped — the same tree idiom the tab strips use, so one visual language for hanging off. */
-  function treePrefix(depth) {
-    var n = Math.max(0, Math.min(4, depth - 1));
-    var out = '';
-    for (var i = 0; i < n; i++) out += '|_ ';
-    return out + '|_ ';
+  /** Same contract as [revealAndLeave], for a background task's own view. */
+  function revealTaskAndLeave(taskId, chatId) {
+    if (taskId == null) return;
+    send({
+      type: 'revealBackgroundTask',
+      taskId: taskId,
+      chatId: chatId == null ? '' : String(chatId),
+    });
+    if (shown) toggle();
   }
 
-  /** Agents spawned directly by this chat's turns. */
-  function buildAgentsCard(tree) {
-    if (!Array.isArray(tree)) return null;
-    var roots = tree.filter(function (a) {
-      return a && !a.parent;
+  // NB the hierarchy used to be spelled INSIDE the label — first `|_`, then spaces, then CSS indentation.
+  // All three were the same mistake in different clothes: a shape expressed as text wraps, misaligns and
+  // cannot be styled. It is a real diagram now (CC.diagram): cards positioned by arithmetic, joined by
+  // curves drawn from those same coordinates.
+
+  /**
+   * Everything running, as ONE diagram: every chat, its agents, their agents, and the tasks each started.
+   *
+   * It was three views — Agents, Subagents, Background tasks — and they were three views of the same tree:
+   * to find out whether an agent had spawned anything you switched view, lost the parent, and read a
+   * breadcrumb to work out where you were. Then it was one already-expanded list, which was right about the
+   * data and wrong about the drawing: rows at different x with nothing joining them read as a ragged list.
+   *
+   * Now it is a diagram, rooted at the CHATS — that is the honest root, since a chat is what starts
+   * everything below it — and every node is a destination: click a chat, an agent, a subagent or a task and
+   * you go there. It pans by dragging, like a diagram editor, because a tree that outgrows the panel should
+   * be moved around rather than scrolled through two scrollbars.
+   *
+   * [payload] may carry `workloads` (every chat) or just this session's own `agentTree`/`backgroundTasks`;
+   * the second is drawn under a single root so the shape is the same either way.
+   */
+  function buildWorkloadsCard(payload) {
+    var chats =
+      Array.isArray(payload.workloads) && payload.workloads.length
+        ? payload.workloads.filter(Boolean)
+        : [
+            {
+              chatId: null,
+              title: 'This chat',
+              selected: true,
+              tree: Array.isArray(payload.agentTree) ? payload.agentTree.filter(Boolean) : [],
+              tasks: Array.isArray(payload.backgroundTasks) ? payload.backgroundTasks.filter(Boolean) : [],
+            },
+          ];
+
+    var roots = chats.map(chatNode).filter(function (n) {
+      // A chat that started nothing is not a workload; drawing it would be a card saying "nothing here".
+      return n.children.length > 0;
     });
     if (!roots.length) return null;
-    return card('Agents', roots.map(agentRow), true, 'agents');
-  }
 
-  /** Agents spawned BY another agent, at any depth — the window that answers "who launched this?". */
-  function buildSubagentsCard(tree) {
-    if (!Array.isArray(tree)) return null;
-    var nested = tree.filter(function (a) {
-      return a && a.parent;
-    });
-    if (!nested.length) return null;
-    return card('Subagents', nested.map(agentRow), true, 'subagents');
-  }
-
-  // Live background tasks, from the `background_tasks_changed` LEVEL signal: the host always sends the CURRENT
-  // set, so this list can never wedge on a missed start/stop bookend the way the edge-derived Subagents list can.
-  // Deliberately a separate card — the two streams must not be correlated.
-  function buildBackgroundTasksCard(tasks) {
-    if (!Array.isArray(tasks) || !tasks.length) return null;
-    var rows = [];
-    for (var i = 0; i < tasks.length; i++) {
-      var t = tasks[i] || {};
-      var id = t.id;
-      var desc = t.desc != null ? String(t.desc) : '';
-      var type = t.type != null ? String(t.type) : '';
-
-      var stopBtn = h('span', {
-        class: 'btn',
-        attrs: { role: 'button', tabindex: '0' },
-        text: 'Stop',
-        on: {
-          click: (function (taskId) {
-            return function (ev) {
-              ev.preventDefault();
-              ev.stopPropagation();
-              if (taskId != null) send({ type: 'stopTask', taskId: taskId });
-            };
-          })(id),
-        },
+    var canvas = CC.diagram(roots);
+    if (!canvas) return null;
+    // Keyed, so the dashboard's frequent rebuilds restore where you left the diagram instead of re-fitting.
+    var view = CC.panView(canvas, 'Workloads diagram — drag to move, wheel to zoom', 'workloads');
+    // The card is not in the document yet, so the viewport has no size: fit on the next frame, when it has.
+    // Two frames, because the dashboard reveals the panel with its own transition.
+    requestAnimationFrame(function () {
+      if (view.__fit) view.__fit();
+      requestAnimationFrame(function () {
+        if (view.__fit) view.__fit();
       });
+    });
+    return card('Workloads', [view], true, 'workloads');
+  }
 
-      // Where it runs. The chat is always known -- it is the session that reported the task -- but the
-      // OWNING AGENT often is not: `background_tasks_changed` carries only id, type and description, with
-      // no parent and no tool_use_id. When the host could not resolve one it says so, because a made-up
-      // chain would be worse than an honest gap.
-      var chain = t.chain != null ? String(t.chain) : '';
-      var row = h(
-        'div',
-        {
-          class: 'subagent-row' + (t.agentId ? ' agent-row' : ''),
-          attrs: t.agentId ? { role: 'button', tabindex: '0', title: chain } : { title: chain },
-          on: t.agentId
-            ? {
-                click: (function (agentId) {
-                  return function () {
-                    send({ type: 'revealAgent', agentId: agentId });
-                  };
-                })(t.agentId),
-              }
-            : null,
-        },
-        h(
-          'div',
-          { class: 'subagent-main' },
-          h('span', { class: 'subagent-desc', text: desc || type || 'Background task' }),
-          type ? h('span', { class: 'subagent-meta', text: type }) : null,
-          chain ? h('span', { class: 'agent-chain', text: chain }) : null
-        ),
-        stopBtn
-      );
-      rows.push(row);
+  /** One chat, with everything it started underneath it. Every node is a destination. */
+  function chatNode(chat) {
+    var nodes = Array.isArray(chat.tree) ? chat.tree.filter(Boolean) : [];
+    var list = Array.isArray(chat.tasks) ? chat.tasks.filter(Boolean) : [];
+    var seen = {};
+
+    function tasksOf(agentId) {
+      return list.filter(function (t) {
+        return (t.agentId == null ? null : t.agentId) === agentId;
+      });
     }
-    return card('Background tasks', rows, true, 'background');
+    function childrenOf(agentId) {
+      return nodes
+        .filter(function (n) {
+          return (n.parent == null ? null : n.parent) === agentId;
+        })
+        .filter(function (n) {
+          if (seen[n.agentId]) return false; // a malformed parent link must not loop
+          seen[n.agentId] = true;
+          return true;
+        });
+    }
+
+    function agentNode(a, depth) {
+      return {
+        id: a.agentId,
+        kind: 'agent',
+        // `Agent (…)` / `Subagent (…)` — the same naming the transcript card uses, so the same work does not
+        // have two names depending on which panel you read it in.
+        label: CC.diagramLabel('agent', depth, a.label != null ? String(a.label) : 'Agent'),
+        meta: a.type ? String(a.type) : '',
+        status: a.status ? String(a.status) : null,
+        running: !!a.running,
+        title: a.chain || a.label,
+        onPick: function () {
+          if (a.agentId) revealAndLeave(a.agentId, chat.chatId);
+        },
+        children: childrenOf(a.agentId)
+          .map(function (child) {
+            return agentNode(child, depth + 1);
+          })
+          .concat(
+            tasksOf(a.agentId).map(function (t) {
+              return taskNode(t, chat.chatId);
+            })
+          ),
+      };
+    }
+
+    var kids = childrenOf(null).map(function (a) {
+      return agentNode(a, 1);
+    });
+    // Tasks the chat itself started hang off the chat, and a task whose owner never became known would
+    // otherwise be invisible — an honest gap has to be VISIBLE to be honest.
+    var loose = tasksOf(null).concat(
+      list.filter(function (t) {
+        return (
+          t.agentId != null &&
+          !nodes.some(function (n) {
+            return n.agentId === t.agentId;
+          })
+        );
+      })
+    );
+
+    return {
+      id: chat.chatId,
+      kind: 'chat',
+      label: chat.title != null ? String(chat.title) : 'Chat',
+      selected: !!chat.selected,
+      title: 'Go to this chat',
+      onPick: function () {
+        if (chat.chatId != null) send({ type: 'selectChat', chatId: chat.chatId });
+        revealAndLeave('');
+      },
+      children: kids.concat(
+        loose.map(function (t) {
+          return taskNode(t, chat.chatId);
+        })
+      ),
+    };
+  }
+
+  /**
+   * One background task as a diagram node.
+   *
+   * Running AND finished ones are drawn: the host sends its own record, not the binary's live set, because
+   * that set is a LEVEL signal — a task that ends stops being listed, and the node (with its output) used to
+   * disappear at the exact moment there was something to read.
+   *
+   * The click opens the TASK's own view — what it is, who started it, its command and its output — not its
+   * owner's transcript. Sending the user to the owner is what made this node look inert.
+   */
+  function taskNode(t, chatId) {
+    var running = t.running !== false;
+    var type = t.type != null ? String(t.type) : '';
+    return {
+      id: t.id,
+      kind: 'task',
+      // `Background Task (…)`, holding the model's description of the job or, failing that, the command.
+      label: CC.diagramLabel('task', 1, (t.desc != null && String(t.desc)) || type || 'background'),
+      meta: type || 'background task',
+      // Named by the host, like every other state on the page (see JcefStatus).
+      status: t.status || null,
+      running: running,
+      title: t.chain || t.desc || 'Background task',
+      onPick: function () {
+        revealTaskAndLeave(t.id, chatId);
+      },
+      // A finished task keeps its node and loses its Stop: there is nothing left to stop, and a button that
+      // does nothing is worse than no button.
+      action: running
+        ? {
+            label: 'Stop',
+            onClick: function () {
+              if (t.id != null) send({ type: 'stopTask', taskId: t.id });
+            },
+          }
+        : null,
+      children: [],
+    };
   }
 
   // status → mcp-dot class. Defensive: unknown maps to nothing extra.
@@ -547,6 +631,19 @@
   // ---------------------------------------------------------------------------
   // Render the whole dashboard body from the stashed payloads.
   // ---------------------------------------------------------------------------
+  /**
+   * Renders only what is on screen.
+   *
+   * The host pushes the session payload on every state change, several times a turn, and this used to
+   * rebuild the whole panel each time "to keep the DOM fresh while hidden" — rebuilding a diagram nobody
+   * is looking at, laying out its cards and measuring its SVG. Opening the panel renders anyway (see
+   * [toggle] and [cc.openDashboard]), so the work was pure waste; while hidden the payload is simply
+   * stashed and drawn when it is next shown.
+   */
+  function renderIfShown() {
+    if (built && shown) render();
+  }
+
   function render() {
     if (!panel) return;
     // Clear.
@@ -557,19 +654,15 @@
     var inner = h('div', { class: 'dash-inner' });
 
     var s = lastSession || {};
-    var cards = [
-      buildUsageCard(s.usage),
-      buildContextCard(s.context),
-      buildCostCard(s.cost),
-      buildAccountCard(s.account),
-      buildEnvCard(s),
-      buildMcpCard(lastMcp),
-      // Session first, then the three windows the agent work moved into, in the order the user asked for:
-      // Session · Agents · Subagents · Background tasks.
-      buildAgentsCard(s.agentTree),
-      buildSubagentsCard(s.agentTree),
-      buildBackgroundTasksCard(s.backgroundTasks),
-    ];
+    // FOUR EXCLUSIVE VIEWS, not one panel with four scroll anchors. The anchor version was wrong in a way
+    // that only shows up in use: with no agents there is no Agents card to scroll to, so pressing "Agents"
+    // simply left the Session cards on screen — the button looked broken because it did nothing visible.
+    //
+    // One registry, looked up by view: adding a fifth view is a line here and a line in the button stack,
+    // and no branch anywhere else. The nested ternary this replaces was four levels deep and had the same
+    // failure mode as any conditional chain — the next view would have been appended to the tail of it.
+    var view = VIEWS[currentView] || VIEWS.session;
+    var cards = view.cards(s);
 
     var any = false;
     for (var i = 0; i < cards.length; i++) {
@@ -584,59 +677,129 @@
         h(
           'div',
           { class: 'dash-card dash-empty' },
-          h('div', { class: 'dash-title', text: 'Session' }),
-          h('div', { class: 'stat-row' }, h('span', { class: 'stat-label', text: 'No session data yet.' }))
+          h('div', { class: 'dash-title', text: view.title }),
+          h('div', { class: 'stat-row' }, h('span', { class: 'stat-label', text: view.empty }))
         )
       );
     }
     panel.appendChild(inner);
   }
 
+  /**
+   * The four views, each declaring its own title, its cards and what it says when empty.
+   *
+   * A view that renders nothing must still say WHICH view is empty: "No session data yet" under the Agents
+   * button is the same failure as showing the Session cards — the panel answering a question nobody asked.
+   */
+  var VIEWS = {
+    session: {
+      title: 'Session',
+      empty: 'No session data yet.',
+      cards: function (s) {
+        return [
+          buildUsageCard(s.usage),
+          buildContextCard(s.context),
+          buildCostCard(s.cost),
+          buildAccountCard(s.account),
+          buildEnvCard(s),
+          buildMcpCard(lastMcp),
+        ];
+      },
+    },
+    // ONE view for everything that is running. It was three — Agents, Subagents, Background tasks — and they
+    // were three views of one tree: to see whether an agent had spawned anything you switched view, lost the
+    // parent, and had to read a breadcrumb to work out where you were. Here it is a single diagram, rooted at
+    // the chats, and every node in it is somewhere you can go.
+    workloads: {
+      title: 'Workloads',
+      empty: 'Nothing is running: no agents, no background tasks.',
+      cards: function (s) {
+        return [buildWorkloadsCard(s)];
+      },
+    },
+  };
+
   // ---------------------------------------------------------------------------
   /**
-   * One of the four view buttons. [anchor] is the card to scroll to once the panel is open (null = the top,
-   * i.e. the Session view). Opening an already-open panel on the same button closes it, so a button toggles
-   * its own view rather than trapping the user in the dashboard.
+   * One of the four view buttons.
+   *
+   * Each button owns a VIEW, and the rule is the one people expect from a switcher: pressing another view
+   * switches to it, pressing the one you are already in closes the panel and gives you the chat back. The
+   * earlier version renamed the first button to "Chat" while the active view was a different one, so the
+   * button that said "Chat" was not the button that would take you there — it took two presses and looked
+   * broken. Names are fixed now, and the highlight says where you are.
    */
-  function viewButton(label, anchor) {
+  function viewButton(label, view) {
+    var id = view || 'session';
     return h('button', {
       class: 'dash-toggle',
-      attrs: { type: 'button', 'data-anchor': anchor || 'session' },
+      // A real <button>, so keyboard operation, focus and the button role come from the platform rather
+      // than from attributes we would have to keep correct by hand. `aria-controls`/`aria-expanded` say
+      // what it opens and whether it is open (4.1.2); `aria-current` says which view you are in, which is
+      // the part colour alone must not carry (1.4.1).
+      attrs: {
+        type: 'button',
+        'data-view': id,
+        'aria-controls': 'cc-dashboard',
+        'aria-expanded': 'false',
+      },
       text: label,
       on: {
         click: function (ev) {
           ev.preventDefault();
-          if (shown && currentAnchor === (anchor || 'session')) {
-            toggle();
+          if (shown && currentView === id) {
+            toggle(); // back to the chat
             return;
           }
-          currentAnchor = anchor || 'session';
-          if (!shown) toggle();
-          scrollToAnchor();
-          markActiveButton();
+          currentView = id;
+          if (shown) {
+            render();
+            markActiveButton();
+          } else {
+            toggle(); // opens, renders and marks
+          }
+          announceView();
         },
       },
     });
   }
 
-  /** Which view the last button press asked for; drives the scroll and the active-button highlight. */
-  var currentAnchor = 'session';
-
-  function scrollToAnchor() {
-    if (!panel) return;
-    if (currentAnchor === 'session') {
-      panel.scrollTop = 0;
+  /**
+   * Says out loud which view is now on screen (4.1.3 Status Messages).
+   *
+   * The panel swaps its whole content without the focus moving, so a screen-reader user gets no signal at
+   * all otherwise — the transcript simply becomes a different panel in silence. `CC.announce` writes to the
+   * live region the shell declares statically, which is why it is announced rather than created here.
+   */
+  function announceView() {
+    var c = core();
+    if (!c || typeof c.announce !== 'function') return;
+    if (!shown) {
+      c.announce('Dashboard closed');
       return;
     }
-    var card = panel.querySelector('[data-card="' + currentAnchor + '"]');
-    if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start' });
+    var v = VIEWS[currentView] || VIEWS.session;
+    c.announce(v.title + ' view');
   }
+
+  /** Which of the four views the panel is showing. Drives `render` and the active-button highlight. */
+  var currentView = 'session';
 
   function markActiveButton() {
     var all = document.querySelectorAll('.dash-toggle');
     for (var i = 0; i < all.length; i++) {
-      var isActive = shown && all[i].getAttribute('data-anchor') === currentAnchor;
+      var isChat = all[i].classList.contains('dash-exit');
+      // Exactly one button is lit at any moment: the open view, or Chat when nothing is open.
+      var isActive = shown ? !isChat && all[i].getAttribute('data-view') === currentView : isChat;
       all[i].classList.toggle('active', isActive);
+      // Both states are programmatic, not just painted: `aria-expanded` for "this opens the panel and the
+      // panel is open", `aria-current` for "and this is the view you are in".
+      all[i].setAttribute('aria-expanded', shown ? 'true' : 'false');
+      if (isActive) {
+        all[i].setAttribute('aria-current', 'true');
+      } else {
+        all[i].removeAttribute('aria-current');
+      }
     }
   }
 
@@ -649,7 +812,9 @@
     if (!conv || !root) return; // try again later
     built = true;
 
-    panel = h('div', { class: 'dashboard', attrs: { hidden: '' } });
+    // The id is what the view buttons point `aria-controls` at, so the relation between the stack and the
+    // panel it opens is programmatic rather than only visual.
+    panel = h('div', { class: 'dashboard', attrs: { hidden: '', id: 'cc-dashboard' } });
     // Overlay the conversation; the composer (in #dock) stays visible.
     // Insert as a sibling of #conversation so CSS can position it over the
     // conversation area without covering the dock.
@@ -659,19 +824,30 @@
       root.appendChild(panel);
     }
 
-    // Four buttons, stacked: Session, then the three windows the agent work moved into. Each opens the
-    // dashboard scrolled to its own card, so they are views of one panel rather than four panels -- the
-    // data is the same payload and splitting it would mean four things to keep in sync.
+    // The stack: a way OUT, then the four views. "Chat" is its own button rather than a state of another
+    // one — leaving the dashboard is a different action from switching view, and making the user find
+    // whichever button happens to be highlighted in order to leave is a puzzle, not an affordance. It only
+    // exists while the panel is open, because a "Chat" button while you are already in the chat says nothing.
     toggleBtn = viewButton('Session', null);
-    var stack = h(
-      'div',
-      { class: 'dash-toggles' },
-      toggleBtn,
-      viewButton('Agents', 'agents'),
-      viewButton('Subagents', 'subagents'),
-      viewButton('Background tasks', 'background')
-    );
-    root.appendChild(stack);
+    chatBtn = h('button', {
+      class: 'dash-toggle dash-exit',
+      attrs: { type: 'button', 'aria-controls': 'cc-dashboard', 'aria-expanded': 'true' },
+      text: 'Chat',
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          if (shown) toggle();
+          announceView();
+        },
+      },
+    });
+    var stack = h('div', { class: 'dash-toggles' }, chatBtn, toggleBtn, viewButton('Workloads', 'workloads'));
+    // Into the TAB BAR, not floating over the transcript. As a fixed stack in the corner it sat on top of
+    // the conversation and, with a few chats open, on top of the tabs themselves — the row it now lives in
+    // has always reserved the space for it (`.tab-row` padding-right).
+    var bar = document.getElementById('tabsbar');
+    if (bar) bar.appendChild(stack);
+    else root.appendChild(stack);
 
     applyVisibility();
     render();
@@ -685,17 +861,17 @@
       panel.classList.add('open');
       // Hide the transcript while the dashboard fills the conversation area — the dock (composer) stays visible.
       if (conv) conv.setAttribute('hidden', '');
-      // The first button doubles as the way OUT: with the panel open it reads "Chat". The other three keep
-      // their names and only light up, so the stack always says both where you are and how to leave.
-      toggleBtn.textContent = 'Chat';
-      toggleBtn.classList.add('active');
     } else {
       panel.setAttribute('hidden', '');
       panel.classList.remove('open');
       if (conv) conv.removeAttribute('hidden');
-      toggleBtn.textContent = 'Session';
-      toggleBtn.classList.remove('active');
+      // Leaving the panel returns to the default view, so the next press of any button opens what it says
+      // rather than whatever was last looked at.
+      currentView = 'session';
     }
+    // Button labels never change (see viewButton); the highlight says where you are. "Chat" is always on
+    // screen — it is one of the five places you can be, not a mode of the others — and it is the one lit up
+    // when the dashboard is closed, because then the chat IS the view you are looking at.
     markActiveButton();
   }
 
@@ -717,13 +893,13 @@
   cc.session = function (payload) {
     lastSession = payload && typeof payload === 'object' ? payload : null;
     ensureBuilt();
-    if (built) render(); // keep DOM fresh even while hidden
+    renderIfShown();
   };
 
   cc.mcp = function (payload) {
     lastMcp = payload && typeof payload === 'object' ? payload : null;
     ensureBuilt();
-    if (built) render();
+    renderIfShown();
   };
 
   // Host can force the dashboard open (e.g. the ⚙ menu reusing this instead of plain-text dialogs).
@@ -732,6 +908,18 @@
     if (!built) return;
     shown = true;
     render();
+    applyVisibility();
+  };
+
+  /**
+   * Host can force the dashboard SHUT — used when a tab is selected in one of the agent strips.
+   *
+   * Selecting a tab repaints the transcript, which is behind the panel: without this the click looked
+   * like it did nothing, because what changed was hidden by the very view you were in.
+   */
+  cc.closeDashboard = function () {
+    if (!built || !shown) return;
+    shown = false;
     applyVisibility();
   };
 

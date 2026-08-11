@@ -49,6 +49,20 @@ class TranscriptEntry(
     /** Elapsed execution time (seconds) from the latest tool_progress; shown while [RUNNING] (no % exists). */
     var elapsedSeconds: Double = 0.0
         internal set
+
+    /**
+     * A better label for this row, when one becomes known LATER than the row itself.
+     *
+     * The case it exists for: an `Agent` card says only "Agent" when it is created, because the description
+     * of what that agent is doing is written by the binary into the agent's own sidecar — which appears
+     * after the call. Once the scan has read it, the card can say `Agent (Inventory of dependencies)`.
+     *
+     * Deliberately NOT [meta]: that field is the tool's NAME and is compared against it all over the place
+     * (reviewable tools, command detection, the icon). Renaming it to make a card read better would break
+     * every one of those comparisons silently.
+     */
+    var toolTitle: String? = null
+        internal set
 }
 
 /**
@@ -186,6 +200,18 @@ class TranscriptModel {
         entry.toolState = state
         if (elapsedSeconds != null) entry.elapsedSeconds = elapsedSeconds
         listeners.forEach { it.onUpdated(entry) }
+    }
+
+    /**
+     * Gives the call behind [toolUseId] a better label (see [TranscriptEntry.toolTitle]). Returns true when
+     * it actually changed, so the caller can avoid a repaint per scan.
+     */
+    fun setToolTitle(toolUseId: String, title: String): Boolean {
+        val entry = byToolUseId[toolUseId] ?: return false
+        if (entry.toolTitle == title) return false
+        entry.toolTitle = title
+        listeners.forEach { it.onUpdated(entry) }
+        return true
     }
 
     fun clear() {

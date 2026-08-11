@@ -47,6 +47,9 @@ object JcefBridge {
         put("speaker", e.speaker.name)
         put("text", e.text)
         e.meta?.let { put("meta", it) }
+        // A label that only became knowable after the row existed — an Agent card gaining the description of
+        // what its agent is actually doing. The frontend prefers it over `meta`, which stays the tool's name.
+        e.toolTitle?.let { put("title", it) }
         e.toolUseId?.let { put("toolUseId", it) }
         e.parentToolUseId?.let { put("parent", it) }
         // Project-relative file for a file tool → the frontend renders the card label as a jump-to-code link.
@@ -81,7 +84,14 @@ object JcefBridge {
      * Tool rows are marked FINISHED: whatever the agent was doing when it wrote that file, it is not doing
      * it now in a way this row can track, and a card left spinning forever is a lie the UI tells by omission.
      */
-    fun agentBatchJson(entries: List<EntryDTO>): String =
+    fun agentBatchJson(
+        entries: List<EntryDTO>,
+        titles: Map<String, String> = emptyMap(),
+        running: Set<String> = emptySet(),
+        expanded: Boolean = false,
+        /** Whether the agent this transcript belongs to is still working — see the `inFlight` branch below. */
+        ownerRunning: Boolean = false,
+    ): String =
         JsonArray(
             entries.mapIndexed { index, dto ->
                 buildJsonObject {
@@ -90,10 +100,17 @@ object JcefBridge {
                     put("speaker", dto.speaker)
                     put("text", dto.text)
                     dto.meta?.let { put("meta", it) }
+                    // The same label the live path gives an Agent card, so a card inside an agent's own
+                    // transcript reads `Agent (Inventory of dependencies)` too — it was only ever applied to
+                    // the chat's rows, which is exactly where the user does NOT need it most.
+                    dto.toolUseId?.let { id -> titles[id]?.let { put("title", it) } }
                     dto.toolUseId?.let { put("toolUseId", it) }
                     dto.filePath?.let { put("filePath", it) }
                     dto.commandText?.let { put("command", it) }
-                    put("state", "FINISHED")
+                    put("state", agentRowState(dto, running, ownerRunning))
+                    // A background task's view is nothing BUT its command and its output: shipping it
+                    // collapsed means the one thing you opened the tab for is behind a click.
+                    if (expanded) put("open", true)
                     put("elapsed", 0)
                     if (dto.speaker == "TOOL" && dto.toolUseId != null && dto.meta in REVIEWABLE_TOOLS) {
                         put("reviewable", true)
@@ -101,6 +118,24 @@ object JcefBridge {
                 }
             },
         ).toString()
+
+    /**
+     * RUNNING when the call has no result yet ([EntryDTO.inFlight]) or when it IS an agent that is still
+     * working. Marking everything FINISHED is what made a live card sit there green and still: a Bash the
+     * agent was running right now looked exactly like one that had ended half an hour ago.
+     */
+    private fun agentRowState(dto: EntryDTO, running: Set<String>, ownerRunning: Boolean): String = when {
+        // A failure outranks everything: it is the one state you must not miss.
+        dto.failed -> "ERROR"
+
+        dto.toolUseId in running -> "RUNNING"
+
+        // A call with no result is only IN FLIGHT while something could still return it. In a transcript
+        // whose owner has stopped, it was cut off — cancelled, not running.
+        dto.inFlight -> if (ownerRunning) "RUNNING" else "ERROR"
+
+        else -> "FINISHED"
+    }
 
     /** One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). */
     fun permissionJson(p: PendingPermission, diff: String? = null): JsonObject = buildJsonObject {
@@ -279,8 +314,43 @@ object JcefBridge {
          *
          * Also the documented way back to a tab the user closed: closing hides a view, it never destroys
          * anything, so revealing it again just re-opens a window onto a file that is still there.
+         *
+         * [chatId] names the chat the agent belongs to, when the sender knows it.
+         *
+         * The Workloads diagram spans EVERY chat, but the message arrives at the panel of the one you are
+         * looking at — which then searched its own session, found nothing, and went nowhere. That is why
+         * clicking a node there did nothing while the same node in the tab bar's popup worked: the popup only
+         * ever shows one chat, so the panel that received it was always the right one.
          */
-        data class RevealAgent(val agentId: String, val toolUseId: String) : SessionControl
+        data class RevealAgent(val agentId: String, val toolUseId: String, val chatId: String = "") :
+            SessionControl
+
+        /**
+         * Open a background task's own view: what it is, who started it, and whatever output came back.
+         *
+         * Separate from [RevealAgent] because a task is not an agent and has no transcript. Sending the user
+         * to its owner's transcript instead — which is what the dashboard row used to do — either did nothing
+         * visible or moved them somewhere unrelated.
+         *
+         * [chatId] as in [RevealAgent]: Workloads spans every chat, so a task names the one it belongs to.
+         */
+        data class RevealBackgroundTask(val taskId: String, val chatId: String = "") : SessionControl
+
+        // The tab bar (app-tabs.js). It is part of the page, not a Swing strip above it, so selecting a chat,
+        // an agent or closing either arrives here like every other web→host message.
+        data class SelectChat(val chatId: String) : SessionControl
+        data class CloseChat(val chatId: String) : SessionControl
+        data class SelectAgent(val agentId: String) : SessionControl
+        data class CloseAgent(val agentId: String) : SessionControl
+
+        /**
+         * Pin the open subtab as a chat tab of its own — one of [agentId] / [taskId] is set.
+         *
+         * A subtab is a VIEW: one browser painting somebody else's transcript, gone the moment you look at
+         * something else. Pinning turns it into a real tab that stays put, which is what you want for the
+         * one agent you keep coming back to.
+         */
+        data class PinSubtab(val agentId: String, val taskId: String) : SessionControl
 
         // The "Claude Code was not found" boot card: run an official installer in the IDE terminal,
         // validate a user-typed binary path, or re-check after an install finished.
@@ -416,8 +486,6 @@ object JcefBridge {
 
         "stopTask" -> Msg.StopTask(f.text("taskId"))
 
-        "revealAgent" -> Msg.RevealAgent(f.text("agentId"), f.text("toolUseId"))
-
         // The "Claude Code was not found" boot card.
         "installClaude" -> Msg.InstallClaude(f.text("method"))
 
@@ -425,7 +493,19 @@ object JcefBridge {
 
         "recheckBinary" -> Msg.RecheckBinary
 
-        else -> parseAuthControls(type, f)
+        else -> parseTabControls(type, f) ?: parseAuthControls(type, f)
+    }
+
+    /** The tab bar and the Workloads view (app-tabs.js / app-session.js). Split out for complexity only. */
+    private fun parseTabControls(type: String, f: Fields): Msg? = when (type) {
+        "revealAgent" -> Msg.RevealAgent(f.text("agentId"), f.text("toolUseId"), f.text("chatId"))
+        "revealBackgroundTask" -> Msg.RevealBackgroundTask(f.text("taskId"), f.text("chatId"))
+        "selectChat" -> Msg.SelectChat(f.text("chatId"))
+        "closeChat" -> Msg.CloseChat(f.text("chatId"))
+        "selectAgent" -> Msg.SelectAgent(f.text("agentId"))
+        "closeAgent" -> Msg.CloseAgent(f.text("agentId"))
+        "pinSubtab" -> Msg.PinSubtab(f.text("agentId"), f.text("taskId"))
+        else -> null
     }
 
     /** The sign-in card and the account buttons. Split out of [parseSessionControls] for complexity only. */

@@ -52,10 +52,33 @@ import kotlinx.serialization.json.put
 object JcefSessionData {
 
     /**
+     * One open chat and the session behind it, for the Workloads diagram.
+     *
+     * [chatId] is the tab strip's own handle — opaque here, and exactly what a click sends back to select
+     * that chat.
+     */
+    data class Workload(
+        val chatId: String,
+        val title: String,
+        val selected: Boolean,
+        val session: ClaudeSession,
+    )
+
+    /**
      * The dashboard payload. [usage] is passed in rather than read off the session because it comes from an
      * on-demand `get_usage` round-trip, not from session state — the caller polls, then re-serializes.
+     *
+     * [workloads] is EVERY open chat, not just this one: what is running does not belong to the tab you
+     * happen to be looking at, and a diagram that showed only the selected chat answered "what is running?"
+     * with a fraction of the truth. The per-chat view is the tab bar's own popup. Empty when the caller has
+     * no strip to ask (a panel outside the tab strip), in which case the frontend falls back to this
+     * session's own `agentTree`/`backgroundTasks` and draws it under a single root.
      */
-    fun sessionJson(session: ClaudeSession, usage: UsageReport? = null): String {
+    fun sessionJson(
+        session: ClaudeSession,
+        usage: UsageReport? = null,
+        workloads: List<Workload> = emptyList(),
+    ): String {
         val obj = buildJsonObject {
             put("usage", usageJson(session, usage) ?: JsonNull)
             put("context", contextJson(session) ?: JsonNull)
@@ -68,6 +91,9 @@ object JcefSessionData {
             // The tree behind the Agents / Subagents windows: every agent with the chain it hangs off, so a
             // row can say "Chat |_ Agent A |_ Agent B" and link straight to that tab.
             put("agentTree", agentTreeJson(session))
+            // Every chat's tree, for the Workloads diagram. Kept ALONGSIDE the two keys above rather than
+            // replacing them: they are this session's own data, which other cards read.
+            put("workloads", workloadsJson(workloads))
             // Always emit a friendly model label (even on a default session where session.model is null)
             // and the known working dir, so the Session card is never empty — the prior nulls made the
             // whole dashboard collapse to "No session data yet" on a fresh/idle session.
@@ -141,6 +167,9 @@ object JcefSessionData {
         put("pct", extra.utilization) // EXPERIMENT: raw, un-rounded, like the windows — so the decimal shows
         put("limitReached", extra.spendLimitReached)
     }
+
+    // NB the `local_agent` filter lives in BackgroundTaskRegistry now: it was duplicated here and in the tab
+    // rows, which is two places for one rule about what counts as a background task.
 
     private const val TEN = 10.0
 
@@ -277,7 +306,30 @@ object JcefSessionData {
      * same string is what the Background tasks window shows for the task's owner.
      *
      * Every row carries its `agentId`, which is what the window's link sends back to jump to that tab.
+     *
+     * ---
+     * `[{chatId, title, selected, tree:[…], tasks:[…]}]` — one entry per open chat.
+     *
+     * Each entry reuses the very same builders the single-session payload uses, so a node means the same
+     * thing whichever chat it came from and there is no second serialisation to drift.
+     *
+     * ONE ENTRY PER SESSION. A tab pinned to a subagent is a second tab over the same panel — a view of one
+     * agent's transcript, not another workload — so the strip lists that session twice and the diagram drew
+     * the chat, its agents and its tasks twice over. Keyed by session identity, first tab wins (the chat's
+     * own tab comes before anything pinned out of it).
      */
+    private fun workloadsJson(workloads: List<Workload>) = buildJsonArray {
+        workloads.distinctBy { it.session }.forEach { w ->
+            addJsonObject {
+                put("chatId", w.chatId)
+                put("title", w.title)
+                put("selected", w.selected)
+                put("tree", agentTreeJson(w.session))
+                put("tasks", backgroundTasksJson(w.session))
+            }
+        }
+    }
+
     private fun agentTreeJson(session: ClaudeSession) = buildJsonArray {
         val nodes = session.runningAgents.nodes
         nodes.values.forEach { node ->
@@ -285,7 +337,7 @@ object JcefSessionData {
                 put("agentId", node.agentId)
                 put("label", node.meta.label())
                 put("type", node.meta.agentType)
-                put("status", node.status.name.lowercase())
+                put("status", JcefStatus.of(node.status))
                 put("depth", node.depth)
                 put("parent", node.parentAgentId)
                 put("chain", ownershipChain(session.title, node.agentId, nodes))
@@ -314,7 +366,10 @@ object JcefSessionData {
             current = node.parentAgentId
         }
         parts.addFirst(chatTitle)
-        return parts.joinToString(" |_ ")
+        // A breadcrumb, not a tree: it is one line naming a path, so it reads with a chevron. The tree
+        // glyphs belong to the tab rows, where there really are branches to draw — repeating `|_` here made
+        // a single line look like a broken diagram.
+        return parts.joinToString("  ›  ")
     }
 
     // NB `subagentsJson` lived here until 5.5.0. The Session view no longer carries agent data at all: the
@@ -330,24 +385,24 @@ object JcefSessionData {
      */
     private fun backgroundTasksJson(session: ClaudeSession) = buildJsonArray {
         val nodes = session.runningAgents.nodes
-        session.backgroundTasks.forEach { task ->
-            // Which agent owns it, when that is knowable at all. `background_tasks_changed` carries only
-            // {task_id, task_type, description} — no parent, no tool_use_id — so the owner can only be
-            // recovered when the same task_id was seen earlier on the edge stream, which is where the
-            // tool_use_id lives. When it cannot be, the row says the chat and stops there: an invented
-            // chain would be worse than an honest gap.
-            val owner = session.subagentTasks[task.taskId]?.toolUseId
-                ?.let { tool -> nodes.values.firstOrNull { it.meta.toolUseId == tool } }
+        // The plugin's own record rather than the binary's live set, and for one reason: that set is a LEVEL
+        // signal, so a task that finished simply stops being listed — its row vanished from this window the
+        // instant it ended, taking its output with it. The registry keeps finished tasks, marked as such, and
+        // already excludes agents (to the binary a running agent IS a background task, which is how this
+        // window used to duplicate the Agents one).
+        session.backgroundTaskRegistry.all.forEach { task ->
+            // ONE owner-resolution rule, owned by the session, so this window and the tab rows cannot
+            // disagree about who launched a task. Unresolvable means unclaimed: the row says the chat and
+            // stops there, because an invented chain is worse than an honest gap.
+            val owner = session.ownerAgentOfTask(task.taskId)
             addJsonObject {
                 put("id", task.taskId)
                 put("desc", task.description)
                 put("type", task.taskType)
-                put("agentId", owner?.agentId)
-                put(
-                    "chain",
-                    owner?.let { ownershipChain(session.title, it.agentId, nodes) }
-                        ?: "${session.title}  ·  no known agent",
-                )
+                put("running", task.running)
+                put("status", JcefStatus.of(task.running))
+                put("agentId", owner)
+                put("chain", owner?.let { ownershipChain(session.title, it, nodes) } ?: session.title)
             }
         }
     }

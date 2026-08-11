@@ -5,6 +5,9 @@ import com.intellij.ide.actions.RevealFileAction
 import com.intellij.ide.highlighter.ArchiveFileType
 import com.intellij.ide.projectView.ProjectView
 import com.intellij.ide.ui.LafManagerListener
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -17,14 +20,12 @@ import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.context.EditorContextProvider
 import dev.lain.claudejb.context.FilePickerHelper
-import com.intellij.notification.NotificationAction
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.protocol.mergedOver
-import dev.lain.claudejb.session.PluginAgentIndex
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.EntryDTO
+import dev.lain.claudejb.session.PluginAgentIndex
 import dev.lain.claudejb.session.SessionListener
 import dev.lain.claudejb.session.TranscriptEntry
 import dev.lain.claudejb.session.TranscriptModel
@@ -34,6 +35,7 @@ import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefHost
 import dev.lain.claudejb.ui.jcef.JcefSessionData
 import dev.lain.claudejb.ui.jcef.JcefState
+import dev.lain.claudejb.ui.jcef.JcefTabsData
 import dev.lain.claudejb.ui.jcef.JcefTheme
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -63,14 +65,16 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     private val host = JcefHost(this, ::onBridgeMessage)
 
+    /** Where a clicked link goes — the browser, an editor, or the Project view. See [LinkNavigator]. */
+    private val links = LinkNavigator(project)
+
     // ── Streaming coalescer state (all touched on the EDT) ───────────────────────────────────────────────
     private val dirty = LinkedHashSet<Long>()
     private var structural = false
     private val timer = Timer(ELAPSED_TICK_MS) { onTick() }.apply { isRepeats = true }
 
-    // ── Pending attachments pinned to the next turn (editor actions, drag/drop/paste, file picker) ────────
-    private val attachments = LinkedHashMap<String, Attachment>()
-    private var nextAttachmentId = 0L
+    /** Pending attachments pinned to the next turn (editor actions, drag/drop/paste, file picker). */
+    private val tray = AttachmentTray(project, host::exec, ::focusInput)
 
     /**
      * Actions deferred by [whenReady]. EDT-confined: both the add and the drain happen on the EDT.
@@ -83,62 +87,39 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private val pendingUntilReady = mutableListOf<() -> Unit>()
 
     /**
-     * The last `get_usage` reply, and when it was asked for. Cached because [pushSession] runs on every state
-     * change (many per turn) while the usage figures move on the order of minutes — re-asking the binary each
-     * time would be a round-trip per keystroke-ish event for a number that has not changed.
+     * The per-process data the dashboard draws (plan limits, MCP, version) and the poll behind it.
      *
-     * Declared above `init` for the same reason as [pendingUntilReady]: `init` reads `lastUsage` (via
-     * [pushMetaState]/[pushSession]) and can write `lastUsageAt` (via [requestUsage], when the session is
-     * already running). A property initializer below `init` runs AFTER it and would silently reset the throttle
-     * it had just set. Nullable and primitive types hide this — they read as null/0 rather than throwing — which
-     * is precisely why it is worth stating instead of relying on someone noticing.
+     * Declared above `init` for the same reason as [pendingUntilReady]: `init` reads `feed.usage` (via
+     * [pushMetaState]/[pushSession]) and can ask for a refresh when the session is already running. A
+     * property initializer below `init` runs AFTER it, so the field would be null inside the constructor —
+     * the defect `InitOrderContractTest` exists to catch.
      */
-    private var lastUsage: dev.lain.claudejb.protocol.UsageReport? = null
-    private var lastUsageAt = 0L
-
-    /**
-     * Plan-limits poll, unconditional for the panel's whole lifetime.
-     *
-     * Unlike context and cost — which cannot move while the session idles, so their timer retires at turn end
-     * — the quota IS shared state: other sessions, other devices and claude.ai itself consume the same
-     * windows, and **a window reset is a wall-clock event that owes nothing to this IDE**.
-     *
-     * It used to be gated on [isShowing], and that gate is the bug: a tool window the user had collapsed, or
-     * a chat tab that was not the selected one, stopped asking entirely — so a window could reset, or fill
-     * from another device, and the panel went on displaying the last figure it happened to catch until
-     * something else (a turn, opening the dashboard) triggered a probe. "It only updates when I talk to the
-     * agent" is exactly what a visibility-gated poll looks like from outside. The round-trip it saved is one
-     * control request every half minute against a process that is already running.
-     */
-    private val usageTimer = Timer(USAGE_POLL_MS) { requestUsage() }.apply { isRepeats = true }
+    private val feed = SessionFeed(session, host::exec) {
+        // BOTH surfaces, or they disagree: `usage` feeds the dashboard bars (pushSession) AND the composer's
+        // usage dots (pushMetaState → stateJson). Pushing only the dashboard left the dots blank until some
+        // unrelated state change re-pushed them — the same number appearing "a while later" in one place.
+        pushSession()
+        pushMetaState()
+    }
 
     /** Last observed process liveness, so [onStateChanged] can spot a restart. EDT-confined. */
     private var wasRunning = false
-
-    /** Everything that is per-PROCESS rather than per-panel: asked on every launch, not just the first. */
-    private fun onSessionReady() {
-        requestMcp()
-        requestVersion()
-        requestUsage()
-    }
 
     /** The two onboarding cards' host side (install-the-binary + sign-in), kept OFF this class on purpose. */
     private val onboarding = OnboardingController(project, session, host::exec)
 
     /**
-     * The `Agents` / `Subagents` rows, at the top of THIS panel.
+     * The chat list this page draws in its tab bar.
      *
-     * They live inside the chat rather than beside the chat strip because that is the only place they can sit
-     * *below* the chat's own tab and still belong to it: `JBTabs` owns the space between its header and its
-     * content, so a wrapper around the strip would have put the agent rows above the chat tabs. Being
-     * per-chat also makes "show the agents of the selected chat" free — nothing has to be swapped when the
-     * user switches tab, because each chat carries its own rows.
+     * Pushed in by [ChatTabsPanel] (see [setChats]) because no single page owns the list — there is one
+     * browser per chat, and each renders the whole bar marking its own entry.
      */
-    private val agentTabs = AgentTabsPanel(project, this)
+    private var chats: List<JcefTabsData.Chat> = emptyList()
 
     // Declared ABOVE `init`, which assigns them. Kotlin runs initializers and init blocks in declaration
     // order, so a field declared below would still be null when the constructor writes it — the defect that
     // killed every chat tab in 5.0.0 and the reason InitOrderContractTest scans this file.
+
     /** Wired in `init` to [onAgentsScanned]; a field so a test or a future owner can substitute it. */
     var onAgentsUpdated: (List<String>) -> Unit = {}
 
@@ -148,16 +129,38 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     /** Agents whose tab the user closed. Not a delete — see [PluginAgentIndex]; the card reopens them. */
     private val hiddenAgents = HashSet<String>()
 
+    /**
+     * Which transcript this browser is painting: the chat's own, an agent's, or a background task's view.
+     *
+     * One browser, many transcripts. A JCEF per agent tab would mean a Chromium process per agent, and the
+     * session this feature exists for runs dozens at once.
+     *
+     * Declared ABOVE `init` for the same reason as the fields above it: Kotlin runs initializers in
+     * declaration order, so a property declared below is still null while the constructor runs — the defect
+     * that killed every chat tab in 5.0.0, which is why InitOrderContractTest scans this file.
+     */
+    private var shown: Shown = Shown.Chat
+
+    /**
+     * The last payload sent by [pushEntries], so an unchanged repaint can be skipped.
+     *
+     * Declared here, above `init`, for the same declaration-order reason as [shown]: `init` reaches
+     * [pushEntries] through [renderAgentRows], so a property declared below would be reset to null right
+     * after the constructor had set it.
+     */
+    private var lastPushed: String? = null
+
+    /** What the single browser is painting. One type, so "an agent AND a task" cannot be represented. */
+    private sealed interface Shown {
+        object Chat : Shown
+        data class Agent(val id: String) : Shown
+        data class Task(val id: String) : Shown
+    }
+
     init {
         background = ChatTheme.BG
-        add(agentTabs, BorderLayout.NORTH)
+        // The page is the whole panel: the tab bar is part of it (app-tabs.js), not a Swing strip on top.
         add(host.component, BorderLayout.CENTER)
-        agentTabs.onShowTranscript = ::showTranscript
-        agentTabs.onTabClosed = { agentId ->
-            hiddenAgents += agentId
-            session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, agentId, false) }
-            renderAgentRows()
-        }
         onAgentsUpdated = ::onAgentsScanned
         onRevealAgent = ::revealAgent
         // What the user closed in an earlier run stays closed: the index is read once here, before the first
@@ -166,6 +169,16 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             val index = PluginAgentIndex.getInstance(project)
             hiddenAgents += index.admittedAgents(id) - index.openAgents(id).toSet()
         }
+
+        // Paint whatever the session already knows, and ask for a fresh look at the directory.
+        //
+        // A restored chat restores its agents from disk BEFORE this panel exists, so the scan that found them
+        // fired into a session with no listener attached: the tree was in memory and the rows were empty, for
+        // good — nothing scans again until an agent event arrives, and on a restored chat none ever does.
+        // Rendering here (and asking for one more scan) is what makes a restored chat come back with its
+        // agent rows without the user having to send a prompt first.
+        renderAgentRows()
+        session.scanAgents()
 
         livePanels.add(this)
         session.transcript.addListener(this)
@@ -181,25 +194,17 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         pushTheme()
         pushMetaState()
         pushPermissions()
-        pushAttachments()
+        tray.push()
         pushSession()
         // These three all need a live `claude` process, and the panel is constructed BEFORE session.start()
         // runs — so calling them directly here always lost. See [whenReady].
-        whenReady(::onSessionReady)
-        usageTimer.start()
+        whenReady(feed::onSessionReady)
+        feed.start()
         structural = true
         ensureTimer()
     }
 
     // ── TranscriptModel.Listener ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Which transcript this browser is painting: null = the chat's own, otherwise that agent's.
-     *
-     * One browser, many transcripts. Spawning a JCEF per agent tab would mean a Chromium process per agent,
-     * and the session this feature exists for runs dozens at once.
-     */
-    private var shownAgentId: String? = null
 
     /**
      * Paints [agentId]'s transcript (null → the chat's own), replacing whatever is on screen.
@@ -209,29 +214,93 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
      * agent's transcript — the very mixing this release removes. Switching back re-sends the chat in full.
      */
     fun showTranscript(agentId: String?) {
-        if (shownAgentId == agentId) return
-        shownAgentId = agentId
+        show(agentId?.let { Shown.Agent(it) } ?: Shown.Chat)
+    }
+
+    /**
+     * Paints background task [taskId]: what it is, who started it, and whatever output has come back.
+     *
+     * A task has no transcript — it is a process, not a conversation — so this is built from what the binary
+     * reported about it. It is deliberately NOT its owner's transcript: sending the user there is what made
+     * clicking a task's tab look broken.
+     */
+    fun showBackgroundTask(taskId: String) = show(Shown.Task(taskId))
+
+    private fun show(next: Shown) {
+        // Whatever the transcript is about to become, it lives in the chat area — so leave the dashboard if
+        // it is covering it. Selecting a tab used to repaint behind an open panel, which reads as the click
+        // doing nothing at all.
+        host.exec("window.cc.closeDashboard && window.cc.closeDashboard()")
+        if (shown == next) return
+        shown = next
         dirty.clear()
+        lastPushed = null // a different thing is being shown; the skip-if-unchanged guard must not hold it back
         host.exec("window.cc.clear && window.cc.clear()")
-        if (agentId == null) {
-            structural = true
-            ensureTimer()
-        } else {
-            pushAgentTranscript(agentId)
+        when (next) {
+            is Shown.Chat -> {
+                // Nothing in the rows is current any more, and the bar has to say so — otherwise a pill stays
+                // highlighted for a transcript that is no longer on screen.
+                host.exec("window.cc.clearAgentSelection && window.cc.clearAgentSelection()")
+                structural = true
+                ensureTimer()
+            }
+
+            is Shown.Agent -> pushEntries(session.runningAgents.nodes[next.id]?.entries.orEmpty())
+
+            is Shown.Task -> pushEntries(BackgroundTaskView.entries(session, next.id), expanded = true)
         }
     }
 
-    /** Re-sends the shown agent's transcript after a scan; a no-op when the chat's own is on screen. */
+    /** Re-sends whatever is shown besides the chat, after a scan or a state change. */
     private fun refreshShownAgent() {
-        val id = shownAgentId ?: return
-        pushAgentTranscript(id)
+        when (val current = shown) {
+            is Shown.Chat -> Unit
+
+            is Shown.Agent -> pushEntries(session.runningAgents.nodes[current.id]?.entries.orEmpty())
+
+            // The point of the task view: its output grows while you are looking at it.
+            is Shown.Task -> pushEntries(BackgroundTaskView.entries(session, current.id), expanded = true)
+        }
     }
 
-    private fun pushAgentTranscript(agentId: String) {
-        val entries = session.runningAgents.nodes[agentId]?.entries.orEmpty()
+    /**
+     * Paints a reconstructed transcript (an agent's, or a background task's view).
+     *
+     * **Skips the repaint when nothing changed**, and that is not an optimisation: this is called on every
+     * state fire so a task's output can grow while you watch it, and clearing the page to re-send identical
+     * rows several times a turn is exactly the flicker the user saw.
+     */
+    private fun pushEntries(entries: List<EntryDTO>, expanded: Boolean = false) {
+        // Agent labels and in-flight calls, so a card inside an agent's transcript reads and behaves like one
+        // in the chat: `Agent (…)` / `Subagent (…)`, and still fading while its agent works.
+        val titles = HashMap<String, String>()
+        val running = HashSet<String>()
+        session.runningAgents.nodes.values.forEach { node ->
+            val tool = node.meta.toolUseId ?: return@forEach
+            node.meta.description?.takeIf { it.isNotBlank() }?.let { titles[tool] = "${node.kindLabel} ($it)" }
+            if (node.status == dev.lain.claudejb.session.AgentStatus.RUNNING) running += tool
+        }
+        // Is the thing whose transcript is on screen still working? A call with no result is only in flight
+        // while something can still return it; in a stopped agent's transcript it was cut off.
+        val ownerRunning = when (val current = shown) {
+            is Shown.Agent -> session.runningAgents.nodes[current.id]?.status ==
+                dev.lain.claudejb.session.AgentStatus.RUNNING
+
+            is Shown.Task -> session.backgroundTaskRegistry.all.firstOrNull { it.taskId == current.id }?.running == true
+
+            else -> false
+        }
+        val payload =
+            if (entries.isEmpty()) {
+                ""
+            } else {
+                JcefBridge.agentBatchJson(entries, titles, running, expanded, ownerRunning)
+            }
+        if (payload == lastPushed) return
+        lastPushed = payload
         host.exec("window.cc.clear && window.cc.clear()")
-        if (entries.isNotEmpty()) {
-            host.exec("window.cc.batch && window.cc.batch(" + JcefBridge.agentBatchJson(entries) + ")")
+        if (payload.isNotEmpty()) {
+            host.exec("window.cc.batch && window.cc.batch($payload)")
         }
     }
 
@@ -263,9 +332,9 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     /** Coalescer tick (EDT): one `cc.batch` frame — all rows on a structural change, else just the dirty ones. */
     private fun onTick() {
-        // An agent's transcript is on screen: keep coalescing the chat's rows into the model, but do not
-        // paint them over the agent's. They are re-sent whole when the user switches back.
-        if (shownAgentId != null) {
+        // An agent's transcript (or a task's view) is on screen: keep coalescing the chat's rows into the
+        // model, but do not paint them over it. They are re-sent whole when the user switches back.
+        if (shown != Shown.Chat) {
             dirty.clear()
             structural = true
             timer.stop()
@@ -310,16 +379,24 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
      * names an agent. When that lookup fails the task stays at the chat's level rather than being guessed
      * into somebody's row.
      */
-    private fun renderAgentRows() = agentTabs.render(
-        registry = session.runningAgents,
-        backgroundTasks = session.backgroundTasks,
-        hiddenAgents = hiddenAgents,
-        ownerOf = { taskId ->
-            session.subagentTasks[taskId]?.toolUseId?.let { tool ->
-                session.runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
-            }
-        },
-    )
+    private fun renderAgentRows() {
+        // Every open chat's session, so hovering ANY tab can show that chat's tree — not just this one's.
+        val others = chatStrip()?.workloads().orEmpty().associate { it.chatId to it.session }
+        host.exec(
+            "window.cc.tabs && window.cc.tabs(" +
+                JcefTabsData.tabsJson(session, chats, hiddenAgents, others) + ")",
+        )
+    }
+
+    /** The chat list changed (added, closed, renamed, selected): re-render this page's bar. */
+    fun setChats(list: List<JcefTabsData.Chat>) {
+        chats = list
+        renderAgentRows()
+    }
+
+    /** The strip that owns the chats, found by walking up — it is this panel's container, not a dependency. */
+    private fun chatStrip(): ChatTabsPanel? =
+        javax.swing.SwingUtilities.getAncestorOfClass(ChatTabsPanel::class.java, this) as? ChatTabsPanel
 
     /**
      * A scan finished. Repaint the rows, then blink the tabs of agents seen for the first time and raise ONE
@@ -328,9 +405,14 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
      */
     private fun onAgentsScanned(freshlyAdmitted: List<String>) {
         renderAgentRows()
-        val fresh = freshlyAdmitted.filterNot { it in hiddenAgents }
+        val fresh = freshlyAdmitted
+            .filterNot { it in hiddenAgents }
+            // "Started" means STARTED. A restored chat admits its whole history at once, and every one of
+            // those agents is freshly admitted as far as the registry is concerned — announcing them said
+            // "12 agents started" for work that ended before the IDE was even open. Only something actually
+            // running is news.
+            .filter { session.runningAgents.nodes[it]?.status == dev.lain.claudejb.session.AgentStatus.RUNNING }
         if (fresh.isEmpty()) return
-        fresh.forEach { agentTabs.blink(it) }
         notifyAgentsSpawned(fresh)
     }
 
@@ -362,17 +444,64 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     /**
-     * Reveals an agent's tab, reopening it when the user had closed it.
+     * Runs [reveal] on the panel that OWNS the thing, selecting its chat first when that is not this one.
      *
-     * This is what makes closing a tab safe: the agent, its transcript and its card are all still there, so
-     * "closed" only ever meant "not currently shown".
+     * Workloads draws every chat, but its clicks arrive at whichever panel is on screen. Without this the
+     * panel searched its own session for somebody else's agent, found nothing, and the click did nothing —
+     * while the identical node in the tab bar's popup worked, because there the owner is always this panel.
+     *
+     * Selecting first, then revealing: the strip's `select` shows the chat's own transcript as part of the
+     * switch, so revealing before it would be undone a moment later.
      */
+    private fun revealElsewhere(chatId: String, reveal: (JcefChatPanel) -> Unit) {
+        val strip = chatStrip()
+        val target = chatId.takeIf { it.isNotBlank() }?.let { strip?.panelOf(it) }
+        if (target == null || target === this) {
+            reveal(this)
+            return
+        }
+        strip?.selectById(chatId)
+        reveal(target)
+    }
+
+    /** The host side of a `revealAgent`: resolve what it names, or fall back to the chat's own transcript. */
+    internal fun revealFromHost(m: JcefBridge.Msg.RevealAgent) {
+        resolveAgentId(m)?.let { onRevealAgent(it) } ?: showTranscript(null)
+    }
+
     private fun revealAgent(agentId: String) {
         if (hiddenAgents.remove(agentId)) {
             session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, agentId, true) }
             renderAgentRows()
         }
-        agentTabs.reveal(agentId)
+        // The bar opens the path down to it; the page owns which levels are shown (see app-tabs.js).
+        host.exec("window.cc.revealAgentTab && window.cc.revealAgentTab(" + JcefBridge.jsString(agentId) + ")")
+        showTranscript(agentId)
+    }
+
+    /**
+     * Turns the open subtab into a chat tab of its own.
+     *
+     * The tab shows the SAME session — an agent is not a separate conversation, it is part of this one — but
+     * it is pinned to that agent's (or that task's) transcript and stays there while you use the chat next to
+     * it. Which is the whole point: a subtab is a view of this browser, so it disappears the moment you look
+     * at something else, and the one agent you keep coming back to deserves better than being re-found.
+     */
+    private fun pinSubtab(m: JcefBridge.Msg.PinSubtab) {
+        val strip = chatStrip() ?: return
+        val agentId = m.agentId.takeIf { it.isNotBlank() }
+        val taskId = m.taskId.takeIf { it.isNotBlank() }
+        if (agentId == null && taskId == null) return
+        val node = agentId?.let { session.runningAgents.nodes[it] }
+        val title = when {
+            node != null -> "${node.kindLabel} (${node.meta.label()})"
+
+            taskId != null -> session.backgroundTaskRegistry.all.firstOrNull { it.taskId == taskId }
+                ?.let { "Background Task (${it.label()})" } ?: "Background Task"
+
+            else -> "Agent"
+        }
+        strip.pin(JcefChatPanel(project, session), agentId, taskId, title)
     }
 
     /**
@@ -393,16 +522,21 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         // state), not through the agent scan — so their rows would otherwise only refresh when an agent
         // happened to change.
         renderAgentRows()
+        // …and so does a task's output, which is the whole point of its view: it has to grow while you are
+        // looking at it, not when you next switch tabs. Only the TASK view is repainted here — an agent's
+        // transcript changes when the scan says so, and re-serializing it on every state fire would be a
+        // full repaint several times a turn for nothing.
+        if (shown is Shown.Task) refreshShownAgent()
         drainPendingUntilReady()
         // A RESTART is a new process, so everything that is only asked once per process has to be asked
         // again. [whenReady] fires once in the constructor and never again, so after a sign-out/sign-in the
         // dashboard sat empty until a prompt happened to produce a rate_limit_event — the panels looked
         // broken when they had simply never been asked.
         val running = session.isRunning()
-        if (running && !wasRunning) onSessionReady()
+        if (running && !wasRunning) feed.onSessionReady()
         wasRunning = running
-        // A window moved (a rate_limit_event landed) → re-ask for all of them. requestUsage throttles itself.
-        if (session.rateLimits.isNotEmpty()) requestUsage()
+        // A window moved (a rate_limit_event landed) → re-ask for all of them. The feed throttles itself.
+        if (session.rateLimits.isNotEmpty()) feed.requestUsage()
         // The not-found card is up → the onboarding watcher looks for the binary appearing (an install
         // finishing) and starts the session without further clicks.
         onboarding.onStateChanged()
@@ -453,7 +587,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     private fun pushMetaState() {
         host.exec(
             "window.cc.meta && window.cc.meta(" + JcefState.metaJson(session) + ");" +
-                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, lastUsage) + ")",
+                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage) + ")",
         )
     }
 
@@ -506,7 +640,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
                         if (done != null && done.canRewind) {
                             session.refreshAfterRewind(done.filesChanged)
                             val n = done.filesChanged.size
-                            notifyClipboard("Restored to this turn via Claude Code" + if (n > 0) " ($n file(s))." else ".")
+                            tray.notify("Restored to this turn via Claude Code" + if (n > 0) " ($n file(s))." else ".")
                         } else {
                             offerIdeFallback(snap, done?.error ?: "rewind failed")
                         }
@@ -523,7 +657,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     /** Confirmation (with a remembered choice) to fall back to the IDE-side per-file revert. */
     private fun offerIdeFallback(snap: dev.lain.claudejb.diff.EditSnapshot?, reason: String) {
         if (snap == null) {
-            notifyClipboard("Nothing to restore for this edit.")
+            tray.notify("Nothing to restore for this edit.")
             return
         }
         val settings = ClaudeSettings.getInstance(project)
@@ -534,7 +668,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             }
 
             "never" -> {
-                notifyClipboard("Native rewind unavailable ($reason).")
+                tray.notify("Native rewind unavailable ($reason).")
                 return
             }
         }
@@ -556,141 +690,32 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         if (restore) session.revertEdit(snap)
     }
 
-    /** A small balloon for clipboard feedback (e.g. when "Paste image" finds nothing to paste). */
-    private fun notifyClipboard(message: String) {
-        com.intellij.notification.NotificationGroupManager.getInstance()
-            .getNotificationGroup("Claude Code")
-            .createNotification(message, com.intellij.notification.NotificationType.INFORMATION)
-            .notify(project)
-    }
-
     /** Refresh the session data and open the JCEF dashboard (the ⚙ menu reuses this instead of text dialogs). */
     fun openDashboard() {
         pushSession()
-        requestMcp()
-        requestVersion()
-        // Opening the dashboard is one of the two documented refresh triggers for the plan limits (the other is
-        // a rate_limit_event). It was stated in requestUsage's contract and not actually wired, so the bars
-        // showed whatever the last unrelated refresh had left. Throttled, so re-opening is free.
-        requestUsage()
+        feed.requestMcp()
+        feed.requestVersion()
+        // Opening the dashboard is one of the two documented refresh triggers for the plan limits (the other
+        // is a rate_limit_event). Throttled inside the feed, so re-opening is free.
+        feed.requestUsage()
         host.exec("window.cc.openDashboard && window.cc.openDashboard()")
     }
 
     /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
     private fun pushSession() {
-        val json = JcefSessionData.sessionJson(session, lastUsage)
+        // Every open chat's tree, asked of the strip that owns them — Workloads is about what is running,
+        // and that spans the tabs. Null strip (a panel outside one) degrades to this session alone.
+        val json = JcefSessionData.sessionJson(session, feed.usage, chatStrip()?.workloads().orEmpty())
         // The host→web half of the data-flow trace: this is EXACTLY what the dashboard receives. An empty
         // panel with a full CC-TRACE control reply means the loss is between the session cache and here.
         LOG.debug("CC-TRACE pushSession ${json.take(TRACE_MAX)}")
         host.exec("window.cc.session && window.cc.session($json)")
     }
 
-    /**
-     * Refreshes the plan-limit windows, then re-pushes the dashboard.
-     *
-     * Called by [usageTimer] every [USAGE_POLL_MS] while the panel is showing, and directly on the event
-     * triggers (a `rate_limit_event`, the dashboard opening, session ready). The throttle below is burst
-     * protection for the event triggers — a run of rate_limit_events must not turn into a request storm —
-     * and its floor sits under the timer's period so the periodic tick is never swallowed by it.
-     */
-    private fun requestUsage() {
-        val now = System.currentTimeMillis()
-        // The throttle must not swallow the FIRST reading: with no data yet there is nothing to protect, and
-        // waiting out the interval is the difference between the panel appearing at once and appearing later
-        // for no reason the user can see.
-        if (lastUsage != null && now - lastUsageAt < USAGE_MIN_INTERVAL_MS) return
-        lastUsageAt = now
-        session.requestUsage { report ->
-            if (report != null) {
-                // Merged, not replaced: when the binary's usage fetch falls back to its header-seeded object
-                // the reply carries only five_hour/seven_day, and taking it literally made the per-model bars
-                // (Fable's among them) blink out on that poll and back on the next. See `mergedOver`.
-                lastUsage = report.mergedOver(lastUsage)
-                // BOTH surfaces, or they disagree. `lastUsage` feeds the dashboard bars (pushSession) AND the
-                // composer's usage dots (pushMetaState → stateJson). Pushing only the dashboard left the dots
-                // blank until some unrelated state change happened to re-push — so the same number appeared in
-                // one place immediately and in the other "a while later", which reads as a broken readout.
-                pushSession()
-                pushMetaState()
-            }
-        }
-    }
-
-    /** Fetch MCP server status asynchronously and hand the raw payload to the dashboard's MCP health card. */
-    private fun requestMcp() {
-        session.requestMcpStatus { json ->
-            if (json != null) host.exec("window.cc.mcp && window.cc.mcp(" + json + ")")
-        }
-    }
-
-    /** Fetch the CLI binary version once and cache it on the session so the dashboard's Version row populates. */
-    private fun requestVersion() {
-        if (session.binaryVersion != null) return
-        session.requestBinaryVersion { payload ->
-            val v = payload?.let {
-                it["version"]?.jsonPrimitive?.contentOrNull
-                    ?: it["binary_version"]?.jsonPrimitive?.contentOrNull
-                    ?: it["claude_code_version"]?.jsonPrimitive?.contentOrNull
-            }
-            if (!v.isNullOrBlank()) {
-                session.binaryVersion = v
-                pushSession()
-            }
-        }
-    }
-
     /** Force a full transcript resend on the next tick (used on init and on a late page `Ready`). */
     private fun fullResync() {
         structural = true
         ensureTimer()
-    }
-
-    /**
-     * Ctrl+V: read the system clipboard host-side (reliable on Wayland) on a POOLED thread, then apply on the EDT.
-     * The Wayland fallback shells out to `wl-paste`/`xclip` and reads their stdout with a deadline — doing that on
-     * the EDT (as before) froze the IDE whenever the clipboard owner was slow/hung. Image → attach; else text →
-     * insert at the caret.
-     */
-    private fun pasteFromClipboardOffEdt() {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val img = EditorContextProvider.imageFromClipboard()
-            val text = if (img == null) EditorContextProvider.clipboardText() else null
-            val help = if (img == null && text.isNullOrEmpty()) EditorContextProvider.clipboardImageHelp() else null
-            ApplicationManager.getApplication().invokeLater({
-                when {
-                    img != null -> addAttachment(img)
-
-                    !text.isNullOrEmpty() ->
-                        host.exec("window.cc.insertText && window.cc.insertText(" + JsonPrimitive(text).toString() + ")")
-
-                    else -> notifyClipboard(
-                        if (help != null) "Couldn't read the clipboard — $help" else "Clipboard is empty or unreadable.",
-                    )
-                }
-            }, ModalityState.any())
-        }
-    }
-
-    /** Explicit "Paste image" / image-only Ctrl+V — same off-EDT read, image-only handling. */
-    private fun pasteImageFromClipboardOffEdt(notify: Boolean) {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val img = EditorContextProvider.imageFromClipboard()
-            val shouldNotify = img == null && (notify || !EditorContextProvider.clipboardHasText())
-            val help = if (shouldNotify) EditorContextProvider.clipboardImageHelp() else null
-            ApplicationManager.getApplication().invokeLater({
-                when {
-                    img != null -> addAttachment(img)
-
-                    shouldNotify -> notifyClipboard(
-                        if (help != null) {
-                            "Couldn't read an image from the clipboard — $help"
-                        } else {
-                            "No image found in the clipboard."
-                        },
-                    )
-                }
-            }, ModalityState.any())
-        }
     }
 
     // ── Inbound dispatch (EDT) ───────────────────────────────────────────────────────────────────────────
@@ -751,7 +776,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     }
 
     private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {
-        ClaudeSettings.getInstance(project).rememberToolAlwaysAllow(m.tool)
+        ClaudeSettings.getInstance(project).alwaysAllow.remember(m.tool)
         // Resolve THE card the button lives on (by requestId), not just the first pending card with that
         // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
         // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
@@ -780,63 +805,79 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
         JcefBridge.Msg.OpenDiffHistory -> ClaudeToolWindowFactory.openDiffHistoryFor(project, session)
 
-        is JcefBridge.Msg.Open -> openUrl(m.url)
+        is JcefBridge.Msg.Open -> links.open(m.url)
 
         is JcefBridge.Msg.ResolveLinks -> resolveLinksOffEdt(m)
     }
 
     private fun onAttachments(m: JcefBridge.Msg.Attachments) = when (m) {
-        is JcefBridge.Msg.RemoveAttachment -> {
-            attachments.remove(m.id)
-            pushAttachments()
-        }
+        is JcefBridge.Msg.RemoveAttachment -> tray.remove(m.id)
 
-        JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(project).forEach {
-            addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
-        }
+        JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(project).forEach(tray::addPath)
 
         JcefBridge.Msg.PickDirectory -> {
-            FilePickerHelper.chooseDirectory(project)?.let {
-                addAttachment(Attachment.FileRef(it, FilePickerHelper.displayName(project, it)))
-            }
+            FilePickerHelper.chooseDirectory(project)?.let(tray::addPath)
             Unit
         }
 
         JcefBridge.Msg.AttachSelection -> {
-            EditorContextProvider.selectionAsAttachment(project)?.let { addAttachment(it) }
+            tray.addSelection()
             Unit
         }
 
-        JcefBridge.Msg.AttachCurrentFile -> mentionCurrentFile()
+        JcefBridge.Msg.AttachCurrentFile -> tray.addCurrentFile()
 
-        JcefBridge.Msg.RequestAttachData -> pushAttachData()
+        JcefBridge.Msg.RequestAttachData -> tray.pushMenuData()
 
-        is JcefBridge.Msg.AttachPath ->
-            addAttachment(Attachment.FileRef(m.path, FilePickerHelper.displayName(project, m.path)))
+        is JcefBridge.Msg.AttachPath -> tray.addPath(m.path)
 
-        JcefBridge.Msg.PasteClipboard -> pasteFromClipboardOffEdt()
+        JcefBridge.Msg.PasteClipboard -> tray.pasteFromClipboard()
 
-        is JcefBridge.Msg.PasteClipboardImage -> pasteImageFromClipboardOffEdt(m.notify)
+        is JcefBridge.Msg.PasteClipboardImage -> tray.pasteImageFromClipboard(m.notify)
 
-        is JcefBridge.Msg.Attach -> addAttachment(Attachment.Image(m.name, m.mediaType, m.base64))
+        is JcefBridge.Msg.Attach -> tray.add(Attachment.Image(m.name, m.mediaType, m.base64))
     }
 
     private fun onSessionControl(m: JcefBridge.Msg.SessionControl) = when (m) {
         is JcefBridge.Msg.McpReconnect -> {
             session.reconnectMcp(m.name)
-            requestMcp()
+            feed.requestMcp()
         }
 
         is JcefBridge.Msg.McpToggle -> {
             session.toggleMcp(m.name, m.enabled)
-            requestMcp()
+            feed.requestMcp()
         }
 
         is JcefBridge.Msg.StopTask -> session.stopTask(m.taskId)
 
         // The transcript card (and the dashboard lists) asking to go to an agent's tab. Reopens it when the
         // user had closed it: closing hides a view, it never removes the agent or its transcript.
-        is JcefBridge.Msg.RevealAgent -> resolveAgentId(m)?.let { onRevealAgent(it) }
+        //
+        // With nothing to resolve it means the CHAT's own transcript — a background task the binary never
+        // attributed to an agent still ran somewhere, and that somewhere is this chat.
+        is JcefBridge.Msg.RevealAgent -> revealElsewhere(m.chatId) { it.revealFromHost(m) }
+
+        is JcefBridge.Msg.RevealBackgroundTask -> revealElsewhere(m.chatId) { it.showBackgroundTask(m.taskId) }
+
+        // The tab bar lives in the page, so its clicks arrive here like any other web→host message.
+        is JcefBridge.Msg.SelectChat -> chatStrip()?.selectById(m.chatId)
+
+        is JcefBridge.Msg.CloseChat -> chatStrip()?.closeById(m.chatId)
+
+        // No id means the chat's own transcript: that is how the breadcrumb's first segment goes back, and
+        // `Shown.Agent("")` would be a transcript for an agent that does not exist — an empty page.
+        is JcefBridge.Msg.SelectAgent -> showTranscript(m.agentId.ifBlank { null })
+
+        // Pinning is the strip's business: it owns the tabs. This panel only knows WHAT was pinned.
+        is JcefBridge.Msg.PinSubtab -> pinSubtab(m)
+
+        is JcefBridge.Msg.CloseAgent -> {
+            hiddenAgents += m.agentId
+            session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, m.agentId, false) }
+            showTranscript(null)
+            renderAgentRows()
+        }
 
         // Everything the two onboarding cards send (install / binary path / sign-in / logout) lives in
         // its own collaborator — see OnboardingController. `handle` returns false only for messages that
@@ -855,10 +896,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             pushTheme()
             pushMetaState()
             pushPermissions()
-            pushAttachments()
+            tray.push()
             pushSession()
-            requestMcp()
-            requestVersion()
+            feed.requestMcp()
+            feed.requestVersion()
             fullResync()
         }
 
@@ -875,9 +916,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
 
     private fun dispatchSend(raw: String) {
         session.clearSuggestion()
-        val atts = attachments.values.toList()
-        attachments.clear()
-        pushAttachments()
+        val atts = tray.take()
         val text = raw.trim()
         when {
             atts.isEmpty() && text == "/login" -> session.startLogin()
@@ -888,29 +927,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             }
 
             else -> session.send(raw, atts)
-        }
-    }
-
-    /**
-     * Only **https** links open externally — plain http (a common malware-hosting scheme) is refused, and
-     * file:/jar:/javascript: never reach here. Internal `jb://open?file=&line=` links jump to code in the
-     * editor, gated to the project root. Links from the untrusted view are strictly gated.
-     */
-    private fun openUrl(url: String) {
-        val u = url.trim()
-        when {
-            u.lowercase().startsWith("https://") -> BrowserUtil.browse(u)
-
-            u.startsWith("jb://open") -> openJbLink(u)
-
-            // A markdown link whose href is a PATH rather than a URL — `[BACKLOG](docs/BACKLOG.md)`. It carries
-            // no scheme, so it matched neither branch above and the click did NOTHING: no navigation, no error,
-            // nothing in any log. Bare paths written in prose already resolve (LinkResolver confirms them before
-            // linking), which made this the odd one out — the more deliberate the link, the less it worked.
-            //
-            // The scheme test is what keeps this from swallowing the other schemes DOMPurify allows (`mailto:`,
-            // `tel:`, `sms:`…): anything with a scheme is not a path, and is still ignored here as before.
-            LinkResolver.isFilePathHref(u) -> openPath(u.substringBefore('#').trim())
         }
     }
 
@@ -932,88 +948,6 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
             ApplicationManager.getApplication().invokeLater({
                 host.exec("window.cc.links && window.cc.links(" + JcefBridge.linksJson(m.rowId, resolved) + ")")
             }, ModalityState.any())
-        }
-    }
-
-    /**
-     * Turns a link's `file` param into an absolute path: `~/…` is expanded, an absolute path is taken as-is, and a
-     * relative one is resolved against the project root. Returns null when a relative path has no root to resolve
-     * against. The caller still gates the result with [LinkResolver.isOpenable] — this only *builds* the path, it
-     * does not authorise it.
-     */
-    private fun resolveAgainstRoot(raw: String): String? {
-        val f = java.io.File(LinkResolver.expandHome(raw))
-        if (f.isAbsolute) return f.path
-        val root = project.basePath ?: return null
-        return java.io.File(root, f.path).path
-    }
-
-    /** Opens the file from a `jb://open?file=<encoded-path>&line=N` link in the editor, gated by [LinkResolver]. */
-    private fun openJbLink(url: String) {
-        val query = url.substringAfter('?', "")
-        val params = query.split('&').mapNotNull {
-            val k = it.substringBefore('=', "")
-            val v = it.substringAfter('=', "")
-            if (k.isEmpty()) null else k to runCatching { java.net.URLDecoder.decode(v, Charsets.UTF_8) }.getOrDefault(v)
-        }.toMap()
-        val raw = params["file"] ?: return
-        openPath(raw, (params["line"]?.toIntOrNull() ?: 1))
-    }
-
-    /**
-     * Opens [raw] — project-relative or absolute — in the editor, or reveals it in the tree when it is a
-     * directory or an archive. The single authorising gate for every link the transcript can produce.
-     *
-     * A link normally carries a PROJECT-RELATIVE path; one pointing into the user's home carries an absolute
-     * one. Either way this only *builds* the path — [LinkResolver.isOpenable] is what authorises it, and it is
-     * the one place that decides, so neither a hand-crafted `jb://` URL nor a markdown href can reach a file we
-     * would not have linked ourselves.
-     */
-    private fun openPath(raw: String, line: Int = 1) {
-        val path = resolveAgainstRoot(raw) ?: return
-        if (!LinkResolver.isOpenable(path, project.basePath)) return // project or the user's own home, nothing else
-        // refreshAndFind, not find: a file Claude has just written may not be in the VFS yet, and a plain lookup
-        // would return null — the link would silently do nothing until the IDE next refreshed. (The session also
-        // refreshes on every successful write; this is the belt to that pair of braces.)
-        val vf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByPath(path) ?: return
-        // A directory — and an ARCHIVE, which has no meaningful editor either (opening `foo.zip` would just show a
-        // binary buffer) — belong in the tree, not in an editor tab. Revealing them there is the useful action:
-        // you can then right-click → Copy full path, Open in Files, expand the archive…
-        if (vf.isDirectory || vf.fileType is ArchiveFileType) {
-            revealDirectory(vf)
-            return
-        }
-        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vf, line.coerceAtLeast(1) - 1, 0).navigate(true)
-        selectInProjectView(vf)
-    }
-
-    /**
-     * Mirrors *Autoscroll from Source*: the opened file is also selected in the **Project view**, so you can see
-     * where it lives. Deliberately unobtrusive — `requestFocus = false` keeps the caret in the editor you just
-     * jumped into, and the tool window is NOT force-opened: if you keep the tree hidden, a link click has no
-     * business popping it open. A file outside the project (in the home) simply isn't in the tree, so we skip it.
-     */
-    private fun selectInProjectView(file: com.intellij.openapi.vfs.VirtualFile) {
-        if (!DiffPresenter.isWithinRoot(file.path, project.basePath)) return
-        val tw = ToolWindowManager.getInstance(project).getToolWindow(ToolWindowId.PROJECT_VIEW) ?: return
-        if (!tw.isVisible) return
-        runCatching { ProjectView.getInstance(project).select(null, file, false) }
-    }
-
-    /**
-     * Reveals something that has no editor to open (a directory, an archive). Inside the project it belongs to the
-     * **Project view** — select and expand it there, activating the tool window: unlike the file case, selecting
-     * into a hidden tree would make the click look like it did nothing at all. Outside the project (in the user's
-     * home) it isn't in the tree, so the only sensible target is the OS file manager. Already gated by
-     * [LinkResolver.isOpenable] before we get here.
-     */
-    private fun revealDirectory(target: com.intellij.openapi.vfs.VirtualFile) {
-        if (DiffPresenter.isWithinRoot(target.path, project.basePath)) {
-            val select = { ProjectView.getInstance(project).select(null, target, true) }
-            val tw = ToolWindowManager.getInstance(project).getToolWindow(ToolWindowId.PROJECT_VIEW)
-            if (tw != null) tw.activate(select, true) else select()
-        } else {
-            RevealFileAction.openDirectory(java.io.File(target.path))
         }
     }
 
@@ -1040,55 +974,10 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
     fun requestLogout() = onboarding.logout()
 
     /** Pins the current editor file as a removable attachment chip (editor "Add … to Claude Context"). */
-    fun mentionCurrentFile() {
-        val path = EditorContextProvider.currentFilePath(project) ?: return
-        addAttachment(Attachment.FileRef(path, FilePickerHelper.displayName(project, path)))
-    }
+    fun mentionCurrentFile() = tray.addCurrentFile()
 
     /** Pins an attachment (file / selection / image) to the next turn as a chip; it travels with the next send. */
-    fun addAttachment(attachment: Attachment) {
-        attachments["a" + (nextAttachmentId++)] = attachment
-        pushAttachments()
-        focusInput()
-    }
-
-    private fun pushAttachments() {
-        host.exec("window.cc.attachments && window.cc.attachments(" + attachmentsJson() + ")")
-    }
-
-    /** Data for the rich 📎 attach menu: recent files (newest-first) + what context is available right now. */
-    private fun pushAttachData() {
-        val recent = FilePickerHelper.recentFiles(project, RECENT_FILES_LIMIT).map { path ->
-            buildJsonObject {
-                put("path", path)
-                put("name", FilePickerHelper.displayName(project, path))
-                put("ext", path.substringAfterLast('.', "").lowercase())
-            }
-        }
-        val payload = buildJsonObject {
-            put("recent", JsonArray(recent))
-            put("hasSelection", EditorContextProvider.currentSelection(project) != null)
-            put("hasFile", EditorContextProvider.currentFilePath(project) != null)
-        }
-        host.exec("window.cc.attachData && window.cc.attachData($payload)")
-    }
-
-    private fun attachmentsJson(): String = JsonArray(
-        attachments.map { (id, a) ->
-            buildJsonObject {
-                put("id", id)
-                put("label", a.displayName)
-                put(
-                    "kind",
-                    when (a) {
-                        is Attachment.Image -> "image"
-                        is Attachment.Selection -> "selection"
-                        is Attachment.FileRef -> "file"
-                    },
-                )
-            }
-        },
-    ).toString()
+    fun addAttachment(attachment: Attachment) = tray.add(attachment)
 
     override fun dispose() {
         livePanels.remove(this)
@@ -1097,7 +986,7 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         session.detachLoginUi(onboarding)
         onboarding.dispose()
         timer.stop()
-        usageTimer.stop()
+        feed.stop()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }
 
@@ -1115,21 +1004,8 @@ class JcefChatPanel(private val project: Project, val session: ClaudeSession) :
         /** Tick driving the tool cards' live elapsed counters. ~33 fps: smooth, and the work per tick is trivial. */
         private const val ELAPSED_TICK_MS = 30
 
-        /** How many recently-opened files the attach menu offers before the user has to search. */
-        private const val RECENT_FILES_LIMIT = 14
-
         /** The tool window this plugin registers; used to tell "am I on screen?" from a notification. */
         private const val CLAUDE_TOOL_WINDOW = "Claude Code"
-
-        /** Period of the plan-limits poll, visible or not — a window reset happens on wall-clock time. */
-        private const val USAGE_POLL_MS = 30_000
-
-        /**
-         * Floor between `get_usage` round-trips — burst protection for the event-driven triggers. MUST stay
-         * below [USAGE_POLL_MS], or the periodic tick is silently throttled away and the poll only *looks*
-         * like it runs on its period.
-         */
-        private const val USAGE_MIN_INTERVAL_MS = 12_000L
 
         // Vibe Mode is global (ChatTheme.vibeMode), so a toggle on one tab must re-theme them all.
         private val livePanels = java.util.concurrent.CopyOnWriteArrayList<JcefChatPanel>()
