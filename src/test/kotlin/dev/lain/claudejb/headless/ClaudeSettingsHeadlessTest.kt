@@ -3,6 +3,8 @@ package dev.lain.claudejb.headless
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SettingsStoreTestAccess
 import kotlinx.serialization.json.JsonObject
 
 /** Headless: the [ClaudeSettings] project service holds launch defaults and the "Always allow" tool set. */
@@ -14,7 +16,16 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         // The light-fixture project service is reused across methods; restore the defaults under test.
-        settings.loadState(ClaudeSettings.State())
+        settings.replaceState(ClaudeSettings.State())
+    }
+
+    /** Some of these tests persist (that IS the behaviour under test); the safe must not carry it forward. */
+    override fun tearDown() {
+        try {
+            SecretStore.clear(SecretStore.SETTINGS_JSON)
+        } finally {
+            super.tearDown()
+        }
     }
 
     fun `test getInstance returns the project service`() {
@@ -49,12 +60,11 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         assertTrue(policy.enforceForeignNetworkMounts)
     }
 
-    fun `test state mutation survives getState loadState round-trip`() {
-        settings.state.model = "sonnet"
-        val saved = settings.getState()
-        val reloaded = ClaudeSettings()
-        reloaded.loadState(saved)
-        assertEquals("sonnet", reloaded.state.model)
+    fun `test a replaced state is what the settings then report`() {
+        // The persistence itself is covered by SettingsStoreCoverageTest, which points the home at a temp
+        // directory. Here the object contract is enough: what you put in is what the rest of the plugin reads.
+        settings.replaceState(ClaudeSettings.State().apply { model = "sonnet" })
+        assertEquals("sonnet", settings.state.model)
     }
 
     fun `test parseEnv reads KEY VALUE lines`() {
@@ -67,17 +77,23 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
 
     fun `test remember and forget always-allow tool`() {
         assertFalse(settings.isToolAlwaysAllowed("Bash", emptyInput))
-        settings.rememberToolAlwaysAllow("Bash")
+        settings.alwaysAllow.remember("Bash")
         assertTrue(settings.isToolAlwaysAllowed("Bash", emptyInput))
-        assertTrue("Bash" in settings.alwaysAllowedTools())
-        settings.forgetToolAlwaysAllow("Bash")
+        assertTrue("Bash" in settings.alwaysAllow.all())
+        settings.alwaysAllow.forget("Bash")
         assertFalse(settings.isToolAlwaysAllowed("Bash", emptyInput))
-        assertFalse("Bash" in settings.alwaysAllowedTools())
+        assertFalse("Bash" in settings.alwaysAllow.all())
     }
 
-    fun `test rememberToolAlwaysAllow is idempotent`() {
-        settings.rememberToolAlwaysAllow("Edit")
-        settings.rememberToolAlwaysAllow("Edit")
-        assertEquals(listOf("Edit"), settings.alwaysAllowedTools())
+    fun `test remembering a tool is idempotent`() {
+        settings.alwaysAllow.remember("Edit")
+        settings.alwaysAllow.remember("Edit")
+        assertEquals(listOf("Edit"), settings.alwaysAllow.all())
+    }
+
+    /** The mutation and the write are one operation: a remembered tool must survive a restart. */
+    fun `test remembering a tool persists`() {
+        settings.alwaysAllow.remember("Write")
+        assertTrue("Write" in SettingsStoreTestAccess.load().alwaysAllowTools)
     }
 }
