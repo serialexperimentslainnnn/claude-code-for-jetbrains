@@ -95,6 +95,21 @@ class BackgroundTaskRegistryTest {
     }
 
     @Test
+    fun `an agent's output file never conjures a background task`() {
+        val reg = BackgroundTaskRegistry()
+        // `task_notification` fires for AGENTS too, and creating from it registered every agent as a
+        // background task: a row per agent with no description, whose "output" was the agent's own
+        // transcript — pages of raw JSONL where a command's output belongs. Reported live, and the id gave
+        // it away: the task id in the view was the agent id.
+        assertFalse(reg.observeOutputFile("a682c347feede06f3", "/tmp/whatever/agent.jsonl"))
+        assertTrue(reg.all.isEmpty())
+        // Once the tool_result has made the task ours, the same call is what gives it its file.
+        reg.observe(result("toolu_1", "t1"))
+        assertTrue(reg.observeOutputFile("t1", "/tmp/tasks/t1.output"))
+        assertEquals("/tmp/tasks/t1.output", reg.taskOf("t1")!!.outputFile)
+    }
+
+    @Test
     fun `tailed output is appended to a known task only`() {
         val reg = BackgroundTaskRegistry()
         reg.observe(result("toolu_1", "t1", outputFile = "/tmp/agent.out"))

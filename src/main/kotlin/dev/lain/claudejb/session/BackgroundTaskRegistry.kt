@@ -125,13 +125,18 @@ class BackgroundTaskRegistry {
      * The structured source, and the one that matters: with it the task's output is a file the plugin can
      * tail, live and after a restart, instead of the "no output was reported" the view used to show for a
      * command that had plainly produced some.
+     *
+     * UPDATE ONLY — never create, for the same reason [observeLevel] never creates. `task_notification` is
+     * emitted for AGENTS too, and creating from it registered every agent as a background task: a row per
+     * agent with no description ("Background Task (background)"), whose "output" was the agent's own
+     * transcript file — pages of raw JSONL where a command's output should be. The id gave it away: the
+     * task id was the agent id. A `tool_result` carrying `backgroundTaskId` is what makes a task ours.
      */
     fun observeOutputFile(taskId: String, outputFile: String?): Boolean {
         val path = outputFile?.takeIf { it.isNotBlank() } ?: return false
-        val previous = tasks[taskId]
-        if (previous?.outputFile == path) return false
-        if (previous == null) order += taskId
-        tasks[taskId] = (previous ?: Task(taskId)).copy(outputFile = path)
+        val previous = tasks[taskId] ?: return false
+        if (previous.outputFile == path) return false
+        tasks[taskId] = previous.copy(outputFile = path)
         return true
     }
 
