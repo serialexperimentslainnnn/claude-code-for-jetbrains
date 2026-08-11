@@ -135,10 +135,13 @@ class AgentRegistry(
         // Shallowest first, so a child is always resolved AFTER the parent it inherits its ending from.
         for (id in admitted.sortedWith(compareBy({ metas[it]?.spawnDepth ?: 1 }, { it }))) {
             val meta = metas[id] ?: continue
+            // Read the transcript ONCE: it is both what the tab shows and, for an agent from a previous run,
+            // the only evidence of how it ended.
+            val lines = readLines(dir, id)
             next[id] = AgentNode(
                 meta = meta,
-                status = statusOf(meta, next),
-                entries = readTranscript(dir, id),
+                status = statusOf(meta, next, lines),
+                entries = SessionTranscriptReader.parseEntries(lines),
             )
         }
         snapshot = next
@@ -148,27 +151,38 @@ class AgentRegistry(
     }
 
     /**
-     * How this agent ended, in order of evidence.
+     * What this agent is doing, in order of evidence.
      *
-     * 1. Its own `task_notification`, when the plugin saw the Task call that started it.
-     * 2. **Its parent's ending.** A NESTED agent has no `toolUseId` of its own — it was spawned inside
-     *    another agent's turn, so no Task call of ours ever named it — and rule 1 can therefore never
-     *    settle it: every subagent below the first level stayed RUNNING for ever, pulsing away in the tab
-     *    bar and the diagram long after its work was done. It cannot outlive the turn that spawned it, so
-     *    once the parent has an ending, that ending is the child's too.
-     * 3. Otherwise RUNNING — but only while there is a process that could be running it. In a RESTORED chat
-     *    there is not: those agents belong to a previous run of the binary, so whatever they were doing was
-     *    cut off. Calling them running showed a dead tree as live and fired the "agents are running"
-     *    notification on startup for work that ended hours ago.
+     * 1. **Its own `task_notification`** — the plugin saw the Task call that started it, and saw it settle.
+     * 2. **Its parent's state, whatever that is.** A NESTED agent has no `toolUseId` of its own — it was
+     *    spawned inside another agent's turn, so no Task call of ours ever named it — and rule 1 can never
+     *    settle it. It cannot outlive the turn that spawned it, so a finished parent means a finished child;
+     *    and by the same token a parent that is still working means the child belongs to live work.
+     * 3. **Did we watch it start?** An agent whose Task call is in [observedToolUse] was launched by THIS
+     *    process, so it is running whatever else is true.
+     * 4. **How its own transcript ends** ([AgentEnding]), for an agent from a previous run. A settled status
+     *    is per-process memory, so after a restart the plugin knows nothing about what it is restoring —
+     *    and calling all of it "cut off" painted every agent of every past session RED, which does not just
+     *    look wrong, it ASSERTS THAT THEY FAILED. Most had finished perfectly, and the binary wrote that
+     *    down: a transcript ending on `stop_reason: end_turn` is an agent that said its piece and stopped.
+     * 5. Otherwise RUNNING — unless the chat was RESTORED and left no transcript to judge, in which case the
+     *    process it belonged to is gone and its work was cut off.
+     *
+     * **Rules 2 and 3 are the fix for a live report**: `restoring` is set when a chat comes back from disk
+     * and is never cleared (it is what admits that chat's own subagents), so rule 5 used to swallow agents
+     * launched AFTERWARDS in that same chat — and since restoring open chats is the default, every agent in
+     * a freshly reopened IDE came up STOPPED, i.e. red, while it was plainly working.
      *
      * [resolved] holds the agents already built by this scan, parents first — see the sort in [scan].
      */
-    private fun statusOf(meta: AgentMeta, resolved: Map<String, AgentNode>): AgentStatus {
+    private fun statusOf(meta: AgentMeta, resolved: Map<String, AgentNode>, lines: List<String>): AgentStatus {
+        // Every lookup goes through `?.let`: a nested agent has NO toolUseId, and these are concurrent
+        // collections, which throw on a null key rather than answering false.
         meta.toolUseId?.let { statusByToolUse[it] }?.let { return it }
-        meta.parentAgentId?.let { resolved[it] }
-            ?.takeIf { it.status != AgentStatus.RUNNING }
-            ?.let { return it.status }
-        return if (restoring) AgentStatus.STOPPED else AgentStatus.RUNNING
+        meta.parentAgentId?.let { resolved[it] }?.let { return it.status }
+        if (meta.toolUseId?.let { it in observedToolUse } == true) return AgentStatus.RUNNING
+        if (!restoring) return AgentStatus.RUNNING
+        return AgentEnding.of(lines) ?: AgentStatus.STOPPED
     }
 
     /**
@@ -220,14 +234,16 @@ class AgentRegistry(
     }.getOrDefault(emptyMap())
 
     /**
-     * The agent's own transcript, parsed by the SAME reader the session restore uses. A sidecar that is not
-     * there yet (the binary writes the meta first) simply yields an empty transcript, and the next scan
-     * fills it — no error, no placeholder row.
+     * The agent's own transcript file, raw. It feeds two things — the rows the tab shows (through the SAME
+     * reader the session restore uses) and, for an agent from a previous run, [AgentEnding] — so it is read
+     * once per scan rather than once per purpose.
+     *
+     * A sidecar that is not there yet (the binary writes the meta first) yields nothing, and the next scan
+     * fills it: no error, no placeholder row.
      */
-    private fun readTranscript(dir: Path, agentId: String): List<EntryDTO> {
+    private fun readLines(dir: Path, agentId: String): List<String> {
         // The id is the bare one; the `agent-` prefix belongs to the file name (see AgentMeta.agentId).
         val file = dir.resolve(AgentMeta.transcriptFile(agentId))
-        val lines = runCatching { Files.readAllLines(file) }.getOrNull() ?: return emptyList()
-        return SessionTranscriptReader.parseEntries(lines)
+        return runCatching { Files.readAllLines(file) }.getOrDefault(emptyList())
     }
 }
