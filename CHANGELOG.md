@@ -4,6 +4,69 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.5.0] — 2026-08-11
+
+### Fixed
+- **The plugin was dead on 2026.2.** From build 262 the platform ships the embedded browser as a separate
+  bundled plugin (`com.intellij.modules.jcef`), and one that does not declare a dependency on it gets no
+  browser classes at all: every chat died on `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp` at
+  `JcefHost.<init>`. The whole UI is that browser, so there was nothing to degrade to. The dependency is now
+  declared, hard — an optional one that cannot be satisfied is skipped, which would have left 262 exactly as
+  broken and just as silent. That module id does not exist before 2025.3, so **the minimum IDE is now
+  2025.3**; on 2025.1/2025.2, stay on 5.1.1. `verifyPlugin` had been reporting Compatible throughout and was
+  right to — it resolves against the whole IDE distribution, not against the plugin's classloader, which is
+  where the failure lives — so the gate is a source contract instead: touch `com.intellij.ui.jcef` and the
+  descriptor must declare it.
+- **Agents showed as failed while they were working.** `restoring` is set when a chat comes back from disk
+  and is never cleared (it is what admits that chat's own subagents), so the rule "an agent nobody watched
+  start belongs to a previous run" swallowed agents launched afterwards in that same chat. Restoring open
+  chats is the default, so this was every agent in a freshly reopened IDE: red, while plainly running.
+- **Every agent of every past session was painted red after a restart.** A settled status is per-process
+  memory, so restoring left the plugin knowing nothing — and red does not merely look wrong, it asserts that
+  they failed. The binary had already written the answer: an agent's transcript ending on
+  `stop_reason: end_turn` finished, anything else was cut off.
+- **A nested subagent never stopped running.** It has no `toolUseId` of its own, so nothing could ever settle
+  it; it now follows its parent, which it cannot outlive.
+- **Every agent was also being registered as a background task** — a row with no description whose "output"
+  was the agent's own transcript, i.e. pages of raw JSONL where a command's output belongs. `task_notification`
+  fires for agents too, and it was creating entries; only a `tool_result` carrying `backgroundTaskId` makes a
+  task ours.
+- **The tab bar could not be scrolled** once the chats overflowed (a vertical wheel does not move a horizontal
+  row in Chromium), **the loading screen covered the chat tabs** so you could not switch while one started,
+  and **the view buttons floated over the transcript** you were reading — overlapping a focusable tab is
+  WCAG 2.2 SC 2.4.11, and they are flex items now, so it cannot happen by construction.
+- **Hovering another chat's tab showed your own agents.** The bar is rebuilt several times a turn, and the
+  reopen re-anchored to the first `⋮` with no chat id — i.e. the selected chat.
+- **The loading screen flickered on every new chat.** It is visible by default (the honest initial state is
+  "waiting"), but the binary often starts in a fraction of a second, and a full-window panel that paints and
+  vanishes reads as the whole plugin flashing. It now waits a third of a second before showing itself.
+
+### Changed
+- **Debloat and optimisation, with measurable results.** The chat felt heavy because it was doing a great
+  deal of work nobody asked for: the tab bar and the dashboard rebuilt their entire DOM on every push from
+  the host — several times per turn, on pushes that changed nothing visible — and the dashboard did it even
+  while hidden, laying out a diagram and measuring its SVG for a panel nobody was looking at. Both now draw
+  only when what they draw has actually changed, which is the same fix as the flicker under the pointer.
+  The stylesheet lost ~200 lines of rules nothing could reach, `JcefChatPanel` lost 300 lines to three
+  collaborators, and `SettingsStore`'s hand-written serialiser (85 lines, cyclomatic complexity 36) became
+  the generated one. **detekt's baseline was not touched**: it still carries the same two `ClaudeSession`
+  entries and nothing else.
+- The stylesheet is now several files concatenated in cascade order by `JcefHost.CSS_PARTS` instead of one
+  3.6k-line file; the split was verified byte-identical before it landed, and the tests read that same list.
+
+### Added
+- **A tab per agent, with its own transcript**, reachable from a bar under the chats that keeps the whole
+  tree — agents, their agents, background tasks — one hover away. A finished agent keeps its tab; closing one
+  hides a view and destroys nothing; any subtab can be pinned as a tab of its own.
+- **Workloads**: everything running across every open chat as one diagram, replacing the three lists that
+  were three views of the same tree.
+- **Background tasks that outlive themselves** — the binary stops listing a task the moment it ends, which is
+  exactly when its output is worth reading. The task, its command and its output are kept, tailed live from
+  the file the binary writes, and rebuilt from the session transcript after a restart.
+- **Settings moved into the IDE's password safe** (the OS keychain), one encrypted document shared by every
+  project. They used to sit in `.idea/claude-code.xml`: per project, in the clear, and committable —
+  including the env block, which is where an API key ends up. Existing settings are adopted on first run.
+
 ## [5.1.1] — 2026-08-10
 
 ### Fixed
