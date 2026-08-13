@@ -5,15 +5,42 @@ analytics, no error reporting, no usage pings, no remote logging. The
 plugin opens no network connections of its own.
 
 ## What stays on your machine
-1
+
+Everything the plugin keeps, it keeps locally:
+
+- **Transcripts.** The plugin persists none of its own. Chat history is the
+  `claude` binary's files, under `~/.claude/projects/<cwd-encoded>/<sessionId>.jsonl`
+  — the same ones `claude --resume` reads in your terminal. The plugin only reads
+  them.
+- **Which tabs were open.** `SessionHistory` stores the ordered list of
+  `sessionId`s in the project's `workspace.xml`, which is not committed. Ids
+  only, no content.
+- **Settings.** Since 5.5.0 they live in the **IDE's PasswordSafe** — the OS
+  credential store (Keychain, KWallet/Secret Service, Credential Manager) or the
+  IDE's encrypted file — as one JSON document. They used to be
+  `.idea/claude-code.xml`: per project, plaintext, and committable. The move
+  exists because those settings carry an env block, and an env block is where an
+  API key or a credentialed proxy URL ends up.
+- **Credentials.** The OAuth blob is harvested into that same safe and
+  `~/.claude/.credentials.json` is deleted; API keys sit in their own safe slot.
+  They reach the binary as environment variables — never as arguments, never in
+  a log, never in the transcript.
+- **Which agents this plugin spawned.**
+  `~/.claude/ide/claude-code-native/agent-index.json` — ids, who spawned whom,
+  the agent *type* (`general-purpose` and the like) and whether you had the tab
+  open. No prompts, no descriptions, no transcript content. It exists so that
+  after a restart your agents can be told apart from ones a terminal session
+  left in the same directory.
+- **Logs.** The IDE's own `idea.log`, on your machine. Nothing is uploaded.
+
 ## What goes off-machine, and why
 
 - **Your prompts and the model's responses** travel between the `claude`
   binary and Anthropic's API. That channel is owned by the binary and
-  authenticated with the credentials in your `~/.claude/` directory
-  (subscription / OAuth / `ANTHROPIC_API_KEY`). The plugin does not add,
-  intercept, or duplicate this traffic. Anthropic's privacy policy applies
-  to that channel.
+  authenticated with your own credential (subscription / OAuth /
+  `ANTHROPIC_API_KEY`), which the plugin hands to it in the environment. The
+  plugin does not add, intercept, or duplicate this traffic. Anthropic's privacy
+  policy applies to that channel.
 - **JetBrains MCP server, if enabled,** talks to the local IDE process
   only.
 - **Custom MCP servers** you configure may make network calls — that is
@@ -32,7 +59,7 @@ plugin opens no network connections of its own.
 If error reporting is ever added, it will be:
 
 - **Opt-in**, never opt-out.
-- **Per project**, configured under Settings → Tools → Claude Code Native.
+- Configured under **Settings ▸ Claude Code**.
 - **Disclosed in `CHANGELOG.md`** under a `Security` or `Privacy` entry
   before the feature ships.
 - **Anonymous by default** — no prompt content, no file contents, no

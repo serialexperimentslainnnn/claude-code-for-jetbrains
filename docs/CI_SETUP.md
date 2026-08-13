@@ -1,12 +1,13 @@
 # CI/CD setup — one-time configuration
 
 Everything the pipeline needs that is **not** in the repository: the deployment environment, its six
-secrets, and the branch protections. Follow this once; afterwards a release is a tag plus an approval.
+secrets, and the branch protections. Follow this once; afterwards a release is a merge into `main` (see
+[`RELEASE_PROCEDURE.md`](RELEASE_PROCEDURE.md) — the workflow cuts the tag itself, and nobody tags by hand).
 
-All of it uses `gh` rather than the web UI, for one reason that matters: four of the six secrets are
-**multi-line PEM / armoured blocks**, and pasting those into a browser form is where a stray newline or a
-truncated line ends up in a secret that then fails at 3 a.m. with an error that does not say why. Reading
-them from a file or stdin cannot do that.
+All of it uses `gh` rather than the web UI, for one reason that matters: three of the six secrets are
+**multi-line PEM / armoured blocks** (`PRIVATE_KEY`, `CERTIFICATE_CHAIN`, `GPG_SIGNING_KEY`), and pasting
+those into a browser form is where a stray newline or a truncated line ends up in a secret that then fails at
+3 a.m. with an error that does not say why. Reading them from a file or stdin cannot do that.
 
 Prerequisites: `gh` authenticated with admin rights on the repository, plus `jq`, `gpg` and `openssl`.
 
@@ -16,9 +17,9 @@ Prerequisites: `gh` authenticated with admin rights on the repository, plus `jq`
 ./scripts/bootstrap-ci.sh
 ```
 
-It does everything below: creates the environment with you as required reviewer, restricts it to `v*.*.*`
-tags, generates and certifies the CI signing key, sets all six secrets, checks that none leaked to
-repository level, and offers to apply the branch protections. It asks you only for what you actually
+It does everything below: creates the environment with **no required reviewer** (see §1), restricts
+deployments to `main` and `v*.*.*` tags, generates and certifies the CI signing key, sets all six secrets,
+checks that none leaked to repository level, and offers to apply the branch protections. It asks you only for what you actually
 hold — the Marketplace token, and the JetBrains signing key. Idempotent: existing secrets are reported
 and skipped unless you say to replace them.
 
@@ -31,18 +32,23 @@ or work out why something failed.
 
 ## Step 1 — Create the `marketplace` environment
 
-This environment is the human gate on publication. The four Marketplace credentials and the artifact
-signing key live in it, which means they exist for **no other job** in the repository.
+This environment is where every credential that can reach a user lives — the Marketplace token, the three
+parts of the JetBrains upload key, and the CI artifact signing key with its passphrase — which means they
+exist for **no other job** in the repository.
+
+**There is deliberately no required reviewer**, and this section used to say the opposite. The environment
+carries one protection rule: the deployment-branch policy below. So a merge into `main` that bumps the
+version **publishes unattended** — the human act is opening and merging the pull request, and nothing after
+it (the rulesets require no approval; see [`BRANCHING.md`](BRANCHING.md)). On a
+single-maintainer repository an approval prompt is the same person clicking twice; it reads as a control and
+is not one. Verified against the API on 2026-08-11, and it is what `scripts/bootstrap-ci.sh` sets on purpose
+(`reviewers: []`, logging *"publish runs without a manual approval"*).
 
 ```sh
-# Your own numeric user id — the reviewer.
-REVIEWER_ID=$(gh api user -q .id)
-echo "reviewer id: $REVIEWER_ID"
-
-jq -n --argjson id "$REVIEWER_ID" '{
+jq -n '{
   wait_timer: 0,
   prevent_self_review: false,
-  reviewers: [{ type: "User", id: $id }],
+  reviewers: [],
   deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }
 }' | gh api --method PUT "repos/$REPO/environments/marketplace" --input -
 ```
@@ -52,25 +58,34 @@ jq -n --argjson id "$REVIEWER_ID" '{
 > guesses the type instead; and the bracket syntax for an array of objects (`reviewers[][type]=`) is
 > ambiguous enough not to rely on. A JSON document has exactly one meaning.
 
-> **`prevent_self_review` must be `false`.** It is tempting to set it — it sounds stricter — and on a
-> single-maintainer project it is a deadlock: you push the tag, so you are the deployment creator, so you
-> would be the one person forbidden from approving it. Nothing would ever publish.
+**If a second maintainer ever exists, add them here** — `reviewers: [{ type: "User", id: <their id> }]` — and
+update `SECURITY.md`, `BRANCHING.md` and ADR 0001 §5 in the same change, since all three currently state that
+publication is *not* approval-gated. Keep `prevent_self_review: false` regardless: whoever merges is the
+deployment creator, so setting it would forbid the only available approver and nothing would ever publish.
 
-Then restrict the environment to release tags, so it cannot be deployed to from anything else:
+Then restrict the environment to what may deploy from it — **both** entries, and both are needed:
 
 ```sh
+gh api --method POST "repos/$REPO/environments/marketplace/deployment-branch-policies" \
+  -f name='main' -f type=branch
 gh api --method POST "repos/$REPO/environments/marketplace/deployment-branch-policies" \
   -f name='v*.*.*' -f type=tag
 ```
 
-That is a second, independent lock on top of the workflow's own lineage guard. The guard checks the tag
-came from `main`; this checks the environment is only ever reachable from a version tag at all.
+`main` is the **primary** release path — `release.yml` triggers on the push that a merge creates, and cuts
+the tag itself from inside the gated job — so a tag-only policy would block every ordinary release. The tag
+entry covers the escape hatch (re-running after a failed publish).
 
-Verify:
+That is a second, independent lock on top of the workflow's own lineage guard. The guard checks the commit
+came from `main`; this checks the environment is only ever reachable from `main` or a version tag at all.
+
+Verify — expect an empty `reviewers` list and both policies:
 
 ```sh
 gh api "repos/$REPO/environments/marketplace" \
-  -q '{reviewers: [.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[].reviewer.login], self_review: .prevent_self_review}'
+  -q '[.protection_rules[]? | select(.type=="required_reviewers") | .reviewers[].reviewer.login]'
+gh api "repos/$REPO/environments/marketplace/deployment-branch-policies" \
+  -q '[.branch_policies[] | "\(.type):\(.name)"] | join(", ")'   # → branch:main, tag:v*.*.*
 ```
 
 ---
@@ -211,8 +226,8 @@ That is the difference this step is checking for.
 ```
 
 **After this, `main` and `develop` stop accepting direct pushes — including yours.** There are no bypass
-actors, by design (see [`BRANCHING.md`](BRANCHING.md)). From here on the flow is: branch → PR → review →
-merge.
+actors, by design (see [`BRANCHING.md`](BRANCHING.md)). From here on the flow is: branch → PR → checks
+green → merge. No approval is required (and none can be given on a single-maintainer repository).
 
 The required status checks are referenced by **job display name**. They will show as pending until the
 first CI run has reported them once; that is expected, not a misconfiguration.
@@ -227,18 +242,20 @@ Do not let the first exercise of this machinery be a real release.
 git checkout -b test/ci-smoke
 git commit --allow-empty -m "test(ci): verify the pipeline runs end to end"
 git push -u origin test/ci-smoke
+gh pr create --base develop --title "test(ci): pipeline smoke" --body "Delete after checking."
 gh run watch
 ```
 
-Confirm: the five `ci.yml` jobs run and pass, and both CodeQL analyses appear. Then open a PR into
-`develop` and confirm the checks are **required** rather than merely present — the merge button should be
-blocked until they are green.
+**Open the pull request — pushing the branch on its own runs nothing.** `ci.yml` has no `push` trigger; a
+branch with no PR gets no checks, by design. On a PR into `develop` expect *JVM tests*, *Frontend tests* and
+both CodeQL analyses; the rest of the jobs only run on a PR into `main`. Confirm the checks are **required**
+rather than merely present — the merge button should stay blocked until they are green.
 
 Delete the branch afterwards.
 
 The release path itself cannot be smoke-tested without publishing, so the first real release is where the
-`guard` job earns its keep: if the tag did not come from `main`, or does not match the version in
-`build.gradle.kts`, it fails in seconds and before any secret is in scope.
+`guard` job earns its keep: if the commit is not reachable from `main`, or a hand-pushed tag does not match
+the version in `build.gradle.kts`, it fails in seconds and before any secret is in scope.
 
 ---
 
@@ -246,9 +263,9 @@ The release path itself cannot be smoke-tested without publishing, so the first 
 
 | Symptom | Cause |
 |---|---|
-| `publish` job never starts, no approval prompt | `prevent_self_review` is `true`, or you are not listed as a reviewer |
-| `publish` starts without asking for approval | the environment has no required reviewer — re-run step 1 |
-| Deployment rejected: branch not allowed | you tagged something that is not `v*.*.*`, or pushed a branch instead of a tag |
+| `publish` starts without asking for approval | expected — there is no required reviewer, by design (§1) |
+| `publish` never starts, waiting forever | someone added a reviewer *and* `prevent_self_review: true`; the only approver is the person who merged |
+| Deployment rejected: branch not allowed | the deployment-branch policy is missing `main` or `v*.*.*` — both entries are required (step 1) |
 | `gpg: no default secret key` | `GPG_SIGNING_KEY` is truncated — re-set it from a file, not by pasting |
 | `signPlugin` fails on the key | `PRIVATE_KEY` is the *encrypted* PEM; it must be the output of `openssl rsa` |
 | A required check is stuck pending forever | a job was renamed and no longer matches the name in `.github/rulesets/` |

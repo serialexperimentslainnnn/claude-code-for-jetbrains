@@ -30,16 +30,32 @@ removed rather than kept as a second pipeline that could also publish.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push to `develop`, `main`, `feature/**`, `bugfix/**`, `hotfix/**`; PRs | JVM tests, frontend tests, dependency audit, plugin verifier, build (asserting no npm code and that attribution is packaged) |
+| `ci.yml` | **pull requests only** into `develop` or `main` (plus manual dispatch) | JVM tests + coverage, static analysis, frontend tests, dependency audit, plugin verifier, artifact assertions, and the release-door bot-PR check |
 | `codeql.yml` | push/PR to `develop`/`main`; weekly | SAST over `java-kotlin` and `javascript-typescript`, `security-extended` queries |
-| `release.yml` | `vX.Y.Z` tag | Guard → verify → build+attest → **publish** (approval-gated) → GitHub Release |
+| `release.yml` | **push to `main`** (primary); a `vX.Y.Z` tag (escape hatch) | Guard → verify → tag, build, sign, publish, GitHub Release — all in one gated job |
 | `drift.yml` | weekly; manual | `checkDrift` against the current CLI and SDK; files an issue on real drift |
+
+**There is deliberately no `push` trigger on `ci.yml`.** A branch with an open PR fires `pull_request` on
+every push to it, so the loop is covered once instead of twice; a branch with no PR gets no checks at all,
+which is the intent. The consequence worth knowing: **the gate is not uniform**. A PR into `develop` runs
+only *JVM tests* and *Frontend tests*; static analysis, the dependency audit, the plugin verifier and the
+artifact assertions run at the `develop → main` door, because each is expensive and that is the merge that
+publishes. So a formatting or verifier failure can land *on* `develop` and be caught one merge later.
 
 ### Secrets
 
 All six live in the **`marketplace` GitHub Environment**, never in repository
 secrets. Environment scoping means they do not exist for any other job, and the
-environment's required reviewer is the human gate on publication.
+environment's deployment-branch policy restricts it to `main` and `v*.*.*` tags.
+
+> **There is no required reviewer, deliberately** (verified against the API,
+> 2026-08-11; `scripts/bootstrap-ci.sh` sets `reviewers: []` and logs that
+> publish runs without a manual approval). So a merge into `main` that bumps the
+> version **publishes to the Marketplace unattended** — the pull request into
+> `main` is the human act, and there is no second one. The environment *scopes*
+> the credentials; it does not gate on a person. See
+> [`CI_SETUP.md`](CI_SETUP.md) §1 for how to add a reviewer if a second
+> maintainer ever exists.
 
 | Secret | What it is |
 |---|---|
@@ -68,12 +84,17 @@ Branch protection is versioned in `.github/rulesets/*.json` and applied with
 
 ### UI test suite
 
-The UI (Swing/`uiTest`) suite is not in the default pipeline. Run it under a
-virtual display:
+The RemoteRobot `uiTest` suite is not in the default pipeline and is not a
+required check. It is a **client**: it drives an IDE that must already be
+running, so it is two steps, and the second one is `uiTest`, not `test`.
 
 ```bash
-xvfb-run -a ./gradlew test -PuiTest.enabled=true
+xvfb-run -a -s "-screen 0 1920x1080x24" ./gradlew runIdeForUiTests &   # keep it up
+./gradlew uiTest -PuiTest.enabled=true                                 # then connect
 ```
+
+The full harness, its two preconditions and what the suite can and cannot cover
+are in [`UI_TESTING.md`](UI_TESTING.md).
 
 ### Drift detection
 
@@ -90,18 +111,32 @@ its own would silently bless a gap. See `docs/DRIFT_DETECTION.md`.
 ```bash
 git checkout develop
 git pull --ff-only
+gh pr list --base develop --state open   # must be empty of bot PRs
 ```
+
+**Drain the bot queue first.** The `No bot PRs pending on develop` check is a
+required status check on `main`, and it fails while Claude or Dependabot has a
+pull request open against `develop`. That is deliberate — a release claims
+`develop` is a finished state, and an un-merged dependency bump contradicts it —
+but it means merging or closing those PRs is a release step, not an afterthought.
 
 ### 2. Run the full local verification
 
 ```bash
 JAVA_HOME=~/.jdks/jbr-21.0.11 \
-  ./gradlew test verifyPlugin buildPlugin
+  ./gradlew test koverVerify detekt spotlessCheck verifyPlugin buildPlugin
+npm ci && npm test && npm run lint && npm run format:check
 ```
 
-All tests must pass, `verifyPlugin` must report **Compatible** for both
-IU-261 and IU-262 with no new internal-API usage, and `buildPlugin` must
-produce a zip in `build/distributions/`.
+Everything CI runs, run locally first. All tests must pass, and `verifyPlugin`
+must report **Compatible** across the declared range — the floor (253) through
+the newest IDEA **and PyCharm** EAP/RC — with no internal-API, override-only or
+**deprecated** API usage, all four of which are failure levels in the build.
+`buildPlugin` produces `build/distributions/claude-code-native-X.Y.Z.zip`.
+
+Offline, or on a network that cannot pull 1.6 GB of IDE:
+`./gradlew verifyPlugin -PlocalIdePath=<dir>[,<dir>…]` verifies against
+locally-extracted installs and downloads nothing.
 
 ### 3. Bump the version
 
@@ -118,8 +153,11 @@ Pick MAJOR / MINOR / PATCH per the rules above.
 Update **both** files with the new version and today's date:
 
 - [`../CHANGELOG.md`](../CHANGELOG.md) — Keep a Changelog format with the
-  sections `Added`, `Changed`, `Fixed`, `Security` as applicable. Move
-  entries out of `Unreleased`.
+  sections `Added`, `Changed`, `Fixed`, `Security` as applicable. **There is no
+  `Unreleased` section, on purpose**: `release.yml` publishes the newest
+  `## [x.y.z]` block verbatim as the GitHub Release body, so a non-version
+  heading at the top would ship as the release notes. Entries are written
+  under the version being prepared, from the moment work starts on it.
 - [`../RELEASE_NOTES.md`](../RELEASE_NOTES.md) — narrative copy that
   Marketplace renders in the "What's New" panel. Keep it short and
   user-facing; `build.gradle.kts` extracts the latest section via
@@ -129,8 +167,14 @@ Update **both** files with the new version and today's date:
 
 ```bash
 git add build.gradle.kts CHANGELOG.md RELEASE_NOTES.md
-git commit -m "Release vX.Y.Z"
+git commit -m "build: bump the version to X.Y.Z"
 ```
+
+**Conventional Commits, including this one.** `commitlint` runs as a versioned
+local hook (`.githooks/commit-msg`, enabled with
+`git config core.hooksPath .githooks`) and the old `Release vX.Y.Z` subject does
+not parse — it is the exact shortfall [ADR 0001 §4](adr/0001-release-process.md)
+records as what still blocks generating the changelog.
 
 ### 6. Open a release PR
 
@@ -158,63 +202,100 @@ re-verifies — the diff looks harmless, so the checks get read as still valid w
 different commit. If something cosmetic turns up mid-PR, it waits for the next release; if it truly
 cannot wait, close the PR, land the change, re-run the full battery, and open a new one.
 
-### 7. Tag and push
+### 7. Do NOT tag anything
 
-After the PR is merged:
+**The workflow cuts the tag. You do not.** This section used to say
+`git tag -s vX.Y.Z && git push origin vX.Y.Z`, and following it is actively
+harmful: a hand-cut tag reaches the `marketplace` environment on the escape-hatch
+trigger, skipping the merge into `main` that the whole review model rests on, and
+a tag that beats the workflow to the name makes the automated release path stop
+with *"already released"* on a version nobody published. Published tags are
+immutable ([ADR 0001 §3](adr/0001-release-process.md)), so that mistake is not
+undoable — the only exit is burning the version number and cutting the next
+patch.
 
-```bash
-git checkout main
-git pull --ff-only
-git tag -s vX.Y.Z -m "Claude Code Native vX.Y.Z"
-git push origin vX.Y.Z
-```
+The version in `build.gradle.kts` is the single source of truth; the tag is
+**derived** from it, which is precisely why nothing has to be kept in sync by
+hand.
 
-The tag must be **signed** (the repo enforces signed tags via the GitHub
-ruleset on `main`).
+### 8. The merge publishes
 
-### 8. The release workflow publishes
+Merging the PR pushes to `main`, which triggers `.github/workflows/release.yml`.
+Three jobs, in order:
 
-Pushing the `vX.Y.Z` tag triggers `.github/workflows/release.yml`, which runs
-five jobs in order:
+1. **`guard`** — reads the version out of `build.gradle.kts`, derives `vX.Y.Z`,
+   and asserts the commit is **reachable from `main`** (`git merge-base
+   --is-ancestor`). It runs before any secret is in scope, so a tag pushed from
+   the wrong branch fails in seconds and reaches nothing. If the tag already
+   exists on the remote it sets `release=false` and the run **stops without
+   failing** — `main` legitimately takes merges that are not releases, and a red
+   run on each of those is an alarm people learn to ignore.
+2. **`verify`** — `npm ci && npm test` plus `./gradlew test verifyPlugin` on the
+   exact tree being shipped, in the same container image the branch was green
+   in. CI already ran on the PR; this re-runs it against what is actually going
+   out.
+3. **`publish`** — everything irreversible, in one job behind the `marketplace`
+   environment. In order: import the CI signing key, **cut and sign the tag**,
+   check that tag out, create the GitHub Release as a **draft**, then a single
+   `buildPlugin signPlugin publishPlugin` invocation, attest provenance,
+   checksum and GPG-sign the exact published bytes, attach them, and only then
+   take the release out of draft.
 
-1. **`guard`** — asserts the tagged commit is reachable from `main` and that the
-   tag matches `version` in `build.gradle.kts`. Runs before any secret is in
-   scope, so a tag pushed from the wrong branch fails in seconds and reaches
-   nothing.
-2. **`verify`** — the full suite plus `verifyPlugin`, against the exact tagged
-   tree rather than against whatever passed on `develop` last week.
-3. **`build`** — `buildPlugin` once, records the SHA-256, and emits SLSA build
-   provenance.
-4. **`publish`** — `signPlugin publishPlugin`. Gated on the **`marketplace`
-   environment**, so it waits for a human approval; the four credentials are
-   scoped to that environment and exist nowhere else.
-5. **`github-release`** — creates the GitHub Release with the zip and its
-   checksum attached.
+Three properties of that job are load-bearing and easy to break:
 
-Nothing publishes without all three gates lining up: the tag, its lineage from
-`main`, and the approval. See [ADR 0001 §5](adr/0001-release-process.md) for why
-the middle one is not decoration.
+- **The tag comes first and the build runs from it.** The tag is the identity of
+  the release, so the artifact is produced from the ref that names it rather
+  than stamped afterwards.
+- **One Gradle invocation.** `publishPlugin` uploads the signed archive only if
+  `signPlugin.didWork` and silently falls back to the *unsigned* one otherwise,
+  so splitting the tasks is how a plugin ships unsigned. Building twice is also
+  how users get two different zips under one version number: a Gradle zip is not
+  byte-reproducible.
+- **Recovery from a failed publish is a JOB re-run, not a workflow re-run.** The
+  tag step detects an existing tag and verifies it instead of re-cutting, and the
+  upload uses `--clobber`. A whole-workflow re-run would stop at `guard`, which
+  now correctly sees the version as already released.
 
-### 9. Verify on Marketplace
+On the tag-push escape hatch the same three jobs run, and `guard` additionally
+requires the tag name to match the declared version. That path exists for
+re-cutting after a failed publish without pushing an empty commit to `main` — not
+for releasing by hand.
+
+### 9. Verify on Marketplace and on the Release
 
 Within ~20 minutes the new version should appear at
-<https://plugins.jetbrains.com/plugin/dev.lain.claude-code-for-jetbrains>.
-Check:
+<https://plugins.jetbrains.com/plugin/31965-claude-code-native>. Check:
 
 - Version number and date.
-- "What's New" panel matches `RELEASE_NOTES.md`.
+- "What's New" panel matches the latest section of `RELEASE_NOTES.md` (that is
+  what `latestReleaseNotesHtml()` feeds into `changeNotes`).
 - Compatibility range (`since-build` / `until-build`) is correct.
-- The download is the signed zip from `build/distributions/`.
+
+The GitHub Release carries four files, and its notes come from **`CHANGELOG.md`**
+— not `RELEASE_NOTES.md`, which is the storefront copy for a different reader:
+
+```sh
+gpg --import docs/ci-signing-key.asc
+gpg --verify claude-code-native-X.Y.Z.zip.asc
+sha256sum -c claude-code-native-X.Y.Z.zip.sha256
+git verify-tag vX.Y.Z
+```
 
 Install the published zip into a real IDE and run the smoke test from
 [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
 
 ### 10. Back-merge and close
 
+`develop` is protected and accepts nothing but pull requests, so the back-merge
+is a PR like any other — and it cannot be a fast-forward: GitHub creates the
+merge commit on `main`, so `main` and `develop` end up with the same *tree* and
+different SHAs.
+
 ```bash
-git checkout develop
-git merge --ff-only main   # if main is ahead; otherwise nothing to do
-git push
+git checkout -b chore/back-merge-X.Y.Z main
+git push -u origin chore/back-merge-X.Y.Z
+gh pr create --base develop --head chore/back-merge-X.Y.Z \
+  --title "chore: back-merge vX.Y.Z into develop" --body "Post-release sync."
 ```
 
 Close the milestone in GitHub and any issues tagged with it.
@@ -234,11 +315,11 @@ critical regressions.
 4. Add a `Security` entry to `CHANGELOG.md` and a one-paragraph note to
    `RELEASE_NOTES.md`.
 5. Open a PR `hotfix/X.Y.Z` → `main`. Merge once CI is green. Even under
-   pressure this goes through `main` — the release workflow refuses a tag whose
-   commit is not reachable from it, and a hotfix is exactly when you least want
-   to discover you skipped the review.
-6. Tag `vX.Y.Z` and push — `release.yml` runs, then approve the `marketplace`
-   environment to publish.
+   pressure this goes through `main` — the release workflow refuses a commit
+   that is not reachable from it, and a hotfix is exactly when you least want to
+   discover you skipped the review.
+6. The merge publishes, exactly as in §8. **Do not tag by hand**, least of all
+   under pressure.
 7. **Back-merge** into `develop`:
    ```bash
    git checkout develop

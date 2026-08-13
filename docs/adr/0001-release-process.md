@@ -85,17 +85,30 @@ It opens a release PR from the commit history; fed a history it can only half-pa
 that looks complete and is not.
 
 **Exit condition, so this does not quietly become permanent.** Generation is adopted when the history since
-`v5.0.0` is clean, which the commit-msg hook plus the PR-only merge policy make the default outcome. It is
-checkable in one command:
+the last 5.x tag is clean, which the commit-msg hook plus the PR-only merge policy make the default outcome.
+It is checkable in one command — and the ref it names has to be a tag that **exists**, or the check passes
+by printing `0` for an empty stream (see the amendment below, where it did exactly that):
 
 ```sh
-git log v5.0.0..HEAD --no-merges --format=%s \
+git log v5.0.1..HEAD --no-merges --format=%s \
   | grep -vcE '^(feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: '   # → 0
 ```
 
 At `0`, wire `release-please` as a workflow on `main` and delete this section. Until then the hand-written
 changelog is the accurate one, and saying so here is the point: a recorded deviation with a test for when it
 ends, not an oversight.
+
+> **Amendment, 2026-08-11 — the anchor was wrong and the test was vacuous.** It read `v5.0.0..HEAD`, and
+> **there is no `v5.0.0` tag**, in this clone or on `origin` (the 5.x tags are `v5.0.1`, `v5.1.0`, `v5.1.1`).
+> `git log` failed to stderr, `grep -vc` counted an empty stream, and the command printed `0` — the answer the
+> exit condition is waiting for — while measuring nothing. A check that cannot fail is worse than no check,
+> which is this ADR's own argument about the changelog, turned on its own test.
+>
+> Re-anchored to `v5.0.1` above. **It now genuinely reports `0` across all 34 non-merge commits since that
+> tag**, so the exit condition has in fact fired: the hook plus the PR-only merge policy did what §4 predicted.
+> Adopting `release-please` is now a scheduling decision rather than a data problem — and the one remaining
+> objection is not commit hygiene but the release trigger, since a release-PR bot and "a merge to `main`
+> publishes what `build.gradle.kts` declares" are two different sources of truth for the version.
 
 ### 5. CI/CD on GitHub Actions, with publication gated three ways
 
@@ -111,18 +124,53 @@ when the change is already large.
 1. a `vX.Y.Z` **tag** — the artifact's identity, per §3;
 2. the tagged commit is **reachable from `main`**, asserted in a job that runs before any secret is in
    scope. Since `main` accepts nothing but reviewed PRs, "reachable from main" *is* "was reviewed";
-3. a **human approval** on the `marketplace` GitHub Environment, where the four credentials live scoped —
+3. a **human approval** on the `marketplace` GitHub Environment, where the credentials live scoped —
    so they do not exist for any other job in this repository.
 
 Without (2), anyone able to push a tag could publish from any code, and the review that (3) assumes has
 happened becomes optional. It is the cheapest of the three checks and the one that makes the other two mean
 something.
 
+> **Amendment, 2026-08-11 — three of these statements no longer describe the repository.** The decisions
+> above stand; the descriptions have been overtaken by later changes, and are corrected here rather than
+> rewritten, per this directory's own rule.
+>
+> - **The gate no longer runs everywhere work happens.** `ci.yml` has no `push` trigger at all: it runs on
+>   pull requests into `develop` or `main`. A branch with no PR gets no checks, deliberately ("no PR, no
+>   promotion"), and the heavy checks run only at the `develop → main` door. The paragraph's own argument —
+>   that discovering the bar late is expensive — is now a cost the pipeline accepts in exchange for not
+>   running every pipeline twice.
+> - **The tag is no longer an input to publication; it is an output of it.** The primary trigger is a push to
+>   `main`, the version is read from `build.gradle.kts`, and `release.yml` cuts and signs the tag itself
+>   inside the gated job, before building from it. Item (1) is therefore a property of the release rather
+>   than a precondition a human supplies — and §3's immutability rule is what makes cutting it early safe to
+>   reason about. A hand-pushed tag remains a supported escape hatch, and on that path item (1) reads as
+>   originally written.
+> - **"Reachable from `main`" is not "was reviewed".** Item (2)'s wording above predates the rulesets being
+>   written down: both set `required_approving_review_count: 0` (§5, and `.github/rulesets/*.json`), so what
+>   "reachable from `main`" actually certifies is *"went through the pull-request gate"* — a PR was opened, the
+>   branch was up to date, and every required check was green. That is mechanical and cannot be talked out of;
+>   it is simply not a second person's judgement. No document here may describe a merge to `main` as reviewed.
+> - **Item (3) no longer exists, and its removal was deliberate.** The `marketplace` environment's only
+>   protection rule is its deployment-branch policy (`main`, `v*.*.*`); it carries no required reviewer, and
+>   `scripts/bootstrap-ci.sh` sets `reviewers: []` while logging that publish runs without a manual approval.
+>   So publication rests on **two** gates, and the human judgement is entirely in the pull request into
+>   `main`. The reasoning is the same one §5 gives for zero required approvals on the branch rulesets: with a
+>   single maintainer, an approval prompt is the same person confirming their own merge, which is ceremony
+>   rather than control. It is re-added with a second maintainer (`docs/CI_SETUP.md` §1) — and until then no
+>   document may describe releases as approval-gated.
+>
+> Also corrected: the environment holds **six** secrets, not four — the Marketplace token, the three parts
+> of the JetBrains upload key, and the CI GPG key with its passphrase.
+
 **Every action is pinned by full commit SHA.** A tag is mutable and the action runs with this repository's
-token. The counterweight to pin rot is Dependabot proposing the bumps weekly, so the pinning is free.
+token. The counterweight to pin rot is Dependabot proposing the bumps — **monthly**, per
+`.github/dependabot.yml`, with security updates arriving on their own schedule regardless — so the pinning
+is free.
 Provenance attestation is emitted and deliberately **not** overtrusted: a compromised runner can sign a
 build that genuinely happened on it. The controls that actually cut that class are the SHA pins, the
-read-only default token, and no secrets outside the approval-gated job.
+read-only default token, and no secrets outside the one environment-scoped job (see the amendment above:
+that job is scoped, not approval-gated).
 
 **Build once.** The whole distributable is produced by a single `buildPlugin signPlugin publishPlugin`
 invocation inside the approved job, and those exact bytes are what gets attested, checksummed,
