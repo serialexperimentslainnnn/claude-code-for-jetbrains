@@ -172,6 +172,57 @@ describe('missing-binary card', () => {
     expect(card().querySelector('.boot-install-btn').getAttribute('aria-busy')).toBe('false');
   });
 
+  // "Check again" shipped as a documented button with a live host handler and NO web code emitting the
+  // message — the same shape as the `/login` terminal launch that was dead for a whole release. The Kotlin
+  // side (JcefBridge "recheckBinary" → OnboardingController.recheckBinary → pushBootError) was reachable only
+  // from a unit test, so the user who ran the install command in their own terminal had nothing to click.
+  it('offers Check again — a real focusable control with a name that survives out of context', () => {
+    missing();
+    const btn = win.document.getElementById('boot-recheck');
+    expect(btn).toBeTruthy();
+    expect(card().contains(btn)).toBe(true);
+    // A native <button>: it is what picks up the `:where(a, button, …):focus-visible` ring and keyboard
+    // activation for free. A styled <div> here would be invisible to both.
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn.type).toBe('button');
+    expect(btn.textContent).toBe('Check again');
+    // WCAG 2.5.3: the accessible name must START with the visible label, so speech input still works.
+    expect(btn.getAttribute('aria-label')).toMatch(/^Check again/);
+  });
+
+  it('clicking Check again asks the host to look again — and sends nothing else', () => {
+    missing();
+    win.document.getElementById('boot-recheck').click();
+    expect(sent).toEqual([{ type: 'recheckBinary' }]);
+  });
+
+  it('Check again clears a stale error so the next answer is a fresh alert mutation', () => {
+    missing();
+    win.cc.bootPathError('Still not found.');
+    expect(win.document.getElementById('boot-path-err').textContent).toContain('Still not found');
+    win.document.getElementById('boot-recheck').click();
+    expect(win.document.getElementById('boot-path-err').textContent).toBe('');
+  });
+
+  it('Check again has no busy state to wedge in: a second click is a second request', () => {
+    missing();
+    const btn = win.document.getElementById('boot-recheck');
+    btn.click();
+    expect(btn.disabled).toBe(false);
+    expect(btn.getAttribute('aria-busy')).toBeNull();
+    btn.click();
+    expect(sent.filter((m) => m.type === 'recheckBinary').length).toBe(2);
+  });
+
+  it('a fresh installMethods push rebuilds the rows without leaving a second Check again', () => {
+    missing();
+    win.cc.meta({
+      installMethods: [{ id: 'dnf', label: 'Install via dnf', display: 'sudo dnf install claude-code' }],
+    });
+    expect(win.document.querySelectorAll('.boot-recheck').length).toBe(1);
+    expect(card().querySelectorAll('.boot-install').length).toBe(1);
+  });
+
   it('the card comes down when the binary appears', () => {
     missing();
     win.cc.state({ starting: true, running: false, binaryMissing: false });

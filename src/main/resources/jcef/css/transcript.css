@@ -49,7 +49,6 @@
 }
 
 /* hover affordances (copy / actions) */
-.msg-head .act,
 .act,
 .copy {
   cursor: pointer;
@@ -60,7 +59,7 @@
   border-radius: var(--radius-sm);
   transition:
     color 0.14s,
-    background 0.14s,
+    background-color 0.14s,
     opacity 0.14s;
 }
 .msg-head .act,
@@ -176,8 +175,11 @@
   border-top: 1px solid var(--border);
   margin: 18px 0;
 }
+/* inline images from model markdown (only data: URIs pass the CSP img-src) — keep them in-bounds */
 .body img {
   max-width: 100%;
+  height: auto;
+  margin: 6px 0;
   border-radius: var(--radius-sm);
 }
 
@@ -283,7 +285,7 @@ details.fold > summary {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   transition:
-    background 0.14s,
+    background-color 0.14s,
     color 0.14s;
 }
 details.fold > summary:hover {
@@ -298,9 +300,6 @@ details.fold > summary:hover {
   opacity: 0.6;
 }
 details.fold[open] > summary .fold-hint {
-  display: none;
-}
-details.fold > summary::-webkit-details-marker {
   display: none;
 }
 details.fold > summary .tri {
@@ -446,7 +445,7 @@ details.fold .fold-body p:first-child {
   padding: 9px 12px;
   cursor: pointer;
   user-select: none;
-  transition: background 0.14s;
+  transition: background-color 0.14s;
 }
 .tool-head:hover {
   background: color-mix(in srgb, var(--text) 3%, transparent);
@@ -460,9 +459,6 @@ details.fold .fold-body p:first-child {
   width: 14px;
   height: 14px;
   display: block;
-}
-.tool.running > .tool-head .ic {
-  color: var(--warning);
 }
 .tool.failed > .tool-head .ic {
   color: var(--danger);
@@ -478,48 +474,39 @@ details.fold .fold-body p:first-child {
   word-break: break-word;
   flex: 1 1 auto;
 }
-.tool-head .tool-diff {
+/* The two trailing buttons on a tool head. Same shape; they differ only in hue and in which edge they hug. */
+.tool-head .tool-diff,
+.tool-head .tool-restore {
   flex: 0 0 auto;
-  margin-left: auto;
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
   padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   transition:
-    background 0.12s,
-    border-color 0.12s;
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.tool-head .tool-diff {
+  margin-left: auto;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .tool-head .tool-diff:hover {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
 .tool-head .tool-restore {
-  flex: 0 0 auto;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
   margin-left: 6px;
   color: var(--dim);
-  background: transparent;
-  border: 1px solid var(--border);
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  transition:
-    background 0.12s,
-    border-color 0.12s,
-    color 0.12s;
 }
 .tool-head .tool-restore:hover {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
   background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-.tool-head .tool-diff:not([hidden]) {
-  margin-left: auto;
 }
 .tool-head .tool-restore + .chev,
 .tool-head .tool-diff + .chev {
@@ -542,16 +529,21 @@ details.fold .fold-body p:first-child {
 .tool.open > .tool-out {
   display: block;
 }
-.tool-out pre {
+/* A code block inside a card wears none of the chrome a markdown fence has — the card already provides it. */
+.tool-out pre,
+.tool-cmd pre.command-src {
   margin: 0;
   border: none;
   border-radius: 0;
   background: var(--code-bg);
   box-shadow: none;
-  max-height: 420px;
   overflow: auto;
 }
-.tool-out pre code {
+.tool-out pre {
+  max-height: 420px;
+}
+.tool-out pre code,
+.tool-cmd pre.command-src code {
   font-size: 12px;
 }
 /* A FAILED tool's output wraps instead of scrolling sideways.
@@ -590,15 +582,9 @@ details.fold .fold-body p:first-child {
   border-top: 1px solid var(--border);
 }
 .tool-cmd pre.command-src {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-  background: var(--code-bg);
-  box-shadow: none;
   overflow: hidden;
 }
 .tool-cmd pre.command-src code {
-  font-size: 12px;
   display: block;
   max-height: 160px;
   overflow: auto;
@@ -689,6 +675,9 @@ details.fold .fold-body p:first-child {
 .hljs-attribute {
   color: var(--syn-type);
 }
+/* Not a no-op, despite repeating the inherited colour: these tokens NEST inside coloured ones —
+   `${x}` sits inside an `.hljs-string`, `$var` inside a quoted shell word — and without this they would take
+   the string's colour and stop reading as an interpolation. */
 .hljs-attr,
 .hljs-variable,
 .hljs-template-variable,
@@ -715,11 +704,8 @@ details.fold .fold-body p:first-child {
 .tool-children:empty {
   display: none;
 }
-.tool-children > * {
-  max-width: none;
-  margin-left: 0;
-  margin-right: 0;
-}
+/* NB nothing here undoes `#conversation > *` (the centred reading column): that is a CHILD selector, and a
+   nested card is a child of this container, not of the transcript. The three lines that did were inert. */
 
 /* ── notices (system / error) ─────────────────────────────────────────────── */
 .notice {

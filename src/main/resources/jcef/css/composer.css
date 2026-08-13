@@ -45,7 +45,9 @@
   color: var(--dim);
 }
 
-/* neon-grey send/stop button — NO border, NO background: just the icon, glowing in neon grey */
+/* neon-grey send/stop button — NO border, NO background: just the icon, glowing.
+   The grey is the theme's own text colour, not a literal: a hardcoded #cfd6e0 is a light-grey icon on a light
+   IDE theme's surface, i.e. invisible exactly where contrast is hardest to spare. */
 .send-btn {
   flex: 0 0 auto;
   width: 32px;
@@ -58,16 +60,15 @@
   padding: 0;
   background: transparent;
   box-shadow: none;
-  color: #cfd6e0;
+  color: var(--text);
   transition:
     transform 0.12s var(--ease),
     color 0.14s,
     filter 0.16s;
-  filter: drop-shadow(0 0 4px rgba(200, 208, 218, 0.55));
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--text) 55%, transparent));
 }
 .send-btn:hover {
-  color: #fff;
-  filter: drop-shadow(0 0 7px rgba(220, 228, 238, 0.9));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--text) 90%, transparent));
   transform: translateY(-1px);
 }
 .send-btn:active {
@@ -84,9 +85,6 @@
   height: 17px;
   display: block;
   fill: currentColor;
-}
-.send-btn.stop {
-  color: #cfd6e0;
 }
 .send-btn.stop:hover {
   color: var(--danger);
@@ -111,24 +109,22 @@
 }
 
 /* ── controls bar (flat single row, divided by hairlines — no bubbles) ─────── */
-.composer-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  row-gap: 2px;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 4px;
-  min-width: 0;
-}
 /* Pills WRAP to a second row when the tool window is narrow instead of being clipped/hidden (the old
    `overflow: hidden` + nowrap silently swallowed model/mode/effort/thinking at small widths). */
+.composer-bar,
 .bar-left {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   row-gap: 2px;
   min-width: 0;
+}
+.composer-bar {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.bar-left {
   flex: 1 1 auto;
 }
 .bar-right {
@@ -160,7 +156,7 @@
   flex: 0 0 auto;
   position: relative;
   transition:
-    background 0.12s,
+    background-color 0.12s,
     color 0.12s;
 }
 .composer-bar .bar-left > * + * {
@@ -220,7 +216,7 @@
   border-radius: 8px;
   color: var(--dim);
   transition:
-    background 0.12s,
+    background-color 0.12s,
     color 0.12s;
 }
 .bar-icon:hover {
@@ -275,7 +271,7 @@
   border-radius: 7px;
   font-size: 12.5px;
   color: var(--text);
-  transition: background 0.12s;
+  transition: background-color 0.12s;
 }
 .menu-item:hover {
   background: var(--surface2);
@@ -341,9 +337,6 @@
   margin-bottom: 6px;
   outline: none;
 }
-.attach-search:focus {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
 .attach-search::placeholder {
   color: var(--dim);
 }
@@ -398,19 +391,25 @@
   background: var(--surface2);
   border: 1px solid var(--border);
 }
-.queue-x {
+/* The little × that removes one chip — on a queued prompt, and on an attachment. One control, one rule: they
+   were two identical blocks in two files, which is how they drifted apart in the first place. */
+.queue-x,
+.att-x,
+.find-x {
   cursor: pointer;
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
   border-radius: var(--radius-pill);
   color: var(--dim);
   transition:
     color 0.12s,
-    background 0.12s;
+    background-color 0.12s;
 }
-.queue-x:hover {
+.queue-x:hover,
+.att-x:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--danger) 22%, transparent);
 }
@@ -524,21 +523,19 @@
   border-radius: var(--radius-pill);
   background: var(--surface2);
   overflow: hidden;
+  /* The fill animates its WIDTH, which is a layout property: without containment every frame of that
+     transition re-lays out the grid, the dock and the transcript above it. Layout containment confines the
+     work to this 4px box — the bar's own size does not depend on the fill, so nothing outside can change. */
+  contain: layout paint;
 }
+/* Level colours (lvl-low/mid/high) are the shared quota scale — see `.usage-fill` in dashboard.css. */
 .usage-bars .ub-track > i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--info);
   transition:
     width 0.35s var(--ease),
     background-color 0.35s var(--ease);
-}
-.usage-bars .ub-track > i.lvl-mid {
-  background: var(--warning);
-}
-.usage-bars .ub-track > i.lvl-high {
-  background: var(--danger);
 }
 .usage-bars .ub-pct {
   flex: 0 0 auto;
@@ -599,6 +596,7 @@
   border-radius: var(--radius-sm);
   margin-bottom: 6px;
 }
+.attach-search:focus,
 .palette-input:focus {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }

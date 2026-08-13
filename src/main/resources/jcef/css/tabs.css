@@ -13,9 +13,9 @@ body.vibe .notice {
   font-style: italic;
   text-decoration: underline;
 }
-body.vibe .body * {
-  text-decoration: underline;
-}
+/* NB no `body.vibe .body *` here. A rule whose rightmost selector is `*` lands in the browser's universal
+   bucket and is matched against EVERY element in the transcript, which is the one container that grows
+   without bound — for a gag, and for nothing the underline above does not already propagate into. */
 /* Nyan Cat for the Vibe toggle icon + the assistant avatar */
 .vibe-emoji {
   display: inline-flex;
@@ -26,10 +26,12 @@ body.vibe .body * {
   height: 22px;
   display: block;
 }
-.avatar-nyan {
+.avatar-nyan,
+body.vibe .msg.assistant .avatar .avatar-star {
   display: none;
 }
-.avatar-nyan svg {
+.avatar-nyan svg,
+body.vibe .msg.assistant .avatar .avatar-nyan {
   width: 100%;
   height: 100%;
   display: block;
@@ -37,14 +39,6 @@ body.vibe .body * {
 body.vibe .msg.assistant .avatar {
   background: transparent;
   box-shadow: none;
-}
-body.vibe .msg.assistant .avatar .avatar-star {
-  display: none;
-}
-body.vibe .msg.assistant .avatar .avatar-nyan {
-  display: block;
-  width: 100%;
-  height: 100%;
 }
 /* a gentle rainbow ring on the cards/composer so the whole UI joins in */
 body.vibe .composer-card:focus-within {
@@ -65,10 +59,7 @@ body.vibe .composer-card:focus-within {
    for 3:1 against adjacent colours for the focus indicator itself, and a single hairline in the accent colour
    does not reliably clear that over the card backgrounds used here. `outline-offset` keeps it from being
    clipped by the element's own border-radius. */
-:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible,
-.copy:focus-visible,
-.menu-item:focus-visible,
-.tool-head:focus-visible {
+:where(a, button, input, textarea, select, summary, [tabindex], .copy, .menu-item, .tool-head):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
@@ -81,14 +72,12 @@ body.vibe .composer-card:focus-within {
   outline-offset: 1px;
 }
 
-/* Windows/forced-colors mode: honour the system's own focus colour instead of ours (3.8 — the interface must
-   stay usable under prefers-contrast / forced colours, and overriding system colours defeats the point). */
+/* Windows/forced-colors mode: honour the system's own focus colour instead of ours (the interface must stay
+   usable under prefers-contrast / forced colours, and overriding system colours defeats the point). Not the
+   list above but ANYTHING focusable: there, the system owns the palette, so there is no element we would want
+   to leave without its ring — and no list to keep in sync. */
 @media (forced-colors: active) {
-  :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible,
-  .copy:focus-visible,
-  .menu-item:focus-visible,
-  .tool-head:focus-visible,
-  .find-input:focus-visible {
+  :focus-visible {
     outline: 2px solid Highlight;
   }
 }
@@ -115,9 +104,6 @@ body.vibe .composer-card:focus-within {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-}
-#tabsbar[hidden] {
-  display: none;
 }
 /* The chats' row and the open subtab's row, stacked; they take whatever the switcher leaves. */
 .tab-rows {
@@ -188,9 +174,6 @@ body.vibe .composer-card:focus-within {
   scroll-behavior: auto;
   user-select: none;
 }
-.tab-capsule::-webkit-scrollbar {
-  display: none;
-}
 
 /* The trail sits a hair further left than the capsule above it, so the first segment's text lines up with
    the first chat pill's rather than with the capsule's border. */
@@ -205,34 +188,21 @@ body.vibe .composer-card:focus-within {
   font-size: 11px;
 }
 
-/* The ⋮ on a chat tab (and on the open subtab): the control that shows the whole tree. Sits inside the pill,
-   next to the ×, with a real hit area — the version before this was a bare glyph a few pixels wide. */
-.pill-more {
+/* The two glyph controls that live INSIDE a pill, next to the ×: the ⋮ that shows the whole tree, and the pin
+   that promotes the open subtab to a tab of its own. Both need a real hit area — the version before this was a
+   bare glyph a few pixels wide. */
+.pill-more,
+.pill-pin {
   flex: 0 0 auto;
   margin-left: 2px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--dim);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
 }
-.pill-more:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-/* The pin, on the open subtab: promote what you are reading to a tab of its own. */
-.pill-pin {
-  flex: 0 0 auto;
-  margin-left: 2px;
-  padding: 0 4px;
-  border-radius: 999px;
-  color: var(--dim);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
+.pill-more:hover,
 .pill-pin:hover {
   color: var(--accent);
   background: var(--accent-soft);
@@ -365,7 +335,7 @@ body.vibe .composer-card:focus-within {
   white-space: nowrap;
   transition:
     border-color 0.14s var(--ease),
-    background 0.14s var(--ease),
+    background-color 0.14s var(--ease),
     color 0.14s var(--ease);
 }
 .pill:hover {
@@ -396,7 +366,7 @@ body.vibe .composer-card:focus-within {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--dim);
 }
 .pill-dot.running {
@@ -418,7 +388,7 @@ body.vibe .composer-card:focus-within {
   flex: 0 0 auto;
   margin-right: -4px;
   padding: 0 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--dim);
   font-size: 13px;
   line-height: 1;

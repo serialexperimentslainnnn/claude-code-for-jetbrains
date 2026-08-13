@@ -118,15 +118,13 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   scroll-behavior: smooth;
+  padding: 22px clamp(16px, 5vw, 40px) 30px;
 }
 /* centred reading column with generous breathing room */
 #conversation > * {
   max-width: var(--col);
   margin-left: auto;
   margin-right: auto;
-}
-#conversation {
-  padding: 22px clamp(16px, 5vw, 40px) 30px;
 }
 
 /* dock = permissions + composer, pinned to the bottom with a soft blur veil */
@@ -137,7 +135,7 @@ body {
   padding: 10px clamp(16px, 5vw, 40px) 16px;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  /* No `-webkit-` twin: the embedded browser is Chromium ≥ 122, which took the property unprefixed in 76. */
   backdrop-filter: blur(14px) saturate(1.1);
 }
 #dock > * {
@@ -171,16 +169,11 @@ body {
   text-align: center;
   animation: fade 0.5s var(--ease);
 }
-#empty h1,
 #empty .empty-title {
   margin: 4px 0 0;
   font-size: 1.18em;
   color: var(--text);
   font-weight: 600;
-}
-#empty p {
-  margin: 0;
-  max-width: 30em;
 }
 @keyframes fade {
   from {

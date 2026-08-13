@@ -49,14 +49,52 @@ function shellBody() {
 // marked→DOMPurify→highlight pipeline (not the escape() fallback), which is what code-block decoration needs.
 const VENDOR = ['purify.min.js', 'marked.min.js', 'highlight.min.js'];
 
+/** The KOTLIN source of truth for both the module list and its order — see [appModules] and [readCss]. */
+function jcefHostSource() {
+  return fs.readFileSync(
+    path.resolve(__dirname, '../../../main/kotlin/dev/lain/claudejb/ui/jcef/JcefHost.kt'),
+    'utf8'
+  );
+}
+
 /**
- * Rebuilds the shell DOM and loads the vendored libs, then app-core.js, then [files], into the current jsdom
- * window. Returns the window. Pass { vendor: false } to skip marked/DOMPurify/hljs (faster; CC.markdown then
- * escapes instead of rendering). Each test file gets its own fresh jsdom document from vitest.
+ * The app modules, in the order the page loads them — read from `JcefHost.appNames`, never from a list kept
+ * here and never from `readdirSync`.
+ *
+ * Order is semantics: the files meet through `window.cc`/`window.CC`, so a module that reads another's
+ * namespace at load time must come after it. A harness with its own ordering would be exercising a page the
+ * product never serves — the same reason `readCss` reads `CSS_PARTS`.
+ */
+function appModules() {
+  const host = jcefHostSource();
+  const block = host.slice(host.indexOf('val appNames = listOf('));
+  const names = block.slice(0, block.indexOf(')')).match(/"(app-[\w.-]+\.js)"/g);
+  if (!names) throw new Error('helpers/load: could not read appNames from JcefHost.kt');
+  return names.map((quoted) => quoted.replace(/"/g, ''));
+}
+
+/**
+ * Which FAMILY a module belongs to: `app-composer-attach.js` → `composer`, `app-core.js` → `core`.
+ *
+ * A family is one subject split across files that share state through its namespace, so it only functions
+ * whole — asking for `app-composer.js` has to bring its pills, menus, attachments and screens with it, the
+ * way the page loads them. The core family is loaded for everyone: it defines `cc`/`CC` itself.
+ */
+function familyOf(name) {
+  const m = /^app-([a-z]+)/.exec(name);
+  return m ? m[1] : name;
+}
+
+/**
+ * Rebuilds the shell DOM and loads the vendored libs, then the core family, then the family of each name in
+ * [files], into the current jsdom window — all of it in `JcefHost.appNames` order. Returns the window. Pass
+ * { vendor: false } to skip marked/DOMPurify/hljs (faster; CC.markdown then escapes instead of rendering).
+ * Each test file gets its own fresh jsdom document from vitest.
  */
 function loadFrontend(files = [], { vendor = true } = {}) {
   document.documentElement.innerHTML = `<head></head><body>${shellBody()}</body>`;
-  const seq = [...(vendor ? VENDOR : []), 'app-core.js', ...files];
+  const wanted = new Set(['core', ...files.map(familyOf)]);
+  const seq = [...(vendor ? VENDOR : []), ...appModules().filter((f) => wanted.has(familyOf(f)))];
   for (const f of seq) {
     window.eval(readApp(f));
   }
@@ -76,10 +114,7 @@ function appJsFiles() {
  * product never serves, and a part added to the host but not to the tests would go unchecked.
  */
 function readCss() {
-  const host = fs.readFileSync(
-    path.resolve(__dirname, '../../../main/kotlin/dev/lain/claudejb/ui/jcef/JcefHost.kt'),
-    'utf8'
-  );
+  const host = jcefHostSource();
   // The DECLARATION, not the first mention: `CSS_PARTS` is also used in `buildPage` above it.
   const block = host.slice(host.indexOf('val CSS_PARTS = listOf('));
   const parts = block.slice(0, block.indexOf(')')).match(/"([\w-]+\.css)"/g);

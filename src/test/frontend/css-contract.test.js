@@ -59,8 +59,9 @@ describe('JS↔CSS class contract', () => {
   it('every class the JS emits has a CSS rule (or is grandfathered)', () => {
     const css = cssClassNames();
     const missing = [...jsEmittedClasses()].filter((c) => !css.has(c) && !GRANDFATHERED.has(c)).sort();
-    // If this fails: the JS emits a class with no `.<class>` rule in app.css — add the rule (or, if truly
-    // style-free, add it to GRANDFATHERED with a reason). This caught the real `.mcp-actions` layout bug.
+    // If this fails: the JS emits a class with no `.<class>` rule anywhere in the concatenated `css/*.css`
+    // parts (`readCss` reads them off `JcefHost.CSS_PARTS`) — add the rule to the part it belongs to, or, if
+    // truly style-free, add it to GRANDFATHERED with a reason. This caught the real `.mcp-actions` layout bug.
     expect(missing).toEqual([]);
   });
 

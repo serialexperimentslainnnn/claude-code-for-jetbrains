@@ -213,6 +213,33 @@ describe('tab bar', () => {
     expect(bar().querySelector('.tab-capsule')).not.toBe(before);
   });
 
+  it('a push that changes nothing does not rebuild the bar UNDER AN OPEN MENU either', () => {
+    // The reported flicker. The skip used to be waived outright whenever a panel was open, so while the
+    // pointer rested on a tab EVERY push rebuilt the whole bar and then re-anchored and reopened the panel
+    // under the cursor — several times a second with agents running. Identity of both nodes is the check:
+    // a rebuild replaces the capsule, and the reopen replaces the panel.
+    click(dots());
+    const capsule = bar().querySelector('.tab-capsule');
+    const panel = win.document.querySelector('.tab-menu');
+    expect(panel).not.toBe(null);
+    win.cc.tabs({ chats: CHATS, tree: TREE, tasks: TASKS });
+    win.cc.tabs({ chats: CHATS, tree: TREE, tasks: TASKS });
+    expect(bar().querySelector('.tab-capsule')).toBe(capsule);
+    expect(win.document.querySelector('.tab-menu')).toBe(panel);
+  });
+
+  it('but a change INSIDE the open menu still repaints it — an agent that finished says so', () => {
+    // The other half, and the reason the guard was blunt in the first place: the panel draws the tree, so a
+    // status the panel is showing has to reach it. It is a change; the signature now says so.
+    click(dots());
+    const panel = win.document.querySelector('.tab-menu');
+    expect(cardText().join(' ')).not.toContain('completed');
+    const finished = TREE.map((n) => (n.id === 'a' ? { ...n, status: 'completed' } : n));
+    win.cc.tabs({ chats: CHATS, tree: finished, tasks: TASKS });
+    expect(win.document.querySelector('.tab-menu')).not.toBe(panel); // repainted, and reopened on the new bar
+    expect(cards().some((el) => el.querySelector('.pill-dot.completed'))).toBe(true);
+  });
+
   it('a repaint keeps whatever else lives in the bar', () => {
     // The dashboard's view buttons (Chat · Session · Workloads) are appended to this bar so they stop
     // floating over the transcript. The bar is rebuilt on every agent event, several times a turn, and a

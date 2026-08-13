@@ -1,14 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════════════
    REDUCED MOTION
    ════════════════════════════════════════════════════════════════════════════ */
-/* inline images from model markdown (only data: URIs pass the CSP img-src) — keep them in-bounds */
-.body img {
-  max-width: 100%;
-  height: auto;
-  border-radius: var(--radius-sm);
-  margin: 6px 0;
-}
-
 /* responsive: tight panels (the tool window can be narrow) look professional, not cramped */
 @media (max-width: 600px) {
   #conversation {
@@ -17,9 +9,7 @@
   #dock {
     padding: 8px 12px 12px;
   }
-  .composer-bar {
-    flex-wrap: wrap;
-  }
+  /* NB `.composer-bar { flex-wrap: wrap }` used to be repeated here; the bar wraps at every width now. */
   .dashboard .dash-inner {
     grid-template-columns: 1fr !important;
   }
@@ -50,9 +40,6 @@
 /* The empty state and a waiting screen are two answers to the same question, so only one shows. */
 #conversation:has(#boot:not([hidden])) #empty,
 #conversation:has(#auth-card:not([hidden])) #empty {
-  display: none;
-}
-#boot[hidden] {
   display: none;
 }
 .boot-inner {
@@ -141,9 +128,6 @@ body.reduced-motion .boot-dots::after {
   margin-top: 6px;
   text-align: left;
 }
-#boot-missing[hidden] {
-  display: none;
-}
 .boot-missing-title {
   font-size: 14px;
   font-weight: 600;
@@ -170,15 +154,27 @@ body.reduced-motion .boot-dots::after {
 .boot-install-btn.installing {
   opacity: 0.75;
 }
+/* "Check again", for an install the user ran outside the IDE. `#boot-missing` is a flex column, so a bare
+   button stretches to the card's full width and reads as one more primary decision — which it is not: it asks
+   the host to look again, it does not install anything. Sized to its label, at the start of its own line. */
+.boot-recheck {
+  align-self: flex-start;
+}
 .boot-install-hint {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
+/* The small print of both cards: field labels, the command hint, the API-key hint. */
+.boot-path-label,
+.auth-label,
+.auth-hint,
 .boot-install-hint-label {
   font-size: 11px;
   color: var(--dim);
+}
+.boot-install-hint-label {
   white-space: nowrap;
 }
 .boot-install-cmd {
@@ -197,11 +193,6 @@ body.reduced-motion .boot-dots::after {
   flex-direction: column;
   gap: 4px;
 }
-.boot-path-label,
-.auth-label {
-  font-size: 11px;
-  color: var(--dim);
-}
 .boot-path-controls,
 .auth-row {
   display: flex;
@@ -209,32 +200,12 @@ body.reduced-motion .boot-dots::after {
   align-items: center;
   min-width: 0;
 }
+/* Everything else about these fields is THE themed field, shared with the elicitation cards — see
+   `.elicit-card input` in permissions.css. Only their behaviour in this row belongs here. */
 .boot-path-controls input,
 .auth-row input {
   flex: 1;
   min-width: 0;
-  /* Same themed field as the elicitation cards — a bare UA-styled white input reads as foreign
-     in every dark theme the IDE ships. */
-  font-family: var(--font);
-  font-size: 12.5px;
-  color: var(--text);
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 7px 10px;
-  outline: none;
-  transition:
-    border-color 0.14s,
-    box-shadow 0.14s;
-}
-.boot-path-controls input:focus,
-.auth-row input:focus {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.boot-path-controls input::placeholder,
-.auth-row input::placeholder {
-  color: var(--dim);
 }
 .boot-path-err,
 .auth-error {
@@ -253,9 +224,6 @@ body.reduced-motion .boot-dots::after {
   justify-content: center;
   padding: clamp(24px, 10vh, 70px) 0;
 }
-#auth-card[hidden] {
-  display: none;
-}
 .auth-inner {
   display: flex;
   flex-direction: column;
@@ -269,32 +237,18 @@ body.reduced-motion .boot-dots::after {
   font-size: 15px;
   font-weight: 600;
 }
-.auth-step {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-.auth-step[hidden] {
-  display: none;
-}
-.auth-primary {
-  font-weight: 600;
-}
-/* The collapsed API-key route. It needs its own display rule (and the [hidden] override that always goes
-   with one) because .auth-step is a flex column and this is a nested group inside it. */
+/* A step of the card, and the collapsed API-key route nested inside one: both are flex columns of their own.
+   Neither needs a `[hidden]` twin — `[hidden] { display: none !important }` in base.css already outranks
+   every display rule here, which is the whole reason it carries that `!important`. */
+.auth-step,
 #auth-key-fields {
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
 }
-#auth-key-fields[hidden] {
-  display: none;
-}
-.auth-hint {
-  font-size: 11px;
-  color: var(--dim);
+.auth-primary {
+  font-weight: 600;
 }
 .auth-divider {
   font-size: 11px;
@@ -353,7 +307,4 @@ body.reduced-motion *::after {
   animation-iteration-count: 1 !important;
   transition-duration: 0.001ms !important;
   scroll-behavior: auto !important;
-}
-body.reduced-motion #conversation {
-  scroll-behavior: auto;
 }
