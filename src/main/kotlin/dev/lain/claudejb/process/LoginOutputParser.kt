@@ -29,8 +29,12 @@ object LoginOutputParser {
     /** Removes ANSI escapes so the remaining text can be matched/grepped. */
     fun stripAnsi(text: String): String = ANSI.replace(text, "")
 
+    // Hoisted, not inline: `normalize` runs once per hint per line inside `resultMessage`, and a Regex built in
+    // the function body is recompiled on every one of those calls.
+    private val NON_ALNUM = Regex("[^a-z0-9]")
+
     /** Lower-cases and drops every non-alphanumeric char — collapses cursor-positioned layout into stable tokens. */
-    private fun normalize(text: String): String = stripAnsi(text).lowercase().replace(Regex("[^a-z0-9]"), "")
+    private fun normalize(text: String): String = stripAnsi(text).lowercase().replace(NON_ALNUM, "")
 
     /** The OAuth authorize URL the binary is sending the user to, or null if it hasn't appeared yet. */
     fun extractAuthUrl(text: String): String? = AUTH_URL.find(stripAnsi(text))?.value
@@ -77,12 +81,14 @@ object LoginOutputParser {
         // notifications and the sign-in card, which are exactly the places a secret must not appear.
         val lines = redactSecrets(text).lines().map { it.trim() }.filter { it.isNotEmpty() }
         if (success) {
-            return lines.lastOrNull { l -> SUCCESS_HINTS.any { it in normalize(l) } }?.let(::withoutKeyPrompt)
-                ?: "You're signed in."
+            return lines.lastMatching(SUCCESS_HINTS)?.let(::withoutKeyPrompt) ?: "You're signed in."
         }
-        return lines.lastOrNull { l -> FAILURE_HINTS.any { it in normalize(l) } }?.let(::withoutKeyPrompt)
-            ?: "Login failed. Please try again."
+        return lines.lastMatching(FAILURE_HINTS)?.let(::withoutKeyPrompt) ?: "Login failed. Please try again."
     }
+
+    /** The last line whose normalized form carries any of [hints] — normalizing each line ONCE, not per hint. */
+    private fun List<String>.lastMatching(hints: List<String>): String? =
+        lastOrNull { line -> normalize(line).let { n -> hints.any { it in n } } }
 
     /**
      * Drops the TUI's trailing "Press Enter to continue…" / "Press any key to close." instruction.

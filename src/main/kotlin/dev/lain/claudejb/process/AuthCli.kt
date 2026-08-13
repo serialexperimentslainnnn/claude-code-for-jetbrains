@@ -8,7 +8,11 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 /**
- * The binary's non-interactive auth surface: `claude auth status` and `claude auth logout`.
+ * The binary's non-interactive auth surface: `claude auth status`, plus the refresh-token `auth login`.
+ *
+ * **`auth logout` is deliberately not here** (it was, unused, until 5.5.0). The plugin's credential lives in the
+ * IDE safe, so clearing the safe IS the logout — see `OnboardingController.logout`. Shelling out would clear the
+ * BINARY's own store, signing the user's terminal CLI out of an identity the plugin never owned.
  *
  * **`auth status` takes NO `--json` flag — it already answers in JSON.** It was being invoked with one, and
  * an unrecognised flag is a non-zero exit, which [run] maps to null: "unknown". So the probe answered nothing
@@ -90,10 +94,6 @@ object AuthCli {
         if (start < 0) return null
         return runCatching { json.decodeFromString<AuthState>(output.substring(start)) }.getOrNull()
     }
-
-    /** True when the logout completed. Clears the BINARY's own credential store, not the IDE's. */
-    fun logout(binary: File, env: Map<String, String>): Boolean =
-        run(binary, env, "auth", "logout") != null
 
     /**
      * **Non-interactive** `claude auth login`, driven entirely by a refresh token in the environment — no

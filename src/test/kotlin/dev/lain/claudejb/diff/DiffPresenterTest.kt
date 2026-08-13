@@ -6,6 +6,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -138,6 +139,55 @@ class DiffPresenterTest {
     fun `MultiEdit without edits array returns null`() {
         val input = buildJsonObject { put("file_path", "a.kt") }
         assertNull(DiffPresenter.proposedContent("MultiEdit", input, "a"))
+    }
+
+    /**
+     * A MALFORMED element (no `old_string`) makes `applyEdit` return null, which is a different case from an
+     * `old_string` that is simply not found. The fold must keep the accumulator and carry on: the alternative
+     * is one bad element either aborting the whole reconstruction or — far worse — collapsing the preview to
+     * something that is not what the binary would write, on the screen the user approves the write from.
+     */
+    @Test
+    fun `MultiEdit skips a malformed edit and keeps applying the rest`() {
+        val input = buildJsonObject {
+            putJsonArray("edits") {
+                addJsonObject {
+                    put("old_string", "a")
+                    put("new_string", "b")
+                }
+                addJsonObject {
+                    // no old_string at all → applyEdit returns null → accumulator preserved
+                    put("new_string", "IGNORED")
+                }
+                addJsonObject {
+                    put("old_string", "b")
+                    put("new_string", "c")
+                }
+            }
+        }
+        assertEquals("c", DiffPresenter.proposedContent("MultiEdit", input, "a"))
+    }
+
+    /**
+     * `replace_all` is only honoured when it is genuinely a boolean. Anything else defaults to false —
+     * replace the FIRST occurrence. Defaulting the other way would silently widen a one-line edit into a
+     * whole-file substitution, which is the sort of write nobody reviews closely because the card says "Edit".
+     */
+    @Test
+    fun `replace_all that is not a boolean defaults to replacing only the first occurrence`() {
+        val notPrimitive = buildJsonObject {
+            put("old_string", "foo")
+            put("new_string", "bar")
+            putJsonObject("replace_all") { put("nested", true) }
+        }
+        assertEquals("bar foo", DiffPresenter.proposedContent("Edit", notPrimitive, "foo foo"))
+
+        val notBoolean = buildJsonObject {
+            put("old_string", "foo")
+            put("new_string", "bar")
+            put("replace_all", 5)
+        }
+        assertEquals("bar foo", DiffPresenter.proposedContent("Edit", notBoolean, "foo foo"))
     }
 
     // --- unknown tool ---
