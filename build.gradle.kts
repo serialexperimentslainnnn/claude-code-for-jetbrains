@@ -77,13 +77,21 @@ dependencies {
         // `useInstaller = false` resolves the Maven artifact instead of the `.tar.gz` installer. The installer
         // for this build is not on the CDN (`ideaIC-2025.3.tar.gz` → 404), while the repository does carry
         // `com.jetbrains.intellij.idea:ideaIC:253.28294.334`.
-        create(IntelliJPlatformType.IntellijIdeaCommunity, "253.28294.334") {
+        // NOT `IntellijIdeaCommunity`: the `ideaIC` artifact stopped being published at 2025.3 (253) — the very
+        // floor this release moved to — and the Gradle plugin warns about it on every build. JetBrains ships a
+        // single unified IDEA distribution from 253 onwards, which is what `intellijIdea(…)` resolves.
+        intellijIdea("253.28294.334") {
             useInstaller = false
         }
         // Bundled IDE Terminal: used to open an interactive `claude login` session (the OAuth flow needs a
         // TTY, which the stream-json process doesn't have). Compile-only coupling; TerminalLauncher guards
         // its use behind PluginManager.isPluginInstalled so a disabled Terminal plugin degrades gracefully.
         bundledPlugin("org.jetbrains.plugins.terminal")
+        // Bundled Git plugin: compile-only coupling for `git4idea.*` (GitRepositoryManager, GitHistoryUtils),
+        // read-only. Declared OPTIONAL in META-INF/plugin.xml (config-file claude-git.xml) — unlike JCEF, an IDE
+        // without Git, or a project that is not a working copy, must still load the plugin; `GitGateway` is the
+        // only file that names a git4idea type and it is never reached unless `GitAvailability` says yes.
+        bundledPlugin("Git4Idea")
     }
 
     // JSON (de)serialization for the stream-json / control protocol.
@@ -268,6 +276,22 @@ intellijPlatformTesting {
                 jvmArgs(
                     // RemoteRobot endpoint (UiTestBase connects to http://127.0.0.1:8082).
                     "-Drobot-server.port=8082",
+                    // THE WHOLE UI IS A BROWSER, and this is what lets the suite talk to it. Not a magic
+                    // number: `ide.browser.jcef.jsQueryPoolSize` is a platform REGISTRY key — `JBCefClient`
+                    // reads it once via `RegistryManager.intValue(...)` into `JS_QUERY_POOL_DEFAULT_SIZE`, and
+                    // a registry value falls back to the system property of the same name (verified in the
+                    // bytecode of `RegistryValue`/`JBCefClient` in the IDE distribution), so a `-D` on the
+                    // IDE's command line IS how it is set.
+                    // A `JBCefJSQuery` can only be attached to a browser that has ALREADY loaded if its slot
+                    // was reserved when the client was created; with the pool at its default the platform
+                    // refuses with "Set the property JBCefClient.Properties.JS_QUERY_POOL_SIZE to use
+                    // JBCefJSQuery after the browser has been created". That is exactly what JetBrains'
+                    // `JCefBrowserFixture` does, and it is the only route src/uiTest has into the DOM — so
+                    // without this line every DOM-driving test fails at fixture construction, before it can
+                    // assert anything. 10000 is the size the fixture's own documented precondition asks for
+                    // (recorded again in `UiTestBase`'s KDoc); it costs reserved callback slots in a
+                    // throwaway sandbox IDE and nothing else. Do not "tidy" it away.
+                    "-Dide.browser.jcef.jsQueryPoolSize=10000",
                     // Quiet, deterministic first run: no privacy/consent gates, no tips, no "what's new".
                     "-Djb.privacy.policy.text=<!--999.999-->",
                     "-Djb.consents.confirmation.enabled=false",
@@ -455,7 +479,7 @@ tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configure
 // each package measures today: a gate that catches regression, not a target that invites test-padding.
 //
 // `ui`/`ui.jcef` are excluded rather than gated at a token value. They need a live IDE and a live Chromium, and
-// they are covered by a different layer entirely: 54 vitest tests drive the real shipped JS, and the release
+// they are covered by a different layer entirely: 156 vitest tests drive the real shipped JS, and the release
 // checklist requires a manual pass through the UI. Excluding them says that out loud; gating them at 20% would
 // dress the same fact up as a passing check.
 //
@@ -483,7 +507,7 @@ kover {
     reports {
         filters {
             excludes {
-                // Need a live IDE / live Chromium to execute at all. Covered instead by the 54 vitest tests
+                // Need a live IDE / live Chromium to execute at all. Covered instead by the 156 vitest tests
                 // that drive the REAL shipped JS, and by the manual UI pass the release checklist requires.
                 classes("dev.lain.claudejb.ui.*")
                 // Thin IDE-action shells: their bodies are one delegate call each, and exercising them means
@@ -491,8 +515,24 @@ kover {
                 classes("dev.lain.claudejb.actions.*")
                 // Wrappers over the OS — system clipboard, process spawn, shell environment. Most of what is
                 // uncovered here cannot run on a CI box at all. A KNOWN GAP, listed so it is not mistaken for
-                // coverage; the parts that are pure (AttachmentEncoder, EnvScriptLoader.parse) are tested.
+                // coverage; the parts that are pure ARE tested — `ClipboardCli`/`ImageAttachments` in `context/`
+                // (ClipboardCliTest, ImageAttachmentsTest) and `EnvScriptLoader.parse` in `process/`.
+                // (This line used to cite `AttachmentEncoder`, deleted in 5.5.0 with the last of the Swing
+                // composer it served — a comment naming a file that no longer exists is worse than no comment.)
                 classes("dev.lain.claudejb.context.*", "dev.lain.claudejb.process.*")
+                // The Git integration's IDE-bound half: the availability probe (asks the running IDE's plugin
+                // set), the git4idea gateway (spawns `git log` through the platform) and the hand-off to the
+                // Version Control tool window. Exercising any of them means a live IDE AND a real repository on
+                // disk, which is exactly the headless/integration test this package deliberately does not have.
+                // `GitCommitInfo` — the pure half, and the only place a bug would be silent — is NOT excluded:
+                // it stays gated and is covered by GitCommitInfoTest. The read-only and API contracts are
+                // pinned by source/reflection tests instead (GitReadOnlyContractTest, GitApiContractTest).
+                classes(
+                    "dev.lain.claudejb.git.GitAvailability",
+                    "dev.lain.claudejb.git.GitGateway",
+                    "dev.lain.claudejb.git.GitHistoryService",
+                    "dev.lain.claudejb.git.GitLogNavigator",
+                )
                 // A single line delegating to PluginManager.isPluginInstalled. It exists precisely BECAUSE it
                 // must run against a real platform (PluginId is a Kotlin class since 2025.2, so the naive call
                 // dies with NoSuchFieldError below 252) — which is also why a unit test cannot exercise it.
