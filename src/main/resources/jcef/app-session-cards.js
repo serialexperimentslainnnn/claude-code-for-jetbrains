@@ -230,6 +230,32 @@
     return card('Session', rows);
   }
 
+  /**
+   * The plan-mode plan, as the binary itself holds it (`get_plan`).
+   *
+   * Rendered as MARKDOWN through the same sanitizing path the transcript uses. A plan is written by the
+   * model, so it is exactly as untrusted as anything else the model emits — never `innerHTML` of raw text.
+   *
+   * Wide, because a plan is prose and a numbered list, not a stat row: at column width it would wrap into an
+   * unreadable ribbon. Absent when there is no plan, so the card omits itself rather than heading an
+   * empty panel — `get_plan` is read-only and never creates one, so "no plan" is an ordinary answer.
+   */
+  function buildPlanCard(plan) {
+    if (!plan || typeof plan !== 'object' || !plan.body) return null;
+    var body = document.createElement('div');
+    body.className = 'plan-md';
+    body.innerHTML = CC.markdown(String(plan.body));
+    var parts = [body];
+    if (plan.path) {
+      var where = document.createElement('div');
+      where.className = 'plan-path';
+      where.textContent = String(plan.path);
+      parts.push(where);
+    }
+    return card('Plan', parts, true, 'plan');
+  }
+
+  D.buildPlanCard = buildPlanCard;
   D.buildUsageCard = buildUsageCard;
   D.buildContextCard = buildContextCard;
   D.buildCostCard = buildCostCard;

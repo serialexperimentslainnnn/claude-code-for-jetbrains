@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui
 import dev.lain.claudejb.protocol.UsageReport
 import dev.lain.claudejb.protocol.mergedOver
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.PlanInfo
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import javax.swing.Timer
@@ -32,6 +33,17 @@ internal class SessionFeed(
     private var askedAt = 0L
 
     /**
+     * The session's plan-mode plan, when it has one.
+     *
+     * Asked on the same triggers as the usage figures rather than on a timer of its own: a plan only appears
+     * or changes when the agent writes one, which is a turn, and both turn edges already refresh this panel.
+     * Null means the binary says there is no plan — `get_plan` never CREATES one, it only reads, so asking
+     * costs nothing and cannot change the session's state.
+     */
+    var plan: PlanInfo? = null
+        private set
+
+    /**
      * Plan-limits poll, unconditional for the panel's whole lifetime.
      *
      * Unlike context and cost — which cannot move while the session idles, so their timer retires at turn end
@@ -54,6 +66,22 @@ internal class SessionFeed(
         requestMcp()
         requestVersion()
         requestUsage()
+        requestPlan()
+    }
+
+    /**
+     * Re-reads the plan-mode plan. Read-only on the binary's side, so it is safe to call on any refresh.
+     *
+     * Kept unconditional rather than gated on the current permission mode: a plan written in plan mode
+     * survives leaving it, and that is exactly when the user wants to look at it again.
+     */
+    fun requestPlan() {
+        session.queries.requestPlan { info ->
+            // Only a change is worth a redraw — this runs on both turn edges, and most turns write no plan.
+            if (info == plan) return@requestPlan
+            plan = info
+            onRefreshed()
+        }
     }
 
     /**

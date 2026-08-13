@@ -162,6 +162,9 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         wasRunning = running
         // A window moved (a rate_limit_event landed) → re-ask for all of them. The feed throttles itself.
         if (session.rateLimits.isNotEmpty()) feed.requestUsage()
+        // A plan is written BY a turn, so a turn ending is the only moment one can have appeared or changed.
+        // Read-only on the binary's side, and the feed redraws only when the answer actually differs.
+        if (!session.turnActive && running) feed.requestPlan()
         // The not-found card is up → the onboarding watcher looks for the binary appearing (an install
         // finishing) and starts the session without further clicks.
         onboarding.onStateChanged()
@@ -229,7 +232,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     internal fun pushSession() {
         // Every open chat's tree, asked of the strip that owns them — Workloads is about what is running,
         // and that spans the tabs. Null strip (a panel outside one) degrades to this session alone.
-        val json = JcefSessionData.sessionJson(session, feed.usage, chatStrip()?.workloads().orEmpty())
+        val json = JcefSessionData.sessionJson(session, feed.usage, chatStrip()?.workloads().orEmpty(), feed.plan)
         // The host→web half of the data-flow trace: this is EXACTLY what the dashboard receives. An empty
         // panel with a full CC-TRACE control reply means the loss is between the session cache and here.
         LOG.debug("CC-TRACE pushSession ${json.take(TRACE_MAX)}")

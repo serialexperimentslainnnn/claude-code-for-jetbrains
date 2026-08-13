@@ -101,6 +101,8 @@
       empty: 'No session data yet.',
       cards: function (s) {
         return [
+          // First: when there IS a plan, it is what the session is about, and everything below is telemetry.
+          D.buildPlanCard(s.plan),
           D.buildUsageCard(s.usage),
           D.buildContextCard(s.context),
           D.buildCostCard(s.cost),

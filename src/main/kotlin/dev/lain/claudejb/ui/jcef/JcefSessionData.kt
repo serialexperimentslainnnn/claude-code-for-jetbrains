@@ -75,9 +75,13 @@ object JcefSessionData {
         session: ClaudeSession,
         usage: UsageReport? = null,
         workloads: List<Workload> = emptyList(),
+        plan: dev.lain.claudejb.session.PlanInfo? = null,
     ): String {
         val obj = buildJsonObject {
             put("usage", JcefUsageData.usageJson(session, usage) ?: JsonNull)
+            // The plan-mode plan, when the session has one. Like every card here it is null-or-absent rather
+            // than empty, so the page omits it instead of drawing a heading over nothing.
+            put("plan", JcefPlanData.planJson(plan) ?: JsonNull)
             put("context", JcefCostData.contextJson(session) ?: JsonNull)
             put("cost", JcefCostData.costJson(session) ?: JsonNull)
             put("account", JcefAccountData.accountJson(session) ?: JsonNull)
