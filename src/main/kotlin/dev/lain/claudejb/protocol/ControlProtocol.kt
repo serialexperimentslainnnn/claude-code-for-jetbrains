@@ -1,6 +1,7 @@
 package dev.lain.claudejb.protocol
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -87,6 +88,24 @@ object ControlProtocol {
             put("request_id", requestId)
             put("request", request)
         }.toString()
+
+    /**
+     * A control request from its subtype and whatever fields it carries — the generic form of the named
+     * builders below.
+     *
+     * Most of those builders are this line with a different string: `{"subtype": "get_usage"}`. The named
+     * ones stay, because a call site reads better as `getUsageRequest(id)` than as a string, but a request
+     * declared in a catalogue (see `SessionQueries.Ask`) needs no hand-written builder at all — which is
+     * what makes adding one a single line instead of three edits in three files.
+     */
+    fun of(requestId: String, subtype: String, params: JsonObjectBuilder.() -> Unit = {}): String =
+        controlRequest(
+            requestId,
+            buildJsonObject {
+                put("subtype", subtype)
+                params()
+            },
+        )
 
     fun interruptRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "interrupt") })
