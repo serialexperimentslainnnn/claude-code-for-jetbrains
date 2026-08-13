@@ -103,7 +103,7 @@ class PermissionBroker(
 
     /**
      * The two tools that are never auto-approved regardless of mode, because neither is really a permission
-     * question: [AskUserQuestion] carries questions the user must answer, and ExitPlanMode is the agent asking
+     * question: `AskUserQuestion` carries questions the user must answer, and `ExitPlanMode` is the agent asking
      * to leave plan mode — a deliberate user decision. Returns true when it presented a card.
      */
     private fun presentSpecialCard(requestId: String, request: CanUseToolRequest): Boolean {
