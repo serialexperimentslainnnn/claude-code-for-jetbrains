@@ -1,0 +1,123 @@
+# ==========================================================================================
+# ALLOWLIST. This file ignores EVERYTHING and then names what belongs in the repository.
+#
+# Why inverted, and why this one is committed while the previous denylist was not: a denylist
+# is a public inventory of the directories, tools and local layout a maintainer keeps out —
+# free reconnaissance, and it grows every time someone adds a tool. An allowlist reveals only
+# what is already visible to anyone who can see the tree, so it can be published without
+# telling the world anything new.
+#
+# THREE RULES, in order of how much they cost when broken:
+#
+#  1. LAST MATCHING PATTERN WINS. The secrets section at the bottom is deliberately last, so a
+#     `!/scripts/**` further up cannot re-include a private key someone dropped in scripts/.
+#     Never append an un-ignore below that section.
+#  2. `!*/` is load-bearing. Git does not descend into an ignored directory, so without it
+#     nothing below the top level could ever be re-included, no matter how many rules follow.
+#  3. A NEW top-level file or directory is INVISIBLE until it is named here. That is the
+#     deliberate trade: a leak now requires an explicit mistake, while a legitimate addition
+#     requires one line. If `git status` does not show something you just created, this file
+#     is the reason — add it, do not reach for `git add -f`.
+# ==========================================================================================
+
+# Ignore everything…
+*
+# …but descend into directories, or rules 2 above cannot work.
+!*/
+
+# ------------------------------------------------------------------------------------------
+# Source and resources
+# ------------------------------------------------------------------------------------------
+!/src/**
+!/bin/**
+!/gradle/**
+!/config/**
+!/scripts/**
+!/docs/**
+!/.github/**
+!/.githooks/**
+!/LICENSES/**
+
+# ------------------------------------------------------------------------------------------
+# Build, tooling and project configuration
+# ------------------------------------------------------------------------------------------
+!/build.gradle.kts
+!/settings.gradle.kts
+!/gradle.properties
+!/gradlew
+!/gradlew.bat
+!/qodana.yaml
+!/package.json
+!/package-lock.json
+!/vitest.config.js
+!/eslint.config.mjs
+!/commitlint.config.mjs
+!/.prettierrc.json
+!/.prettierignore
+!/.dockerignore
+!/.gitattributes
+!/.gitignore
+
+# ------------------------------------------------------------------------------------------
+# Documentation and governance
+# ------------------------------------------------------------------------------------------
+!/*.md
+!/LICENSE
+!/CODEOWNERS
+
+# ------------------------------------------------------------------------------------------
+# Re-ignored INSIDE the allowed trees. `!/src/**` re-includes everything under src/, including
+# things that are generated there.
+# ------------------------------------------------------------------------------------------
+**/build/
+**/node_modules/
+# IDE state, including the sandbox project under src/uiTest/resources that `!/src/**` would
+# otherwise re-include — it is a fixture the UI suite opens, so an IDE writes into it.
+**/.idea/
+*.class
+*.log
+
+# ==========================================================================================
+# SECRETS AND KEY MATERIAL — LAST, and it must stay last.
+#
+# `*` above already ignores these, so this section is belt-and-braces: it exists so that a
+# future `!/some/tree/**` cannot silently re-include key material living inside that tree.
+# A build artifact committed by accident is noise. A private key committed by accident is
+# BURNED — forks, clones, forge caches and CI logs mean rewriting history does not un-leak it,
+# the key has to be rotated. The concrete hazard: scripts/bootstrap-ci.sh asks where to save a
+# generated JetBrains signing key, and answering "." puts private.pem in the working tree.
+# ==========================================================================================
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.der
+*.pkcs8
+chain.crt
+
+# GPG / PGP
+*.gpg
+*.pgp
+*.asc
+secring.*
+private.asc
+passphrase
+fingerprint
+
+# Tokens and credentials
+*.token
+credentials.json
+.npmrc
+.netrc
+auth.json
+secrets.yml
+secrets.yaml
+.env
+.env.*
+
+# The ONE key file that must be committed: the CI signing key's PUBLIC half. Without it in the
+# repository nobody can verify a release, which is the whole point of signing one. Below the
+# secrets block on purpose — last match wins, so this exception survives `*.asc` above.
+!/docs/ci-signing-key.asc
