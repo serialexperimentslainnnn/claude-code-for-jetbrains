@@ -4,6 +4,8 @@ import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.Credentials
 import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
+import com.intellij.openapi.application.ApplicationManager
+import org.jetbrains.annotations.TestOnly
 
 /**
  * The plugin's credentials, in the IDE's PasswordSafe (OS keychain / KWallet / DPAPI / encrypted file —
@@ -103,8 +105,78 @@ object SecretStore {
     private fun attributes(name: String) =
         CredentialAttributes(generateServiceName("Claude Code", name))
 
-    fun get(name: String): String? =
-        PasswordSafe.instance.getPassword(attributes(name))?.takeIf { it.isNotBlank() }
+    // --- The test seam -------------------------------------------------------------------------------
+    //
+    // WHAT THIS IS FOR, precisely, because the obvious guess is wrong: it is NOT protecting the developer's
+    // OS keychain. A test JVM already cannot reach that, and not by our doing — the platform registers
+    // `testServiceImplementation="TestPasswordSafeImpl"` for this service and `computeProvider` swaps in an
+    // `InMemoryCredentialStore` whenever `isUnitTestMode`, before any native store is constructed. Measured
+    // on the pinned IDE (253.28294.334): inside `BasePlatformTestCase`, `PasswordSafe.instance` is
+    // `TestPasswordSafeImpl` over `InMemoryCredentialStore`, and the machine's real `CLAUDE_SETTINGS_JSON`
+    // and `CLAUDE_CREDENTIALS_JSON` read back as null.
+    //
+    // The bug is one level in from that. `InMemoryCredentialStore` is a single APPLICATION service, the
+    // platform test framework reuses ONE Application across every test class, and the `test` task sets
+    // neither `maxParallelForks` nor `forkEvery` — so the whole suite shares one store. Measured, again:
+    // `ClaudeSettingsConfigurableHeadlessTest` leaves its fixture document (`model = opus-pinned-by-the-user`,
+    // `permissionMode = acceptEdits`) behind, and the next class in the run reads it. That is a test seeing a
+    // value it never wrote, which is how `SettingsStoreHeadlessTest` was seen asserting on somebody else's
+    // model — and a leaked `permissionMode` is not only a flake, it is a test running under a permission mode
+    // nobody chose.
+    //
+    // So a test that needs the store to REMEMBER anything installs a store of its own, exactly the way
+    // `CredentialsVault.homeOverride` makes a test name its own home. And the default when it has not is
+    // INERT — no reads, no writes, nothing shared — rather than "fall back to the one everybody shares",
+    // because falling back is the bug. Forgetting is then loud (a save is refused, a migration reports it did
+    // nothing) instead of silently correlating two tests, and it fails closed: if the platform ever stopped
+    // substituting the in-memory store, a test JVM would still not be the thing that discovers it.
+
+    /**
+     * The store a test has installed for itself, or null. Production never sets it, and must not: outside a
+     * test JVM this is ignored entirely (see [inert]).
+     */
+    @TestOnly
+    @Volatile
+    internal var storeOverride: MutableMap<String, String>? = null
+
+    /**
+     * True when there is no store to talk to: a test JVM in which nothing has installed a [storeOverride].
+     *
+     * Same shape and same predicate as `CredentialsVault.inertHere()` — a named override wins, otherwise a
+     * unit-test JVM (and a JVM with no Application at all, which is not a place to be reading credentials)
+     * is refused. In production `isUnitTestMode` is false and an Application always exists, so this is
+     * constantly false and the safe is used exactly as before.
+     */
+    internal fun inert(): Boolean {
+        if (storeOverride != null) return false
+        return ApplicationManager.getApplication()?.isUnitTestMode ?: true
+    }
+
+    /**
+     * Reads one entry, from the installed test store, or the PasswordSafe, or nowhere.
+     *
+     * [key] identifies the entry inside a test store; [attributes] locates it in the real safe. They are two
+     * spellings of one address, kept apart because the provider-key slots
+     * ([ClaudeSettings.getProviderApiKey]) live under a different service name and must ride the same seam —
+     * one door onto the safe, not two.
+     */
+    internal fun readCredential(key: String, attributes: CredentialAttributes): String? {
+        storeOverride?.let { return it[key]?.takeIf(String::isNotBlank) }
+        if (inert()) return null
+        return PasswordSafe.instance.getPassword(attributes)?.takeIf { it.isNotBlank() }
+    }
+
+    /** Writes (or, on a null [value], removes) one entry. A no-op when the store is [inert]. */
+    internal fun writeCredential(key: String, attributes: CredentialAttributes, value: String?) {
+        storeOverride?.let { store ->
+            if (value == null) store.remove(key) else store[key] = value
+            return
+        }
+        if (inert()) return
+        PasswordSafe.instance.set(attributes, value?.let { Credentials(key, it) })
+    }
+
+    fun get(name: String): String? = readCredential(name, attributes(name))
 
     /**
      * Stores [value] under [name] and CLEARS every sibling entry — the auth modes are exclusive, and a
@@ -113,7 +185,7 @@ object SecretStore {
      */
     fun set(name: String, value: String) {
         require(name in NAMES) { "unknown secret: $name" }
-        PasswordSafe.instance.set(attributes(name), Credentials(name, value))
+        writeCredential(name, attributes(name), value)
         // Only an auth mode evicts the other auth modes. The account profile sits alongside whichever one
         // is in use — clearing the credential every time we learned the user's email would be absurd.
         if (name in EXCLUSIVE) EXCLUSIVE.filter { it != name }.forEach { clear(it) }
@@ -131,6 +203,10 @@ object SecretStore {
      * configuration and a login disappeared on a reinstall, with every line of our code behaving as designed.
      *
      * So: nothing that deletes an original may call [set]. It must call this, and believe the answer.
+     *
+     * An [inert] store answers false here for free (the write goes nowhere, so the read-back finds nothing),
+     * which is the behaviour a test JVM should have: refuse, loudly, rather than report a success nothing
+     * kept.
      */
     fun setVerified(name: String, value: String): Boolean = runCatching {
         set(name, value)
@@ -138,7 +214,7 @@ object SecretStore {
     }.getOrElse { false }
 
     fun clear(name: String) {
-        PasswordSafe.instance.set(attributes(name), null)
+        writeCredential(name, attributes(name), null)
     }
 
     fun clearAll() = NAMES.forEach(::clear)
@@ -147,9 +223,20 @@ object SecretStore {
      * What the launch env should gain from the safe: every stored credential whose name the explicit env
      * does NOT already define. The carve-out is the contract — a value the user wrote by hand in Settings
      * (or exported in their shell) keeps winning over the card-entered one.
+     *
+     * **An explicit [API_KEY] suppresses the whole overlay, and that is a credential-scope rule, not a
+     * preference.** The env carries [API_KEY] in exactly two situations, and both of them say the session is
+     * NOT running as the vaulted subscription identity: the user wrote a key by hand, or a third-party
+     * provider is selected — in which case `Provider.launchEnv` has also set `ANTHROPIC_BASE_URL` to that
+     * provider's endpoint. Adding [OAUTH_TOKEN] on top would put an Anthropic subscription token in the
+     * environment of a process pointed at `api.deepseek.com`, with only the binary's own precedence rules
+     * standing between it and the wire. [dev.lain.claudejb.process.CredentialsVault.envOverlay] already
+     * refuses on exactly this condition; the two overlays feed the same env and must not disagree about it.
      */
-    fun envOverlay(explicitNames: Set<String>): Map<String, String> =
-        ENV_NAMES.filter { it !in explicitNames }
+    fun envOverlay(explicitNames: Set<String>): Map<String, String> {
+        if (API_KEY in explicitNames) return emptyMap()
+        return ENV_NAMES.filter { it !in explicitNames }
             .mapNotNull { name -> get(name)?.let { name to it } }
             .toMap()
+    }
 }

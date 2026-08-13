@@ -25,6 +25,13 @@ import java.nio.file.Paths
  *
  * Nothing is deleted until the new location holds the data — [migrate] removes the project file only after
  * [SettingsStore] reports that it exists.
+ *
+ * **What it does NOT adopt.** This file comes from a repository, and since 5.5.0 what it says would govern
+ * every project the user opens afterwards. So one value is dropped on the way through: a `permissionMode`
+ * weaker than the default (see [LegacyPermissionMode]). Everything else migrates exactly as before, the mode
+ * stays at "ask each time", and [LegacySettingsNotice] tells the user it happened. Nobody is asked, because
+ * this runs before any window the user could answer in, and an unanswered security question must land on the
+ * safe side.
  */
 @Service(Service.Level.PROJECT)
 @State(name = "ClaudeCodeSettings", storages = [Storage("claude-code.xml")])

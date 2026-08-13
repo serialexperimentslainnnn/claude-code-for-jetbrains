@@ -1,26 +1,13 @@
 package dev.lain.claudejb.settings
 
 import com.intellij.credentialStore.CredentialAttributes
-import com.intellij.credentialStore.Credentials
 import com.intellij.credentialStore.generateServiceName
-import com.intellij.ide.passwordSafe.PasswordSafe
-import com.intellij.ide.util.PropertiesComponent
-import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.State
-import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.util.xmlb.XmlSerializerUtil
 import dev.lain.claudejb.permission.SensitiveGuard
-import dev.lain.claudejb.process.EnvScriptLoader
 import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.RemoteMounts
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Persisted launch defaults for the session. Applied on (re)start; the GUI menus mutate the live
@@ -30,11 +17,11 @@ import kotlinx.serialization.json.jsonPrimitive
  * in tests so the trust-flag helpers degrade gracefully (treat the project as untrusted).
  */
 // NB no longer a PersistentStateComponent, and no longer `.idea/claude-code.xml`. The settings are GLOBAL
-// (one set for every project) and live in ~/.claude — see SettingsStore for the three reasons, the one that
-// matters most being that `envVars` is stored in the clear and was sitting in a file people commit.
+// (one set for every project) and live in the IDE's PasswordSafe — see SettingsStore for the reasons, the
+// one that matters most being that `envVars` was stored in the clear, in a file people commit.
 // LegacyProjectSettings reads the old file once so nobody loses their configuration on upgrade.
 @Service(Service.Level.PROJECT)
-class ClaudeSettings(private val project: Project? = null) {
+class ClaudeSettings(internal val project: Project? = null) {
 
     // Serializable because SettingsStore's JSON document IS this class, field for field: an unknown key
     // from a newer version is ignored, a missing key falls back to the property's default.
@@ -168,11 +155,17 @@ class ClaudeSettings(private val project: Project? = null) {
 
     val reduceMotion: Boolean get() = state.reduceMotion
     val enableFileCheckpointing: Boolean get() = state.enableFileCheckpointing
+
+    /**
+     * The remembered "don't ask me again" answer for the rewind fallback.
+     *
+     * Writes through [update], not a bare `state.rewindFallback = value`: this is a *remembered* choice, so a
+     * value that does not survive the restart means the dialog the user told us never to show again is shown
+     * again. Same failure mode the "Always allow" mutators had.
+     */
     var rewindFallback: String
         get() = state.rewindFallback
-        set(value) {
-            state.rewindFallback = value
-        }
+        set(value) = update { it.rewindFallback = value }
 
     /**
      * Resolved `claude` binary path. In production this is exactly the persisted [State.claudePath]
@@ -195,21 +188,28 @@ class ClaudeSettings(private val project: Project? = null) {
     // smell. Each provider has its OWN isolated credential (keyed by provider id), so switching providers
     // never mixes keys and a stored DeepSeek key survives a round-trip through Anthropic. runCatching keeps
     // pure unit tests (no platform) from throwing; they exercise Provider.launchEnv directly instead.
+    //
+    // Reached through SecretStore's read/write pair rather than PasswordSafe directly: these were the only
+    // other door onto the safe in the plugin, and a door that skips the test seam is a door a test can leak
+    // through. The service name is unchanged, so an already-stored key is found exactly where it was.
+    private fun providerKeyName(provider: Provider) = "providerApiKey:${provider.id}"
+
     private fun providerKeyCredentials(provider: Provider) =
-        CredentialAttributes(generateServiceName("ClaudeCodeNative", "providerApiKey:${provider.id}"))
+        CredentialAttributes(generateServiceName("ClaudeCodeNative", providerKeyName(provider)))
 
     /** The stored API key for [provider] (isolated per provider), or "" when unset/unavailable. */
     fun getProviderApiKey(provider: Provider): String =
-        runCatching { PasswordSafe.instance.get(providerKeyCredentials(provider))?.getPasswordAsString().orEmpty() }
-            .getOrDefault("")
+        runCatching { SecretStore.readCredential(providerKeyName(provider), providerKeyCredentials(provider)) }
+            .getOrNull().orEmpty()
 
     /** Persist (or clear, on blank) [provider]'s isolated API key in the IDE password safe. */
     fun setProviderApiKey(provider: Provider, key: String) {
         val trimmed = key.trim()
         runCatching {
-            PasswordSafe.instance.set(
+            SecretStore.writeCredential(
+                providerKeyName(provider),
                 providerKeyCredentials(provider),
-                if (trimmed.isEmpty()) null else Credentials(provider.id, trimmed),
+                trimmed.ifEmpty { null },
             )
         }
     }
@@ -224,9 +224,6 @@ class ClaudeSettings(private val project: Project? = null) {
      * one place decides which identity a session runs as.
      */
     val anthropicApiKey: String get() = getProviderApiKey(Provider.ANTHROPIC)
-
-    /** Env that routes the binary to the selected provider — empty for Anthropic (native auth). */
-    private fun providerEnv(): Map<String, String> = Provider.launchEnv(provider, getProviderApiKey(provider))
 
     // --- Advanced launch accessors (for ClaudeSession.launchOptions mapping) ---------------------
 
@@ -251,51 +248,19 @@ class ClaudeSettings(private val project: Project? = null) {
     /** `--strict-mcp-config` toggle. */
     val strictMcpConfig: Boolean get() = state.strictMcpConfig
 
-    /** Parses the `KEY=VALUE` lines (one per line) into an env map; blank/`#`-comment lines ignored. */
-    fun parseEnv(): Map<String, String> =
-        state.envVars.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains("=") }
-            .associate { line -> line.substringBefore("=").trim() to line.substringAfter("=").trim() }
-            .filterKeys { it.isNotEmpty() }
+    // NB the launch environment (`parseEnv`/`resolveEnv`) lives in SettingsLaunchEnv.kt, the sensitive-data
+    // lock's policy in SettingsSensitivePolicy.kt and the trust-on-open gate in SettingsExecutionTrust.kt —
+    // same package, extension functions, so every call site reads exactly as it did. What is left in this
+    // file is the persistence document and the operations that must go through `update`/`save`.
 
     /**
-     * Effective process env: the sourced script's environment first, then explicit overrides on top.
-     *
-     * SECURITY (trust-on-open): `claude-code.xml` is project-level and may be versioned in the repo, so a
-     * malicious project could ship a [State.sourceScript] that runs at session start. This method does NOT
-     * gate execution itself (it may be called off-EDT); callers that start a session from project-persisted
-     * settings should first consult [requiresTrustPrompt] (i.e. [hasRiskyExecConfig] + [isExecutionTrusted])
-     * and obtain user consent before running. The current start flow is intentionally left unchanged here.
-     */
-    fun resolveEnv(): Map<String, String> =
-        EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv() + providerEnv() + checkpointEnv()
-
-    /** Enables the binary's SDK file-checkpointing so native rewind works (env var the SDK uses). */
-    private fun checkpointEnv(): Map<String, String> =
-        if (state.enableFileCheckpointing) mapOf("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING" to "true") else emptyMap()
-
-    /**
-     * UI-test-only env seeding. When the IDE-under-test is launched with `-Dclaudejb.fakeFixture=<abs path>`
-     * (see `runIdeForUiTests`), forward it to the subprocess as `FAKE_FIXTURE` so `bin/fake-claude` replays
-     * that JSONL scenario. Explicit `FAKE_FIXTURE` in [State.envVars] still wins (parseEnv is applied after
-     * EnvScriptLoader but before this, and a later map entry overrides — so we only set it when absent).
-     * Empty in production (property unset).
-     */
-    private fun fakeFixtureEnv(): Map<String, String> {
-        if (parseEnv().containsKey("FAKE_FIXTURE")) return emptyMap()
-        val fixture = System.getProperty(FAKE_FIXTURE_PROP).orEmpty()
-        return if (fixture.isNotBlank()) mapOf("FAKE_FIXTURE" to fixture) else emptyMap()
-    }
-
-    /**
-     * The settings, loaded once from `~/.claude/ide/claude-code-native/settings.json`.
+     * The settings, loaded once from the IDE's PasswordSafe (see [SettingsStore]). There is no settings file.
      *
      * **Global, not per project, and written by us.** They used to be a `PersistentStateComponent` in
      * `.idea/claude-code.xml`, which had three problems the move fixes: the platform decided when it reached
-     * disk, deleting `.idea` (or a fresh clone) lost them, and `envVars` — which the settings UI itself warns
-     * is stored in the clear — sat in a file people commit. One model, one permission mode, one set of
-     * allowed tools for every project is also what the user asked for.
+     * disk, deleting `.idea` (or a fresh clone) lost them, and `envVars` — where a key or a credentialed
+     * proxy URL ends up — sat in plaintext in a file people commit. One model, one permission mode, one set
+     * of allowed tools for every project is also what the user asked for.
      */
     private var loaded: State? = null
 
@@ -378,93 +343,9 @@ class ClaudeSettings(private val project: Project? = null) {
     @Suppress("UNUSED_PARAMETER")
     fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean = toolName in alwaysAllow
 
-    /** The active sensitive-path globs: the built-in blacklist **plus** the user's extras (additive, never less). */
-    fun sensitiveGlobs(): List<String> {
-        val extra = state.sensitiveExtraGlobs.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
-        return SensitiveGuard.SENSITIVE_GLOBS + extra
-    }
-
-    /**
-     * The guard's deterministic verdict for a tool call (see [SensitiveGuard]) for this [projectRoot]. Enforcement
-     * is per-rule configurable (Settings ▸ Claude Code ▸ Security) but never off entirely: a disabled rule still
-     * downgrades to a permission card rather than a silent allow. Foreign-territory and remote-mount inputs come
-     * from [RemoteMounts].
-     */
-    fun sensitiveDecision(toolName: String, input: JsonObject, projectRoot: String?): SensitiveGuard.Decision =
-        SensitiveGuard.evaluate(toolName, input, sensitivePolicy(projectRoot))
-
-    /** Assembles the pure [SensitiveGuard.Policy] from settings + this host's mounts + the open project. */
-    fun sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
-        val snap = RemoteMounts.snapshot()
-        return SensitiveGuard.Policy(
-            globs = sensitiveGlobs(),
-            home = System.getProperty("user.home"),
-            currentUser = System.getProperty("user.name"),
-            guardedRoots = snap.remoteRoots,
-            blockForeignWslMounts = snap.isWsl,
-            projectRoot = projectRoot,
-            // Canonicalise on disk so a symlink or `..` cannot launder a path past the rules by hiding its target.
-            // Off the EDT already (broker callback runs on the reader thread); a failure just leaves the literal.
-            pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
-            enforceCredentials = state.securityBlockCredentials,
-            enforceDangerousCommands = state.securityBlockDangerousCommands,
-            enforceForeignOtherUserHome = state.securityBlockForeignOtherUserHome,
-            enforceForeignNetworkMounts = state.securityBlockForeignNetworkMounts,
-            enforceForeignWslMounts = state.securityBlockForeignWslMounts,
-        )
-    }
-
-    // --- Trust gate (trust-on-open) -------------------------------------------------------------
-    // Lightweight, non-blocking consent flag for potentially dangerous execution coming from
-    // project-persisted settings (sourceScript / custom stdio MCP servers). These helpers only read
-    // and store the flag and classify the config; they NEVER show dialogs. The "ask the user" wiring
-    // lives elsewhere (e.g. ClaudeSession / a startup activity), which should call requiresTrustPrompt().
-
-    /** Per-project flag: the user has explicitly trusted this project to run sourceScript / custom MCP. */
-    fun isExecutionTrusted(): Boolean =
-        project?.let { PropertiesComponent.getInstance(it).getBoolean(TRUST_KEY, false) } ?: false
-
-    /** Persists the per-project trust flag. No-op without a project (unit tests). */
-    fun setExecutionTrusted(trusted: Boolean) {
-        project?.let { PropertiesComponent.getInstance(it).setValue(TRUST_KEY, trusted) }
-    }
-
-    /**
-     * True when the persisted settings carry execution risk beyond what the UI already validates:
-     * a non-blank [State.sourceScript], or a custom MCP server of `stdio` type with a `command`.
-     * The custom-server JSON is parsed leniently; if it does not parse, it is treated as adding no
-     * extra risk here (the settings UI validates that JSON on save).
-     */
-    fun hasRiskyExecConfig(): Boolean =
-        state.sourceScript.isNotBlank() || customMcpServersHaveStdioCommand()
-
-    /** Convenience: there is risky config and the user has not (yet) trusted it. */
-    fun requiresTrustPrompt(): Boolean = hasRiskyExecConfig() && !isExecutionTrusted()
-
-    /** Lenient scan of the custom MCP servers JSON for any `stdio` server carrying a `command`. */
-    private fun customMcpServersHaveStdioCommand(): Boolean {
-        val raw = state.customMcpServers.trim()
-        if (raw.isEmpty()) return false
-        val root = runCatching { LENIENT_JSON.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return false
-        return root.values.any { server ->
-            val obj = server as? JsonObject ?: return@any false
-            val type = obj["type"]?.jsonPrimitive?.contentOrNull
-            val command = obj["command"]?.jsonPrimitive?.contentOrNull
-            // stdio is the default transport when unspecified; flag it whenever a command is present.
-            !command.isNullOrBlank() && (type == null || type.equals("stdio", ignoreCase = true))
-        }
-    }
-
     companion object {
-        private const val TRUST_KEY = "claudejb.trustedExecOnOpen"
-
-        /** UI-test harness hooks (set only by `runIdeForUiTests`; unset in shipped IDEs). */
+        /** UI-test harness hook (set only by `runIdeForUiTests`; unset in shipped IDEs). */
         private const val FAKE_CLAUDE_PROP = "claudejb.fakeClaude"
-        private const val FAKE_FIXTURE_PROP = "claudejb.fakeFixture"
-        private val LENIENT_JSON = Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        }
 
         fun getInstance(project: Project): ClaudeSettings = project.service()
     }
