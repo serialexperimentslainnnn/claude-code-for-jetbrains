@@ -230,9 +230,12 @@ object BinaryInstall {
         return Validation.Ok(file, text.lineSequence().first().trim())
     }
 
+    // The executable names come from [ClaudeBinaryLocator], not from a second copy of the list: this one had
+    // already drifted apart from the locator's in spirit — that list documents WHY the order matters on
+    // Windows (the extensionless npm shim is a bash script CreateProcess rejects with error 193), and a
+    // validator accepting a name the launcher will not run is a path the user is told is good and is not.
     private fun candidatesIn(dir: File): List<File> =
-        (if (SystemInfo.isWindows) listOf("claude.exe", "claude.cmd", "claude.bat") else listOf("claude"))
-            .map { File(dir, it) }
+        ClaudeBinaryLocator.executableNames.map { File(dir, it) }
 
     private const val VERSION_PROBE_TIMEOUT_MS = 15_000
 

@@ -150,17 +150,40 @@ object CredentialsVault {
      */
     fun envOverlay(existing: Set<String>): Map<String, String> {
         if (SecretStore.OAUTH_TOKEN in existing || SecretStore.API_KEY in existing) return emptyMap()
-        val token = usableToken() ?: return emptyMap()
+        // ONE read of the safe and ONE parse: reading the blob means a round trip to the OS credential store
+        // (KWallet/Keychain/DPAPI), and this used to ask for it twice — once through usableToken(), once here.
+        // It is not only cheaper, it removes a TOCTOU: with two reads the access token could come from one
+        // blob and the refresh token/scopes beside it from a different one.
         val oauth = oauthNode() ?: return emptyMap()
+        // Before accountNode(), which is a second trip to the safe: an unusable token means no overlay at all,
+        // so there is nothing for the account fields to be attached to.
+        val token = usableToken(oauth) ?: return emptyMap()
+        return overlayFrom(token, oauth, accountNode())
+    }
+
+    /**
+     * The blob → environment mapping itself, with no safe access in it: [envOverlay] decides *whether* there is
+     * a credential to hand over, this decides *what* the child process is told about it.
+     *
+     * Split out to be pinnable. The map this returns is the entire authenticated identity of every session the
+     * plugin runs, and it was previously reachable only through the PasswordSafe — so the field-by-field
+     * mapping (the thing that broke `get_usage` when it was just the access token) had no direct test.
+     * See `CredentialsVaultEnvTest`.
+     */
+    internal fun overlayFrom(
+        token: String,
+        oauth: kotlinx.serialization.json.JsonObject,
+        account: kotlinx.serialization.json.JsonObject?,
+    ): Map<String, String> {
         val env = mutableMapOf(SecretStore.OAUTH_TOKEN to token)
         oauth.string("refreshToken")?.let { env[ENV_REFRESH_TOKEN] = it }
         oauth.strings("scopes")?.takeIf { it.isNotEmpty() }?.let { env[ENV_SCOPES] = it.joinToString(" ") }
         oauth.string("subscriptionType")?.let { env[ENV_SUBSCRIPTION_TYPE] = it }
         oauth.string("rateLimitTier")?.let { env[ENV_RATE_LIMIT_TIER] = it }
-        accountNode()?.let { account ->
-            account.string("accountUuid")?.let { env[ENV_ACCOUNT_UUID] = it }
-            account.string("organizationUuid")?.let { env[ENV_ORGANIZATION_UUID] = it }
-            account.string("emailAddress")?.let { env[ENV_USER_EMAIL] = it }
+        account?.let {
+            it.string("accountUuid")?.let { v -> env[ENV_ACCOUNT_UUID] = v }
+            it.string("organizationUuid")?.let { v -> env[ENV_ORGANIZATION_UUID] = v }
+            it.string("emailAddress")?.let { v -> env[ENV_USER_EMAIL] = v }
         }
         return env
     }
@@ -240,13 +263,7 @@ object CredentialsVault {
         val oauth = oauthNode() ?: return false
         val refreshToken = oauth.string("refreshToken") ?: return false
         val scopes = oauth.strings("scopes")?.takeIf { it.isNotEmpty() } ?: return false
-        // Case-insensitively: environment names are case-insensitive on Windows, so a hand-written
-        // `Claude_Code_Oauth_Token` in Settings would survive an exact-match removal and then be the very
-        // expired token the renewal is trying to replace.
-        val env = baseEnv.filterKeys { !it.equals(SecretStore.OAUTH_TOKEN, ignoreCase = true) } + mapOf(
-            ENV_REFRESH_TOKEN to refreshToken,
-            ENV_SCOPES to scopes.joinToString(" "),
-        )
+        val env = renewalEnv(baseEnv, refreshToken, scopes)
         val renewed = AuthCli.loginFromRefreshToken(binary, env) && run {
             AccountProfile.capture()
             harvest()
@@ -256,6 +273,28 @@ object CredentialsVault {
         renewBlockedUntil = if (renewed) 0L else System.currentTimeMillis() + RENEW_COOLDOWN_MS
         return renewed
     }
+
+    /**
+     * The environment the non-interactive renewal runs under. Two invariants live here and neither is
+     * cosmetic, so it is a function with a test rather than four lines inside [renew]:
+     *
+     *  - **Both names or nothing.** `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` without `CLAUDE_CODE_OAUTH_SCOPES` is
+     *    refused by the binary outright ("required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN") — the grant
+     *    cannot be restated without the scopes it was issued under. [canRenew] already refuses a blob with no
+     *    scopes; this is the other half of the same rule.
+     *  - **`CLAUDE_CODE_OAUTH_TOKEN` is stripped CASE-INSENSITIVELY.** Environment names are case-insensitive
+     *    on Windows, so a hand-written `Claude_Code_Oauth_Token` in Settings would survive an exact-match
+     *    removal and then be the very expired token the renewal exists to replace.
+     */
+    internal fun renewalEnv(
+        baseEnv: Map<String, String>,
+        refreshToken: String,
+        scopes: List<String>,
+    ): Map<String, String> =
+        baseEnv.filterKeys { !it.equals(SecretStore.OAUTH_TOKEN, ignoreCase = true) } + mapOf(
+            ENV_REFRESH_TOKEN to refreshToken,
+            ENV_SCOPES to scopes.joinToString(" "),
+        )
 
     /** Set by a failed [renew]; see [canRenew]. */
     @Volatile
@@ -280,8 +319,9 @@ object CredentialsVault {
         runCatching { json.parseToJsonElement(blob).jsonObject["claudeAiOauth"]?.jsonObject }.getOrNull()
     }
 
-    private fun usableToken(): String? {
-        val oauth = oauthNode() ?: return null
+    private fun usableToken(): String? = oauthNode()?.let(::usableToken)
+
+    private fun usableToken(oauth: kotlinx.serialization.json.JsonObject): String? {
         val token = oauth["accessToken"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
         val expiresAt = oauth["expiresAt"]?.jsonPrimitive?.longOrNull ?: return null
         return token.takeIf { expiresAt - System.currentTimeMillis() > EXPIRY_MARGIN_MS }

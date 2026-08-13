@@ -171,8 +171,8 @@ object DiffPresenter {
     }
 
     /**
-     * Line-level hunks between [current] and [proposed], computed via the platform diff engine. The pure
-     * narrowing/reconstruction that consumes these lives in [HunkSelection]. EDT/Application-bound.
+     * Line-level hunks between [current] and [proposed], computed via the platform diff engine — what
+     * [unifiedDiff] renders from. EDT/Application-bound; callers cap the file size before asking.
      */
     fun computeHunks(current: String, proposed: String): List<Hunk> {
         val fragments = com.intellij.diff.comparison.ComparisonManager.getInstance()
@@ -182,12 +182,7 @@ object DiffPresenter {
                 com.intellij.diff.comparison.ComparisonPolicy.DEFAULT,
                 com.intellij.openapi.progress.DumbProgressIndicator.INSTANCE,
             )
-        val currentLines = current.split("\n")
-        val proposedLines = proposed.split("\n")
-        return fragments.mapIndexed { i, f ->
-            val preview = (proposedLines.getOrNull(f.startLine2) ?: currentLines.getOrNull(f.startLine1) ?: "").trim()
-            Hunk(i, f.startLine1, f.endLine1, f.startLine2, f.endLine2, preview)
-        }
+        return fragments.map { Hunk(it.startLine1, it.endLine1, it.startLine2, it.endLine2) }
     }
 
     /**
@@ -214,11 +209,6 @@ object DiffPresenter {
         return sb.toString().trimEnd('\n')
     }
 
-    /** Brings an already-opened diff tab to the front (reopening it if the user closed it). EDT only. */
-    fun revealDiff(project: Project, file: VirtualFile) {
-        FileEditorManager.getInstance(project).openFile(file, true)
-    }
-
     /** Closes a diff tab once its request has been resolved. EDT only. */
     fun closeDiff(project: Project, file: VirtualFile) {
         val manager = FileEditorManager.getInstance(project)
@@ -226,3 +216,14 @@ object DiffPresenter {
         OpenedDiffsService.getInstance(project).unregister(file)
     }
 }
+
+/**
+ * One contiguous changed line-range, as produced by [DiffPresenter.computeHunks].
+ * `[start1,end1)` indexes the current file's lines; `[start2,end2)` indexes the proposed file's lines.
+ */
+data class Hunk(
+    val start1: Int,
+    val end1: Int,
+    val start2: Int,
+    val end2: Int,
+)

@@ -115,4 +115,25 @@ class LoginOutputParserTest {
         val msg = LoginOutputParser.resultMessage("Login successful! Token: $token", success = true)
         assertFalse(msg.contains(token), "a secret leaked into a user-facing message")
     }
+
+    @Test
+    fun `masking holds for a real API-key shape, on the success and the failure branch alike`() {
+        // The console key, not the OAuth token: `sk-ant-api03-` with the `-` and `_` a base64url body carries.
+        // Both branches of resultMessage pick a LINE out of the output, so a key sharing a line with a
+        // success or an error marker is the way one would actually escape.
+        val key = "sk-ant-api03-Ab1_cD2-eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aB4cD5eF6gH7iJ8kL9mN0oP-_AA"
+        assertEquals("sk-ant-…", LoginOutputParser.redactSecrets(key))
+
+        val ok = LoginOutputParser.resultMessage("Login successful, authenticated with $key", success = true)
+        assertFalse(ok.contains(key), "a secret leaked into the success message")
+        assertFalse(ok.contains("sk-ant-api03"), ok)
+
+        val bad = LoginOutputParser.resultMessage("Authentication failed for key $key", success = false)
+        assertFalse(bad.contains(key), "a secret leaked into the failure message")
+        assertFalse(bad.contains("sk-ant-api03"), bad)
+
+        // And the hoisted normalize() regex still collapses the same way: the failure line is still FOUND,
+        // not silently replaced by the generic fallback (which would hide the binary's own wording).
+        assertTrue(bad.startsWith("Authentication failed"), bad)
+    }
 }

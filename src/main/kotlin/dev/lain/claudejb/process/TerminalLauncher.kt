@@ -17,9 +17,9 @@ import org.jetbrains.plugins.terminal.TerminalToolWindowManager
  * gate on [isAvailable] and confine the API touch to [openAndRunCommand] so a stripped/disabled install degrades
  * to a caller-handled fallback (the native PTY flow, then a notice) instead of a `ClassNotFoundException`.
  *
- * Every platform call is **reflective**: these are internal/experimental terminal APIs that have already broken
- * once across the plugin's declared range (see [openAndRunCommand] for the regression), so a rename must degrade
- * to a fallback rather than throw `NoSuchMethodError` at a user.
+ * The platform call is **reflective**: this is an internal terminal API that has already broken once across the
+ * plugin's declared range (see [openAndRunCommand] for the regression), so a rename must degrade to the caller's
+ * fallback rather than throw `NoSuchMethodError` at a user.
  */
 object TerminalLauncher {
 
@@ -62,31 +62,42 @@ object TerminalLauncher {
      * call fails, rather than throwing. The tab owns a TTY and inherits the IDE's environment, which is what the
      * OAuth flow needs to write `~/.claude.json`.
      *
-     * **This is the fix for a real regression.** The previous implementation tried two reflective paths and, on a
-     * current IDE, BOTH silently failed — so `/login` always degraded to "run this yourself in a terminal":
-     *  - the Reworked path looked up `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager`,
-     *    a class that **does not exist** in the shipped IDE (verified by scanning every jar of IU-262.8665.337);
-     *  - the Classic path called `createShellWidget(…)` / `createLocalShellWidget(…)`, both of which existed on
-     *    251/252 but were **removed by 262**, so the reflective lookup returned null.
-     * The failure was invisible: each step returns false rather than throwing, so nothing reached the log.
+     * **This is the fix for a real regression.** Before 4.4.1 `/login` always degraded to "run this yourself in
+     * a terminal", because the two reflective paths it tried both returned false on the IDE of the day — and
+     * each step returns false rather than throwing, so nothing reached the log.
      *
      * `createNewSession(workingDirectory, tabName, shellCommand, requestFocus, deferSessionStartUntilUiShown)` is
-     * verified present on **251, 252 and 262 alike** — one call that spans the whole declared range. It is reached
-     * reflectively anyway (its `TerminalWidget` return type is stable, but reflection keeps the verifier clear of
-     * any deprecation churn and means a future rename degrades to the fallback instead of a `NoSuchMethodError`).
+     * the call that works, and it is not a guess: `javap` on `plugins/terminal/lib/terminal.jar` reports it
+     * present on IC-251.29188.72, IC-252.28539.97, IC-253.28294.334 **and** PY-262.9437.71 — the whole declared
+     * range and below it, IDEA and PyCharm alike. It is reached reflectively anyway (its `TerminalWidget` return
+     * type is stable, but reflection keeps the verifier clear of any deprecation churn and means a future rename
+     * degrades to the caller's fallback instead of a `NoSuchMethodError` at a user). [TerminalApiContractTest]
+     * pins it against the build classpath.
      *
      * Passing [argv] as the tab's `shellCommand` also removes two bug classes the old string-command path had:
      * no shell parses it (so no quoting hazard — contrast [loginCommand], which must quote), and there is no
      * send-text-into-a-shell race to lose the command to.
+     *
+     * **The two chained fallbacks were removed in 5.5.0, and NOT because their APIs are gone.** That claim was
+     * checked and it is false: `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager` ships in
+     * `plugins/terminal/lib/terminal.jar` on 253 and in `plugins/terminal/lib/modules/intellij.terminal.frontend.jar`
+     * on 262, and `createShellWidget(…)` / `createLocalShellWidget(…)` are still on `TerminalToolWindowManager` in
+     * 251, 252, 253 and 262. They went for two reasons that do hold:
+     *  1. **Unreachable.** The chain only advanced when the primary failed to resolve, and the primary resolves on
+     *     every build in range (above).
+     *  2. **Worse than nothing if it ever did run.** Both took `argv.joinToString(" ")` — a shell STRING, which is
+     *     precisely the quoting hazard the argv path exists to remove (a path with spaces, the Windows `&`
+     *     prefix), and `openClassic` additionally typed it into a live shell, reintroducing the send race. A
+     *     fallback that silently runs a *mis-quoted* command is not a safety net.
+     * The real fallback lives outside this class, where a false answer here is handled: `LoginCoordinator` goes
+     * terminal → native PTY → manual notice.
      */
     fun openAndRunCommand(project: Project, argv: List<String>, tabName: String): Boolean {
         if (!isAvailable()) return false
         if (argv.isEmpty()) return false
-        return runCatching {
-            openWithShellCommand(project, argv, tabName) ||
-                openReworked(project, argv.joinToString(" "), tabName) ||
-                openClassic(project, argv.joinToString(" "), tabName)
-        }.onFailure { log.warn("Failed to open IDE terminal for: $tabName", it) }.getOrDefault(false)
+        return runCatching { openWithShellCommand(project, argv, tabName) }
+            .onFailure { log.warn("Failed to open IDE terminal for: $tabName", it) }
+            .getOrDefault(false)
     }
 
     /**
@@ -110,91 +121,5 @@ object TerminalLauncher {
         return runCatching {
             method.invoke(mgr, project.basePath, tabName, argv, true, false) != null
         }.getOrDefault(false)
-    }
-
-    /**
-     * Reworked Terminal API path (2025.3 / build 253+). All types
-     * (`com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager`, its tab builder/tab, and
-     * `com.intellij.terminal.frontend.view.TerminalView`) are reached reflectively — they're `@ApiStatus.Experimental`,
-     * so a compile-time reference would trip the verifier, and they're simply absent on older IDEs. Returns false
-     * (caller falls back to [openClassic]) when the API isn't present or any step fails. EDT-only.
-     *
-     * Mirror of the documented snippet:
-     * ```
-     * TerminalToolWindowTabsManager.getInstance(project)
-     *   .createTabBuilder().workingDirectory(cwd).tabName(tabName).createTab()
-     *   .view.createSendTextBuilder().shouldExecute().send(command)
-     * ```
-     */
-    private fun openReworked(project: Project, command: String, tabName: String): Boolean {
-        val managerCls = runCatching {
-            Class.forName("com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager")
-        }.getOrNull() ?: return false // older IDE — no Reworked API
-        val manager = managerCls.getMethod("getInstance", Project::class.java).invoke(null, project) ?: return false
-
-        var builder = manager.javaClass.getMethod("createTabBuilder").invoke(manager) ?: return false
-        builder = builder.javaClass.getMethod("workingDirectory", String::class.java).invoke(builder, project.basePath)
-        builder = builder.javaClass.getMethod("tabName", String::class.java).invoke(builder, tabName)
-        val tab = builder.javaClass.getMethod("createTab").invoke(builder) ?: return false
-
-        val view = tab.javaClass.getMethod("getView").invoke(tab) ?: return false
-        var sender = view.javaClass.getMethod("createSendTextBuilder").invoke(view) ?: return false
-        sender = sender.javaClass.getMethod("shouldExecute").invoke(sender) // append the line wrap → run it
-        sender.javaClass.getMethod("send", String::class.java).invoke(sender, command)
-        return true
-    }
-
-    /**
-     * Legacy Classic-terminal path, for IDEs **< 253** that lack the Reworked API. Creates a shell widget without
-     * a compile-time reference to a deprecated method — `createShellWidget(String,String,boolean,boolean)` first,
-     * then the `createLocalShellWidget(String,String)` fallback — and sends [command] via `sendCommandToExecute`
-     * (or the older `executeCommand`). Returns whether a widget was created and the command dispatched. EDT-only.
-     */
-    private fun openClassic(project: Project, command: String, tabName: String): Boolean {
-        val mgr = TerminalToolWindowManager.getInstance(project)
-        val widget = createShellWidgetReflectively(mgr, project.basePath, tabName) ?: return false
-        return sendCommandReflectively(widget, command)
-    }
-
-    /**
-     * Creates a Classic shell terminal widget without a compile-time reference to a deprecated method. Tries the
-     * `createShellWidget(String,String,boolean,boolean)` factory first, then the `createLocalShellWidget(String,String)`
-     * fallback. Returns the widget as [Any] (its concrete type varies by build), or null if neither method resolves.
-     */
-    private fun createShellWidgetReflectively(mgr: Any, cwd: String?, tabName: String): Any? {
-        val cls = mgr.javaClass
-        runCatching {
-            val m = cls.getMethod(
-                "createShellWidget",
-                String::class.java,
-                String::class.java,
-                java.lang.Boolean.TYPE,
-                java.lang.Boolean.TYPE,
-            )
-            return m.invoke(mgr, cwd, tabName, true, false)
-        }
-        runCatching {
-            val m = cls.getMethod("createLocalShellWidget", String::class.java, String::class.java)
-            return m.invoke(mgr, cwd, tabName)
-        }
-        return null
-    }
-
-    /**
-     * Types [command] into the widget's shell. Prefers `sendCommandToExecute(String)` (the current API on
-     * `TerminalWidget`), falling back to the older `executeCommand(String)` on `ShellTerminalWidget`. Returns
-     * whether either resolved.
-     */
-    private fun sendCommandReflectively(widget: Any, command: String): Boolean {
-        val cls = widget.javaClass
-        runCatching {
-            cls.getMethod("sendCommandToExecute", String::class.java).invoke(widget, command)
-            return true
-        }
-        runCatching {
-            cls.getMethod("executeCommand", String::class.java).invoke(widget, command)
-            return true
-        }
-        return false
     }
 }

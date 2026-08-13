@@ -13,12 +13,15 @@ object ClaudeBinaryLocator {
 
     private val home: String get() = System.getProperty("user.home").orEmpty()
 
+    /** The `.js` entrypoint an npm `.cmd`/`.bat` shim invokes, `%~dp0`-relative. Compiled once, not per probe. */
+    private val SHIM_ENTRYPOINT = Regex("%~dp0[\\\\/]?([^\"\\s]+\\.js)")
+
     /**
      * Executable names to try, in priority order. On Windows we must NOT pick the extensionless npm
      * shim (`%APPDATA%\npm\claude`) — it is a bash script and `CreateProcess` rejects it with
      * "%1 is not a valid Win32 application" (error 193). Prefer the native `.exe`, then the `.cmd`.
      */
-    private val executableNames: List<String>
+    internal val executableNames: List<String>
         get() = if (SystemInfo.isWindows) {
             listOf("claude.exe", "claude.cmd", "claude.bat")
         } else {
@@ -83,7 +86,7 @@ object ClaudeBinaryLocator {
         File(dir, "node_modules\\@anthropic-ai\\claude-code\\cli.js").takeIf { it.isFile }?.let { return it }
         // Fallback: extract the .js entrypoint the shim invokes (paths are %~dp0-relative).
         return runCatching {
-            Regex("%~dp0[\\\\/]?([^\"\\s]+\\.js)").find(binary.readText())
+            SHIM_ENTRYPOINT.find(binary.readText())
                 ?.groupValues?.get(1)
                 ?.let { File(dir, it) }
                 ?.takeIf { it.isFile }

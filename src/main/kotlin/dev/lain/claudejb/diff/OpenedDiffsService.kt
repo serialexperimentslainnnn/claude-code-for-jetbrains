@@ -12,10 +12,11 @@ import java.util.concurrent.CopyOnWriteArraySet
  * Membership is plugin-scoped: we only know about diffs that went through [DiffPresenter.openDiff], so the
  * "Close all diffs" action never closes tabs the user opened from VCS, "Compare with…" or another source.
  *
- * Many edits in a row can pile up diff tabs — the per-request cleanup in `ChatPanel` only fires when the
- * permission card resolves, and auto-approved writes (acceptEdits/bypassPermissions) don't have a card. Sessions
- * close their own auto-opened diffs once the tool result lands (via [ClaudeSession]); this service is the
- * safety net + the explicit "Close all" button surface.
+ * Many edits in a row can pile up diff tabs — the per-request cleanup (`DiffLifecycleManager.closeReviewDiff`,
+ * called from `ClaudeSession.resolvePermission`) only fires when the permission card resolves, and auto-approved
+ * writes (acceptEdits/bypassPermissions) don't have a card. Sessions close their own auto-opened diffs once the
+ * tool result lands (via [ClaudeSession]); this service is the safety net + the explicit "Close all" button
+ * surface.
  */
 @Service(Service.Level.PROJECT)
 class OpenedDiffsService(private val project: Project) {

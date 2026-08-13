@@ -17,6 +17,15 @@ import java.nio.file.Path
  */
 class DiffPresenterIsWithinRootTest {
 
+    private companion object {
+        /**
+         * A NUL character, built rather than written as a literal: an embedded NUL in a source file is
+         * invisible in every diff and editor that would review it. It is the one byte no path may contain,
+         * which is what makes it the portable way to force a canonicalization failure.
+         */
+        val NUL: Char = 0.toChar()
+    }
+
     @Test
     fun `null path returns false (fail-closed)`(@TempDir root: Path) {
         assertFalse(DiffPresenter.isWithinRoot(null, root.toFile().canonicalPath))
@@ -118,5 +127,27 @@ class DiffPresenterIsWithinRootTest {
         val actual = DiffPresenter.isWithinRoot(file.canonicalPath, relativeRoot)
         // Implementation canonicalizes internally → the two calls must agree.
         assertTrue(expected == actual, "relative and pre-canonicalized roots must yield the same verdict")
+    }
+
+    /**
+     * The fail-closed branch the class KDoc promises but nothing exercised: when canonicalization itself
+     * FAILS, the answer must be false. A NUL byte cannot appear in a path on any supported OS, so
+     * `File.canonicalFile` raises `IOException` — the one input that reaches the `catch` rather than the
+     * comparison. If that branch ever returned true (or propagated out), an unresolvable path would be
+     * treated as contained and auto-approved for writing, which is exactly what this gate exists to deny.
+     */
+    @Test
+    fun `a path that cannot be canonicalized is rejected (fail-closed on IO failure)`(@TempDir root: Path) {
+        val canonicalRoot = root.toFile().canonicalPath
+        val unresolvable = canonicalRoot + File.separator + "a" + NUL + "b.kt"
+        // Guard the premise rather than assume it: if a filesystem ever accepted this, the test would be
+        // asserting the wrong thing silently instead of failing.
+        assumeTrue(
+            runCatching { File(unresolvable).canonicalFile }.isFailure,
+            "this platform does not reject a NUL byte in a path",
+        )
+        assertFalse(DiffPresenter.isWithinRoot(unresolvable, canonicalRoot))
+        // Symmetric: an unresolvable ROOT must also fail closed, never match by prefix on the raw string.
+        assertFalse(DiffPresenter.isWithinRoot(File(root.toFile(), "a.kt").path, canonicalRoot + NUL + "x"))
     }
 }

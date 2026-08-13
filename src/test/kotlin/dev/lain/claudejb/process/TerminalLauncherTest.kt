@@ -63,21 +63,25 @@ class TerminalLauncherTest {
 }
 
 /**
- * REGRESSION (4.4.1): `/login` always fell through to "run this yourself in a terminal" on a current IDE, because
- * every terminal API the launcher reflected on was missing at runtime:
- *  - `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager` — not present in the shipped IDE
- *    (verified by scanning every jar of IU-262.8665.337);
- *  - `TerminalToolWindowManager.createShellWidget(…)` / `.createLocalShellWidget(…)` — present on 251/252 but
- *    **removed by 262**.
- * Every lookup returns false instead of throwing, so the breakage was silent — nothing in the log, just a dead end.
+ * REGRESSION (4.4.1): `/login` always fell through to "run this yourself in a terminal", because both terminal
+ * paths the launcher reflected on returned false at runtime — and every lookup returns false instead of throwing,
+ * so the breakage was silent: nothing in the log, just a dead end.
  *
- * **Why CI never caught it, and why this test is shaped the way it is.** The plugin compiles and tests against
- * IC-2025.2 (252), where the removed factories still exist — so any test asserting "those methods are gone" would
- * PASS on the test classpath and tell us nothing about the user's 262 runtime. That asymmetry *is* the bug's hiding
- * place. So this pins the only thing that actually protects us: that the replacement overload
- * (`createNewSession`, verified by hand on 251, 252 AND 262) exists on whatever platform we build against. If it
- * ever disappears the way its predecessors did, this fails at build time instead of a user hitting the dead end.
- * The `verifyPlugin` run across the declared range is the complementary half of this guard.
+ * **Do not repeat the diagnosis that was written down for it.** The commit message and this file used to say the
+ * reflected types were "missing from the shipped IDE" and "removed by 262". Re-checked with `javap` against the
+ * distributions themselves, that is false in both halves:
+ * `com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager` is in `plugins/terminal/lib/terminal.jar`
+ * on IC-253.28294.334 and in `plugins/terminal/lib/modules/intellij.terminal.frontend.jar` on PY-262.9437.71, and
+ * `TerminalToolWindowManager.createShellWidget(…)` / `.createLocalShellWidget(…)` are present on 251, 252, 253 AND
+ * 262. Whatever made those paths fail, it was not an absent symbol — which is exactly why this test does not try
+ * to assert an absence.
+ *
+ * **What it pins instead**, because it is the only thing that actually protects the feature: that the replacement
+ * overload `createNewSession(String, String, List, boolean, boolean)` exists on whatever platform we build
+ * against. It is verified present on IC-251.29188.72, IC-252.28539.97, IC-253.28294.334 and PY-262.9437.71, i.e.
+ * the whole declared range in both product families; if it ever disappears, this fails at build time instead of a
+ * user hitting the dead end. Since 5.5.0 it is also the ONLY in-class path, so a failure here is a dead `/login`,
+ * not a downgrade. The `verifyPlugin` run across the declared range is the complementary half of this guard.
  */
 class TerminalApiContractTest {
 
@@ -93,5 +97,34 @@ class TerminalApiContractTest {
             java.lang.Boolean.TYPE,
         )
         assertTrue(m.returnType != Void.TYPE, "createNewSession must return a widget we can null-check")
+    }
+
+    /**
+     * The half the platform check cannot cover: that the signature pinned above is the signature
+     * [TerminalLauncher] actually asks for.
+     *
+     * Both are hand-written reflective lookups, so they can drift apart silently — and the drift would be
+     * invisible in exactly the same way the 4.4.1 regression was: the guard stays green while `/login` dies,
+     * because `getMethod` returns null-into-false rather than throwing. Cheap to pin, and the only way this
+     * test means what its name says.
+     */
+    @Test
+    fun `the launcher asks the platform for exactly the overload this test pins`() {
+        val source = sequenceOf(
+            java.io.File("src/main/kotlin/dev/lain/claudejb/process/TerminalLauncher.kt"),
+            java.io.File("../src/main/kotlin/dev/lain/claudejb/process/TerminalLauncher.kt"),
+        ).first { it.isFile }.readText()
+
+        // Whitespace-insensitive: the argument list, not its formatting.
+        val call = source.substringAfter("getMethod(").substringBefore(")").filterNot { it.isWhitespace() }
+        assertEquals(
+            "\"createNewSession\",String::class.java,String::class.java,List::class.java," +
+                "java.lang.Boolean.TYPE,java.lang.Boolean.TYPE,",
+            call,
+            "TerminalLauncher reflects on a different signature than TerminalApiContractTest verifies",
+        )
+        assertEquals(1, Regex("""\bgetMethod\(""").findAll(source).count()) {
+            "more than one reflective lookup in TerminalLauncher — this contract only covers the first"
+        }
     }
 }
