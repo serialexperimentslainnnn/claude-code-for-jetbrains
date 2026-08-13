@@ -20,9 +20,6 @@
   box-shadow: var(--shadow);
   animation: pop 0.14s var(--ease);
 }
-.find-bar[hidden] {
-  display: none;
-}
 .find-input {
   border: none;
   outline: none;
@@ -50,18 +47,10 @@
   text-align: right;
   white-space: nowrap;
 }
+/* The same chip × as `.queue-x`/`.att-x` (composer.css), one size up because it closes a whole bar. */
 .find-x {
-  cursor: pointer;
-  display: grid;
-  place-items: center;
   width: 22px;
   height: 22px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-pill);
-  color: var(--dim);
-  transition:
-    color 0.12s,
-    background 0.12s;
 }
 .find-x:hover {
   color: var(--text);
@@ -115,13 +104,13 @@
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  /* No backdrop-filter here. It cost a blurred backdrop snapshot per button on every frame the tab bar
+     repaints, to blur a flat, nearly-opaque strip — spend that on the dock's veil, where it is visible. */
   transition:
     color 0.14s,
     border-color 0.14s,
     box-shadow 0.14s,
-    background 0.14s;
+    background-color 0.14s;
 }
 /* The view you are in: neon orange with a soft glow. Two shadows do the work — a tight one for the edge and
    a wide, blurred one for the halo — because a single large blur reads as smudged rather than as lit.
@@ -144,13 +133,9 @@
   font-size: 8px;
   line-height: 1;
 }
-/* Chat lit up is still Chat: it keeps its arrow instead of gaining the view bullet. */
-.dash-toggle.dash-exit.active::before {
-  content: '←';
-  font-size: 11px;
-}
-/* The way out, at the top of the stack. Marked with an arrow so it reads as "leave", not as a fifth view —
-   the glyph carries that on its own, without relying on colour (1.4.1). */
+/* The way out. Marked with an arrow so it reads as "leave", not as a fifth view — the glyph carries that on
+   its own, without relying on colour (1.4.1). Later than the bullet rule at equal specificity, which is what
+   keeps the arrow on Chat when Chat is the lit one; a third rule for that case only restated this. */
 .dash-toggle.dash-exit::before {
   content: '←';
   font-size: 11px;
@@ -165,10 +150,8 @@
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.dash-toggle.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
+/* NB a second `.dash-toggle.active` sat here repainting the selected view coral — later rule, same
+   specificity — so it was lit in one colour and haloed in the neon of the rule above. Deleted, not both. */
 .dash-toggle svg {
   width: 13px;
   height: 13px;
@@ -189,9 +172,6 @@
   background: color-mix(in srgb, var(--bg) 94%, transparent);
   padding: 22px clamp(16px, 5vw, 40px) 30px;
   animation: fade 0.2s var(--ease);
-}
-.dashboard[hidden] {
-  display: none;
 }
 /* a responsive column of cards, centred with the reading column */
 .dashboard > .dash-inner {
@@ -300,6 +280,8 @@
   border-radius: var(--radius-pill);
   background: var(--surface2);
   border: 1px solid var(--border);
+  /* See `.usage-bars .ub-track`: the fill transitions its width, so containment keeps that layout inside. */
+  contain: layout paint;
 }
 .usage-fill {
   height: 100%;
@@ -311,16 +293,20 @@
 }
 
 /* ── quota severity ────────────────────────────────────────────────────────
-   One scale, three levels, used by BOTH the dashboard bar and the composer's dot: blue under 65%, amber under
-   85%, red at or above. Status hues, never the product accent — the accent means "Claude", and a quota bar
-   that is coral at 10% and coral at 95% has told the user nothing. */
-.usage-fill.lvl-low {
+   One scale, three levels, painted the same for BOTH bars — the dashboard's `.usage-fill` and the composer's
+   `.ub-track > i` — because they answer the same question and used to carry two copies of the answer: blue
+   under 65%, amber under 85%, red at or above. Status hues, never the product accent — the accent means
+   "Claude", and a quota bar that is coral at 10% and coral at 95% has told the user nothing. */
+.usage-fill.lvl-low,
+.usage-bars .ub-track > i.lvl-low {
   background: var(--info);
 }
-.usage-fill.lvl-mid {
+.usage-fill.lvl-mid,
+.usage-bars .ub-track > i.lvl-mid {
   background: var(--warning);
 }
-.usage-fill.lvl-high {
+.usage-fill.lvl-high,
+.usage-bars .ub-track > i.lvl-high {
   background: var(--danger);
 }
 .usage-pct.exhausted {
@@ -348,13 +334,15 @@
 .seg {
   height: 100%;
   min-width: 2px;
-  background: color-mix(in srgb, var(--accent) 60%, var(--surface2));
 }
-/* gentle accent-tint variation so adjacent segments read apart, no status hues */
-.seg:nth-child(odd) {
+/* gentle accent-tint variation so adjacent segments read apart, no status hues. Every child is odd or even,
+   so these two ARE the default — a third "base" colour under them was only ever dead paint. */
+.seg:nth-child(odd),
+.legend > span:nth-child(odd)::before {
   background: color-mix(in srgb, var(--accent) 72%, var(--surface2));
 }
-.seg:nth-child(even) {
+.seg:nth-child(even),
+.legend > span:nth-child(even)::before {
   background: color-mix(in srgb, var(--accent) 42%, var(--surface2));
 }
 .legend {
@@ -375,13 +363,6 @@
   height: 8px;
   border-radius: 2px;
   flex: 0 0 auto;
-  background: color-mix(in srgb, var(--accent) 60%, var(--surface2));
-}
-.legend > span:nth-child(odd)::before {
-  background: color-mix(in srgb, var(--accent) 72%, var(--surface2));
-}
-.legend > span:nth-child(even)::before {
-  background: color-mix(in srgb, var(--accent) 42%, var(--surface2));
 }
 
 /* ── MCP server rows ────────────────────────────────────────────────────────── */
@@ -457,10 +438,6 @@
   box-shadow: none;
   opacity: 0.6;
 }
-.mcp-row .btn {
-  padding: 4px 11px;
-  font-size: 11.5px;
-}
 
 /* ── node diagram (CC.diagram / CC.panView) ──────────────────────────────────
    Cards laid out by depth, joined by curved connectors, on a canvas you drag. Every coordinate is computed
@@ -511,9 +488,6 @@
   stroke: color-mix(in srgb, var(--border) 65%, var(--text) 35%);
   stroke-width: 1.5;
 }
-.dg-edge.running {
-  stroke: color-mix(in srgb, var(--info) 70%, transparent);
-}
 /* A node: a compact chip, sized to its own text up to a cap. It carries its state colour on the left edge
    and lifts on hover, so the diagram reads as a set of places you can go rather than as a drawing.
    `width: max-content` is what keeps it small: the first version fixed every card at 208px, so four nodes
@@ -530,23 +504,17 @@
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  /* Readable at a glance: the size the rest of the UI uses, and the size the cards are measured for
+     (`widthFor`). Smaller "fits more" and says less. */
+  font-size: 12.5px;
   line-height: 1;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
   transition:
     border-color 0.12s var(--ease),
-    background 0.12s var(--ease),
+    background-color 0.12s var(--ease),
     transform 0.12s var(--ease);
-}
-/* Readable at a glance: this is the size the rest of the UI uses, and the cards are measured for it
-   (`widthFor`). Smaller "fits more" and says less. */
-.dg-card {
-  font-size: 12.5px;
-}
-.dg-meta {
-  font-size: 10.5px;
 }
 .dg-card:hover {
   background: var(--surface2);
@@ -622,8 +590,11 @@
     toolRun 1.3s ease-in-out 0.46s infinite;
 }
 
-/* The connector into a running node breathes with it, so a live branch is visible without reading a label. */
+/* The connector into a running node breathes with it, so a live branch is visible without reading a label.
+   The static stroke is what it settles on when motion is reduced — the animation is neutralised there, and a
+   live branch that then looks exactly like a dead one has lost the information, not just the movement. */
 .dg-edge.running {
+  stroke: color-mix(in srgb, var(--info) 70%, transparent);
   animation: edgeRun 1.3s ease-in-out infinite;
 }
 @keyframes edgeRun {
@@ -669,8 +640,7 @@
   background: var(--info);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 22%, transparent);
 }
-.dg-dot.completed,
-.dg-dot.done {
+.dg-dot.completed {
   background: var(--success);
 }
 .dg-dot.failed {
@@ -698,7 +668,7 @@
   background: var(--surface2);
   border: 1px solid var(--border);
   transition:
-    background 0.16s var(--ease),
+    background-color 0.16s var(--ease),
     border-color 0.16s;
 }
 .toggle::after {
@@ -712,7 +682,7 @@
   background: var(--dim);
   transition:
     transform 0.16s var(--ease),
-    background 0.16s;
+    background-color 0.16s;
 }
 .toggle.on {
   background: var(--accent-soft);
