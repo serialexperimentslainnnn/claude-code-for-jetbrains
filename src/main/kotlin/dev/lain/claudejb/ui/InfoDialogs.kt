@@ -42,7 +42,7 @@ object InfoDialogs {
     private const val MCP_LIST_HEIGHT = 260
 
     fun showContextUsage(project: Project, session: ClaudeSession) {
-        session.requestContextUsage { usage ->
+        session.queries.requestContextUsage { usage ->
             val text = if (usage == null) {
                 "No context data available."
             } else {
@@ -57,7 +57,7 @@ object InfoDialogs {
     }
 
     fun showSessionCost(project: Project, session: ClaudeSession) {
-        session.requestSessionCost { payload ->
+        session.queries.requestSessionCost { payload ->
             // get_session_cost returns { text } with the $-denominated API cost (the /cost summary). The
             // subscription quota % lives in the rate-limit info, so show both: quota first, then the cost.
             val cost = payload?.str("text")?.takeIf { it.isNotBlank() }
@@ -94,7 +94,7 @@ object InfoDialogs {
      * the status so the panel reflects the new state. Replaces the previous raw-JSON dump.
      */
     fun showMcpStatus(project: Project, session: ClaudeSession) {
-        session.requestMcpStatus { payload ->
+        session.queries.requestMcpStatus { payload ->
             val servers = parseMcpServers(payload)
             if (servers.isEmpty()) {
                 Messages.showInfoMessage(project, "No MCP servers configured.", "MCP Servers")
@@ -106,14 +106,14 @@ object InfoDialogs {
 
     /** /version equivalent: shows the responder binary's CLI version (from `get_binary_version`). */
     fun showBinaryVersion(project: Project, session: ClaudeSession) {
-        session.requestBinaryVersion { payload ->
+        session.queries.requestBinaryVersion { payload ->
             Messages.showInfoMessage(project, formatBinaryVersion(payload), "Claude Binary Version")
         }
     }
 
     /** /config equivalent: shows the effective merged settings (from `get_settings`) as readable text. */
     fun showEffectiveSettings(project: Project, session: ClaudeSession) {
-        session.requestSettings { payload ->
+        session.queries.requestSettings { payload ->
             Messages.showInfoMessage(project, formatEffectiveSettings(payload), "Effective Settings")
         }
     }
@@ -301,11 +301,11 @@ object InfoDialogs {
                 buildMcpPanel(
                     servers,
                     onReconnect = { name ->
-                        session.reconnectMcp(name)
+                        session.queries.reconnectMcp(name)
                         refresh()
                     },
                     onToggle = { name, enabled ->
-                        session.toggleMcp(name, enabled)
+                        session.queries.toggleMcp(name, enabled)
                         refresh()
                     },
                 ),
@@ -316,7 +316,7 @@ object InfoDialogs {
         }
 
         private fun refresh() {
-            session.requestMcpStatus { payload ->
+            session.queries.requestMcpStatus { payload ->
                 servers = parseMcpServers(payload).ifEmpty { servers }
                 rebuild()
             }

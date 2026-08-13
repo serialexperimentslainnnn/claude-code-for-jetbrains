@@ -81,10 +81,13 @@ object ChatTheme {
     @Volatile var vibeHue: Float = 0f
         private set
 
-    // Repaint hooks from each open ChatPanel. A SINGLE shared timer advances the hue and repaints every registered
-    // panel in sync — so multiple open chat tabs don't each run their own 50ms timer (which would double the
-    // animation speed and desync), and closing the tab that toggled Vibe Mode doesn't leave the others frozen on a
-    // static rainbow with no driver. The timer runs only while at least one panel is registered AND vibing.
+    // Repaint hooks for Swing surfaces that paint with the LIVE [ACCENT]. A SINGLE shared timer advances the hue
+    // and repaints every registered hook in sync — so N surfaces don't each run their own timer (which would
+    // multiply the animation speed and desync them). It runs only while at least one hook is registered AND
+    // Vibe Mode is on. **Nothing registers today**: since 4.0.0 the chat is JCEF and spins its own rainbow in
+    // `app-core-theme.js` (`setVibe`), driven by the `vibe` flag `JcefTheme` puts in the payload; the Swing
+    // surfaces left (AccountInfoPanel, DiffHistoryPanel) resolve [ACCENT] once when they are built. So this
+    // timer never starts, and [setVibeMode] is in practice just the global flag the JCEF side reads.
     private val vibeRepaints = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
 
     // Faster rainbow (~1.8s per full cycle, coherent with the JCEF side in app-core.js vibeStep): 30ms tick × 0.018
@@ -94,20 +97,21 @@ object ChatTheme {
         vibeRepaints.forEach { it() }
     }
 
-    /** A ChatPanel registers its repaint hook (on init) so it animates while Vibe Mode is on. */
+    /** Registers a Swing surface's repaint hook so it animates while Vibe Mode is on. No caller today (see above). */
     fun registerVibe(repaint: () -> Unit) {
         vibeRepaints.addIfAbsent(repaint)
         if (vibeMode && !vibeTimer.isRunning) vibeTimer.start()
     }
 
-    /** A ChatPanel unregisters its hook (on dispose); the shared timer stops once nothing is left to animate. */
+    /** Unregisters a hook (on dispose); the shared timer stops once nothing is left to animate. No caller today. */
     fun unregisterVibe(repaint: () -> Unit) {
         vibeRepaints.remove(repaint)
         if (vibeRepaints.isEmpty()) vibeTimer.stop()
     }
 
-    /** Flips Vibe Mode globally: starts/stops the shared timer and refreshes every registered panel immediately
-     *  (so each tab's toggle glyph / tool-window icon / avatar layout re-syncs, not just the one that flipped it). */
+    /** Flips Vibe Mode globally: starts/stops the shared timer and refreshes every registered hook immediately, so a
+     *  toggle on one chat re-themes them all. Called from `ChatBridgeRouter`; `JcefTheme` then ships [vibeMode] to
+     *  the web app, which is what actually animates today (the hook list is empty — see the note above). */
     fun setVibeMode(on: Boolean) {
         if (vibeMode == on) return
         vibeMode = on
