@@ -198,6 +198,31 @@
   grid-column: 1 / -1;
 }
 
+/* The plan-mode plan. Prose and a numbered list rather than stat rows, so it is `wide` and reads at a
+   comfortable measure instead of wrapping into a ribbon in one grid column. The body is model-written
+   markdown, rendered through the same sanitized path as the transcript. */
+.plan-md {
+  color: var(--text);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.plan-md > :first-child {
+  margin-top: 0;
+}
+
+.plan-md > :last-child {
+  margin-bottom: 0;
+}
+
+/* Where the plan lives on disk. Dim and small: it is provenance, not content. */
+.plan-path {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 /* Workloads is a canvas, not a list of stats: it takes the height it is given instead of sitting in a strip
    with the rest of the panel empty below it. `align-self: stretch` beats the grid's `align-items: start`,
    and the fixed min-height is what stops it collapsing to the diagram's own height on a small tree. */

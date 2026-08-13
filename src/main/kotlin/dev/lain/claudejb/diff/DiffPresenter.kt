@@ -126,6 +126,39 @@ object DiffPresenter {
     }
 
     /**
+     * Opens two texts we already hold as a read-only diff tab, for a change that did NOT arrive as a tool
+     * call — the whole session's workspace diff, where the binary sends hunks rather than a proposed file.
+     *
+     * Read-only on both sides deliberately: this is a REVIEW of what already happened on disk, not a proposal
+     * awaiting approval. There is nothing here to accept, so an editable pane would invite an edit that goes
+     * nowhere. [openReviewDiff] is the other case and stays editable.
+     *
+     * [path] is used only to pick the file type and name the tab; nothing is read from or written to it.
+     * EDT only.
+     */
+    // One pane of a text diff: what it says above the content, and the content.
+    data class TextSide(val label: String, val text: String)
+
+    fun openTextDiff(project: Project, path: String, base: TextSide, current: TextSide): VirtualFile? {
+        val name = File(path).name.ifBlank { return null }
+        val fileType = FileTypeManager.getInstance().getFileTypeByFileName(name)
+        val factory = DiffContentFactory.getInstance()
+        val title = diffTitle(name)
+        val request = SimpleDiffRequest(
+            title,
+            factory.create(project, base.text, fileType),
+            factory.create(project, current.text, fileType),
+            base.label,
+            current.label,
+        )
+        val vFile = ChainDiffVirtualFile(SimpleDiffRequestChain(request), title)
+        // openFile, not showDiffFile — see openDiff: the latter honours a global setting and can pop a window.
+        FileEditorManager.getInstance(project).openFile(vFile, false)
+        OpenedDiffsService.getInstance(project).register(vFile)
+        return vFile
+    }
+
+    /**
      * An open editable review diff: the diff tab [file], the EDITABLE "proposed" [proposed] document (the user can
      * tweak it before accepting), and the [currentText]/[originalProposed] baselines used to detect an edit.
      */

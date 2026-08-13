@@ -167,6 +167,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             // instead of the old plain-text dialogs.
             add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(tabs)?.openDashboard() })
             add(simple("Agents") { activePanel(tabs)?.let { InfoDialogs.showAgents(project, it.session) } })
+            // The per-edit diffs answer "what is this call about to do". This one answers "what has this
+            // whole session done to my tree", which is the question you ask before deciding to keep any of it.
+            add(SessionDiffAction(project, tabs))
             add(simple("Binary Version…") { activePanel(tabs)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
             add(simple("Effective Settings…") { activePanel(tabs)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
             addSeparator()

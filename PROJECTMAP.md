@@ -21,7 +21,9 @@
 | To… | Go to | Note |
 |---|---|---|
 | Handle a new binary→host event | `protocol/ClaudeEvent.kt` (the sealed case) + the model file of its family (`TaskModels`/`NoticeModels`/`UsageModels`/`SessionSignalModels`/`HookModels`/`PermissionModels`/`ConversationModels`/`InitializeModels`) + `protocol/ProtocolParser.kt` (the `TOP_LEVEL_DECODERS`/`SYSTEM_DECODERS` tables), then `session/ClaudeSession.kt` `onEvent` | Decoders are **tables, not branches** — register, don't add an `if`. Triage the subtype into `src/test/kotlin/dev/lain/claudejb/drift/ProtocolSurface.kt` `KNOWN_SUBTYPES` or `checkDrift` goes red |
-| Send a host→binary control request | `protocol/ControlProtocol.kt` (builder) + `session/ControlAsks.kt` (one declared ask: what to send, how to read the answer) + `session/SessionQueries.kt` (the UI-facing surface) + `session/SessionControlClient.kt` (correlation, watchdog) | Every request is correlated by `request_id`; never block on the reply |
+| Send a host→binary control request | `protocol/ControlProtocol.kt` (builder) + `session/ControlAsks.kt` (one declared ask: what to send, how to read the answer) + `session/SessionQueries.kt` (the UI-facing surface) + `session/SessionControlClient.kt` (correlation, watchdog) | Every request is correlated by `request_id`; never block on the reply. **And wire a caller in the same change** — a declared ask nothing invokes is the repository's signature defect |
+| Review everything this session changed | `ui/SessionDiffAction.kt` (⚙ menu) → `session/WorkspaceDiffReview.kt` (pure: hunks → two whole texts) → `diff/DiffPresenter.openTextDiff` | The binary sends hunks; the base side is reconstructed and REFUSED when it does not match disk |
+| Change the plan card | `ui/SessionFeed.requestPlan` (asked on turn edges) → `ui/jcef/JcefPlanData.kt` → `app-session-cards.js buildPlanCard` | `get_plan` is read-only and never creates a plan; "no plan" is an ordinary answer, so the card omits itself |
 | Change how a turn is orchestrated | `session/ClaudeSession.kt` | **Thin orchestrator** (2 507 lines, most-churned source file). New behaviour goes to a collaborator, not here |
 | Change transcript rows / streaming | `session/TranscriptReconciler.kt` + `session/TranscriptModel.kt` | Assumes EDT. `parentOf`/`isDescendantOf` model subagent nesting |
 | Change what the chat renders | `resources/jcef/app-transcript*.js` (rows, tool cards, links, find bar), `app-composer-*.js` (input, pills, palette, attachments, readout, boot + auth cards), `app-permissions.js` (cards), `app-session-*.js` (dashboard), `app-tabs-*.js` (tab bar) | 30 inlined ES2019 files, no bundler. **Load order is a contract** — see `JcefHost.appNames`: `app-core.js` first, each family's namespace (`-base.js`, or `app-transcript.js` for its own) before its members, and the composer/session/tabs spine LAST. CSS class names are a tested contract |
@@ -178,11 +180,10 @@ On this machine only: `node` needs `OPENSSL_CONF=/dev/null`, and `claude` is a s
   without its test is a green suite that proves nothing.
 - `scripts/split-css.py` — **one-shot, already applied.** Kept as the record of a mechanical migration;
   re-running it now would corrupt the tree.
-- **`Asks.WORKSPACE_DIFF` and `Asks.PLAN` are declared but NOT REACHABLE.** `session/ControlAsks.kt` models
-  both replies and `session/SessionQueries.kt` exposes `requestWorkspaceDiff`/`requestPlan`, and **nothing
-  calls either** — the UI side was never built. This is the repository's signature defect (see the `/login`
-  terminal lookups, the `git/` package and the onboarding card's "Check again" button, all three shipped or
-  nearly shipped implemented-and-unreachable). Either wire them or do not claim them as features.
+- `session/WorkspaceDiffReview.kt` rebuilds the BASE side of the session diff by applying the binary's hunks
+  BACKWARDS over the working tree, and **refuses when a hunk does not describe what is on disk**. Do not
+  "improve" that into a best-effort reconstruction: a review tool showing a fabricated left-hand pane is
+  worse than one showing none, because nothing on screen distinguishes them. Its tests pin the refusal.
 
 ## Out of the map
 
