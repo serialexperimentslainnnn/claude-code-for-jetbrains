@@ -31,8 +31,13 @@ What actually happened. Include error messages verbatim.
 
 ## Environment
 
+> From **5.5.0** the minimum supported IDE is **2025.3 (build 253)**. The whole chat UI is the IDE's
+> embedded browser, and the module that provides it does not exist before 253. On 2025.1 or 2025.2 the
+> last supported version is **5.1.1** — a bug report against 5.5.0 on those builds is expected behaviour,
+> not a defect.
+
 - **OS:** (e.g. Ubuntu 24.04, macOS 14.5, Windows 11 23H2)
-- **IDE:** (Help → About → product + build, e.g. `IntelliJ IDEA 2025.1.2 IC-251.23774.435`)
+- **IDE:** (Help → About → product + build, e.g. `IntelliJ IDEA 2025.3 IC-253.28294.334`)
 - **Plugin version:** (Settings → Plugins → Claude Code Native)
 - **`claude` binary version:** output of `claude --version`
 - **Binary location:** `which claude` (Linux/macOS) or `where claude` (Windows)

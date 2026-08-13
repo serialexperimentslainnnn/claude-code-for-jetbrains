@@ -26,13 +26,32 @@
 #                two can never disagree. An existing tag means "already released" and the run stops.
 #   2. LINEAGE.  The commit must be reachable from `main`. Tagging a feature branch, or a develop commit
 #                that never went through a PR into main, aborts the run. `main` is protected and only
-#                accepts PRs, so "reachable from main" IS "was reviewed and merged".
-#   3. HUMAN.    Everything irreversible lives in the `marketplace` GitHub Environment with a required
-#                reviewer — including the tag, which is why cutting it early is safe. Marketplace
-#                publication cannot be undone; a version is out the moment it is out.
+#                accepts PRs with every required check green, so "reachable from main" IS "went through
+#                the pull-request gate". NOT "was reviewed by a second person": main.json sets
+#                `required_approving_review_count: 0` on purpose — GitHub will not let an author approve
+#                their own PR, so on a single-maintainer repository any higher value is a deadlock, not a
+#                control. The mechanical half (PR required, up to date, all checks passing) is what is
+#                actually enforced; raise the count the moment a second maintainer exists.
+#   3. SCOPE.    Everything irreversible lives in the `marketplace` GitHub Environment: the credentials
+#                exist only inside that job, and only refs the environment's branch policy allows can
+#                deploy at all. Marketplace publication cannot be undone; a version is out the moment
+#                it is out.
 #
-# Gate 2 is the one worth arguing about, so: it is not decoration. Without it, anyone who can push a
-# tag can publish from any code, and the PR review that gate 3 assumes has happened becomes optional.
+# WHAT GATE 3 IS NOT, since this file used to say otherwise in four places: it is **not** a human approval.
+# The `marketplace` environment has NO required reviewer — verified against the live repository, and
+# deliberate rather than overlooked: the reasoning is written out in scripts/bootstrap-ci.sh §1 (on a
+# single-maintainer repository the approval was the same person clicking a second time, moments later, over
+# the same decision). So **a merge into `main` that carries a bumped version publishes to the Marketplace
+# unattended.** The human act is the merge, not a later button.
+#
+# That makes gate 2 the load-bearing one, and it is not decoration. Without it, anyone who can push a tag
+# can publish from any code, and the pull request into `main` — now the only human step there is —
+# becomes optional.
+#
+# NB the environment's protection rules are a GitHub setting, not a file in this repository: unlike
+# .github/rulesets/*.json they are not versioned, so this comment can go stale without any diff. Re-check
+# with `gh api repos/OWNER/REPO/environments`, which is what scripts/bootstrap-ci.sh reports at the end of
+# every run.
 name: Release
 
 on:
@@ -75,13 +94,14 @@ jobs:
 
       # Lineage. On a tag push this is the load-bearing gate: without it, anyone who can push a tag can
       # publish from any code. On a main push it is trivially true, and checked anyway rather than assumed —
-      # the cost is one command and the failure mode it guards against is publishing unreviewed code.
+      # the cost is one command and the failure mode it guards against is publishing code that never passed
+      # the pull-request gate on `main`.
       - name: Assert this commit is on main
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::${GITHUB_REF_NAME} points at a commit that is not reachable from main."
-            echo "Releases are cut from main only, and main only accepts reviewed PRs from develop."
+            echo "Releases are cut from main only, and main only accepts pull requests with every check green."
             exit 1
           fi
           echo "lineage OK — $GITHUB_SHA is reachable from main."
@@ -136,7 +156,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile.
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile.
       GRADLE_USER_HOME: /opt/gradle-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,8 +184,10 @@ jobs:
   # That is the lesser problem. Attestation proves WHERE a build ran, and this is the job where the
   # release is genuinely built; two divergent artifacts is a correctness bug users can actually hit.
   #
-  # Everything here is behind the `marketplace` environment, so nothing runs until a human approves —
-  # and no credential is even in scope before that point.
+  # Everything here is behind the `marketplace` environment, which is what SCOPES the credentials: they
+  # exist in this job and nowhere else in the repository. It is not an approval gate — that environment has
+  # no required reviewer (see the header, and scripts/bootstrap-ci.sh §1). Reaching this job means `guard`
+  # passed: the commit is reachable from `main`, and the version in build.gradle.kts has never been tagged.
   publish:
     name: Build, sign and publish
     runs-on: ubuntu-latest
@@ -194,9 +216,11 @@ jobs:
       # than publishing first and stamping a tag on afterwards, which makes the tag a label for something
       # already gone out.
       #
-      # This is safe to do this early ONLY because the whole job is behind the `marketplace` environment:
-      # nothing here runs until a human approves, so a tag can no longer appear for a release nobody
-      # authorised. What it can still do is outlive a FAILED publish, and published tags are immutable
+      # What makes it safe to do this early is `guard`, not an approval: this job is only reached once the
+      # commit is proven reachable from `main` and the declared version proven not already tagged. So a tag
+      # can only appear for a version somebody merged into `main` on purpose. (An earlier version of this
+      # note credited a required reviewer on the `marketplace` environment; there is none — see the header.)
+      # What the tag can still do is outlive a FAILED publish, and published tags are immutable
       # here. That is deliberate, and the recovery is to re-run THIS JOB on the existing tag — the tag
       # step below detects the ref and skips re-cutting it. Note it has to be a JOB re-run and not a
       # workflow re-run: `guard` would see the tag on the remote and correctly report the version as
@@ -226,8 +250,10 @@ jobs:
       # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
       # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
       # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
-      # attests "this workflow released these bytes", and the human authorisation lives in the two gates
-      # around it — the reviewed PR into main, and the required approval on this environment.
+      # attests "this workflow released these bytes", and the human authorisation is the MERGE into `main` —
+      # the only human act in the sequence. There is no approval on this environment (see the header); the
+      # mechanical guards either side of the merge are the pull-request gate on `main` and `guard`'s lineage
+      # and already-tagged checks.
       - name: Create and sign the release tag
         if: github.ref_type != 'tag'
         env:
@@ -320,8 +346,12 @@ jobs:
           key — so the chain terminates in a key that has never been on a computer.
 
           What the signatures do NOT assert is that a human pressed a button: the release is cut
-          automatically from `main`. That claim rests on the two gates around it — `main` accepts only
-          reviewed pull requests, and publication requires an approval on a protected environment.
+          automatically from the merge into `main`, with no approval step and no required reviewer. What
+          stands behind it instead is mechanical, and it is worth being exact about — `main` accepts nothing
+          but pull requests that are up to date and have all nine required checks green (among them the JVM
+          and frontend tests, both CodeQL scans, the dependency audit and the plugin verifier), that
+          protection can be bypassed by nobody including admins, and this workflow refuses to publish a
+          commit that is not reachable from `main` or a version number that has already been released.
 
           ```sh
           gpg --import docs/ci-signing-key.asc
