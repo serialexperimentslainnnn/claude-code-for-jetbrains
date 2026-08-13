@@ -4,7 +4,13 @@
 ships its embedded browser as a separate bundled plugin, and a plugin that does not declare a dependency on it
 no longer gets those classes at all. The whole chat UI is that browser, so on 2026.2 nothing opened —
 `NoClassDefFoundError: com.intellij.ui.jcef.JBCefApp`, every chat, every time. Declaring the dependency fixes
-it, and that dependency does not exist before 2025.3. On 2025.1 or 2025.2, stay on 5.1.1.
+it, and that dependency does not exist before 2025.3.
+
+So this costs 2025.1 and 2025.2, and it is worth saying why there is no middle option. Since 4.0.0 the entire
+interface — transcript, composer, permission cards, dashboard, tabs — *is* the embedded browser; there is no
+second, browser-less UI to fall back to, and building one would be building the plugin twice. The choice was
+between a plugin that works on 2025.3 and up, or one that is silently dead on the newest IDEs. On **2025.1 or
+2025.2, stay on 5.1.1** — it keeps working, it just stops receiving updates.
 
 **Every agent gets its own tab, with its own transcript.** A session running agents under agents used to put
 all of it in one place: consecutive "Thought process" rows belonging to different agents, interleaved, with no
@@ -21,16 +27,72 @@ somewhere you can go.
 it finishes — which is exactly when its output is worth reading — so the row, the tab and everything it had
 printed used to vanish at that instant. Both now survive, and they come back after a restart.
 
+**Your branch is in the ⚙ menu, and so is your recent history.** The tool window's gear menu now names the
+branch you have checked out in its own label, so *which branch is Claude working on* is answered without
+opening anything. Behind it: your last twenty commits — hash, subject, author, age, how many files each
+touched — and the Git history of the file you have open. Both hand you to the IDE's **own** Git Log rather
+than drawing a second, worse one inside a chat panel. It is strictly **read-only**: nothing here moves a
+branch, rewrites history or talks to a remote, and a test fails the build if that ever stops being true. On
+an IDE with the Git plugin disabled, or in a project that is not a Git working copy, the entries are simply
+not there.
+
 **Your settings moved into the IDE's password safe.** They lived in `.idea/claude-code.xml`: per project, in
 the clear, and committable — including the environment block, which is where an API key or a credentialed
 proxy URL ends up. They are now one encrypted document in the same store as your sign-in, shared by every
 project. Existing settings are adopted automatically on first run.
+
+**And your sign-in stays where it always was — in that same safe, and it survives a reboot.** Nothing about
+signing in changes in this release; it is worth restating only because your settings have now moved in next to
+it. The credential is held in your OS keychain through the IDE's password safe, never in plaintext on disk,
+and when the short-lived half of it expires overnight the plugin renews it without a browser, a terminal or
+you. If you authenticate with an Anthropic API key instead, that key lives in the same place and has nothing
+to expire.
+
+**The chat is noticeably lighter.** It felt heavy because it was doing a great deal of work nobody asked for:
+the tab bar and the dashboard rebuilt their entire contents on every update from the plugin — several times
+per turn, including on updates that changed nothing you could see — and the dashboard did it even while it was
+hidden, laying out and measuring a diagram for a panel nobody was looking at. Both now redraw only when what
+they draw has actually changed, so a tab bar no longer rebuilds itself under your pointer and the dashboard
+does no work while it is closed. Around two hundred lines of unreachable rules came out of the stylesheet at
+the same time, and a sizeable slice of the chat panel was split into smaller pieces.
 
 **Fixes:** with many chats open the tabs could not be scrolled at all (a vertical wheel does not move a
 horizontal row); the loading screen covered the chat tabs, so you could not switch chats while one was
 starting; a chat pinned to a subagent was drawn twice in the diagram; a nested subagent showed as running for
 ever; the same finished task was green in one view and grey in another; and the Chat / Session / Workloads
 buttons floated over the transcript you were reading.
+
+### Upgrade notes — coming from 5.1.1
+
+**Check your IDE first.** 5.5.0 needs **2025.3 (build 253) or newer**. On 2025.1 or 2025.2 the Marketplace will
+not offer you this version; 5.1.1 stays installed and stays working, and it is the last version for those
+IDEs. On **2026.2 the upgrade is the fix** — 5.1.1 cannot open a chat there at all, so if that is where you
+are, this release is the whole point.
+
+**Your settings move themselves, once, on first launch.** The plugin reads the old `.idea/claude-code.xml` for
+the project you open, writes it into the IDE's password safe, and only then removes the file — in that order,
+so a safe that refuses the write leaves your configuration exactly where it was rather than nowhere. You do
+not have to do anything, and you should not have to re-enter anything.
+
+Two consequences worth knowing before you open the IDE:
+
+- **Settings are now shared by every project, where they used to be per project.** If you had deliberately
+  different settings in two projects — a different model, a different permission mode, a different environment
+  block — they no longer both survive: the first project you open after upgrading is the one whose settings
+  become the shared ones. If that matters to you, note down what the others had before you upgrade.
+- **The old file was plaintext and committable, and the migration cannot un-commit it.** If
+  `.idea/claude-code.xml` was ever committed or shared with an environment block in it, treat anything that
+  was in that block — an API key, a token, a credentialed proxy URL — as exposed: rotate it, and remove the
+  file from the history. The move stops it happening again; it cannot undo what already left.
+
+**If the keychain is not up yet, nothing is lost.** A settings read that *fails* is not read as "no settings":
+the plugin declines to save over a configuration it could not read this run, rather than quietly consolidating
+defaults on top of it. Unlock your keychain and restart the IDE.
+
+**Everything else carries over.** You are not signed out — the credential is untouched. Your chat history is
+unaffected, because it has always been read from the `claude` binary's own session files rather than stored by
+the plugin, and your open tabs are restored as before. The agent, subagent and background-task tabs are new
+views over data the binary was already writing, so past sessions get them too.
 
 ## v5.1.1 — 2026-08-10
 

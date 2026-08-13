@@ -40,8 +40,9 @@ Include:
 - Reproduction steps, proof-of-concept, expected vs observed impact.
 - Whether the issue is already public anywhere.
 
-PGP-encrypted email is welcome; request our key in a first plaintext message
-that contains no sensitive details.
+The advisory thread is already private, so there is nothing to encrypt against —
+and there is deliberately **no contact address published anywhere in this
+repository**. If you need an out-of-band channel, ask for one in the advisory.
 
 ## Our commitments
 
@@ -81,7 +82,20 @@ zero. `npm audit` over the whole tree will report transitive advisories in that
 tooling; they reach a developer's machine at build time, never a user, and are
 handled as maintenance rather than as security releases.
 
-Verify the claim rather than taking it on trust — the artifact is inspectable:
+**This is enforced, not asserted.** `ci.yml` blocks on `npm audit --omit=dev
+--audit-level=low` (the distributed scope) and reports the full tree without
+failing; and the `Build plugin` job asserts, on the exact artifact the verifier
+just checked, that the zip contains **zero** `node_modules` entries and that
+`META-INF/LICENSE`, `META-INF/THIRD-PARTY-NOTICES.md` and a licence text for
+**every** file in this repository's `LICENSES/` directory are present inside the
+plugin jar. That last set is derived from the checkout rather than hardcoded, so
+adding a licence text extends the gate by itself — and the notices file cannot
+end up pointing at texts the artifact does not carry, which is exactly what it
+did before the check was widened. Both are required status checks on `main`. If
+the packaging ever changes, the claim fails the build rather than quietly
+becoming false.
+
+Verify it yourself — the artifact is inspectable:
 
 ```sh
 unzip -l build/distributions/*.zip | grep -c 'node_modules'   # → 0
@@ -148,6 +162,31 @@ project root (`DiffPresenter.isWithinRoot`, enforced in `PermissionBroker` and
 `FileRollback`) and is unaffected by the above. A path that lets the plugin
 **write**, delete or execute outside the project root — or an *open* that
 reaches outside project ∪ `$HOME` — is a real finding. Report it.
+
+## Where credentials and settings are kept
+
+Both moved into the IDE's **PasswordSafe** — the OS credential store (Keychain,
+KWallet/Secret Service, Credential Manager) or the IDE's encrypted file — and
+both moves closed a plaintext-at-rest problem rather than a theoretical one.
+
+- **The OAuth credential (5.0.x).** `claude auth login` writes
+  `~/.claude/.credentials.json`, plaintext on Linux and shared with the terminal
+  CLI. The plugin harvests it into the safe and **deletes that file** — including
+  a login you made in your own terminal, deliberately. It is never written back:
+  the credential reaches the binary as an environment variable, and the plugin
+  holds no OAuth client and calls no token endpoint. Renewal (5.0.1) goes through
+  the binary's own non-interactive refresh branch, so that invariant is intact.
+- **API keys** live in their own per-provider slot, so no provider's key can
+  overwrite another's, and are applied only when that provider is selected.
+- **The settings document (5.5.0).** Previously `.idea/claude-code.xml`: per
+  project, plaintext, and in a directory people commit. It carries the plugin's
+  **env block**, which is exactly where an API key or a credentialed proxy URL
+  ends up. The legacy file is deleted only after the safe has accepted the copy.
+
+Credentials are passed in the environment, **never in argv** (where `ps` would
+show them), and never reach a log, the transcript or any exported XML. Sign-out
+clears the plugin's safe and nothing else — running `auth logout` from an IDE
+button would destroy the user's terminal login too.
 
 ## The sensitive-data lock (4.3.1) — deterministic, not an "AI guardrail"
 
@@ -227,8 +266,8 @@ different security properties.
 
 | | Maintainer key | CI signing key |
 |---|---|---|
-| Signs | commits and the `vX.Y.Z` tag | the release `.zip` and its `.sha256` |
-| Claim | *a person chose to release this commit* | *this workflow produced these bytes* |
+| Signs | every commit, and the CI key's certification | the `vX.Y.Z` tag, the release `.zip` and its `.sha256` |
+| Claim | *a person wrote and merged this commit* | *this workflow cut this tag and produced these bytes* |
 | Custody | **hardware (YubiKey)** — non-exportable, touch required | software key in a GitHub **environment** secret |
 | Public key | `6CD3 0675 6132 C6FD DEE8 8A74 CD0C 12D8 3C04 435A` | `docs/ci-signing-key.asc` |
 | Expiry | — | **1 year**, then rotated |
@@ -239,8 +278,9 @@ exactly what makes it worth trusting. Automating artifact signatures therefore
 requires a software key whose private half sits in a secret. That is a real
 weakening and it is an accepted, bounded one:
 
-- The secret is scoped to the **`marketplace` environment**, which requires a
-  human approval. No job reachable by merely pushing a tag can see it.
+- The secret is scoped to the **`marketplace` environment**, whose deployment
+  policy admits only `main` and `v*.*.*` tags. No job on any other ref can see
+  it, and no repository-level secret exists at all.
 - The key **expires after a year**, so a leak nobody noticed stops mattering on
   its own schedule rather than never.
 - Its user ID says out loud that it is a CI key and not the maintainer. If the
@@ -283,17 +323,29 @@ gh attestation verify claude-code-native-X.Y.Z.zip \
 is merged into `main`, and both the tag and the artifact are signed by the CI
 key — which is certified by the maintainer's hardware key, so the chain still
 ends in hardware, but which signs without a human present. **Nothing in a
-release attests that a person authorised it.** That rests on the two gates
-around publication: `main` accepts only reviewed pull requests, and publishing
-requires an approval from a named reviewer on a protected environment. Read
-`git verify-tag` as *"this workflow cut this from main"*, and treat the human
-judgement as living in the pull request, not in the signature.
+release attests that a person authorised it.** Read `git verify-tag` as *"this
+workflow cut this from main"*, and treat the human judgement as living in the
+pull request, not in the signature.
+
+That judgement is **one** gate, not two. This section used to name a second — a
+required reviewer on the `marketplace` environment — and there is no such rule:
+the environment's only protection is the deployment policy restricting it to
+`main` and `v*.*.*` (checked against the API on 2026-08-11; the provisioning
+script sets `reviewers: []` deliberately). **The merge into `main` is the last
+human act before a version reaches users.** Said plainly rather than dropped,
+because a control everyone believes in and nobody configured is worse than one
+that was never claimed. What still holds without it: `main` takes nothing but
+pull requests that are up to date with every required check green (a
+*mechanical* gate — `required_approving_review_count` is 0, deliberately, since
+GitHub will not let an author approve their own PR and a single maintainer
+cannot satisfy any higher value), the credentials exist on no other ref, and the
+lineage guard runs before any of them is in scope.
 
 The attestation is worth having and worth not overtrusting: it proves *where* a
 build ran, not that the result is benign. A compromised runner can produce a
 valid attestation for a malicious artifact. What actually reduces that risk is
 everything around it — every action pinned by commit SHA, a read-only default
-token, and no secrets outside the approval-gated job.
+token, and no secrets outside the one environment-scoped job.
 
 **Rotation** (scheduled, before expiry): regenerate with
 `./scripts/gen-ci-signing-key.sh`, certify the new key with the YubiKey, replace

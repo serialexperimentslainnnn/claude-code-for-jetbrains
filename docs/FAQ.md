@@ -14,43 +14,55 @@ After install, a "Claude Code" tool window appears on the right.
 
 ## Which Claude account does the plugin use?
 
-**Whichever account your local `claude` binary is already authenticated
-with.** The plugin spawns the binary you have on `PATH` (or at
-`~/.local/bin/claude` on Linux/macOS) and reuses its credentials —
-subscription, OAuth, or `ANTHROPIC_API_KEY`. The plugin never asks you to
-log in again and stores no tokens of its own.
+**The one you sign into from the chat's sign-in card** — and the plugin holds
+that credential itself, which is the part worth knowing.
 
-If you have not logged in yet:
+A chat tab that has no credential shows a sign-in card. It runs `claude auth
+login` for you, the binary opens your browser and captures the callback, and
+then the plugin **harvests the resulting credential into the IDE's PasswordSafe
+and deletes `~/.claude/.credentials.json`**. From then on it is handed to the
+binary in the environment for each session. An `ANTHROPIC_API_KEY` typed into
+the card (or into Settings ▸ Claude Code ▸ Provider) is stored the same way.
 
-```bash
-claude login
-```
+Two consequences people notice:
+
+- **A login you made in your own terminal is also harvested**, and that file is
+  deleted. Deliberate: the credential ends up in your keychain instead of a
+  plaintext file. Your terminal `claude` will ask you to log in again.
+- **Signing out from the dashboard clears the plugin's safe and nothing else.**
+  It does not run `claude auth logout`, because that would kill your terminal's
+  login too.
 
 ## How do I change the model?
 
-Click the **model chip** at the bottom of the chat composer (e.g. `Default`,
-`Sonnet`, `Haiku`). Selecting a different model restarts the current session
-under `--resume`, so the transcript is preserved.
+Click the **model chip** at the bottom of the chat composer. Selecting a
+different model restarts the current session under `--resume`, so the transcript
+is preserved. The default lives in **Settings ▸ Claude Code**.
 
-You can also set the default model permanently in Settings → Tools →
-Claude Code Native.
+## Which models are in the list?
 
-## What is the difference between Default, Sonnet, and Haiku?
+**Whatever your binary reports** — the list is read from the `initialize` reply,
+not hardcoded, so a new model appears without a plugin update. Entries are
+labelled from the binary's own `description`, because its short display name
+omits the version and made two generations of Opus indistinguishable.
 
-- **Default** — the model alias your binary resolves to, usually the latest
-  recommended model for your subscription tier.
-- **Sonnet** — Claude Sonnet family. Balanced quality and latency.
-- **Haiku** — smaller, faster, cheaper. Good for short edits and quick
-  questions.
+The floating `default` alias is filtered out on purpose: the binary lists it
+*and* the concrete model it resolves to, which is the same model twice, once
+without a version. The plugin pins the concrete Opus 1M-context model instead,
+falling back to the binary's recommendation and then to the first model listed
+if that one is not on offer.
 
-The exact mapping is decided by the `claude` binary, not the plugin.
+## How do I see what a session costs, and how much of my plan is left?
 
-## How do I see the cost of a session?
+Open the **session dashboard** (⚙ in the chat). It shows the context breakdown,
+the session cost, and the **plan limits**: every rate-limit window with its reset
+time, per-model weekly buckets where your plan reports them, and the extra-credit
+balance. The composer carries the same figures as its own row of labelled bars
+under the status line, colour-coded, and announces a window once per threshold
+crossed.
 
-The quota bar in the composer shows live token usage. The control message
-`get_session_cost` is queried periodically and the result is rendered next
-to the spinner. For an authoritative breakdown across sessions, use
-`claude /cost` in a terminal — same account, same data.
+That comes from the binary's `get_usage` control request — the same numbers the
+Claude apps show, so there is no longer a reason to leave the IDE for them.
 
 ## I get "Connection refused" or "Claude binary not found"
 
@@ -60,25 +72,62 @@ The plugin looks for `claude` on `PATH` and then at `~/.local/bin/claude`
 Fix:
 
 1. Verify the binary exists: `which claude` (or `where claude` on Windows).
-2. If it is in a non-standard location, set it in Settings → Tools →
-   Claude Code Native → **Claude binary path**.
-3. On Windows, the npm install uses `claude.cmd` — point the setting at
-   that file.
+2. If it is in a non-standard location, set it in **Settings ▸ Claude Code ▸
+   claude executable path**.
+3. On Windows, prefer the native `claude.exe`; the extensionless npm shim cannot
+   be spawned directly.
+
+The chat also offers to install it for you when it is missing, using the
+official per-OS route. The detection is re-run every few seconds while no
+session is up, so installing the binary in a terminal takes effect without
+closing the tab.
 
 See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for more.
 
+## Why does the plugin need my IDE's password store?
+
+Because that is where its settings and credentials live. Since 5.5.0 the whole
+settings document is in the IDE's PasswordSafe rather than in
+`.idea/claude-code.xml` — they were per-project plaintext in a file people
+commit, and they include an env block, which is where an API key or a
+credentialed proxy URL ends up. One consequence worth knowing: **the settings are
+now global, not per project.**
+
+If the safe cannot be read (a locked KWallet, say), the plugin treats that as a
+failure and refuses to save over it — a failed read is not an empty
+configuration.
+
 ## How do I disable restoring open chats on startup?
 
-Settings → Tools → Claude Code Native → uncheck
-**Restore open chats on startup**. The plugin will then start with a
-single empty tab instead of reopening your previous sessions via
-`--resume`.
+**Settings ▸ Claude Code** → uncheck **Restore open chats on startup**. The
+plugin will then start with a single empty tab instead of reopening your
+previous sessions via `--resume`.
 
 ## How do I clean up leftover diff tabs?
 
-Use the editor tabs context menu **Close All Diffs**, or close them
-individually. Diffs opened by the plugin are real editor tabs, not modal
+Use **Close All Diffs** in the Claude Code tool window's title bar, or close
+them individually. Diffs opened by the plugin are real editor tabs, not modal
 windows, so they stay until you close them.
+
+## Which IDE versions does it run in?
+
+**2025.3 and newer.** The chat UI is the IDE's embedded browser, and from build
+262 the platform ships that browser as a separate bundled plugin the plugin has
+to declare a dependency on — a module id that does not exist before 2025.3. So
+declaring it (which is what makes the plugin work on 2026.2 at all) costs 2025.1
+and 2025.2. On those, stay on **5.1.1**. There is no browser-less mode to fall
+back to.
+
+## Why does each agent get its own tab now?
+
+Because one transcript could not hold them. A session running agents under
+agents plus background tasks filled the chat with consecutive "Thought process"
+rows belonging to different agents, interleaved, with no way to follow any one of
+them. Each agent now has its own tab and its own transcript, nested to match who
+spawned whom, and the main transcript links to an agent instead of inlining it.
+
+Only agents **this plugin** started are shown. A session you also resumed from a
+terminal leaves its own agents in the same directory, and those never appear.
 
 ## Does the plugin send my code or prompts anywhere?
 

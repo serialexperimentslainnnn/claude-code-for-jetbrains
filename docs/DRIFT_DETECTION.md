@@ -30,17 +30,22 @@ new and worth a human look.
 
 ## Reconciliation pipeline (run this end-to-end when checking for drift)
 
-1. **Update** — run `./gradlew checkDrift` (updates SDK + binary, reports).
+1. **Update** — run `./gradlew checkDrift` (updates SDK + binary, reports). It defaults to
+   `~/.local/bin/claude`; pass `-PclaudeBinary=<path>` (or `CLAUDE_BINARY`) for a system-wide install.
 2. **Plugin code update** — for each genuinely-new kind in the report, add the serializer/`when` branch in
    `protocol/ClaudeEvent.kt` (event/system subtype) or `protocol/ControlProtocol.kt` (control kind). No-op if
    the surface is unchanged.
-3. **Tests** — `./gradlew test` (full non-UI pyramid green).
+3. **Tests** — `./gradlew test` (full non-UI pyramid green) plus `npm test` if anything reached the UI.
 4. **Update the drift detector** — extend `KNOWN_EVENT_TYPES` / `KNOWN_SUBTYPES` to cover the triaged kinds,
    and bump `scripts/drift-baseline.properties` (`sdk`, `binary`) to the updated versions. Re-run
    `./gradlew checkDrift` → green.
 5. **Bump release** — `version` in `build.gradle.kts`.
 6. **Code review + security review** — `/code-review` and `/security-review` over the diff.
-7. **Update `.md` files** — `CHANGELOG.md`, `RELEASE_NOTES.md`, `README.md`, `CLAUDE.md` (version refs).
-8. **Commit** — GP-signed commits, no `Co-Authored-By: Claude` trailer.
-9. **Publish release** — GitFlow PRs `feature → develop → main` (admin rebase-merge), normalize branches,
-   signed `vX.Y.Z` tag, GitHub release with the built zip.
+7. **Update `.md` files** — `CHANGELOG.md`, `RELEASE_NOTES.md`, `README.md`, `CLAUDE.md`, `PROJECTMAP.md`,
+   and the matrix in [`BINARY_COMPAT.md`](BINARY_COMPAT.md).
+8. **Commit** — Conventional Commits (`build(protocol): re-baseline to claude X / SDK Y`), GPG-signed, and
+   **no `Co-Authored-By` trailer**.
+9. **Publish release** — GitFlow PRs `feature → develop → main`, **merge commits only** (squash and rebase
+   are disabled repository-wide: they rewrite commits and strip the author's signature). **Do not tag** —
+   the merge into `main` triggers `release.yml`, which cuts and signs `vX.Y.Z` itself and publishes from it.
+   See [`RELEASE_PROCEDURE.md`](RELEASE_PROCEDURE.md).

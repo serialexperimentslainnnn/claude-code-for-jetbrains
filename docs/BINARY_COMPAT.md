@@ -1,85 +1,76 @@
 # Binary compatibility
 
-This document tracks which `claude` binary versions each plugin release
-has been tested against, and which stream-json / control events the
-protocol layer currently understands.
+Two ranges have to hold at once, and they move independently:
 
-The plugin uses **lenient JSON decoding** (`ignoreUnknownKeys = true`) in
-`ProtocolParser`, so a newer binary that adds fields to existing events
-will not break older plugin versions — they just won't render the new
-data. **Entirely new event types** require code changes in
-`protocol/ClaudeEvent.kt` (and downstream in `ClaudeSession` /
-`TranscriptView`) before the plugin can react to them.
+- the **`claude` binary / Agent SDK** whose `stream-json` + control protocol the plugin speaks;
+- the **IntelliJ Platform** builds the plugin loads into.
 
-## Version matrix
+This document records both, and what to do when either moves.
 
-| Plugin version | claude binary min | claude binary tested | SDK ref         | Notes                                                                                  |
-|----------------|-------------------|----------------------|-----------------|----------------------------------------------------------------------------------------|
-| 2.0.1          | 2.1.150           | 2.1.150              | 0.3.150         | First Marketplace release.                                                              |
-| 2.1.0          | 2.1.150           | 2.1.150              | 0.3.150         | **Not published** — blocked by internal-API usage discovered during `verifyPlugin`.    |
-| 2.2.0          | 2.1.150           | 2.1.161              | 0.3.161         | Current release. Lenient codec absorbs new fields; new event types listed below.        |
+## Current state
 
-Bump the **min** column only when the plugin starts depending on a feature
-older binaries do not expose; otherwise leave it conservative.
+| | Value | Where it is declared |
+|---|---|---|
+| Protocol baseline | `claude` **2.1.226** / SDK **0.3.227** | `scripts/drift-baseline.properties` |
+| IDE range | **253 → 263.\*** (2025.3 → the 2026.3 branch) | `build.gradle.kts` → `ideaVersion` |
+| Compiled against | IDEA `253.28294.334` — the floor itself | `build.gradle.kts` → `intellijIdea("253.28294.334") { useInstaller = false }` |
+| Verified against | the recommended range **plus** the newest IDEA **and PyCharm** EAP/RC | `pluginVerification.ides` |
 
-## Events currently parsed
+**There is no enforced minimum binary version.** The plugin does not probe for one and would not refuse an
+older `claude`; the baseline above is the version the protocol layer was last *reconciled* against, which is
+a different claim. An older binary is simply untested — it will typically work, because everything the plugin
+sends is long-established, and it will silently omit whatever it does not implement.
 
-`protocol/ClaudeEvent.kt` and `ProtocolParser` understand at least:
+**The IDE floor is 253 because of JCEF, not because of an API tidy-up.** Since build 262 the platform ships
+the embedded browser as a bundled plugin (`com.intellij.modules.jcef`) instead of as part of the platform
+itself, so a plugin that does not declare that dependency gets no `com.intellij.ui.jcef.*` in its
+classloader — and since 4.0.0 the entire UI *is* that browser. The module id does not exist at all on
+251/252, so declaring it (which 5.5.0 must) costs 2025.1 and 2025.2. There is no browser-less mode to
+degrade to. `JcefDependencyContractTest` is the gate: it fails if the descriptor stops declaring the
+dependency, declares it as optional, or drops the floor below 253. `verifyPlugin` does **not** catch this —
+it resolves against the whole IDE distribution rather than against the plugin's classloader, and it reported
+*Compatible* on 262 throughout the release that was dead there.
 
-- `system/init` (carries `session_id`, `slash_commands`, launch metadata).
-- `assistant` (content blocks: text, thinking, tool_use).
-- `user` (echoed user turns, tool_result).
-- `stream_event` (assistant deltas while `--include-partial-messages`).
-- `result` (end of turn, usage, stop reason).
-- `keep_alive` (ignored).
-- `control_request` with `subtype = can_use_tool` (permissions and
-  `AskUserQuestion` piggy-backed on it).
-- `control_response` correlated by `request_id`.
-- `status` / `compact_metadata` (compaction reconstruction).
+## Protocol version history
 
-## Events from binary 2.1.161 — TO IMPLEMENT
+Each row is the baseline a release was reconciled at, i.e. the point where `./gradlew checkDrift` was green
+and `ProtocolSurface` covered the surface both the SDK types and a live probe exposed.
 
-The newer binary emits additional events that the plugin currently
-ignores via lenient decoding. They should be added incrementally as
-sealed-subclass cases in `ClaudeEvent.kt`, with rendering in the
-transcript and, where relevant, hooks in `ClaudeSession`:
+| Plugin version | `claude` binary | SDK ref | Notes |
+|---|---|---|---|
+| 5.5.0 | 2.1.226 | 0.3.227 | Current. Surface unchanged; the release's protocol work was reading the subagent sidecars the binary already writes. |
+| 5.0.0 | 2.1.222 | 0.3.222 | `checkDrift` green across the move of the SDK to `devDependencies`; surface unchanged. |
+| 4.3.3 | 2.1.220 | 0.3.220 | Surface unchanged. |
+| 4.2.0 | 2.1.204 | 0.3.204 | Five new kinds reconciled, `background_tasks_changed` and `control_request_progress` among them. |
+| 4.0.4 | 2.1.193 | 0.3.193 | Added `informational`, `model_refusal_no_fallback`, `worker_shutting_down`. |
+| 4.0.1 | 2.1.170 | 0.3.170 | Added `model_refusal_fallback`; triaged `get_usage`, `register_repo_root`, `reload_skills`. |
 
-- `task_progress` — long-running task progress updates (percentage,
-  step description). UI: progress strip on the corresponding ToolRow.
-- `task_notification` — completion / failure notifications for
-  background work. UI: attention badge + optional toast via the existing
-  `SessionListener.onAttention` plumbing.
-- `background_task_started` / `background_task_finished` — lifecycle of
-  detached agent tasks. UI: collapsible section in the transcript;
-  cancel via existing `interrupt` control.
-- `auth_status` — re-auth required, quota exhausted, plan downgrade.
-  UI: actionable notification with a "Re-authenticate" action that runs
-  `claude login` via the binary.
-- `session_state_changed` — server-side state transitions (e.g.
-  paused / resumed, mode coerced). UI: reflect in the mode chip without
-  letting the binary override the plugin's source-of-truth mode.
+Releases before 4.0.1 predate the drift detector. This document previously recorded 2.0.1 as tested against
+`claude` 2.1.150 and 2.2.0 against 2.1.161; those figures are kept only as history — nothing re-verifies them.
 
-Each new event should land with:
+## How new protocol kinds are absorbed
 
-1. A sealed-subclass entry in `ClaudeEvent.kt` annotated with
-   `@SerialName(...)`.
-2. A parser test in `src/test/kotlin/.../protocol/` with a captured
-   JSONL fixture.
-3. Optional rendering in `TranscriptView` and listener calls in
-   `ClaudeSession`.
-4. An entry in `CHANGELOG.md` under `Added` and a row update here.
+`ProtocolParser` decodes leniently (`ignoreUnknownKeys = true`), so a newer binary adding **fields** to an
+existing message cannot break an older plugin: the field is dropped and nothing renders it. An entirely new
+**message or control kind** needs code — a typed case in `protocol/ClaudeEvent.kt` (receive) or a builder in
+`protocol/ControlProtocol.kt` (send), and then whatever surfaces it in `session/` and `ui/jcef/`.
 
-## When the binary changes
+The plugin's own view of the surface lives in **one** set, deliberately: `KNOWN_SUBTYPES` in
+`src/test/kotlin/dev/lain/claudejb/drift/ProtocolSurface.kt` is the *full triaged* list — everything the
+plugin parses, answers, sends, or knowingly declines to send (`list_models`, `get_plan`,
+`get_workspace_diff`, which belong to the remote thin client rather than to us). A subtype outside that set
+is genuinely new and needs a human decision, which is exactly what the detector reports.
 
-When a Dependabot PR bumps
-`node_modules/@anthropic-ai/claude-agent-sdk/` (label `sdk-drift`),
-the reviewer should:
+## When the binary or the SDK moves
 
-1. Diff `sdk.d.ts`, `sdk-tools.d.ts`, and `sdk.mjs` against the previous
-   version.
-2. List any new event subtype, new control subtype, or changed field
-   semantics in the PR description.
-3. Decide per item: ignore (lenient codec covers it), add a parser case,
-   or surface in the UI.
-4. Update the "TO IMPLEMENT" list above and the version matrix once a
-   release ships against the new binary.
+`./gradlew checkDrift` updates both tools to latest, probes the real binary, and diffs the resulting surface
+against the sets above. It is **on-demand**, not part of `check`, and `drift.yml` runs it weekly and **files
+an issue** rather than committing — deciding whether a new kind is modelled or ignored is a judgement call.
+The full reconciliation sequence is in [`DRIFT_DETECTION.md`](DRIFT_DETECTION.md); the short version:
+
+1. `./gradlew checkDrift` — read the report. On this machine the binary is a system-wide install, so it needs
+   `-PclaudeBinary=/usr/bin/claude`; the task otherwise defaults to `~/.local/bin/claude`.
+2. Model each genuinely-new kind, or record the decision not to.
+3. `./gradlew test` green.
+4. Extend `KNOWN_EVENT_TYPES` / `KNOWN_SUBTYPES` and bump `scripts/drift-baseline.properties`.
+5. Add a row to the table above, and a `CHANGELOG.md` entry.

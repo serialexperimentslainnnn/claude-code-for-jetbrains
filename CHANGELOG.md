@@ -31,28 +31,65 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was the agent's own transcript, i.e. pages of raw JSONL where a command's output belongs. `task_notification`
   fires for agents too, and it was creating entries; only a `tool_result` carrying `backgroundTaskId` makes a
   task ours.
-- **The tab bar could not be scrolled** once the chats overflowed (a vertical wheel does not move a horizontal
-  row in Chromium), **the loading screen covered the chat tabs** so you could not switch while one started,
-  and **the view buttons floated over the transcript** you were reading — overlapping a focusable tab is
-  WCAG 2.2 SC 2.4.11, and they are flex items now, so it cannot happen by construction.
+- **The tab row was neither scrollable nor reachable once a few chats were open.** Three faults, stacked. The
+  row never bounded its width, so the strip *grew* instead of overflowing and the extra tabs were painted
+  outside the tool window, where no amount of scrolling reaches them because there is nothing to scroll. The
+  tabs had also become much wider, since a chat is now named after the prompt that started it, and the label
+  had an ellipsis rule but no width to trigger it. And the scrollbar was hidden on the grounds that the wheel
+  would do — which a vertical wheel does not, for a horizontal row, in Chromium. The row is bounded now, the
+  label is capped with the full title in the tooltip, the wheel gesture is translated, the row itself is the
+  handle so you can grab it and drag (with a threshold, so a click is still a click), and selecting a chat
+  **centres** it — which is what makes ordinary use need no dragging at all.
+- **The view buttons floated over the transcript** you were reading, and over the tabs. Overlapping a
+  focusable tab is WCAG 2.2 SC 2.4.11 (Focus Not Obscured); they are items in the tab row now, so it cannot
+  happen by construction rather than by keeping a padding in sync with the width of the words.
 - **Hovering another chat's tab showed your own agents.** The bar is rebuilt several times a turn, and the
   reopen re-anchored to the first `⋮` with no chat id — i.e. the selected chat.
-- **The loading screen flickered on every new chat.** It is visible by default (the honest initial state is
-  "waiting"), but the binary often starts in a fraction of a second, and a full-window panel that paints and
-  vanishes reads as the whole plugin flashing. It now waits a third of a second before showing itself.
+- **The waiting screens covered the chat and flashed on every new one.** Install, sign-in and loading were
+  full-window overlays, so they hid whatever they were laid over — first the chat tabs, so you could not
+  switch chats while one was starting, and then the composer. And because the binary often comes up in a
+  fraction of a second, opening a chat painted a full-window panel and removed it again, which reads as the
+  whole plugin flashing. They are **content of the transcript** now, not overlays: a row cannot cover what it
+  does not own. The composer stays usable throughout — a prompt typed while the binary starts is queued and
+  sent when it is ready — and the loading screen holds off for 0.35 s, so a fast start never draws it at all.
+- **A restored chat showed the binary's own bookkeeping as things you had said.** `<task-notification>` lines
+  and the "Caveat: the messages below were generated…" preamble ride on `user` records in the session file;
+  they are now recognised for what they are, both in the transcript and in the title a chat is given.
 
 ### Changed
-- **Debloat and optimisation, with measurable results.** The chat felt heavy because it was doing a great
-  deal of work nobody asked for: the tab bar and the dashboard rebuilt their entire DOM on every push from
-  the host — several times per turn, on pushes that changed nothing visible — and the dashboard did it even
-  while hidden, laying out a diagram and measuring its SVG for a panel nobody was looking at. Both now draw
-  only when what they draw has actually changed, which is the same fix as the flicker under the pointer.
-  The stylesheet lost ~200 lines of rules nothing could reach, `JcefChatPanel` lost 300 lines to three
-  collaborators, and `SettingsStore`'s hand-written serialiser (85 lines, cyclomatic complexity 36) became
-  the generated one. **detekt's baseline was not touched**: it still carries the same two `ClaudeSession`
-  entries and nothing else.
-- The stylesheet is now several files concatenated in cascade order by `JcefHost.CSS_PARTS` instead of one
-  3.6k-line file; the split was verified byte-identical before it landed, and the tests read that same list.
+- **The chat is faster, and the reason is that it stopped doing work nobody asked for.** Three things, all of
+  them repeated work removed rather than work made cheaper:
+  - **The tab bar redrew itself on every push from the host** — several times a turn, on pushes that change
+    nothing you can see, because an agent's transcript grew or a token landed. It now compares a signature of
+    everything it is drawing (the row *and* the panel hanging off it) and an identical push is a no-op. The
+    earlier attempt waived that skip whenever a menu was open, so resting the pointer on a tab meant every
+    push rebuilt the whole row and then re-anchored and reopened the panel underneath the cursor, several
+    times a second on a session with agents running: that is the flicker that was reported, and folding what
+    the open panel draws into the same signature is what fixed it. Three regression tests assert the identity
+    of the DOM nodes across an identical push, so a rebuild cannot come back unnoticed.
+  - **The dashboard rebuilt itself while hidden**, on the reasoning that the DOM should be kept fresh — which
+    meant laying out the Workloads diagram and measuring its SVG for a panel nobody was looking at, on every
+    session push. Opening the panel renders anyway, so the work was pure waste; while hidden the payload is
+    now simply stashed.
+  - **Every agent gets a tab, but not a browser.** The per-agent transcripts are switched inside the one
+    embedded browser the chat already had. A browser per agent would have been a Chromium process per agent,
+    on the very session this feature exists for — the one running dozens.
+
+  The waiting screen contributes the last piece: it no longer paints a full-window panel for a start that
+  takes 100 ms (see above).
+- **The code was cut down to match.** Measured against the commit this release branched from: no source file
+  over 500 lines remains except `ClaudeSession` (2 779 → 2 507) and the browser host — **seven such files
+  became two**. `protocol/Protocol.kt` (959 lines) was dissolved into eleven new files; `JcefChatPanel` went
+  943 → 305 lines behind seven collaborators; `SensitiveGuard` 814 → 292 across six files; the settings page
+  580 → 97 across seven sections; `SettingsStore`'s hand-written serialiser (85 lines, cyclomatic complexity
+  36) became the generated one. The frontend went from five modules — the largest 1 875 lines — to thirty,
+  none over 575, loaded in a declared order that is now a contract. **detekt's baseline was not touched**: it
+  still carries the same two `ClaudeSession` entries and nothing else.
+- The stylesheet is now seven files concatenated in cascade order by `JcefHost.CSS_PARTS` instead of one
+  2 959-line file; the split was verified byte-identical before it landed, and the tests read that same list.
+  Twenty-six rule blocks nothing could reach went with it, 159 lines in all: the Agents / Subagents /
+  Background list views the Workloads diagram replaced, and selectors the markup no longer emits —
+  `.plan-body`, `.q-body`, `.ro-bar`, `.ghost-text`/`.ghost-key`, `.spacer`, `#empty .star`.
 
 ### Added
 - **A tab per agent, with its own transcript**, reachable from a bar under the chats that keeps the whole
@@ -66,6 +103,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Settings moved into the IDE's password safe** (the OS keychain), one encrypted document shared by every
   project. They used to sit in `.idea/claude-code.xml`: per project, in the clear, and committable —
   including the env block, which is where an API key ends up. Existing settings are adopted on first run.
+- **A chat is named after what you asked it**, instead of being "Chat 3" for its whole life. The binary can
+  generate a title, but only for an interactive session — across thirty real sessions on a developer machine
+  not one carried a generated title, because the plugin runs it in print mode. So the plugin falls back the
+  way the binary itself does for display: the first thing you actually asked, one line, cut on a word. The
+  order of authority is unchanged and this comes last — a rename you typed wins, then a generated title if
+  the binary ever writes one. It applies in the same three places at once: the live tab, the tabs restored at
+  startup, and the list behind "Open Previous Session…".
+- **Git context in the tool window's ⚙ menu** — the checked-out branch is in the menu label itself, so the
+  menu answers "which branch is Claude working on" without opening anything, plus recent commits (one line
+  each: hash, subject, author, age, how many files) and the history of the current file. Both hand off to the
+  IDE's **own** Git Log rather than drawing a second, worse one inside a chat panel — the same reasoning that
+  keeps diffs on the platform's diff viewer. **It only ever reads**: nothing here moves a ref, rewrites
+  history or talks to a remote. On an IDE without the Git plugin, or in a project that is not a working copy,
+  the entries are simply absent rather than shown dead — and that is re-derived every time the menu opens, so
+  running `git init` takes effect without reopening anything.
+- **The agent is told what it is running inside.** Three things it cannot infer from the protocol are appended
+  to its system prompt at launch: that the transcript is a native GUI and not a terminal, so terminal-shaped
+  output is wrong by construction; that its file edits become a reviewable diff and its paths become clickable
+  links, which changes what a good answer looks like; and that a deterministic guard can refuse a call, so a
+  refusal reads as an answer instead of something to route around. It is fixed text — no machine name, no
+  environment value, no project content, no credential — and it is **not** a security control: nothing in it
+  softens a rule or describes how to get past one.
 
 ## [5.1.1] — 2026-08-10
 
