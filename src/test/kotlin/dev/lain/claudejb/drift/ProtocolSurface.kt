@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
  *    the **runtime** contract. Each line's top-level `type` and (for control frames) `subtype` is read.
  *
  * Drift = the difference between what the latest source exposes and what the plugin already knows
- * ([KNOWN_EVENT_TYPES] / [KNOWN_SUBTYPES], mirrored from `protocol/ClaudeEvent.kt`) or referenced
+ * ([KNOWN_EVENT_TYPES] / [KNOWN_SUBTYPES], mirrored from `protocol/ProtocolParser.kt`) or referenced
  * (the previous `sdk.d.ts`). The extraction is pure and offline so it can be unit-tested with fixtures;
  * the live download + probe happens in [DriftLiveCheck], driven by the `checkDrift` Gradle task.
  */
@@ -80,8 +80,10 @@ data class ProtocolSurface(
 
         /**
          * Top-level message `type`s the plugin's [dev.lain.claudejb.protocol] parser handles explicitly.
-         * **Keep in sync with `protocol/ClaudeEvent.kt`'s `when (type)`** — a capture type outside this set
-         * falls into the parser's `else -> Other` branch (it's tolerated, but unmodeled = actionable drift).
+         * **Keep in sync with the keys of `protocol/ProtocolParser.kt`'s `TOP_LEVEL_DECODERS`** — a capture
+         * type outside that table misses it and falls back to `ClaudeEvent.Other` (tolerated, but unmodeled
+         * = actionable drift). NB the dispatch is a MAP, not a `when`: there is no `else` arm to read, which
+         * is precisely why this list has to be kept by hand and diffed here.
          */
         val KNOWN_EVENT_TYPES: Set<String> = setOf(
             "system", "assistant", "user", "stream_event", "result",
@@ -94,7 +96,8 @@ data class ProtocolSurface(
          * *parses* it (system subtypes), *handles* it as a binary->host control request, *sends* it as a
          * host->binary control request, or knowingly leaves it as `Other`/`UnsupportedControlRequest`. A
          * `subtype` outside this set is genuinely new (worth a typed model or an explicit decision). Keep in
-         * sync with `protocol/ClaudeEvent.kt` (receive) and `protocol/ControlProtocol.kt` (send).
+         * sync with `protocol/ProtocolParser.kt` (receive — `SYSTEM_DECODERS` plus the control-frame arms of
+         * `parseControlRequest`) and `protocol/ControlProtocol.kt` (send).
          */
         val KNOWN_SUBTYPES: Set<String> = setOf(
             // system subtypes the parser maps to a typed event

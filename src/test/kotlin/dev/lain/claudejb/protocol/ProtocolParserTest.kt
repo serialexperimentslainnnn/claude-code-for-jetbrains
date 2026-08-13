@@ -3,6 +3,7 @@ package dev.lain.claudejb.protocol
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -116,6 +117,21 @@ class ProtocolParserTest {
         assertEquals("agent1", tool.parentToolUseId)
     }
 
+    // A subagent's reasoning carries the same `parent_tool_use_id` as its tool calls, and the parser used to
+    // drop it: every agent's "Thought process" then landed in the MAIN transcript, interleaved with the others.
+    @Test
+    fun `subagent thinking keeps parent_tool_use_id for nesting`() {
+        val line = """{"type":"assistant","parent_tool_use_id":"agent1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}"""
+        val thinking = parseOne<ClaudeEvent.AssistantThinking>(line)
+        assertEquals("agent1", thinking.parentToolUseId)
+    }
+
+    @Test
+    fun `main-transcript thinking carries no parent_tool_use_id`() {
+        val line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}"""
+        assertNull(parseOne<ClaudeEvent.AssistantThinking>(line).parentToolUseId)
+    }
+
     // --- user / tool_result ---
 
     @Test
@@ -223,6 +239,36 @@ class ProtocolParserTest {
             """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}}""",
         )
         assertEquals("reasoning", event.text)
+    }
+
+    // A subagent streams through the SAME channel as the main conversation and is told apart only by
+    // `parent_tool_use_id`, which `SDKPartialAssistantMessage` puts on the stream_event ROOT — NOT inside
+    // `event`. Reading it from the wrong level is the plausible mistake, so the fixture plants a decoy there.
+    @Test
+    fun `stream text_delta takes parent_tool_use_id from the root, not from event`() {
+        val event = parseOne<ClaudeEvent.TextDelta>(
+            """{"type":"stream_event","parent_tool_use_id":"agent7","event":{"type":"content_block_delta","parent_tool_use_id":"decoy","delta":{"type":"text_delta","text":"par"}}}""",
+        )
+        assertEquals("agent7", event.parentToolUseId)
+    }
+
+    @Test
+    fun `stream thinking_delta takes parent_tool_use_id from the root`() {
+        val event = parseOne<ClaudeEvent.ThinkingDelta>(
+            """{"type":"stream_event","parent_tool_use_id":"agent7","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reasoning"}}}""",
+        )
+        assertEquals("agent7", event.parentToolUseId)
+    }
+
+    // Absent and explicit-null both mean "the main conversation" (the SDK types the field `string | null`),
+    // and that is what routes a delta into this transcript rather than an agent's.
+    @Test
+    fun `main-transcript deltas carry no parent_tool_use_id`() {
+        val absent = """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}"""
+        val explicitNull =
+            """{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"r"}}}"""
+        assertNull(parseOne<ClaudeEvent.TextDelta>(absent).parentToolUseId)
+        assertNull(parseOne<ClaudeEvent.ThinkingDelta>(explicitNull).parentToolUseId)
     }
 
     @Test
