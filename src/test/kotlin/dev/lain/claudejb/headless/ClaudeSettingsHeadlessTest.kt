@@ -5,6 +5,8 @@ import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.settings.SettingsStoreTestAccess
+import dev.lain.claudejb.settings.parseEnv
+import dev.lain.claudejb.settings.sensitivePolicy
 import kotlinx.serialization.json.JsonObject
 
 /** Headless: the [ClaudeSettings] project service holds launch defaults and the "Always allow" tool set. */
@@ -13,16 +15,25 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     private val settings get() = ClaudeSettings.getInstance(project)
     private val emptyInput = JsonObject(emptyMap())
 
+    /**
+     * A store of this method's own, then defaults on top of it.
+     *
+     * The fixture's PasswordSafe belongs to an Application the platform reuses for the whole run, so without
+     * [SecretStore.storeOverride] one document is shared by every test class in the JVM and a method here can
+     * read what a different class wrote. The [SettingsStoreTestAccess.load] is the other half: `readFailed`
+     * lives on an `object` and would otherwise carry a previous test's veto into the saves below.
+     */
     override fun setUp() {
         super.setUp()
+        SecretStore.storeOverride = mutableMapOf()
+        SettingsStoreTestAccess.load()
         // The light-fixture project service is reused across methods; restore the defaults under test.
         settings.replaceState(ClaudeSettings.State())
     }
 
-    /** Some of these tests persist (that IS the behaviour under test); the safe must not carry it forward. */
     override fun tearDown() {
         try {
-            SecretStore.clear(SecretStore.SETTINGS_JSON)
+            SecretStore.storeOverride = null
         } finally {
             super.tearDown()
         }

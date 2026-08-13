@@ -48,6 +48,18 @@ internal object SettingsStore {
      * next save: the settings "breaking" with nobody having touched them.
      */
     fun load(): ClaudeSettings.State {
+        // NO STORE AT ALL is a third state, and it is neither of the two below.
+        //
+        // A test JVM that has not installed a [SecretStore.storeOverride] has nowhere to read from. That is
+        // not "the safe failed" — there is no configuration behind it to protect, and [readFailed] is a flag
+        // on an `object`, so setting it here would outlive this call and veto the saves of every later test
+        // in the JVM: one inert read poisoning a suite, which is the same shape as the bug the flag exists to
+        // prevent. Nor is it silently "read fine, found nothing": [save] refuses on the same condition, so
+        // nothing can round-trip through a store that is not there and quietly appear to work.
+        if (SecretStore.inert()) {
+            readFailed = false
+            return ClaudeSettings.State()
+        }
         val stored = runCatching { SecretStore.get(SecretStore.SETTINGS_JSON) }
         readFailed = stored.isFailure
         stored.onFailure { log.warn("could not read the settings from the password safe", it) }
@@ -128,6 +140,13 @@ internal object SettingsStore {
      * a transient safe.
      */
     fun save(state: ClaudeSettings.State): Boolean {
+        // Nowhere to write (a test JVM with no store of its own): refuse and say so, rather than report a
+        // success nothing kept. Ahead of the [SafeAlarm] path deliberately — there is no failing OS store
+        // here for the user to go and fix, so raising that alarm would be a false one.
+        if (SecretStore.inert()) {
+            log.debug("not saving the settings: no credential store is installed in this JVM")
+            return false
+        }
         if (readFailed) {
             log.warn("not saving the settings: they could not be read this run, and defaults must not replace them")
             return false
@@ -165,17 +184,42 @@ internal object SettingsStore {
      * factory values and mark the migration done, so the actual settings (in another project's XML, opened
      * later) were never adopted and the user saw a plugin reset to defaults. Nothing to migrate is now
      * exactly that — nothing — and the next project that does carry an XML still gets its turn.
+     *
+     * **And one thing it refuses to ADOPT**: a permission mode weaker than the default — see
+     * [LegacyPermissionMode] and [withoutWeakenedSecurity]. That check runs first, so a file whose only
+     * content was such a mode counts as carrying nothing and does not create the document either.
      */
     fun migrateFrom(legacy: ClaudeSettings.State): Boolean {
         if (exists()) return false // already migrated, or already configured here
-        if (encode(legacy) == encode(ClaudeSettings.State())) {
+        val adoptable = withoutWeakenedSecurity(legacy)
+        if (encode(adoptable) == encode(ClaudeSettings.State())) {
             log.info("no legacy settings to migrate (the project carries none)")
             return false
         }
-        save(legacy)
+        save(adoptable)
         log.info("migrated plugin settings from the project's claude-code.xml into the password safe")
         return exists()
     }
+
+    /**
+     * The legacy state as it may be adopted: everything it carries, minus a permission mode a repository has
+     * no business choosing for every project the user will ever open ([LegacyPermissionMode.weakensSecurity]).
+     *
+     * Returns a COPY when it changes something, never the caller's object: the state it is handed belongs to
+     * [LegacyProjectSettings], i.e. to a live `PersistentStateComponent` whose file is still on disk at this
+     * point. Editing that in place would mark the component dirty and invite the platform to write
+     * `claude-code.xml` back out — resurrecting, with our own contents, the file this migration exists to
+     * remove.
+     */
+    private fun withoutWeakenedSecurity(legacy: ClaudeSettings.State): ClaudeSettings.State {
+        if (!LegacyPermissionMode.weakensSecurity(legacy.permissionMode)) return legacy
+        LegacySettingsNotice.permissionModeRefused(legacy.permissionMode)
+        return copyOf(legacy).apply { permissionMode = LegacyPermissionMode.SAFE }
+    }
+
+    /** A detached copy, through the document's own serializer — the one place that already knows every field. */
+    private fun copyOf(state: ClaudeSettings.State): ClaudeSettings.State =
+        JSON.decodeFromJsonElement(ClaudeSettings.State.serializer(), encode(state))
 
     /** Whether a configuration has ever been stored. */
     fun exists(): Boolean = runCatching { SecretStore.get(SecretStore.SETTINGS_JSON) != null }.getOrDefault(false)
