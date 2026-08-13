@@ -27,7 +27,7 @@ class SensitiveGuardTest {
 
     private val home = "/home/me"
     private val policy = SensitiveGuard.Policy(
-        globs = SensitiveGuard.SENSITIVE_GLOBS,
+        globs = CredentialPaths.SENSITIVE_GLOBS,
         home = home,
         currentUser = "me",
         guardedRoots = listOf("/mnt/share", "/net/nfs"),
@@ -180,7 +180,7 @@ class SensitiveGuardTest {
         val nested = buildJsonObject {
             putJsonArray("edits") { addJsonObject { put("uri", "/home/me/.aws/credentials") } }
         }
-        assertTrue(SensitiveGuard.touchesSensitivePath(nested, SensitiveGuard.SENSITIVE_GLOBS, home))
+        assertTrue(CredentialPaths.touchesSensitivePath(nested, CredentialPaths.SENSITIVE_GLOBS, home))
     }
 
     @Test
@@ -191,13 +191,13 @@ class SensitiveGuardTest {
                 add("--export-secret-keys")
             }
         }
-        assertTrue(SensitiveGuard.runsDangerousCommand(argv))
+        assertTrue(CommandRules.runsDangerousCommand(argv))
     }
 
     @Test
     fun `Windows env vars and separators normalise`() {
-        assertEquals("/home/me/.ssh/id_rsa", SensitiveGuard.normalize("%USERPROFILE%\\.ssh\\id_rsa", home))
-        assertEquals("/home/me/AppData/Roaming/x", SensitiveGuard.normalize("%APPDATA%/x", home))
+        assertEquals("/home/me/.ssh/id_rsa", GuardPaths.normalize("%USERPROFILE%\\.ssh\\id_rsa", home))
+        assertEquals("/home/me/AppData/Roaming/x", GuardPaths.normalize("%APPDATA%/x", home))
     }
 
     @Test
@@ -219,10 +219,10 @@ class SensitiveGuardTest {
 
     @Test
     fun `UNC detection`() {
-        assertTrue(SensitiveGuard.isUnc("""\\server\share\x"""))
-        assertTrue(SensitiveGuard.isUnc("//server/share/x"))
-        assertFalse(SensitiveGuard.isUnc("/home/me/x"))
-        assertFalse(SensitiveGuard.isUnc("///etc")) // not a host
+        assertTrue(ForeignTerritory.isUnc("""\\server\share\x"""))
+        assertTrue(ForeignTerritory.isUnc("//server/share/x"))
+        assertFalse(ForeignTerritory.isUnc("/home/me/x"))
+        assertFalse(ForeignTerritory.isUnc("///etc")) // not a host
     }
 
     // ── real incident: an ordinary `//` line comment is not a UNC path ────────────────────────────────────
@@ -233,8 +233,8 @@ class SensitiveGuardTest {
     // even though Edit is a fully trusted agent tool (FOREIGN denies regardless of trust).
     @Test
     fun `a line comment starting with slash-slash is not mistaken for a UNC path`() {
-        assertFalse(SensitiveGuard.isUnc("// a plain comment explaining something"))
-        assertFalse(SensitiveGuard.isUnc("// jump-to-code links (jb://open)"))
+        assertFalse(ForeignTerritory.isUnc("// a plain comment explaining something"))
+        assertFalse(ForeignTerritory.isUnc("// jump-to-code links (jb://open)"))
     }
 
     @Test
@@ -251,21 +251,21 @@ class SensitiveGuardTest {
 
     @Test
     fun `Bash is a command call`() {
-        assertTrue(SensitiveGuard.isCommandCall(bash("ls -la")))
+        assertTrue(ToolInputScanner.isCommandCall(bash("ls -la")))
     }
 
     @Test
     fun `an MCP tool executing something is a command call too — no tool-name matching involved`() {
         val terminalInput = buildJsonObject { put("command", "Get-ChildItem") } // PowerShell, via an MCP tool
-        assertTrue(SensitiveGuard.isCommandCall(terminalInput))
+        assertTrue(ToolInputScanner.isCommandCall(terminalInput))
         val argvInput = buildJsonObject { putJsonArray("args") { add("dir") } }
-        assertTrue(SensitiveGuard.isCommandCall(argvInput))
+        assertTrue(ToolInputScanner.isCommandCall(argvInput))
     }
 
     @Test
     fun `a tool with no command-shaped key is not a command call`() {
-        assertFalse(SensitiveGuard.isCommandCall(read("/home/me/proj/Foo.kt")))
-        assertFalse(SensitiveGuard.isCommandCall(buildJsonObject { put("pattern", "TODO") })) // Grep
+        assertFalse(ToolInputScanner.isCommandCall(read("/home/me/proj/Foo.kt")))
+        assertFalse(ToolInputScanner.isCommandCall(buildJsonObject { put("pattern", "TODO") })) // Grep
     }
 
     // ── real incident: AGENT_TOOLS had gone stale as the CLI grew its own orchestration surface ──────────────
@@ -406,21 +406,21 @@ class SensitiveGuardEvasionTest {
 
     @Test
     fun `deobfuscate peels the common tricks`() {
-        assertTrue(SensitiveGuard.deobfuscate("""c""at""").contains("cat"))
-        assertTrue(SensitiveGuard.deobfuscate("""cat${'$'}IFS/etc/shadow""").contains("cat /etc/shadow"))
-        assertTrue(SensitiveGuard.deobfuscate("k=/etc/shadow; cat \$k").contains("cat /etc/shadow"))
+        assertTrue(CommandRules.deobfuscate("""c""at""").contains("cat"))
+        assertTrue(CommandRules.deobfuscate("""cat${'$'}IFS/etc/shadow""").contains("cat /etc/shadow"))
+        assertTrue(CommandRules.deobfuscate("k=/etc/shadow; cat \$k").contains("cat /etc/shadow"))
     }
 
     // ── real incident: an assigned value containing `$`/regex-replacement syntax crashed verdict() ──────────
     // Confirmed live via a stack trace in idea.log: java.lang.IllegalArgumentException: Illegal group reference,
-    // from Matcher.appendReplacement, three frames under SensitiveGuard.substituteAssignments — an assigned
+    // from Matcher.appendReplacement, three frames under CommandRules.substituteAssignments — an assigned
     // value was passed straight to String.replace(Regex, String), which treats it as a REPLACEMENT TEMPLATE
     // ($1/${name} are group refs, not literal text), and it crashed the whole can_use_tool handshake (no
     // response ever sent) for an ordinary Bash call. Must never throw, whatever the assigned value looks like.
     @Test
     fun `deobfuscate never throws when an assigned value itself contains dollar-brace syntax`() {
-        assertDoesNotThrow { SensitiveGuard.deobfuscate("k=\${OTHER}/x; cat \$k") }
-        assertDoesNotThrow { SensitiveGuard.deobfuscate("k=\$1_literal; echo \$k") }
+        assertDoesNotThrow { CommandRules.deobfuscate("k=\${OTHER}/x; cat \$k") }
+        assertDoesNotThrow { CommandRules.deobfuscate("k=\$1_literal; echo \$k") }
         assertDoesNotThrow { v("Bash", bash("k=\${OTHER}/x; cat \$k")) }
     }
 
