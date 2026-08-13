@@ -123,5 +123,5 @@ object RemoteMounts {
 
 /** Tiny shim so [RemoteMounts] can reuse the guard's UNC test without a circular import at the call site. */
 private object SensitiveGuardUnc {
-    fun isUnc(path: String): Boolean = dev.lain.claudejb.permission.SensitiveGuard.isUnc(path)
+    fun isUnc(path: String): Boolean = dev.lain.claudejb.permission.ForeignTerritory.isUnc(path)
 }

@@ -1,7 +1,7 @@
 package dev.lain.claudejb.session
 
 import com.intellij.openapi.project.Project
-import dev.lain.claudejb.permission.SensitiveGuard
+import dev.lain.claudejb.permission.ToolInputScanner
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -25,10 +25,10 @@ data class EntryDTO(
     val toolUseId: String? = null,
     val parentToolUseId: String? = null,
     /** For a file tool: the file it acts on, project-relative — the transcript's jump-to-code link (see
-     *  [ClaudeSession.toolFilePath]). Null on every other row, and on any row parsed without a project root. */
+     *  [ToolNaming.toolFilePath]). Null on every other row, and on any row parsed without a project root. */
     val filePath: String? = null,
     /** For a command-executing tool: the raw command, so a restored card renders the same copyable code block a
-     *  live one does (see [dev.lain.claudejb.permission.SensitiveGuard.commandText]). Null on every other row. */
+     *  live one does (see [dev.lain.claudejb.permission.ToolInputScanner.commandText]). Null on every other row. */
     val commandText: String? = null,
     /**
      * A tool call that has no result yet — it was still in flight when this transcript was read.
@@ -270,13 +270,13 @@ object SessionTranscriptReader {
                     // absolute paths (and dead cards) where a live one shows a project-relative link.
                     out += EntryDTO(
                         "TOOL",
-                        ClaudeSession.formatToolUse(name, input, projectRoot),
+                        ToolNaming.formatToolUse(name, input, projectRoot),
                         meta = name,
                         toolUseId = id,
-                        filePath = ClaudeSession.toolFilePath(name, input, projectRoot),
+                        filePath = ToolNaming.toolFilePath(name, input, projectRoot),
                         // Same command extraction as a LIVE call, so a reloaded transcript renders the current
                         // copyable code block instead of falling back to the old plain-text card.
-                        commandText = SensitiveGuard.commandText(input),
+                        commandText = ToolInputScanner.commandText(input),
                     )
                 }
             }

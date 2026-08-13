@@ -137,4 +137,85 @@ class BackgroundTaskRegistryTest {
         reg.clear()
         assertTrue(reg.all.isEmpty())
     }
+
+    // ── The level may only settle what it once claimed ────────────────────────────────────────────────────
+
+    @Test
+    fun `the level does not finish a task it never listed`() {
+        val reg = BackgroundTaskRegistry()
+        // A backgrounded shell command exists because its tool_result said so. The level signal has never
+        // mentioned it — and may never mention it at all.
+        reg.observe(result("toolu_1", "t1"))
+        assertTrue(reg.taskOf("t1")!!.running)
+
+        // THE BUG the user saw as "green while it is plainly still writing output": the next level fires for
+        // some OTHER task, ours is absent, and absence was read as an ending. It is not: this signal never
+        // claimed our task, so it has nothing to say about its ending.
+        assertFalse(reg.observeLevel(level("other" to "local_bash")), "nothing about t1 changed")
+        assertTrue(reg.taskOf("t1")!!.running, "a task the level never listed must stay running")
+    }
+
+    @Test
+    fun `once the level HAS listed a task, absence does end it`() {
+        val reg = BackgroundTaskRegistry()
+        reg.observe(result("toolu_1", "t1"))
+        reg.observeLevel(level("t1" to "local_bash")) // claimed
+        assertTrue(reg.observeLevel(emptyList()))
+        assertFalse(reg.taskOf("t1")!!.running, "the level owns the tasks it listed")
+    }
+
+    // ── `task_notification` is the authoritative ending for the rest ──────────────────────────────────────
+
+    @Test
+    fun `a terminal notification ends a task the level never listed`() {
+        val reg = BackgroundTaskRegistry()
+        reg.observe(result("toolu_1", "t1"))
+        // Without this the row would stay running for ever, since only the level settles what it lists.
+        assertTrue(reg.settle("t1", "completed"))
+        assertFalse(reg.taskOf("t1")!!.running)
+    }
+
+    @Test
+    fun `only an ending ends it`() {
+        val reg = BackgroundTaskRegistry()
+        reg.observe(result("toolu_1", "t1"))
+        // Progress is not an end, and neither is a status this build has never heard of. Guessing here is how
+        // a running task goes green mid-flight — exactly the failure this pair of rules exists to stop.
+        listOf("running", "started", "progress", "", "weird_new_status").forEach {
+            assertFalse(reg.settle("t1", it), "'$it' must not settle a task")
+            assertTrue(reg.taskOf("t1")!!.running)
+        }
+        assertFalse(reg.settle("t1", null))
+        assertTrue(reg.taskOf("t1")!!.running)
+    }
+
+    @Test
+    fun `settling is idempotent and never invents a task`() {
+        val reg = BackgroundTaskRegistry()
+        reg.observe(result("toolu_1", "t1"))
+        assertTrue(reg.settle("t1", "failed"))
+        assertFalse(reg.settle("t1", "failed"), "already settled: nothing changed, so nothing to push")
+        // `task_notification` fires for AGENTS too, which have their own tabs. It may never create here.
+        assertFalse(reg.settle("never-seen", "completed"))
+        assertNull(reg.taskOf("never-seen"))
+    }
+
+    // ── What keeps the live-output poll alive ─────────────────────────────────────────────────────────────
+
+    @Test
+    fun `only a running task with a file to read keeps the poll running`() {
+        val reg = BackgroundTaskRegistry()
+        // No output file yet: nothing to tail, so the timer must not start.
+        reg.observe(result("toolu_1", "t1"))
+        assertFalse(reg.anyTailable)
+
+        // The launching result NAMES the file. That is the moment the poll has to begin, because a
+        // backgrounded command emits nothing else until it finishes.
+        reg.observe(result("toolu_1", "t1", outputFile = "/tmp/t1.output"))
+        assertTrue(reg.anyTailable)
+
+        // …and it must stop on its own when the task ends, or an idle session polls for ever.
+        reg.settle("t1", "completed")
+        assertFalse(reg.anyTailable)
+    }
 }

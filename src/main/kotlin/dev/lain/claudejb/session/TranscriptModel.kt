@@ -33,7 +33,7 @@ class TranscriptEntry(
     /**
      * Set on a [Speaker.TOOL] row whose call executes a command (`Bash`, or any tool — including MCP ones —
      * whose input carries a command/script argument) to the raw command/script text; see
-     * [dev.lain.claudejb.permission.SensitiveGuard.commandText]. Drives the command's own copyable code block in
+     * [dev.lain.claudejb.permission.ToolInputScanner.commandText]. Drives the command's own copyable code block in
      * the tool card, and is looked up later, when that call's [Speaker.TOOL_OUTPUT] arrives, to decide whether to
      * render its output as a copyable code block rather than plain text. Null on every other row.
      */

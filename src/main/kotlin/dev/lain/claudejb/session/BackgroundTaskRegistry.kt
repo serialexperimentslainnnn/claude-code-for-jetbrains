@@ -48,6 +48,15 @@ class BackgroundTaskRegistry {
         val output: String = "",
         /** The command that launched it, when the transcript carried one — the most useful label there is. */
         val command: String? = null,
+        /**
+         * Whether the level signal has ever listed this task as live.
+         *
+         * Absence from the level only means "finished" for a task the level once CLAIMED. Without this, the
+         * first `background_tasks_changed` after a task started — a signal that may not carry shell tasks at
+         * all — settled it on the spot: the row went green while the command was still writing output, which
+         * is exactly what the user sees as "finished" on something plainly still running.
+         */
+        val seenLive: Boolean = false,
     ) {
         fun label(): String =
             description.ifBlank { command?.lineSequence()?.firstOrNull().orEmpty() }
@@ -64,6 +73,9 @@ class BackgroundTaskRegistry {
     val all: List<Task> get() = order.mapNotNull { tasks[it] }
 
     fun taskOf(taskId: String): Task? = tasks[taskId]
+
+    /** Whether anything is still running with a file worth tailing — what keeps the live-output poll alive. */
+    val anyTailable: Boolean get() = tasks.values.any { it.running && !it.outputFile.isNullOrBlank() }
 
     /**
      * Applies the level signal: everything in [live] is running, everything previously seen and absent from
@@ -104,6 +116,7 @@ class BackgroundTaskRegistry {
                 description = info.description.ifBlank { previous.description },
                 taskType = info.taskType.ifBlank { previous.taskType },
                 running = true,
+                seenLive = true,
             )
             if (next != previous) {
                 tasks[id] = next
@@ -111,12 +124,30 @@ class BackgroundTaskRegistry {
             }
         }
         tasks.forEach { (id, task) ->
-            if (task.running && id !in liveIds) {
+            // …and only settles what it once CLAIMED. Absence is not evidence of an ending for a task this
+            // signal never listed: a backgrounded shell command is created from its `tool_result`, and the
+            // next level signal — which may only ever carry agents — turned it green while it was still
+            // writing output. What ends such a task is its own `task_notification` ([settle]).
+            if (task.running && task.seenLive && id !in liveIds) {
                 tasks[id] = task.copy(running = false)
                 changed = true
             }
         }
         return changed
+    }
+
+    /**
+     * Ends a task from its own `system/task_notification`, which names it and carries a terminal status.
+     *
+     * The authoritative ending for a task the level signal never listed — see [observeLevel]. An unknown or
+     * non-terminal status leaves it alone: only an ending ends it, the same rule the agent tabs follow.
+     */
+    fun settle(taskId: String, status: String?): Boolean {
+        if (status !in TERMINAL_STATUSES) return false
+        val previous = tasks[taskId] ?: return false
+        if (!previous.running) return false
+        tasks[taskId] = previous.copy(running = false)
+        return true
     }
 
     /**
@@ -182,6 +213,9 @@ class BackgroundTaskRegistry {
     companion object {
         /** The `task_type` the binary uses for a running agent — it has its own rows; see the class doc. */
         const val AGENT_TASK_TYPE = "local_agent"
+
+        /** `task_notification` statuses that END a task. Anything else is progress, and progress is not an end. */
+        private val TERMINAL_STATUSES = setOf("completed", "failed", "cancelled", "stopped", "killed", "error")
 
         /**
          * Cap on retained output per task. A backgrounded `tail -f` is unbounded by nature, and this is a
