@@ -21,7 +21,7 @@ package dev.lain.claudejb.session
  * over `claude` 2.1.223. Worth doing before adding an entry: an id invented from the version-numbering pattern
  * looks right and is simply refused at `set_model` (there is no `claude-opus-4-2`, nor a `claude-sonnet-4-2`).
  * Labels are written out rather than derived:
- * [dev.lain.claudejb.ui.jcef.JcefState.deriveModelLabel] renders `claude-opus-4-7` correctly but turns
+ * [dev.lain.claudejb.ui.jcef.JcefModelLabels.deriveModelLabel] renders `claude-opus-4-7` correctly but turns
  * `claude-3-5-sonnet` into "3 5 Sonnet", because the version leads the family in the 3.x naming scheme.
  *
  * An entry the account cannot use is not filtered here — we cannot know that without asking, and asking costs

@@ -17,7 +17,7 @@ import dev.lain.claudejb.diff.EditSnapshot
 import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
-import dev.lain.claudejb.permission.SensitiveGuard
+import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.process.ClaudeProcess
 import dev.lain.claudejb.protocol.AccountInfo
@@ -42,6 +42,10 @@ import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.requiresTrustPrompt
+import dev.lain.claudejb.settings.resolveEnv
+import dev.lain.claudejb.settings.sensitiveDecision
+import dev.lain.claudejb.settings.setExecutionTrusted
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.ui.ReviewPrompt
 import kotlinx.serialization.json.JsonArray
@@ -82,8 +86,32 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val taskTracker = TaskTracker()
     private val reconciler = TranscriptReconciler(transcript)
     private val diffs = DiffLifecycleManager(project)
-    private val rollback = RollbackManager(project, transcript, diffs, reseedReadState = ::seedReadState)
+    private val rollback = RollbackManager(project, transcript, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
     private val controlClient = SessionControlClient(write = ::write)
+
+    /**
+     * Everything the UI ASKS the binary on demand — see [SessionQueries].
+     *
+     * Exposed rather than wrapped in eleven one-line delegates. Delegating would have kept the call sites
+     * untouched and bought nothing: the same eleven verbs would still be part of this class's API, which is
+     * the thing being reduced. A caller that wants an answer from the binary asks `session.queries`.
+     */
+    val queries = SessionQueries(
+        controlClient = controlClient,
+        isRunning = ::isRunning,
+        edt = ::edt,
+        write = ::write,
+        quota = QuotaWarnings(log, QuotaWarnings.Announce(inTranscript = ::systemNotice, asNotification = ::notifyInfo)),
+    )
+
+    /** What the binary SAYS, as opposed to what it does in a turn — see [NoticeNarrator]. */
+    private val notices = NoticeNarrator(
+        log = log,
+        systemNotice = ::systemNotice,
+        addRow = { speaker, text, meta -> transcript.add(speaker, text, meta = meta) },
+        notifyInfo = ::notifyInfo,
+        edt = ::edt,
+    )
     private val cards = PermissionCardManager(::firePermissions)
     private val hookBroker = HookBroker()
     private val hookNarrator = HookActivityNarrator(transcript)
@@ -217,12 +245,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     // offers in its initialize reply. Two different things — what you can spawn, and what is running.
     val runningAgents = AgentRegistry(subagentsDir = { sessionId?.let { SessionStore.subagentsDir(it) } })
 
-    /** Guards against piling scans on top of each other while one is already walking the directory. */
-    private val agentScanInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /** A scan was asked for while one was already running: run exactly one more when it finishes. */
-    private val agentRescanRequested = java.util.concurrent.atomic.AtomicBoolean(false)
-
     /**
      * Every background task seen this process — live and finished — with its owner, its card and its output.
      *
@@ -233,8 +255,23 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     val backgroundTaskRegistry = BackgroundTaskRegistry()
 
-    /** Reads what a backgrounded agent's progress file has gained since the last scan. */
-    private val outputTail = LiveOutputTail()
+    /**
+     * Keeps the agent tree and the background tasks in step with what the binary writes to disk — see
+     * [AgentScanner]. This class asks for a scan; everything the scan does is over there.
+     */
+    private val agentScanner = AgentScanner(
+        project = project,
+        agents = runningAgents,
+        tasks = backgroundTaskRegistry,
+        sessionId = { sessionId },
+        ownerOfTask = ::ownerAgentOfTask,
+        ui = object : AgentScanner.Ui {
+            override fun labelCards() = labelAgentCards()
+            override fun onFresh(fresh: List<String>) = fireAgents(fresh)
+            override fun onOutputGrew() = fireState()
+            override fun edt(block: () -> Unit) = this@ClaudeSession.edt(block)
+        },
+    )
 
     /**
      * The agent running background task [taskId], or null when it belongs to the chat's own turn (or when the
@@ -388,10 +425,10 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val listeners = CopyOnWriteArrayList<SessionListener>()
 
     // --- session-scoped quota poll (perf) --------------------------------------------------------------
-    // Previously every ChatPanel ran its own 60s javax.swing.Timer that fired get_session_cost +
+    // Previously every chat panel ran its own 60s javax.swing.Timer that fired get_session_cost +
     // get_context_usage; N tabs of the same session meant N identical polls. We now run ONE timer per
     // session, cache the results here, and notify the panel(s) via the existing onStateChanged() listener
-    // callback — so any number of ChatPanels observing this session share a single poll. The timer is an EDT
+    // callback — so any number of panels observing this session share a single poll. The timer is an EDT
     // (javax.swing) Timer so its callback and the cached-field writes stay on the EDT, matching the rest of
     // the GUI; it runs only while at least one listener (panel) is attached and is stopped on dispose/last-remove.
 
@@ -426,6 +463,29 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private var quotaPollInFlight = false
 
     /**
+     * Reads a running background task's output file while it runs — see [AgentScanner.tailNow].
+     *
+     * A separate timer from [quotaPollTimer] and NOT tied to the turn: a task backgrounded near the end of a
+     * turn keeps writing after the turn is over, and that is precisely when the user goes to read it. It
+     * costs a `size` check per running task per tick and stops itself the moment nothing is tailable, so an
+     * idle session runs no timer at all.
+     */
+    private val outputTailTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollLiveOutput() }.apply { isRepeats = true }
+
+    private fun pollLiveOutput() {
+        if (!backgroundTaskRegistry.anyTailable) {
+            outputTailTimer.stop()
+            return
+        }
+        agentScanner.tailNow()
+    }
+
+    /** Starts the live-output poll if anything is worth tailing. EDT. Idempotent — a running timer is left alone. */
+    private fun ensureOutputTail() {
+        if (backgroundTaskRegistry.anyTailable && !outputTailTimer.isRunning) outputTailTimer.start()
+    }
+
+    /**
      * True once the `initialize` handshake has answered — i.e. the binary is up AND talking, with commands,
      * models and the account in hand. The GUI treats THIS, not process liveness, as "loaded": a spawned
      * process that has not answered yet would hand the user a chat whose menus and dashboard are empty and
@@ -458,11 +518,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 fireState()
             }
         }
-        requestSessionCost { cost ->
+        queries.requestSessionCost { cost ->
             if (cost != null) lastSessionCost = cost
             settle()
         }
-        requestContextUsage { cu ->
+        queries.requestContextUsage { cu ->
             if (cu != null) lastContextUsage = cu
             settle()
         }
@@ -563,7 +623,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val settings = ClaudeSettings.getInstance(project)
         val binary = resolveBinary(settings) ?: return false
         if (!passesLaunchGates(settings)) return false
-        if (!hasCredential(settings)) {
+        if (!auth.hasCredential(settings)) {
             // Sign-in comes BEFORE the loading screen, not after it. Verifying auth needs no session, and
             // launching one we know is unauthenticated only buys a spawned process, a spinner, and a turn
             // that fails later for a reason the user already knew at click time.
@@ -627,59 +687,28 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
-     * ONCE per session, on the first boot check: if the machine already has a plaintext
-     * `~/.claude/.credentials.json` — a login the user made in their terminal, or an orphan from a hard IDE
-     * kill — take it into the safe and delete it. That login then counts as ours and the tab starts signed
-     * in instead of asking again.
-     *
-     * Once, and only here. Doing it on every poll deleted the file every few seconds, and `auth login`
-     * finishes by writing exactly that file: the browser leg lost its credential the instant it earned it,
-     * and the code-paste fallback became the only route that ever completed. A sign-in in flight writes its
-     * own credential into the safe when it succeeds ([LoginCoordinator]) — the vault does not need to go
-     * looking for it.
+     * Who this session runs as — see [AuthGate]. Public because the dashboard's account card reads the last
+     * probe straight off it; wrapping that in a getter here would only be this class carrying a field it has
+     * no opinion about.
      */
-    private fun absorbExistingLoginOnce() {
-        if (startupHarvestDone) return
-        startupHarvestDone = true
-        // ORDER IS THE WHOLE POINT, and it is the same order the card's sign-in follows
-        // ([LoginCoordinator.completeSignIn]): ask WHO first, take the credential second. Reversed, the
-        // question can no longer be answered by anybody.
-        captureAccountIdentityOnce()
-        dev.lain.claudejb.process.CredentialsVault.harvest()
-    }
+    val auth = AuthGate(
+        project = project,
+        signInInProgress = { login.inProgress },
+        launchEnv = { effectiveLaunchEnv() },
+        onProbed = { loggedIn ->
+            when {
+                !loggedIn -> onLoginNeeded()
 
-    /**
-     * Captures `claude auth status` — the whole JSON, into the IDE safe — while the binary's own credentials
-     * file still exists, because the very next line takes that file away.
-     *
-     * This is why the dashboard's Email and Organization rows were empty. `auth status` names the account
-     * (`email`, `orgId`, `orgName`) only when it authenticates from its OWN store. Handed our credential
-     * through the environment it answers `authMethod: oauth_token` and no identity at all, and `system/init`
-     * carries the same anonymous account object — which is exactly why Plan and Provider filled in while
-     * those two rows stayed blank. Harvest the credential first and there is nothing left to ask: the file was
-     * the only thing that could answer.
-     *
-     * A login made in the user's own terminal is the case this covers; a sign-in through the card is already
-     * in the right order. [dev.lain.claudejb.process.AuthCli.status] does the filing, and only for a reply
-     * that names the account, so this asks at most once per sign-in — with an answer banked there is nothing
-     * to ask. Blocking (it spawns the binary); every caller of this is pooled-thread only.
-     */
-    private fun captureAccountIdentityOnce() {
-        // Never from a test JVM. [dev.lain.claudejb.process.CredentialsVault.credentialsFile] resolves the
-        // DEVELOPER's real home there, so this would probe on the strength of their own login and file the
-        // answer in a throwaway safe — the same reason the vault refuses to touch a real home under test. It
-        // also spawns the stand-in binary, which has no `auth status` to answer with.
-        if (ApplicationManager.getApplication()?.isUnitTestMode != false) return
-        if (dev.lain.claudejb.process.AuthCli.stored()?.email != null) return
-        if (!dev.lain.claudejb.process.CredentialsVault.credentialsFile().isFile) return
-        val settings = ClaudeSettings.getInstance(project)
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
-        // The RAW settings env: overlaying our own credential is precisely what makes the answer anonymous.
-        dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
-    }
+                needsLogin -> {
+                    needsLogin = false
+                    edt { fireState() }
+                }
 
-    @Volatile
-    private var startupHarvestDone = false
+                // Account card enrichment (email/plan) still wants a push.
+                else -> edt { fireState() }
+            }
+        },
+    )
 
     /**
      * Whether the live process was launched with `--resume`. Read in [onTerminated]: a resumed launch that
@@ -688,94 +717,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     @Volatile
     private var resumedLaunch = false
-
-    /**
-     * Whether this session has an identity to run as — checked BEFORE spawning anything, since that is a
-     * question about what we hold, not about what the binary can do.
-     *
-     * The identity is exclusively: the vaulted subscription login, an API key in its provider slot, or a
-     * credential the user wrote by hand into the Settings environment. Nothing held → logged out by
-     * definition, and no process is started to re-ask a question we have already answered.
-     *
-     * A vaulted login whose access token has expired but whose refresh token has not counts as an identity —
-     * it is one renewal away from live, and [renewVaultedCredential] performs that renewal off the EDT at
-     * launch time. Answering "signed out" here instead is what made every reboot end at the sign-in card.
-     *
-     * Deliberately does NOT harvest — see [absorbExistingLoginOnce] — and deliberately does not RENEW either:
-     * this runs on the EDT from [start], and renewal spawns a process.
-     */
-    private fun hasCredential(settings: ClaudeSettings): Boolean {
-        if (dev.lain.claudejb.process.CredentialsVault.hasUsableToken()) return true
-        if (dev.lain.claudejb.process.CredentialsVault.canRenew()) return true
-        if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
-        if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
-        val explicit = settings.resolveEnv()
-        if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return true
-        // An explicit Log out outranks the binary's own login: otherwise clearing our safe changes nothing
-        // the user can see, because the binary still holds one and the session starts straight back up.
-        if (settings.state.signedOut) return false
-        return binaryHoldsOwnLogin(settings)
-    }
-
-    /**
-     * Last resort: does the BINARY hold a login of its own?
-     *
-     * This is what makes the plugin work off Linux. The vault only ever engages when there is a plaintext
-     * `~/.claude/.credentials.json` to take custody of — which is the Linux situation. On macOS the binary
-     * keeps its credentials in the **Keychain** and writes no such file, so a vault-only view of the world
-     * concludes "signed out" no matter how many times the user signs in: the login card would reappear
-     * immediately after every successful sign-in, forever. Windows behaves the same wherever the binary uses
-     * a store rather than a file.
-     *
-     * So when we hold nothing, we ask instead of assuming. A binary with its own valid login is simply left
-     * to use it: no vault, no config dir, no environment token — and, because it authenticates from its own
-     * store, the dashboard gets the complete account and plan picture there too.
-     *
-     * Throttled hard ([OWN_LOGIN_TTL_MS]): this spawns a process, and the caller polls every few seconds.
-     */
-    private fun binaryHoldsOwnLogin(settings: ClaudeSettings): Boolean {
-        val now = System.currentTimeMillis()
-        ownLoginCheckedAt.takeIf { now - it < OWN_LOGIN_TTL_MS }?.let { return binaryOwnLogin }
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return false
-        // The RAW settings env, deliberately: overlaying our own credentials would be asking the binary
-        // whether IT is signed in while handing it ours.
-        val status = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
-        binaryOwnLogin = status?.loggedIn == true
-        ownLoginCheckedAt = now
-        return binaryOwnLogin
-    }
-
-    @Volatile private var binaryOwnLogin = false
-
-    @Volatile private var ownLoginCheckedAt = 0L
-
-    /**
-     * Brings the vaulted subscription login back to life when its access token has expired, BEFORE the launch
-     * env is built. Blocking (process + network) — pooled thread only, which is why it lives in [launch] and
-     * not in [start].
-     *
-     * This is what makes a login survive a reboot. The access token the OAuth flow issues is good for hours;
-     * the refresh token beside it in the safe is good for weeks and is rotated at every renewal. Without this
-     * step the plugin held a perfectly persisted credential and still asked the user to sign in every
-     * morning — the credential had not been lost, it had merely expired with nothing allowed to spend it.
-     *
-     * @return whether this launch has an identity to run as. A renewal that fails does not condemn the
-     *   launch: the ttl cache is dropped first so the fallback question ("does the BINARY hold its own
-     *   login?") is asked again — a renewal can sign the binary in even when we fail to take custody of what
-     *   it wrote, which is the normal case wherever it uses an OS store instead of a file.
-     */
-    private fun renewVaultedCredential(binary: File, settings: ClaudeSettings): Boolean {
-        // A sign-in owns `~/.claude/.credentials.json` from the browser leg until it is banked; renewing
-        // underneath it would take away the very file the flow is about to write.
-        if (login.inProgress) return true
-        if (!dev.lain.claudejb.process.CredentialsVault.needsRenewal()) return true
-        if (dev.lain.claudejb.process.CredentialsVault.renew(binary, settings.resolveEnv())) {
-            dev.lain.claudejb.process.AccountProfile.invalidate()
-            return true
-        }
-        ownLoginCheckedAt = 0
-        return hasCredential(settings)
-    }
 
     /**
      * Re-evaluates which screen this tab should be showing, from scratch. Called periodically while no
@@ -793,7 +734,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // A sign-in is mid-flight: keep out. This poll harvests the credentials file, and `auth login`
         // writes exactly that file to finish — taking it away mid-flow breaks the browser leg.
         if (login.inProgress) return
-        absorbExistingLoginOnce()
+        auth.absorbExistingLoginOnce()
         val settings = ClaudeSettings.getInstance(project)
         val binary = ClaudeBinaryLocator.locate(settings.claudePath)
         if ((binary == null) != binaryMissing) {
@@ -812,7 +753,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (settings.claudePath != binary.absolutePath) {
             settings.update { it.claudePath = binary.absolutePath }
         }
-        val credentialed = hasCredential(settings)
+        val credentialed = auth.hasCredential(settings)
         edt {
             if (starting) return@edt
             when {
@@ -835,62 +776,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         needsLogin = false
         edt { fireState() }
     }
-
-    /**
-     * Proactive auth check, off-EDT: `claude auth status --json` with the full launch env — so the answer
-     * covers every identity the session can actually run on, in the order the binary itself resolves them:
-     * an env credential (the PasswordSafe overlay / explicit Settings vars) first, its own credential store
-     * (the full-consent `auth login`, shared with the terminal CLI) second. Not logged in by ANY of those →
-     * the sign-in card is the first thing the tab shows, before a turn can fail on it.
-     *
-     * A probe that cannot run or parse yields a SYNTHETIC logged-out state rather than silence: the account
-     * card's button must always exist and say something ("Sign in" that leads to an idempotent login beats
-     * a button that omits itself and cannot be found).
-     */
-    fun probeAuthStatus() {
-        val settings = ClaudeSettings.getInstance(project)
-        val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val onOurEnv = dev.lain.claudejb.process.AuthCli.status(binary, effectiveLaunchEnv())
-                ?: dev.lain.claudejb.process.AuthCli.AuthState(loggedIn = false)
-            // WHO the account is takes a second question, and this is why the dashboard's Email and
-            // Organization rows were empty: asked with our credential in its environment the binary reports
-            // `authMethod: oauth_token` and no identity at all. Asked with the RAW settings env it answers
-            // from its own store as `claude.ai` — email, orgId, orgName, plan — which AuthCli.status files in
-            // the safe. `loggedIn` stays the first answer's: that one describes the identity this session
-            // actually runs on. Skipped entirely once the first answer already named the account.
-            // Only worth a second question when somebody IS signed in: an anonymous logged-OUT answer has no
-            // identity to go looking for, and asking anyway spawns a second process per probe for nothing.
-            val status = if (!onOurEnv.loggedIn || onOurEnv.email != null || onOurEnv.orgName != null) {
-                onOurEnv
-            } else {
-                val identity = dev.lain.claudejb.process.AuthCli.status(binary, settings.resolveEnv())
-                    ?.takeIf { it.email != null || it.orgName != null }
-                    ?: dev.lain.claudejb.process.AuthCli.stored()
-                onOurEnv.copy(
-                    email = identity?.email,
-                    orgId = identity?.orgId,
-                    orgName = identity?.orgName,
-                    apiProvider = onOurEnv.apiProvider ?: identity?.apiProvider,
-                    subscriptionType = onOurEnv.subscriptionType ?: identity?.subscriptionType,
-                )
-            }
-            authCliStatus = status
-            if (!status.loggedIn) {
-                onLoginNeeded()
-            } else if (needsLogin) {
-                needsLogin = false
-                edt { fireState() }
-            } else {
-                edt { fireState() } // account card enrichment (email/plan) still wants a push
-            }
-        }
-    }
-
-    /** Last `auth status` probe result — feeds the dashboard's account card (email, plan, Sign in/Log out). */
-    @Volatile
-    var authCliStatus: dev.lain.claudejb.process.AuthCli.AuthState? = null
-        private set
 
     /** Locates the binary and persists the resolved path; null (after notifying) when there is none. */
     private fun resolveBinary(settings: ClaudeSettings): File? {
@@ -968,14 +853,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private fun launch(launchGen: Int, settings: ClaudeSettings, binary: File, workDir: File, resume: Boolean) {
         // No harvest here: absorbing an existing plaintext login is a ONCE-per-session act
-        // ([absorbExistingLoginOnce]), and a sign-in files its own credential when it succeeds.
+        // ([AuthGate.absorbExistingLoginOnce]), and a sign-in files its own credential when it succeeds.
         //
         // The credential reaches the binary through the environment, WHOLE (CredentialsVault.envOverlay), and
         // the binary keeps its own `~/.claude`. Nothing is relocated, symlinked or deleted.
         //
         // Renewal FIRST, and here rather than in start(): it spawns a process, start() runs on the EDT, and
         // the env below has to be built from the credential we are about to hold — not the expired one.
-        if (!renewVaultedCredential(binary, settings)) {
+        if (!auth.renew(binary, settings)) {
             edt { onLoginNeeded() }
             return
         }
@@ -1022,7 +907,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // note above `system/init` doesn't arrive until after the first user turn. Hooked there alone,
             // the sign-in card waited for the user to type a prompt before appearing, which is exactly
             // backwards: with no login the card must be the first thing the tab shows.
-            probeAuthStatus()
+            auth.probe()
             fireState()
             // Fill the context and cost meters NOW rather than on the poll timer's first tick.
             //
@@ -1132,7 +1017,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // Both are per-PROCESS state, exactly like the task set: a restarted binary re-announces whatever is
         // still alive, and keeping a dead task's output would show a finished thing as if it were running.
         backgroundTaskRegistry.clear()
-        outputTail.clear()
+        agentScanner.clearTails()
         edt {
             cards.clear()
             diffs.clearReviewDiffs()
@@ -1375,7 +1260,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // index already says which are ours, so nothing about them needs a running process — and waiting for
         // `system/init` meant a restored chat showed no agent rows at all until the user sent a prompt, which
         // is exactly the "they are always lost" report. Off-EDT inside.
-        restoreAdmittedAgents()
+        agentScanner.restoreAdmitted(onTasksReplayed = ::fireState)
         // A restored transcript is a different timeline — drop any rewind turn-anchors from before.
         toolUseTurn.clear()
         currentUserMessageId = null
@@ -1708,204 +1593,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         changePermissionMode(order[(idx + 1) % order.size])
     }
 
-    // -----------------------------------------------------------------------
-    // Async queries (results delivered to [onResult] on the EDT)
-    // -----------------------------------------------------------------------
-
-    fun requestContextUsage(onResult: (ContextUsage?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(
-            buildRequest = ControlProtocol::getContextUsageRequest,
-            onResult = { mapped: ContextUsage? -> edt { onResult(mapped) } },
-            decode = { payload ->
-                payload?.let {
-                    runCatching { ClaudeJson.decodeFromJsonElement(ContextUsage.serializer(), it) }.getOrNull()
-                }
-            },
-        )
-    }
-
     /**
-     * Asks the binary for the FULL usage picture — every rate-limit window plus the extra-credit balance.
+     * Refresh the VFS for files the binary changed during a rewind so the editor reflects them.
      *
-     * Preferred over [rateLimits] as the dashboard's source of truth: one round-trip returns every window at
-     * once, whereas the event stream only tells you about a window when it happens to move. The events remain
-     * the live nudge that something changed and it is worth re-asking.
+     * Stays here, unlike the eleven control requests that moved to [queries]: this asks the binary nothing.
+     * It is the IDE reacting to what a rewind did, which is this class's own diff lifecycle.
      */
-    fun requestUsage(onResult: (UsageReport?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(
-            buildRequest = ControlProtocol::getUsageRequest,
-            onResult = { report: UsageReport? ->
-                edt {
-                    report?.windows?.forEach { (key, w) ->
-                        // Logged at INFO, and not as noise: when this fired a false "quota at 100%" there was
-                        // nothing in idea.log to check it against, because only the EVENT path was traced.
-                        // A wrong number the user can see must leave the raw value behind that produced it.
-                        w.utilizationPercent()?.let { pct ->
-                            log.info("usage window $key: utilization=${w.utilization} -> $pct%")
-                            warnOnQuotaCrossing(key, w.title(key), pct)
-                        }
-                    }
-                    onResult(report)
-                }
-            },
-            decode = { payload ->
-                logUsageReply(payload)
-                parseUsageReport(payload)
-            },
-        )
-    }
-
-    /**
-     * Logs what the `get_usage` poll actually came back with, once per poll, at INFO.
-     *
-     * The derived per-window lines below cannot answer the question that keeps coming up — *is the figure on
-     * screen stale, or is the server really still saying that?* — because a window the reply omits leaves no
-     * line at all, and a carried-forward one is indistinguishable from a fresh one. This prints the wire:
-     * `rate_limits` verbatim, truncated. It is what told us the binary was not caching and that the replies
-     * during a two-hour exhausted window were complete rather than the header-seeded fallback.
-     *
-     * One line every 30 s is the deliberate cost. It is bounded (the payload is a handful of windows) and the
-     * alternative is a user reporting a wrong number with nothing in `idea.log` to check it against.
-     */
-    private fun logUsageReply(payload: JsonObject?) {
-        val limits = payload?.get("rate_limits")
-        if (limits == null || limits is JsonNull) {
-            // NOT the same as an empty object: the binary sends null when plan limits do not apply at all
-            // (API key, Bedrock, Vertex) or when its own fetch had nothing to fall back on.
-            log.info("get_usage: rate_limits=null (available=${payload?.get("rate_limits_available")})")
-            return
-        }
-        log.info("get_usage: ${limits.toString().take(USAGE_LOG_CHARS)}")
-    }
-
-    /**
-     * Announces the first time a quota window crosses 65% and again at 85%.
-     *
-     * Announced ONCE per threshold per window, and only on the way UP: this is checked on every usage refresh,
-     * and a warning that repeats every thirty seconds is one the user learns to ignore — which costs exactly
-     * the warning that mattered. The record is cleared when the figure falls back below a threshold, so the
-     * next billing window warns again.
-     *
-     * 85% also raises an IDE notification, not just a transcript row. By then the user may be watching the
-     * editor rather than the chat, and the point of the second threshold is that the wall is close enough to
-     * change what they do next.
-     *
-     * [window] is the record's key and [label] what the user reads: they diverge for the per-model windows,
-     * whose key is synthesised (`model_scoped:Fable`) precisely because the server names them and nothing
-     * else does. Titling from the key would announce that synthetic string verbatim.
-     */
-    private fun warnOnQuotaCrossing(window: String, label: String, pct: Int) {
-        val announced = quotaWarned[window] ?: 0
-        val crossed = QUOTA_THRESHOLDS.lastOrNull { pct >= it } ?: 0
-        if (crossed <= announced) {
-            // Dropped below a threshold (the window reset, or the API revised it down): re-arm.
-            if (crossed < announced) quotaWarned[window] = crossed
-            return
-        }
-        quotaWarned[window] = crossed
-        val message = "$label quota at $pct%."
-        systemNotice(message)
-        if (crossed >= QUOTA_THRESHOLD_HIGH) notifyInfo(message)
-    }
-
-    /** Window → the highest threshold already announced for it. EDT-confined (written from the usage callback). */
-    private val quotaWarned = HashMap<String, Int>()
-
-    fun requestSessionCost(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(ControlProtocol::getSessionCostRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
-    }
-
-    fun requestMcpStatus(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(ControlProtocol::mcpStatusRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
-    }
-
-    /** Effective merged settings + per-source breakdown (E2-UI diagnostics dialog). */
-    fun requestSettings(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(ControlProtocol::getSettingsRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
-    }
-
-    /** The responder's CLI binary version (E2-UI diagnostics dialog). */
-    fun requestBinaryVersion(onResult: (JsonObject?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(ControlProtocol::getBinaryVersionRequest, { mapped: JsonObject? -> edt { onResult(mapped) } }, { it })
-    }
-
-    /** Refresh the VFS for files the binary changed during a rewind so the editor reflects them. */
     fun refreshAfterRewind(paths: List<String>) {
         paths.forEach { diffs.markForRefresh(it) }
         diffs.refreshTouched()
-    }
-
-    /** Result of a `rewind_files` control request. */
-    data class RewindResult(val canRewind: Boolean, val error: String?, val filesChanged: List<String>)
-
-    /**
-     * Ask the binary to rewind tracked files to the state at [userMessageId] (a turn anchor). With [dryRun]
-     * true the binary only reports feasibility (`canRewind`) without touching files. Result on the EDT; null
-     * on timeout / not running.
-     */
-    fun requestRewindFiles(userMessageId: String, dryRun: Boolean, onResult: (RewindResult?) -> Unit) {
-        if (!isRunning()) {
-            edt { onResult(null) }
-            return
-        }
-        controlClient.query(
-            buildRequest = { id -> ControlProtocol.rewindFilesRequest(id, userMessageId, dryRun) },
-            onResult = { mapped: RewindResult? -> edt { onResult(mapped) } },
-            decode = { payload ->
-                payload?.let {
-                    RewindResult(
-                        canRewind = (it["canRewind"] ?: it["can_rewind"])?.let { e -> (e as? JsonPrimitive)?.booleanOrNull } ?: false,
-                        error = ((it["error"] ?: it["message"]) as? JsonPrimitive)?.contentOrNull,
-                        filesChanged = ((it["filesChanged"] ?: it["files_changed"]) as? JsonArray)
-                            ?.mapNotNull { e -> (e as? JsonPrimitive)?.contentOrNull } ?: emptyList(),
-                    )
-                }
-            },
-        )
-    }
-
-    /** Reconnects a disconnected/failed MCP server; fire-and-forget (the UI re-queries mcp_status after). */
-    fun reconnectMcp(name: String) {
-        if (isRunning()) write(ControlProtocol.mcpReconnectRequest(ControlProtocol.newRequestId(), name))
-    }
-
-    /** Enables/disables an MCP server; fire-and-forget (the UI re-queries mcp_status after). */
-    fun toggleMcp(name: String, enabled: Boolean) {
-        if (isRunning()) write(ControlProtocol.mcpToggleRequest(ControlProtocol.newRequestId(), name, enabled))
-    }
-
-    /** Stops a running background task/subagent by id (E10 tasks panel). */
-    fun stopTask(taskId: String) {
-        if (isRunning()) write(ControlProtocol.stopTaskRequest(ControlProtocol.newRequestId(), taskId))
-    }
-
-    /** Reseeds the binary's read-state for a file (path + mtime) after an IDE-side rollback; no-op when down. */
-    private fun seedReadState(path: String, mtime: Long) {
-        if (isRunning()) write(ControlProtocol.seedReadStateRequest(ControlProtocol.newRequestId(), path, mtime))
     }
 
     // -----------------------------------------------------------------------
@@ -1995,7 +1691,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.HookTelemetry -> onHookTelemetry(event)
 
-            is ClaudeEvent.Notice -> onNotice(event)
+            is ClaudeEvent.Notice -> notices.onNotice(event)
 
             // Returned above; the branch exists only because the compiler checks this `when` for exhaustiveness,
             // which is exactly the property we want it to keep checking.
@@ -2005,9 +1701,16 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     /** Buffers a streaming delta on the reader thread; [flushDeltas] lands them on the EDT in one batch. */
     private fun bufferStream(event: ClaudeEvent.Stream) = when (event) {
-        is ClaudeEvent.TextDelta -> bufferDelta(isThinking = false, text = event.text)
+        // Only the MAIN conversation streams into this transcript. A subagent streams through the same
+        // channel, told apart solely by `parent_tool_use_id`, and its finalized blocks are already filtered
+        // out downstream — so without this the streamed halves of a dozen agents piled up here, interleaved,
+        // and were then never replaced by a finalize that had been dropped. Their text lives in their own
+        // tab, read from the binary's per-agent transcript.
+        is ClaudeEvent.TextDelta ->
+            if (event.parentToolUseId == null) bufferDelta(isThinking = false, text = event.text) else Unit
 
-        is ClaudeEvent.ThinkingDelta -> bufferDelta(isThinking = true, text = event.text)
+        is ClaudeEvent.ThinkingDelta ->
+            if (event.parentToolUseId == null) bufferDelta(isThinking = true, text = event.text) else Unit
 
         is ClaudeEvent.LiveUsage ->
             bufferUsage(event.inputTokens, event.cacheCreationTokens, event.cacheReadTokens, event.outputTokens)
@@ -2024,7 +1727,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
             is ClaudeEvent.Result -> onTurnResult(event)
 
-            is ClaudeEvent.AssistantThinking -> edt { reconciler.finalizeThinking(event.text) }
+            // A subagent's reasoning belongs to ITS tab, for exactly the reason its text does — see the
+            // AssistantText branch below. It was the one block that still landed here, because the parser
+            // read `parent_tool_use_id` and dropped it on the thinking branch alone: a session running a
+            // dozen agents filled the main transcript with interleaved "Thought process" rows nobody could
+            // follow, while the text those same agents produced was correctly filtered out.
+            is ClaudeEvent.AssistantThinking -> edt {
+                if (event.parentToolUseId == null) reconciler.finalizeThinking(event.text)
+            }
 
             is ClaudeEvent.MessageStart -> edt {
                 // A turn can emit several assistant messages (e.g. around tool calls). message_delta usage
@@ -2054,7 +1764,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         sessionId = event.info.sessionId
         // The id is what locates this session's agent directory, so this is the earliest point a restored
         // session can bring its previously-admitted agents back. Off-EDT, and a no-op when there are none.
-        restoreAdmittedAgents()
+        agentScanner.restoreAdmitted(onTasksReplayed = ::fireState)
         if (model == null && event.info.model.isNotBlank()) model = event.info.model
         if (event.info.outputStyle.isNotBlank()) outputStyle = event.info.outputStyle
         // The plugin is the source of truth for permissionMode. system/init re-arrives every turn and
@@ -2087,18 +1797,18 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         reconciler.onMessageBoundary()
         transcript.add(
             Speaker.TOOL,
-            formatToolUse(event.name, event.input, workingDir),
+            ToolNaming.formatToolUse(event.name, event.input, workingDir),
             meta = event.name,
             toolUseId = event.id,
             parentToolUseId = event.parentToolUseId,
             toolState = ToolState.LOADING, // just dispatched → light blue, until progress/result arrive
             // Project-relative file for the card's jump-to-code link (null for non-file tools).
-            filePath = toolFilePath(event.name, event.input, workingDir),
+            filePath = ToolNaming.toolFilePath(event.name, event.input, workingDir),
             // The raw command/script text, when this call executes one — drives its own copyable code
             // block in the tool card, and is remembered so ToolResult can decide, once the output lands,
             // whether to render it as a copyable code block too. Covers Bash, PowerShell, and any MCP
             // tool that executes a command (detected by input shape, not tool name).
-            commandText = SensitiveGuard.commandText(event.input),
+            commandText = ToolInputScanner.commandText(event.input),
         )
         // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
         // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including
@@ -2129,7 +1839,12 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // A backgrounded call names its task here and NOWHERE else: this is what gives a background task an
         // owner, a card to jump to and an output to show (see BackgroundTaskLinks). Done for a subagent's
         // result too, which returns below — the task belongs to that agent precisely.
-        if (backgroundTaskRegistry.observe(event)) fireState()
+        if (backgroundTaskRegistry.observe(event)) {
+            // The tool_result is where a backgrounded command NAMES its output file, and it is the last event
+            // that will arrive until it finishes — so the poll starts here or the output is never read live.
+            ensureOutputTail()
+            fireState()
+        }
         val snap = diffs.onToolResult(event.toolUseId)
         // Refresh the VFS NOW, on each successful write — not once at the end of the turn. Until the IDE
         // sees the file on disk it does not exist for it: the editor shows stale contents, and a
@@ -2138,7 +1853,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // mutating MCP tools can change anything, so those mark the project tree dirty instead.
         if (!event.isError) {
             diffs.refreshTouched()
-            if (mayHaveWrittenUnknownFiles(transcript.toolNameOf(event.toolUseId))) diffs.refreshProjectTree()
+            if (ToolNaming.mayHaveWrittenUnknownFiles(transcript.toolNameOf(event.toolUseId))) {
+                diffs.refreshProjectTree()
+            }
         }
         // For a reviewable write we captured the pre-write contents at approval time: render the actual
         // change as an inline unified diff (meta="diff") instead of the binary's "Edited file" blurb, so
@@ -2245,7 +1962,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // The admission seed: this Task call is ours, so the agent whose sidecar names it — and
                 // everything it spawns below — may be shown. See AgentRegistry's admission rule.
                 runningAgents.observeSpawn(event.info.toolUseId)
-                scanAgents()
+                agentScanner.scan()
                 if (taskTracker.onStarted(event.info)) fireState()
             }
 
@@ -2270,10 +1987,20 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // background task's output — so with it a task's tab shows what it actually printed, live and
                 // after a restart, instead of "this task reported no output".
                 backgroundTaskRegistry.observeOutputFile(event.info.taskId, event.info.outputFile)
-                scanAgents()
+                // The authoritative ending for a task the level signal never listed — without it the row
+                // would stay running for ever, since only the level settles the ones it does list.
+                backgroundTaskRegistry.settle(event.info.taskId, event.info.status)
+                // One last read BEFORE the poll gives up, because the binary may take the file away once the
+                // task has ended: the final chunk is exactly the part the user came to read.
+                agentScanner.tailNow()
+                agentScanner.scan()
                 if (taskTracker.onNotification(event.info)) {
-                    val label = event.info.summary.ifBlank { "Subagent ${event.info.status}" }
-                    systemNotice("Subagent ${event.info.status}: $label")
+                    // The HEADLINE only. `summary` carries the subagent's entire final answer — headings,
+                    // tables, code blocks — and printing it here dumped a whole report into the middle of the
+                    // conversation. It is already the last thing in that agent's own transcript, which its
+                    // tab reads from the binary's file, so nothing is lost by pointing at it instead.
+                    val head = SubagentNotice.headline(event.info.summary)
+                    systemNotice("Subagent ${event.info.status}" + (head?.let { ": $it" } ?: ""))
                 }
                 fireState()
             }
@@ -2297,6 +2024,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // the instant it ended. The registry keeps it, marked finished — the same contract a finished
                 // agent's tab already has.
                 backgroundTaskRegistry.observeLevel(event.info.tasks)
+                ensureOutputTail()
                 fireState()
             }
         }
@@ -2403,116 +2131,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /** Informational text surfaced as a transcript row. Fire-and-forget: nothing here answers the binary. */
-    private fun onNotice(event: ClaudeEvent.Notice) {
-        when (event) {
-            is ClaudeEvent.StatusNotice -> systemNotice(event.text)
-
-            is ClaudeEvent.MemoryRecall -> onMemoryRecall(event)
-
-            is ClaudeEvent.FilesPersisted -> onFilesPersisted(event)
-
-            is ClaudeEvent.PluginInstall -> onPluginInstall(event)
-
-            is ClaudeEvent.ModelRefusalFallback -> onModelRefusalFallback(event)
-
-            is ClaudeEvent.ModelRefusalNoFallback -> onModelRefusalNoFallback(event)
-
-            is ClaudeEvent.Informational -> onInformational(event)
-
-            is ClaudeEvent.Notification -> onNotification(event)
-
-            is ClaudeEvent.PermissionDenied -> onPermissionDenied(event)
-
-            // mirror_error → the binary lost transcript data; warn the user (their session file may be incomplete).
-            is ClaudeEvent.MirrorError -> {
-                log.warn("mirror_error: ${event.info.error}")
-                systemNotice("Warning: failed to persist part of the session transcript.")
-            }
-
-            // Live-tail only: a resumed session may replay historical instances, so don't tear anything down —
-            // just log it. (Reasons like host_exit/remote_control_disabled are host-set, not user input.)
-            is ClaudeEvent.WorkerShuttingDown -> log.info("worker_shutting_down: ${event.info.reason}")
-
-            is ClaudeEvent.Other -> log.debug("Ignored ${event.type}/${event.subtype}")
-        }
-    }
-
-    /** notification → in-transcript notice; high/immediate also raises an IDE notification so it isn't missed. */
-    private fun onNotification(event: ClaudeEvent.Notification) {
-        val text = event.info.text
-        if (text.isBlank()) return
-        systemNotice(text)
-        if (event.info.priority == "high" || event.info.priority == "immediate") notifyInfo(text)
-    }
-
-    /** permission_denied → render the denial (the model only otherwise sees an is_error tool_result). */
-    private fun onPermissionDenied(event: ClaudeEvent.PermissionDenied) = edt {
-        val i = event.info
-        val reason = i.message.ifBlank { i.decisionReason ?: i.decisionReasonType ?: "denied" }
-        transcript.add(Speaker.ERROR, "Denied ${i.toolName}: $reason")
-    }
-
-    /** memory_recall → a collapsible "Recalled N memories" row listing what context influenced the turn. */
-    private fun onMemoryRecall(event: ClaudeEvent.MemoryRecall) {
-        if (event.info.memories.isEmpty()) return
-        edt {
-            transcript.add(
-                Speaker.MEMORY,
-                MemoryRecallFormatter.body(event.info),
-                meta = MemoryRecallFormatter.summary(event.info),
-            )
-        }
-    }
-
-    private fun onFilesPersisted(event: ClaudeEvent.FilesPersisted) {
-        val files = event.info.files
-        if (files.isNotEmpty()) {
-            systemNotice("Uploaded ${files.size} file(s): " + files.joinToString(", ") { it.filename })
-        }
-        if (event.info.failed.isNotEmpty()) systemNotice("Failed to persist ${event.info.failed.size} file(s)")
-    }
-
-    private fun onPluginInstall(event: ClaudeEvent.PluginInstall) {
-        val i = event.info
-        log.debug("plugin_install status=${i.status} name=${i.name}")
-        when (i.status) {
-            "installed" -> systemNotice("Plugin installed${i.name?.let { ": $it" } ?: ""}")
-            "failed" -> systemNotice("Plugin install failed${i.error?.let { ": $it" } ?: ""}")
-        }
-    }
-
-    private fun onModelRefusalFallback(event: ClaudeEvent.ModelRefusalFallback) {
-        val i = event.info
-        val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
-        val to = i.fallbackModel.takeIf { it.isNotBlank() }
-            ?.let { " → retried on $it" } ?: " → retried on a fallback model"
-        systemNotice("The model declined to respond$cat$to.")
-    }
-
-    /**
-     * Refusal with no fallback configured → the turn ends in error. Surface it (the content is display prose)
-     * so a refused turn never ends silently.
-     */
-    private fun onModelRefusalNoFallback(event: ClaudeEvent.ModelRefusalNoFallback) = edt {
-        val i = event.info
-        val cat = i.apiRefusalCategory?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
-        val msg = i.content.ifBlank { "The model declined to respond$cat and no fallback model was configured." }
-        transcript.add(Speaker.ERROR, msg)
-    }
-
-    /**
-     * Generic loop banner. Only the more prominent levels (suggestion/warning) plus any blocking message reach
-     * the transcript; info/notice are already implied by the turn state and would just add noise.
-     */
-    private fun onInformational(event: ClaudeEvent.Informational) {
-        val i = event.info
-        val text = i.content.trim()
-        val prominent = i.level == "warning" || i.level == "suggestion" || i.preventContinuation
-        if (text.isNotEmpty() && prominent) {
-            systemNotice(if (i.level == "warning") "Warning: $text" else text)
-        }
-    }
-
     private fun onTerminated(gen: Int, exitCode: Int) {
         // Ignore a stale termination: if a newer start() has run (restart — e.g. toggling thinking/model), this
         // callback belongs to the old process and must NOT tear down the freshly-started session (which would
@@ -2615,72 +2233,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
 
     private fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
 
-    /**
-     * Re-reads the agent directory off the EDT and tells the UI, if anything came of it.
-     *
-     * Coalesced rather than queued: while a scan is walking the directory, further requests **set a flag**
-     * instead of queueing another walk — a burst of task events on a heavy session (dozens of agents
-     * spawning at once, which is the case this feature exists for) would otherwise queue one directory walk
-     * per event.
-     *
-     * The flag matters, and dropping the request outright was a real bug: on a restored chat the panel asks
-     * for a scan as it is built, which is exactly when the restore's own scan is usually still walking. The
-     * request was discarded, the panel had not yet subscribed when that scan finished, and the result was a
-     * chat whose agents were in memory and whose rows stayed empty until the user sent a prompt.
-     */
-    fun scanAgents() {
-        if (!agentScanInFlight.compareAndSet(false, true)) {
-            agentRescanRequested.set(true)
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            // Logged, not just swallowed. A failing scan means the agent rows silently stop updating, which
-            // from outside is indistinguishable from "no agents ran" — the one failure mode this feature
-            // must not have without a trace. The IO itself tolerates a missing directory on its own, so
-            // anything reaching here is a real defect.
-            val fresh = runCatching { runningAgents.scan() }
-                .onFailure { log.warn("agent scan failed; the agent rows will be stale", it) }
-                .getOrDefault(emptyList())
-            val tailed = runCatching { tailBackgroundOutput() }
-                .onFailure { log.warn("background-task tail failed; its output will be stale", it) }
-                .getOrDefault(false)
-            // Persist what was admitted, so a later run of the plugin still counts these as ours while a
-            // terminal-spawned agent in the same directory never does. Done here rather than at task_started
-            // because the tool_use_id → agent id mapping only exists once the binary has written the sidecar.
-            sessionId?.let { id ->
-                runCatching {
-                    val index = PluginAgentIndex.getInstance(project)
-                    // The whole shape, not just the id: parent, type and depth, so the record describes the
-                    // tree it is claiming instead of pointing at files and hoping.
-                    runningAgents.nodes.values.forEach { index.admit(id, it) }
-                    // And the background tasks, which have no sidecar at all — this is the ONLY place the
-                    // plugin can say "this task was mine, and this agent ran it".
-                    backgroundTaskRegistry.all.forEach { task ->
-                        index.recordTask(id, task.taskId, task.toolUseId, ownerAgentOfTask(task.taskId))
-                    }
-                }
-            }
-            agentScanInFlight.set(false)
-            edt {
-                labelAgentCards()
-                fireAgents(fresh)
-                // A task whose file grew has no agent news to report, so it needs its own repaint — the tab
-                // is showing that output live.
-                if (tailed) fireState()
-            }
-            // Someone asked while this one was walking: honour it now, so a request made during a scan is
-            // never silently lost (see the doc above — that is how a restored chat lost its rows).
-            if (agentRescanRequested.compareAndSet(true, false)) scanAgents()
-        }
-    }
+    /** Re-reads the agent directory off the EDT and tells the UI — see [AgentScanner]. */
+    fun scanAgents() = agentScanner.scan()
 
     /**
-     * Names each Agent card after the agent it spawned: `Agent (Inventory of dependencies)`.
+     * Names and states the Agent cards in the transcript, from what the scan found.
      *
-     * The description is the binary's own, model-written summary of the task, and it does not exist when the
-     * card is created — it appears in the agent's sidecar afterwards. So the card says "Agent" until a scan
-     * has read it, and a transcript with six of them was six identical rows. EDT: it notifies transcript
-     * listeners.
+     * Stays here rather than in [AgentScanner] because it writes the transcript, which is this class's.
+     * Assumes the EDT.
      */
     private fun labelAgentCards() {
         runningAgents.nodes.values.forEach { node ->
@@ -2705,64 +2265,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             // [AgentNode.kindLabel] is the single place that decides the word.
             val label = node.meta.description?.takeIf { it.isNotBlank() } ?: return@forEach
             transcript.setToolTitle(toolUseId, "${node.kindLabel} ($label)")
-        }
-    }
-
-    /**
-     * Reads whatever each backgrounded agent's progress file has gained since the last scan.
-     *
-     * Only agents publish one (`AgentOutput.outputFile`); a backgrounded shell command publishes no file at
-     * all, and its output only ever arrives as a tool result when the binary is asked for it. Rather than
-     * inventing a path for it, the task's view says so — see [BackgroundTaskLinks].
-     *
-     * Blocking IO: runs inside the pooled scan, never on the EDT.
-     */
-    private fun tailBackgroundOutput(): Boolean {
-        var changed = false
-        backgroundTaskRegistry.all.forEach { task ->
-            val file = task.outputFile?.takeIf { it.isNotBlank() } ?: return@forEach
-            val text = outputTail.readNew(java.nio.file.Paths.get(file))
-            if (text.isNotEmpty() && backgroundTaskRegistry.appendTailedOutput(task.taskId, text)) changed = true
-        }
-        return changed
-    }
-
-    /**
-     * Brings back the agents a previous run of the plugin admitted for this session id, then scans.
-     *
-     * This is the whole of "restore the agent tabs": the transcripts are the binary's files, still on disk,
-     * and the index says which of the agents in that directory were ever ours. An agent spawned from the
-     * terminal is in the same directory and is never in the index, so it stays invisible.
-     */
-    private fun restoreAdmittedAgents() {
-        val id = sessionId ?: return
-        // A restored chat admits what is in ITS OWN subagents directory. The index is a memory of what this
-        // plugin witnessed live, and it is demonstrably incomplete — sessions on disk carry subagents whose
-        // level-1 parent was never recorded — so relying on it alone brought chats back with no agents.
-        runningAgents.markRestored()
-        ApplicationManager.getApplication().executeOnPooledThread {
-            // The background tasks and their output come back from the binary's own transcript: the plugin
-            // records that a task was ours (and whose), the transcript records what it ran and what it
-            // printed. Without this a restart came back with the agents and no tasks at all — no tabs, no
-            // commands, and every line they had produced gone.
-            runCatching {
-                val replayed = SessionStore.readLines(id)?.let { BackgroundTaskReplay.parse(it) }.orEmpty()
-                // Every task in THIS session's transcript is this chat's. The index used to filter them, and
-                // it is a record of what the plugin saw live — so anything started before the last restart,
-                // or in a run whose index entry is thin, was dropped along with its command and its output.
-                // The transcript is per-session and it is the binary's own: it cannot contain another chat's
-                // work, which is the only thing that filter was ever protecting against.
-                val mine = replayed
-                if (backgroundTaskRegistry.seed(mine)) edt { fireState() }
-            }.onFailure { log.warn("could not replay background tasks for $id", it) }
-            val admitted = runCatching { PluginAgentIndex.getInstance(project).admittedAgents(id) }
-                .getOrDefault(emptyList())
-            // Debug rather than silent: a restore that produces no tabs throws nothing anywhere, so without
-            // these two numbers "my agents did not come back" is indistinguishable from "there were none".
-            // That is not hypothetical — it is how the legacy-id mismatch was found (see AgentMeta.bareAgentId).
-            log.debug("agent restore: session=$id indexed=${admitted.size}")
-            admitted.takeIf { it.isNotEmpty() }?.let { runningAgents.preAdmit(it) }
-            scanAgents()
         }
     }
 
@@ -2839,9 +2341,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         if (!settings.requiresTrustPrompt()) return true
         val choice = Messages.showYesNoDialog(
             project,
+            // Names no file any more. The configuration used to be a per-project `claude-code.xml`, and since
+            // 5.5.0 it lives in the IDE's own secret store — but it can still have ARRIVED from a repository,
+            // because a committed legacy file is adopted on first run. What the user has to judge is the same
+            // either way: code is about to run on their machine because of the project they just opened.
             "This project is configured to run an environment script and/or a custom MCP server when a Claude " +
                 "Code session starts. These execute code on your machine. Only allow this if you trust this " +
-                "project's settings (claude-code.xml). Run them?",
+                "project. Run them?",
             "Trust Claude Code Execution Config?",
             "Trust and run",
             "Cancel",
@@ -2880,8 +2386,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // publish an orphan process.
         generation++
         starting = false
-        // Stop the shared quota-poll timer so the disposed session leaks no EDT timer.
+        // Stop the shared timers so the disposed session leaks no EDT timer.
         quotaPollTimer.stop()
+        outputTailTimer.stop()
         // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
         cancelPendingElicitations()
         diffs.clearReviewDiffs()
@@ -2916,9 +2423,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          *  At 60s the context meter and cost sat visibly frozen through a whole turn and only told the truth
          *  after it ended, which reads as a broken meter exactly while the user is watching it. */
         const val QUOTA_POLL_MS = 1_000
-
-        /** How long a "the binary has its own login" answer is trusted. It costs a process spawn to get. */
-        private const val OWN_LOGIN_TTL_MS = 30_000L
 
         /**
          * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating
@@ -2981,16 +2485,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         /** Listenable TCP port range; anything outside it falls back to [DEFAULT_IDE_MCP_PORT]. */
         private val VALID_PORTS = 1..65_535
 
-        /**
-         * Quota levels worth interrupting the user about, ascending. They match the composer dot's colour
-         * scale exactly (blue → amber → red), so the warning and the indicator always agree.
-         */
-        private val QUOTA_THRESHOLDS = listOf(65, 85)
-        private const val QUOTA_THRESHOLD_HIGH = 85
-
-        /** Truncation for the `get_usage` reply trace — a bound, since the payload is not ours to size. */
-        private const val USAGE_LOG_CHARS = 2000
-
         /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
         val IDE_MCP_TRANSPORTS = McpTransport.entries.map { it.wire }
 
@@ -3006,87 +2500,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         fun isValidMcpConfig(text: String): Boolean =
             text.isBlank() || (runCatching { ClaudeJson.parseToJsonElement(text) }.getOrNull() is JsonObject)
 
-        /** Standard built-in tools, for the allow/deny checkboxes in Settings. */
-        val BUILTIN_TOOLS = listOf(
-            "Bash", "Read", "Edit", "Write", "Glob", "Grep",
-            "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit",
-        )
-
-        /** Tools whose `file_path` names a project file the transcript can hyperlink (jump-to-code). */
-        val FILE_TOOLS = setOf("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
-
-        /**
-         * A name that reads like a mutation, for tools we do NOT know — i.e. MCP ones (`replace_text_in_file`,
-         * `create_new_file`, `apply_patch`, `reformat_file`, `rename_refactoring`…). Applied ONLY to unknown tools:
-         * on a built-in it would misfire (`TodoWrite` contains "write" and touches no file at all).
-         *
-         * Generous on purpose. A false positive costs one async VFS refresh the IDE coalesces away; a false
-         * negative means the IDE keeps showing stale files, so we err towards refreshing.
-         */
-        private val MUTATING_TOOL_NAME = Regex(
-            // Mutations AND executors: an MCP `execute_terminal_command` / `run_configuration` can write anything,
-            // just like Bash — so it must trigger a project-tree refresh too (a real gap the code review caught).
-            "(edit|write|create|delete|remove|move|rename|patch|format|refactor|replace|insert|save|" +
-                "exec|execute|run|terminal|shell|command|apply|generate|build|install)",
-            RegexOption.IGNORE_CASE,
-        )
-
-        /**
-         * True when [toolName] may have changed files we cannot name — so the IDE must re-scan the project tree
-         * rather than a known list of paths.
-         *
-         * `Bash` always qualifies (a `mv`, a formatter, a codegen script). The file tools never do: their paths are
-         * known and refreshed exactly. Every other built-in reads. Anything else is an MCP tool, judged by name.
-         *
-         * PURE — no IDE, unit-testable.
-         */
-        fun mayHaveWrittenUnknownFiles(toolName: String?): Boolean {
-            val name = toolName?.takeIf { it.isNotBlank() } ?: return false
-            if (name == "Bash") return true
-            if (name in FILE_TOOLS || name in BUILTIN_TOOLS) return false
-            return MUTATING_TOOL_NAME.containsMatchIn(name)
-        }
-
-        /**
-         * The tool call's file argument as a path **relative to [projectRoot]**, or null when the tool takes no
-         * file / the path escapes the project (an absolute path outside the root stays absolute — we show the
-         * truth, and the jump-to-code gate refuses to open it anyway).
-         *
-         * PURE (no IDE): [projectRoot] is passed in, so this is unit-testable.
-         */
-        fun toolFilePath(name: String, input: JsonObject, projectRoot: String?): String? {
-            if (name !in FILE_TOOLS) return null
-            val path = input.str("file_path")?.takeIf { it.isNotBlank() } ?: return null
-            return relativizeToRoot(path, projectRoot)
-        }
-
-        /** `/abs/root/src/Foo.kt` + root `/abs/root` → `src/Foo.kt`. Leaves anything outside the root untouched. */
-        fun relativizeToRoot(path: String, projectRoot: String?): String {
-            val root = projectRoot?.takeIf { it.isNotBlank() } ?: return path
-            val normRoot = root.trimEnd('/', '\\')
-            // Compare with the platform separator normalised, so Windows paths relativise too.
-            val p = path.replace('\\', '/')
-            val r = normRoot.replace('\\', '/')
-            if (!p.startsWith("$r/")) return path
-            return p.removePrefix("$r/")
-        }
-
-        /**
-         * Concise one-line representation of a tool call, mirroring the CLI's "Tool(arg)" bullets. File tools show
-         * the path **relative to the project** — `Read(src/main/kotlin/permission/PermissionBroker.kt)` — rather
-         * than a bare file name, so the row says *which* file and the frontend can hyperlink it.
-         */
-        fun formatToolUse(name: String, input: JsonObject, projectRoot: String? = null): String {
-            val arg = when (name) {
-                "Bash" -> input.str("command")
-                in FILE_TOOLS -> toolFilePath(name, input, projectRoot)
-                "Glob", "Grep" -> input.str("pattern")
-                "Task" -> input.str("description")
-                "WebFetch" -> input.str("url")
-                "WebSearch" -> input.str("query")
-                else -> input.str("file_path")?.let { relativizeToRoot(it, projectRoot) } ?: input.str("path")
-            }
-            return if (!arg.isNullOrBlank()) "$name($arg)" else name
-        }
+        // How a tool call is NAMED — the label, its linkable path and which tools force a VFS rescan — lives in
+        // [ToolNaming]. It is pure and shared with the on-disk restore, so the live stream and a resumed session
+        // cannot label the same call differently.
     }
 }

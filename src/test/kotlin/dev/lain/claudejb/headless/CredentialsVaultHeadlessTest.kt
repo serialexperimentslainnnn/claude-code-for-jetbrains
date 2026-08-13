@@ -17,6 +17,11 @@ import java.nio.file.Files
  * These run against a TEMPORARY home ([CredentialsVault.homeOverride]), never the real one. That is not
  * tidiness: harvest MOVES a credential, so a run that died between taking the file and restoring it would
  * sign the developer out of their own CLI for real.
+ *
+ * And against a credential store of their own ([SecretStore.storeOverride]), for the sibling reason: the
+ * fixture's PasswordSafe is an application service on an Application the platform reuses for the whole run,
+ * so `CLAUDE_CREDENTIALS_JSON` written here was visible to — and clearable by — every other test class in
+ * the JVM.
  */
 class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
@@ -27,12 +32,12 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
         super.setUp()
         home = Files.createTempDirectory("claudejb-home").toFile()
         CredentialsVault.homeOverride = home
-        SecretStore.clear(SecretStore.CREDENTIALS_JSON)
+        SecretStore.storeOverride = mutableMapOf()
     }
 
     override fun tearDown() {
         try {
-            SecretStore.clear(SecretStore.CREDENTIALS_JSON)
+            SecretStore.storeOverride = null
             CredentialsVault.homeOverride = null
             home.deleteRecursively()
         } finally {

@@ -3,6 +3,7 @@ package dev.lain.claudejb.session
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.util.SystemInfo
+import dev.lain.claudejb.process.PluginContextPrompt
 import dev.lain.claudejb.util.InstalledPlugins
 import java.io.File
 
@@ -65,7 +66,8 @@ object SessionLauncher {
     /**
      * Builds the CLI argument vector. PURE: the [mcpConfig] JSON (computed by [mcpConfigJson], which needs the IDE) is
      * passed in so this stays unit-testable. Argument order is load-bearing and matches the historical
-     * [ClaudeSession.buildArgs].
+     * [ClaudeSession.buildArgs], with `--append-system-prompt` ([appendSystemPromptFlags]) spliced in as the last
+     * option group — it is a constant of every plugin launch, not one of the user's options.
      */
     fun buildArgs(opts: LaunchOptions, resume: Boolean, mcpConfig: String?): List<String> {
         // Concatenation order IS the argument order, and the argument order is load-bearing — so the groups are
@@ -82,6 +84,7 @@ object SessionLauncher {
         args += modelFlags(opts)
         args += toolFilterFlags(opts)
         args += advancedFlags(opts)
+        args += appendSystemPromptFlags(PluginContextPrompt.TEXT)
         mcpConfig?.let { args += listOf("--mcp-config", it) }
         if (resume) opts.sessionId?.let { args += listOf("--resume", it) }
         return args
@@ -104,6 +107,19 @@ object SessionLauncher {
         opts.allowedTools.trim().ifBlank { null }?.let { addAll(listOf("--allowedTools", it)) }
         opts.disallowedTools.trim().ifBlank { null }?.let { addAll(listOf("--disallowedTools", it)) }
     }
+
+    /**
+     * `--append-system-prompt <text>`: what the agent is told about the IDE it is running in (see
+     * [PluginContextPrompt]). Emitted **only when there is something to append** — a blank prompt means no flag at
+     * all, never an empty argument (the binary would take one and append nothing, paying an argv slot for it).
+     *
+     * Takes the text as a parameter rather than reading the constant so this stays pure and the "blank → no flag"
+     * branch is reachable from a test; [buildArgs] is the only caller and always passes [PluginContextPrompt.TEXT].
+     * Whatever is passed lands on the command line, where `/proc/<pid>/cmdline` is world-readable — so it must stay
+     * the generic constant and must never be given per-user or per-project material.
+     */
+    fun appendSystemPromptFlags(prompt: String): List<String> =
+        prompt.trim().ifBlank { null }?.let { listOf("--append-system-prompt", it) } ?: emptyList()
 
     /** Advanced launch options: each emitted only when it carries a value (neutral default → omitted). */
     private fun advancedFlags(opts: LaunchOptions): List<String> = buildList {

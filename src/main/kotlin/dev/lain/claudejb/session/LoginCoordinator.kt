@@ -13,6 +13,7 @@ import dev.lain.claudejb.process.ClaudeLoginFlow
 import dev.lain.claudejb.process.TerminalLauncher
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import dev.lain.claudejb.settings.resolveEnv
 import java.io.File
 
 /**
