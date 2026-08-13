@@ -22,6 +22,12 @@ export default [
       'src/main/resources/jcef/highlight.min.js',
       'build/**',
       'node_modules/**',
+      // `runIde` unpacks a sandbox IDE here, and the bundled Database plugin ships its data extractors as
+      // `.js` files that are not JavaScript we own — they run inside the IDE's own scripting host against
+      // injected globals (`com`, `OUT`, `COLUMNS`, `ROWS`, …), so `no-undef` fires 12 times on them. The
+      // directory is gitignored, so CI never sees it; without this line `npm run lint` is red on every
+      // workstation that has ever run `runIde`, which is every workstation.
+      '.intellijPlatform/**',
     ],
   },
 

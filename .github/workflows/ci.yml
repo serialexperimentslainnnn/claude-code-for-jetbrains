@@ -5,7 +5,8 @@
 #
 # Every action is pinned by full commit SHA, not by tag. A tag is mutable: whoever controls the action's
 # repository can repoint it at different code, and that code runs with this workflow's token. Dependabot
-# (.github/dependabot.yml) proposes SHA bumps weekly, so pinning costs nothing in maintenance.
+# (.github/dependabot.yml) proposes SHA bumps monthly — and security updates on their own schedule,
+# independently of that interval — so pinning costs nothing in maintenance.
 name: CI
 
 on:
@@ -26,6 +27,16 @@ on:
   #
   # `release.yml` is unaffected — it carries its own `push: branches: [main]` trigger and still fires on the
   # merge that publishes.
+  #
+  # LEFTOVER, named so it is not mistaken for live logic: THREE jobs below — `Static analysis`,
+  # `Dependency audit` and `Plugin verifier` — still carry
+  # `github.event_name == 'push' && github.ref == 'refs/heads/develop|main'` in their `if:`. Those halves
+  # can no longer match anything and are kept only so restoring the trigger is a one-line change. They are
+  # inert, not a second door — nothing runs on a push to a protected branch from this file.
+  #
+  # (`No bot PRs pending on develop` has no push half; `Build plugin` has no `if:` at all and is gated
+  # instead by `needs: [verify]`. So on `workflow_dispatch`, where no half matches, exactly two jobs run:
+  # `JVM tests` and `Frontend tests`.)
   pull_request:
     branches: [develop, main]
   workflow_dispatch:
@@ -54,7 +65,8 @@ env:
 
 jobs:
   # Unit + headless (BasePlatformTestCase, in-process IDE fixture) + integration (the bin/fake-claude
-  # Python stand-in). The whole non-UI pyramid, 677 tests.
+  # Python stand-in). The whole non-UI pyramid. Deliberately no test count here: it changes every release,
+  # and a number in a comment is a claim nobody re-checks.
   test:
     name: JVM tests
     runs-on: ubuntu-latest
@@ -82,7 +94,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
     steps:
@@ -134,7 +146,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
     # Same door as the verifier: pull requests into main, and the protected branches themselves.
@@ -331,15 +343,22 @@ jobs:
           exit 1
 
   # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
-  # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
-  # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
+  # declared 253 → 263.* range (the floor moved from 251 to 253 in 5.5.0, when the hard dependency on
+  # com.intellij.modules.jcef was declared). Compiling against the floor proves nothing about the ceiling —
+  # that asymmetry is exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs,
+  # hence the timeout.
+  #
+  # It is also NOT the gate that catches a missing plugin dependency: the verifier resolves against the
+  # whole IDE distribution, not against the plugin's classloader, which is where that failure lives. It
+  # reported Compatible on 262 all through the 5.1.1 breakage and was right to. JcefDependencyContractTest,
+  # in the JVM suite, is the gate for that.
   verify:
     name: Plugin verifier
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container:
       # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
-      # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
+      # the top of .github/ci-image/jvm-test.Dockerfile. Baking them made the image 38.1 GB, which every job paid for
       # on its own runner, to save ten minutes on the one job that runs least often.
       image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
@@ -352,21 +371,26 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
     needs: [test, frontend-test]
-    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads. It runs where the answer is load-bearing —
-    # on every pull request, and on the protected branches — and NOT on each push to a topic branch, where it
-    # was re-verifying a commit nobody was about to merge. The gate is unchanged: it is still a required check
-    # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
-    # is a real cost and the reason it ran everywhere until now.
-    # Where the exhaustive check belongs: the develop -> main door, plus the protected branches themselves.
+    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads, so it runs at the release door and
+    # nowhere else — pull requests targeting `main`, which is the merge that publishes.
     #
-    # NOT on topic branches and NOT on pull requests into develop — those iterate constantly and this job is
-    # ~10 minutes and 1.25 GB of IDE downloads. It DOES run on any pull request targeting main, because that
-    # is the merge that publishes, and it is the only gate that catches a BINARY incompatibility across the
-    # 251 -> 262 range (compiling against 252 proves nothing about 262 — see the 4.4.1 /login regression).
+    # NOT on pull requests into develop: those iterate constantly, and paying ten minutes per push to
+    # re-verify a commit nobody is about to promote is the cost this condition removes. What is lost is
+    # early detection mid-branch, which is real and is the reason it used to run everywhere.
+    #
+    # Where the gate actually lives, stated precisely because the two rulesets differ: `Plugin verifier` is
+    # a required check in .github/rulesets/main.json ONLY. develop.json requires `JVM tests`,
+    # `Frontend tests` and the two CodeQL jobs, and deliberately not this one. So a binary incompatibility
+    # can reach develop; it cannot reach main.
+    #
+    # The `push` half of the condition below is INERT: this workflow has no `push` trigger (see `on:` at the
+    # top). It is left in place so that restoring the trigger restores the intended behaviour in one edit
+    # rather than four. On `workflow_dispatch` neither half matches, so a manual run executes only the two
+    # ungated test jobs.
     if: >-
       (github.event_name == 'pull_request' && github.base_ref == 'main') ||
       (github.event_name == 'push' &&
@@ -411,7 +435,8 @@ jobs:
   # ran against bytes that were never verified — a second build on a fresh runner is not guaranteed to be
   # the same artifact. Downloading it also drops a full Gradle setup, JDK provision and compile from the
   # critical path. Unsigned and unpublished by design: signing and publishing happen only in release.yml,
-  # behind a human approval.
+  # which runs on the merge into `main` and has NO human approval — the `marketplace` environment scopes the
+  # credentials, it does not gate on a reviewer. See that file's header.
   build:
     name: Build plugin
     runs-on: ubuntu-latest
@@ -423,6 +448,19 @@ jobs:
       contents: read
     needs: [verify]
     steps:
+      # A sparse checkout of LICENSES/ ONLY, and emphatically not a second build: the attribution assertion
+      # below compares the artifact against the licence texts this commit actually carries, and that set has
+      # to come from somewhere other than a list in this file, which would rot the first time a dependency
+      # is added. Nothing else in this job reads the working tree.
+      #
+      # It runs FIRST on purpose: `actions/checkout` cleans the workspace it lands in, so downloading the
+      # distributable before it would delete build/distributions again.
+      - name: Fetch the licence texts this commit declares
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: LICENSES
+
       - name: Fetch the verified distributable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -440,14 +478,62 @@ jobs:
 
       # Likewise for attribution: the licences of the bundled web libraries must travel INSIDE the jar,
       # because that is where the redistribution obligation actually lands.
+      #
+      # THREE things are asserted, on the SAME artifact the verifier checked: this repository's own LICENSE,
+      # the notices file, and — the part that used to be missing — the licence TEXTS every entry in that
+      # notices file points at (`build.gradle.kts` copies `LICENSES/` to `META-INF/licenses/` in
+      # `processResources`). Without that third assertion, deleting that one Gradle line left this gate GREEN
+      # while the plugin shipped a THIRD-PARTY-NOTICES.md whose every "Full text: LICENSES/…" line referred
+      # to a file that was not in the artifact. MIT, BSD-3-Clause and Apache-2.0 all bind their notice
+      # obligation on REDISTRIBUTION, so that is a compliance defect, not a cosmetic one.
+      #
+      # The expected set is DERIVED FROM THE CHECKOUT, never enumerated here: adding a text under LICENSES/
+      # extends this gate by itself, which is the only version of this check that survives contact with a
+      # new dependency.
       - name: Assert third-party attribution is packaged
         run: |
-          unzip -o -q build/distributions/*.zip -d /tmp/dist
+          set -eu
+
+          zip=$(ls build/distributions/*.zip)
+          unzip -o -q "$zip" -d /tmp/dist
           jar=$(ls /tmp/dist/*/lib/claude-code-native-*.jar | grep -v searchableOptions | head -1)
+
+          # ONE listing, read by every assertion below. `-Z1` prints one entry name per line, so names are
+          # matched WHOLE (`grep -qxF`) instead of as substrings of `unzip -l`'s formatted table — where
+          # `META-INF/LICENSE` also matches `META-INF/LICENSES-anything`.
+          unzip -Z1 "$jar" > /tmp/jar-entries.txt
+
+          missing=''
+
           for f in META-INF/LICENSE META-INF/THIRD-PARTY-NOTICES.md; do
-            unzip -l "$jar" | grep -q "$f" || { echo "::error::$f missing from $jar"; exit 1; }
+            grep -qxF "$f" /tmp/jar-entries.txt || missing="$missing $f"
           done
-          echo "attribution present in $jar"
+
+          # The repository side. Guarded explicitly rather than left to fail obscurely: with no LICENSES/ at
+          # all there is nothing to compare against, and an assertion with an empty expected set passes
+          # vacuously — which is the exact failure mode this whole step exists to remove.
+          [ -d LICENSES ] || { echo "::error::LICENSES/ is absent from the checkout — there is nothing to compare the artifact against"; exit 1; }
+          find LICENSES -maxdepth 1 -type f -printf '%f\n' | sort > /tmp/expected-licences.txt
+          [ -s /tmp/expected-licences.txt ] || { echo "::error::LICENSES/ carries no licence texts, but every entry in THIRD-PARTY-NOTICES.md points at one"; exit 1; }
+
+          # Every declared text must have a counterpart in the jar. Read from a FILE with `while read`, not
+          # iterated as a bare $(…): no word splitting on the names, and no subshell to lose `missing` in.
+          while IFS= read -r name; do
+            grep -qxF "META-INF/licenses/$name" /tmp/jar-entries.txt || missing="$missing META-INF/licenses/$name"
+          done < /tmp/expected-licences.txt
+
+          # …and the directory itself must exist and be non-empty in the artifact. `grep -c` exits 1 on no
+          # match while still printing `0`, so the count is the signal and the exit status is not.
+          texts=$(grep -c '^META-INF/licenses/[^/]\{1,\}$' /tmp/jar-entries.txt || true)
+          texts=${texts:-0}
+
+          if [ -n "$missing" ] || [ "$texts" -eq 0 ]; then
+            [ "$texts" -ne 0 ] || echo "::error::META-INF/licenses/ is absent or empty in $jar — the LICENSES/ copy in build.gradle.kts (processResources) is what puts it there"
+            [ -z "$missing" ] || echo "::error::missing from $jar:$missing"
+            exit 1
+          fi
+
+          echo "attribution present in $jar: LICENSE, THIRD-PARTY-NOTICES.md, and $texts licence text(s) matching LICENSES/"
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
