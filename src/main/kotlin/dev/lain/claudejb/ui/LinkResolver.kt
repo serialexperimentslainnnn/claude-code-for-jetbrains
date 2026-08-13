@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui
 import com.intellij.navigation.ChooseByNameContributor
 import com.intellij.navigation.NavigationItem
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
@@ -20,9 +21,9 @@ import java.io.File
  * doesn't exist, or a word that isn't a symbol, is never rendered as a dead hyperlink.
  *
  * A path candidate is tried, in order, as: a path relative to the project root (or absolute, or `~/…`) → a bare
- * file name in the project's file index (`app.css:190` is how a developer cites a file) → a bare file name found by
+ * file name in the project's file index (`base.css:190` is how a developer cites a file) → a bare file name found by
  * a bounded on-disk scan (an *excluded* dir like `build/` is in no index, yet `foo.zip` is worth revealing). At
- * every stage the rule is the same as for symbols: **only an unambiguous match links** — two `app.css` in the tree
+ * every stage the rule is the same as for symbols: **only an unambiguous match links** — two `base.css` in the tree
  * means no link at all, rather than a jump to an arbitrary one.
  *
  * **Language-agnostic on purpose.** Symbols go through the [ChooseByNameContributor.SYMBOL_EP_NAME] extension
@@ -126,7 +127,7 @@ object LinkResolver {
             else -> return null // a relative path with no project to resolve it against
         }
         if (!abs.exists()) {
-            // Not a path relative to the root — but a BARE FILE NAME (`app.css:190`, `JcefHost.kt`) is how a
+            // Not a path relative to the root — but a BARE FILE NAME (`base.css:190`, `JcefHost.kt`) is how a
             // developer normally cites a file, so give it a second chance against the project's file index.
             val isBareName = !pathPart.contains('/') && !pathPart.contains('\\')
             return if (isBareName) PathOutcome.BareName(pathPart, line) else null
@@ -138,7 +139,7 @@ object LinkResolver {
     /**
      * Second chance for bare file names: resolve them through the project's **file-name index** (the one behind
      * *Go to File*), exactly as [resolveSymbols] does for symbols — and with the same rule: **only an unambiguous
-     * match links**. Two files named `app.css` means no link at all, rather than a jump to an arbitrary one.
+     * match links**. Two files named `base.css` means no link at all, rather than a jump to an arbitrary one.
      *
      * **Must be called off the EDT** (index access, inside a cancellable read action that waits for smart mode).
      */
@@ -264,11 +265,42 @@ object LinkResolver {
         if (names.isEmpty()) return emptyList()
         return try {
             ReadAction.nonBlocking<List<Resolved>> {
-                names.mapNotNull { resolveOneSymbol(project, it, root) }
+                // Per SYMBOL, not per batch. One name that cannot be resolved must cost that one link, not every
+                // link in the row — and resolving reaches deep into the platform's indexes and PSI, which can
+                // fail for reasons that have nothing to do with us: a file rewritten on disk while the IDE was
+                // indexing it (a pull, a branch switch, a rebase) leaves a stub that no longer matches the file,
+                // and reading a declaration's offset then throws. A jump-to-code link is a convenience; it is
+                // never worth an error the user has to read.
+                names.mapNotNull { resolveSymbolOrNull(project, it, root) }
             }.inSmartMode(project).expireWith(project).executeSynchronously()
         } catch (_: ProcessCanceledException) {
             emptyList()
         }
+    }
+
+    /**
+     * [resolveOneSymbol], with anything the platform throws turned into "no link".
+     *
+     * **[ProcessCanceledException] is re-thrown, deliberately.** It is not an error, it is the platform telling
+     * this read action to get out of the way of a write action, and swallowing it is the classic way a plugin
+     * becomes uncancellable and starts freezing the IDE. Everything else is a failure to look something up,
+     * which this feature is allowed to have.
+     */
+    // The breadth IS the point, so the rule is suppressed rather than satisfied. Naming the exception types
+    // would mean enumerating everything the platform's index and PSI can throw from another thread's write —
+    // which is precisely the thing we do not know, and the case that produced this guard (a stale stub after a
+    // file changed on disk) does not surface as a type we could have listed. ProcessCanceledException, the one
+    // that must NOT be swallowed, is re-thrown above the generic arm.
+    @Suppress("TooGenericExceptionCaught")
+    private fun resolveSymbolOrNull(project: Project, name: String, root: String): Resolved? = try {
+        resolveOneSymbol(project, name, root)
+    } catch (e: ProcessCanceledException) {
+        throw e
+    } catch (e: Exception) {
+        // Debug, not warn: an unresolvable name is an ordinary outcome here, and this runs once per candidate
+        // on every assistant message. A warning per name would be its own noise.
+        Logger.getInstance(LinkResolver::class.java).debug("could not resolve the symbol '$name' to a link", e)
+        null
     }
 
     /** One symbol → its declaration site, or null. Ambiguous never links: a wrong jump is worse than no link. */
@@ -276,7 +308,11 @@ object LinkResolver {
         val hits = itemsFor(project, name)
         if (hits.size != 1) return null
         val psi = hits.first() as? PsiElement ?: return null
-        val vf = psi.containingFile?.virtualFile ?: return null
+        // The index can hand back an element whose file has since changed or been deleted — the search ran
+        // against what was indexed, not against what is on disk now. Touching an invalid element is an error,
+        // so ask before touching rather than catching afterwards.
+        if (!psi.isValid) return null
+        val vf = psi.containingFile?.virtualFile?.takeIf { it.isValid } ?: return null
         if (!isOpenable(vf.path, root)) return null
         return Resolved(name, displayPath(vf.path, root), lineOf(psi))
     }

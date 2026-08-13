@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
+import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.ui.jcef.JcefSessionData
 import dev.lain.claudejb.ui.jcef.JcefTabsData
 import java.awt.BorderLayout
@@ -42,6 +43,16 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     ) {
         /** The attention badge, as a flag rather than an icon — the page decides how to draw it. */
         var attention: Boolean = false
+
+        /**
+         * When this tab last raised an attention notification, for [ClaudeToolWindowFactory]'s throttle.
+         *
+         * On the TAB, not in a map on the factory: a `ToolWindowFactory` is an APPLICATION-level extension —
+         * one instance for every project, for the life of the IDE — so a `Map<ClaudeSession, …>` there was
+         * keyed by an object holding a `Project`, and nothing cleared it on project close (the strip is
+         * disposed, but no tab is "closed"). Here it dies with the tab, by construction.
+         */
+        var lastNotified: Long = 0L
 
         /**
          * What this tab is PINNED to: an agent id, a background-task id, or neither (an ordinary chat).
@@ -102,13 +113,13 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         (tab.component as? JcefChatPanel)?.let {
             when {
                 // A PINNED tab is that agent's (or task's) tab: selecting it shows what it is pinned to.
-                tab.pinnedAgent != null -> it.showTranscript(tab.pinnedAgent)
+                tab.pinnedAgent != null -> it.transcript.showTranscript(tab.pinnedAgent)
 
-                tab.pinnedTask != null -> it.showBackgroundTask(tab.pinnedTask!!)
+                tab.pinnedTask != null -> it.transcript.showBackgroundTask(tab.pinnedTask!!)
 
                 // Selecting a chat means "show me this chat" — including when an agent's transcript is what
                 // is currently painted in it. Without this there is NO WAY BACK from an agent tab.
-                else -> it.showTranscript(null)
+                else -> it.transcript.showTranscript(null)
             }
             it.focusInput()
         }
@@ -143,6 +154,13 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     /** The chat panel behind tab [id], for a message that names the chat it belongs to (Workloads does). */
     fun panelOf(id: String): JcefChatPanel? =
         tabs.firstOrNull { it.id == id }?.component as? JcefChatPanel
+
+    /**
+     * The tab showing [session] — the chat's own, since it was added before any [pin]ned view of the same one.
+     * Asked of the strip rather than remembered in a map that outlived it (see [ChatTab.lastNotified]).
+     */
+    fun tabFor(session: ClaudeSession): ChatTab? =
+        tabs.firstOrNull { (it.component as? JcefChatPanel)?.session === session }
 
     fun selectById(id: String) {
         tabs.firstOrNull { it.id == id }?.let { select(it) }
@@ -195,7 +213,7 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         val list = tabs.map {
             JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention, it.pinnedAgent)
         }
-        tabs.forEach { (it.component as? JcefChatPanel)?.setChats(list) }
+        tabs.forEach { (it.component as? JcefChatPanel)?.agentTabs?.setChats(list) }
     }
 
     /**

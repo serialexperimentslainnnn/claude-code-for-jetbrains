@@ -71,7 +71,7 @@ internal class SessionFeed(
         // for no reason the user can see.
         if (usage != null && now - askedAt < USAGE_MIN_INTERVAL_MS) return
         askedAt = now
-        session.requestUsage { report ->
+        session.queries.requestUsage { report ->
             if (report == null) return@requestUsage
             // Merged, not replaced: when the binary's usage fetch falls back to its header-seeded object the
             // reply carries only five_hour/seven_day, and taking it literally made the per-model bars blink
@@ -83,7 +83,7 @@ internal class SessionFeed(
 
     /** Fetch MCP server status asynchronously and hand the raw payload to the dashboard's MCP health card. */
     fun requestMcp() {
-        session.requestMcpStatus { json ->
+        session.queries.requestMcpStatus { json ->
             if (json != null) exec("window.cc.mcp && window.cc.mcp($json)")
         }
     }
@@ -91,7 +91,7 @@ internal class SessionFeed(
     /** Fetch the CLI binary version once and cache it on the session so the Version row populates. */
     fun requestVersion() {
         if (session.binaryVersion != null) return
-        session.requestBinaryVersion { payload ->
+        session.queries.requestBinaryVersion { payload ->
             val v = payload?.let {
                 it["version"]?.jsonPrimitive?.contentOrNull
                     ?: it["binary_version"]?.jsonPrimitive?.contentOrNull

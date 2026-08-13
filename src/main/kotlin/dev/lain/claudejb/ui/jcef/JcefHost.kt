@@ -301,12 +301,47 @@ class JcefHost(
         val styleSrc = "'sha256-" + sha256Base64(styleInner) + "'"
 
         val libNames = listOf("purify.min.js", "marked.min.js", "highlight.min.js")
+
+        // The app, in LOAD ORDER — which is a contract, not a listing. There is no module system in the page:
+        // each file is its own hash-pinned <script> and they meet through `window.cc` / `window.CC`. So a file
+        // that reads another's namespace at load time must come after it. Two rules carry the whole list:
+        //   - `app-core.js` first: it creates `cc`/`CC` and everything else extends them.
+        //   - each family's shared namespace before its members: `app-transcript.js` creates `CC.transcript`
+        //     and so leads its own family, while the composer, the dashboard and the tab bar keep theirs in a
+        //     `-base.js` and put their SPINE last. For `app-composer.js` and `app-session.js` that last place
+        //     is load-bearing rather than tidy — both build their UI eagerly on load, so every collaborator
+        //     they call has to exist by then. `app-tabs.js` builds nothing at load, but it owns `render` and
+        //     the Kotlin-facing methods and reaches for all five companions, so it is listed the same way.
         val appNames = listOf(
             "app-core.js",
+            "app-core-markdown.js",
+            "app-core-diagram.js",
+            "app-core-theme.js",
             "app-transcript.js",
+            "app-transcript-rows.js",
+            "app-transcript-tools.js",
+            "app-transcript-links.js",
+            "app-transcript-find.js",
+            "app-composer-base.js",
+            "app-composer-menus.js",
+            "app-composer-pills.js",
+            "app-composer-attach.js",
+            "app-composer-readout.js",
+            "app-composer-palette.js",
+            "app-composer-boot.js",
+            "app-composer-auth.js",
             "app-composer.js",
             "app-permissions.js",
+            "app-session-base.js",
+            "app-session-cards.js",
+            "app-session-mcp.js",
+            "app-session-workloads.js",
             "app-session.js",
+            "app-tabs-base.js",
+            "app-tabs-guard.js",
+            "app-tabs-tree.js",
+            "app-tabs-pill.js",
+            "app-tabs-scroll.js",
             "app-tabs.js",
         )
 
