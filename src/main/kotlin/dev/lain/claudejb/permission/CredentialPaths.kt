@@ -1,7 +1,5 @@
 package dev.lain.claudejb.permission
 
-import kotlinx.serialization.json.JsonObject
-
 /**
  * Rule family 1 of [SensitiveGuard] — **credentials and key material**: the blacklist of files worth stealing,
  * and the glob engine that recognises them.
@@ -84,13 +82,6 @@ object CredentialPaths {
         "**/.env", "**/.env.*", "**/.envrc", "**/secrets.y*ml", "**/secrets.json", "**/credentials.json",
         "**/service-account*.json", "**/.vault-token", "**/.netlify/state.json", "**/.vercel/**",
     )
-
-    // ── rule exposed for tests ───────────────────────────────────────────────────────────────────────────
-
-    fun touchesSensitivePath(input: JsonObject, globs: List<String>, home: String?): Boolean {
-        val matchers = globs.map { compile(it, home) }
-        return ToolInputScanner.pathCandidates(input, home).any { p -> matchers.any { it.matches(p) } }
-    }
 
     // ── glob engine ──────────────────────────────────────────────────────────────────────────────────────
 

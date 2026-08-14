@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.system.measureTimeMillis
 
 /**
@@ -116,6 +117,88 @@ class SensitiveGuardTest {
         assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/src/Foo.kt")))
     }
 
+    // ── provenance: the DESTINATION of a call is its path argument, never the text it carries ─────────────
+    // A tool input is walked leaf by leaf, so an `Edit`'s `old_string` is offered to the same rules as its
+    // `file_path`. It must not be judged as a location: prose, code and documentation legitimately NAME paths
+    // that belong to someone else, and FOREIGN denies every caller with no override — so reading a mention as a
+    // destination refuses an ordinary edit to a project file outright. A command is the deliberate asymmetry:
+    // there the path really does live inside the text, so that text is still tokenised and still judged.
+
+    @Test
+    fun `an Edit that merely MENTIONS another user's home in its text is not foreign territory`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/README.md")
+            put("old_string", "logs are written to /home/bob/.cache/app")
+            put("new_string", "logs are written to /home/bob/.cache/app (override with LOG_DIR)")
+        }
+        assertEquals(Verdict.ALLOW, v("Edit", input))
+    }
+
+    @Test
+    fun `an Edit whose replaced text IS a foreign path is still not foreign — a quote is not a destination`() {
+        // The narrow half of the same bug, and the one an anchored recogniser cannot reach: a documentation line
+        // that consists of nothing but a path is a payload, not a location.
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/README.md")
+            put("old_string", "/home/bob/.cache/app")
+            put("new_string", "/home/bob/.cache/app2")
+        }
+        assertEquals(Verdict.ALLOW, v("Edit", input))
+    }
+
+    @Test
+    fun `a credential path quoted in replaced text is not a read of it either`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/docs/SETUP.md")
+            put("old_string", "/home/me/.ssh/id_rsa")
+            put("new_string", "~/.ssh/id_ed25519")
+        }
+        assertEquals(Verdict.ALLOW, v("Edit", input))
+    }
+
+    @Test
+    fun `a Write whose CONTENT quotes a foreign path still writes only where file_path says`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/notes.md")
+            put("content", "see /home/bob/.ssh/id_rsa for the old key")
+        }
+        assertEquals(Verdict.ALLOW, v("Write", input))
+    }
+
+    @Test
+    fun `an Edit whose file_path IS another user's home is still foreign`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/bob/.bashrc")
+            put("old_string", "PATH=x")
+            put("new_string", "PATH=y")
+        }
+        assertEquals(Verdict.DENY, v("Edit", input))
+    }
+
+    @Test
+    fun `a Bash command naming another user's key is still foreign — the path does live in the text there`() {
+        assertEquals(Verdict.DENY, v("Bash", bash("cat /home/bob/.ssh/id_rsa")))
+    }
+
+    // ── a length cap that runs before the folding is a bypass, not a bound ────────────────────────────────
+    // Padding a path with `/.` segments does not change the file it names, only how long it is spelled. If the
+    // cap that keeps a file's CONTENTS from being mistaken for a filename is applied to the raw spelling, a
+    // padded path is dropped before any rule sees it — and being dropped means ALLOW, from every rule at once.
+
+    @Test
+    fun `a padded credential path is still judged, however long it is spelled`() {
+        val padded = "/home/me/.ssh" + "/.".repeat(300) + "/id_rsa"
+        assertTrue(padded.length > 512, "the fixture must actually exceed the cap, it is ${padded.length} long")
+        assertEquals(Verdict.ASK, v("Read", read(padded)))
+        assertEquals(Verdict.DENY, v("mcp__fs__get", read(padded)))
+    }
+
+    @Test
+    fun `padding cannot smuggle another user's home past the cap either`() {
+        val padded = "/home/bob" + "/.".repeat(300) + "/.ssh/id_rsa"
+        assertEquals(Verdict.DENY, v("Read", read(padded)))
+    }
+
     // ── dangerous commands: location-independent, agent ASKS / third-party DENIED ─────────────────────────
 
     @Test
@@ -180,7 +263,7 @@ class SensitiveGuardTest {
         val nested = buildJsonObject {
             putJsonArray("edits") { addJsonObject { put("uri", "/home/me/.aws/credentials") } }
         }
-        assertTrue(CredentialPaths.touchesSensitivePath(nested, CredentialPaths.SENSITIVE_GLOBS, home))
+        assertEquals(Verdict.DENY, v("mcp__x__edit", nested))
     }
 
     @Test
@@ -191,7 +274,8 @@ class SensitiveGuardTest {
                 add("--export-secret-keys")
             }
         }
-        assertTrue(CommandRules.runsDangerousCommand(argv))
+        assertNotNull(CommandRules.dangerousCommand(argv))
+        assertEquals(Verdict.ASK, v("Bash", argv)) // trusted caller, dangerous command → a card, every time
     }
 
     @Test
@@ -221,16 +305,22 @@ class SensitiveGuardTest {
     fun `UNC detection`() {
         assertTrue(ForeignTerritory.isUnc("""\\server\share\x"""))
         assertTrue(ForeignTerritory.isUnc("//server/share/x"))
+        assertTrue(ForeignTerritory.isUnc("//192.168.1.5/share/x")) // a UNC host may be an IP literal
+        assertTrue(ForeignTerritory.isUnc("""\\file-srv_01.corp.example/share""")) // and carries -, _ and dots
+        assertTrue(ForeignTerritory.isUnc("""\\?\UNC\server\share\x""")) // Win32 spelling of the same remote path
         assertFalse(ForeignTerritory.isUnc("/home/me/x"))
         assertFalse(ForeignTerritory.isUnc("///etc")) // not a host
+        assertFalse(ForeignTerritory.isUnc("//server")) // a host with no share names no resource
     }
 
     // ── real incident: an ordinary `//` line comment is not a UNC path ────────────────────────────────────
-    // pathCandidates walks EVERY string leaf, including Edit's old_string/new_string — a JS/C/Kotlin comment
-    // line ("// see below") starts with `//` just like `\\server\share` does after backslash normalization,
-    // and the old isUnc() only checked "third char isn't another slash", which a comment's leading space
-    // trivially satisfies. That misclassified an everyday Edit as FOREIGN territory — a DENY with no opt-out,
-    // even though Edit is a fully trusted agent tool (FOREIGN denies regardless of trust).
+    // A JS/C/Kotlin comment line ("// see below") starts with `//` just like `\\server\share` does after
+    // backslash normalization, and the old isUnc() only checked "third char isn't another slash", which a
+    // comment's leading space trivially satisfies. That misclassified an everyday Edit as FOREIGN territory — a
+    // DENY with no opt-out, even though Edit is a fully trusted agent tool (FOREIGN denies regardless of trust).
+    // Two independent things now stop it and both are worth keeping: the Edit's payload is no longer offered as
+    // a location at all, and the recogniser itself no longer reads a comment as a host — the second is what
+    // still holds for a comment reaching the rule from anywhere else, so it is asserted on its own below.
     @Test
     fun `a line comment starting with slash-slash is not mistaken for a UNC path`() {
         assertFalse(ForeignTerritory.isUnc("// a plain comment explaining something"))
@@ -247,25 +337,47 @@ class SensitiveGuardTest {
         assertEquals(Verdict.ALLOW, v("Edit", input))
     }
 
-    // ── isCommandCall: the same detection the transcript reuses to render output as a code block ────────────
-
+    // ── the same rule, one layer down: a `//` fragment of ORDINARY CODE is not a UNC path either ──────────
+    // A command-shaped value is tokenised on shell separators — whitespace, quotes, `(`, `)`, `=`, `;`, `|` —
+    // and every token is then judged as a path candidate. Integer division immediately after one of those
+    // separators therefore yields tokens made of `//` and an operand: `len(xs)//2` → `//2`, `xs[len(xs)//2]` →
+    // `//2]`, `sum(v)//len(v)` → `//len`. None names a host and a share, so none is remote — and getting this
+    // wrong is not a near miss, because FOREIGN denies every caller with no override and no way to override it.
     @Test
-    fun `Bash is a command call`() {
-        assertTrue(ToolInputScanner.isCommandCall(bash("ls -la")))
+    fun `an integer-division fragment of a command is not mistaken for a UNC path`() {
+        assertFalse(ForeignTerritory.isUnc("//]"))
+        assertFalse(ForeignTerritory.isUnc("//${'$'}")) // `$` is not a hostname character, and there is no share
+        assertFalse(ForeignTerritory.isUnc("//2]"))
+        assertFalse(ForeignTerritory.isUnc("//2")) // no share
+        assertFalse(ForeignTerritory.isUnc("//len")) // no share, however hostname-shaped the first segment is
+        assertFalse(ForeignTerritory.isUnc("//TODO:fix/x")) // `:` is not a hostname character
     }
 
     @Test
-    fun `an MCP tool executing something is a command call too — no tool-name matching involved`() {
+    fun `a command doing integer division is ALLOWED, not denied as foreign territory`() {
+        assertEquals(Verdict.ALLOW, v("Bash", bash("python3 -c \"print(xs[len(xs)//2])\"")))
+        assertEquals(Verdict.ALLOW, v("Bash", bash("python3 -c 'print(sum(v)//len(v))'")))
+    }
+
+    // ── commandText: what the transcript renders as the call's own copyable code block ─────────────────────
+
+    @Test
+    fun `Bash carries command text`() {
+        assertEquals("ls -la", ToolInputScanner.commandText(bash("ls -la")))
+    }
+
+    @Test
+    fun `an MCP tool executing something carries it too — no tool-name matching involved`() {
         val terminalInput = buildJsonObject { put("command", "Get-ChildItem") } // PowerShell, via an MCP tool
-        assertTrue(ToolInputScanner.isCommandCall(terminalInput))
+        assertEquals("Get-ChildItem", ToolInputScanner.commandText(terminalInput))
         val argvInput = buildJsonObject { putJsonArray("args") { add("dir") } }
-        assertTrue(ToolInputScanner.isCommandCall(argvInput))
+        assertEquals("dir", ToolInputScanner.commandText(argvInput))
     }
 
     @Test
-    fun `a tool with no command-shaped key is not a command call`() {
-        assertFalse(ToolInputScanner.isCommandCall(read("/home/me/proj/Foo.kt")))
-        assertFalse(ToolInputScanner.isCommandCall(buildJsonObject { put("pattern", "TODO") })) // Grep
+    fun `a tool with no command-shaped key carries none`() {
+        assertNull(ToolInputScanner.commandText(read("/home/me/proj/Foo.kt")))
+        assertNull(ToolInputScanner.commandText(buildJsonObject { put("pattern", "TODO") })) // Grep
     }
 
     // ── real incident: AGENT_TOOLS had gone stale as the CLI grew its own orchestration surface ──────────────
@@ -494,13 +606,47 @@ class SensitiveGuardResolverPerformanceTest {
         assertEquals(1, callCount())
     }
 
+    /**
+     * Counts invocations and sleeps past the per-call timeout — a `stat()` on an unresponsive mount. The counter is
+     * atomic because these calls are abandoned mid-flight: a timed-out `Future.get` gives the reader no
+     * happens-before edge to the thread that incremented it, so a plain `var` could be read stale.
+     */
+    private fun hangingResolver(): Pair<(String) -> String?, () -> Int> {
+        val calls = AtomicInteger()
+        return (
+            { _: String ->
+                calls.incrementAndGet()
+                Thread.sleep(5_000)
+                null
+            } to { calls.get() }
+            )
+    }
+
     @Test
-    fun `resolvable candidates are capped, even in a command crafted with many real-looking paths`() {
+    fun `a command naming many real paths resolves every one of them — there is no count to beat`() {
         val (resolver, callCount) = countingResolver()
         val policy = basePolicy.copy(pathResolver = resolver)
         val manyPaths = (1..40).joinToString(" ") { "/tmp/f$it" }
         SensitiveGuard.verdict("Bash", bash("tar czf out.tar $manyPaths"), policy)
-        assertTrue(callCount() <= 16, "expected the resolve cap to apply, got $callCount calls")
+        // The bound here is the wall-clock budget, deliberately not a count of candidates: a count fails open at a
+        // number the caller can exceed, judging everything past the cap on its literal spelling alone. On a healthy
+        // filesystem a stat() is microseconds, so all forty fit — and forty decoys in front of a real argument buy
+        // nothing. `tar`, `czf` and `out.tar` carry no separator and never reach the resolver at all.
+        assertEquals(40, callCount(), "a candidate cap would leave the paths past it judged on their spelling only")
+    }
+
+    @Test
+    fun `that same command on a hung mount stops at the budget instead of paying the timeout per path`() {
+        val (resolver, callCount) = hangingResolver()
+        val policy = basePolicy.copy(pathResolver = resolver)
+        val manyPaths = (1..40).joinToString(" ") { "/tmp/f$it" }
+        val elapsedMs = measureTimeMillis {
+            SensitiveGuard.verdict("Bash", bash("tar czf out.tar $manyPaths"), policy)
+        }
+        // Forty × the 200 ms per-call timeout would be eight seconds of the thread that reads the whole stdout
+        // stream — worse than the incident this class exists to prevent. The shared budget ends it after a handful.
+        assertTrue(elapsedMs < 2_000, "verdict() took ${elapsedMs}ms — the shared budget did not end the resolving")
+        assertTrue(callCount() < 40, "every path was still given its own timeout: ${callCount()} calls")
     }
 
     @Test
