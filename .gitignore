@@ -75,6 +75,10 @@
 # otherwise re-include — it is a fixture the UI suite opens, so an IDE writes into it.
 **/.idea/
 *.class
+# The same thing for the other toolchain: `!/scripts/**` re-includes the Python generators, and
+# running one writes bytecode beside it.
+*.pyc
+**/__pycache__/
 *.log
 
 # ==========================================================================================
