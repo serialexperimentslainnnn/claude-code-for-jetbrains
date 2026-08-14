@@ -9,19 +9,25 @@
 
   What is left is not a lint problem, it is an architecture decision:
 
-    LargeClass       — ClaudeSession is ~1900 lines.
-    TooManyFunctions — it exposes 46 public functions (ignorePrivate is on, so that count is real API
-                       surface, not extracted helpers).
+    LargeClass       — ClaudeSession is far over the threshold. No figure is written here, because a
+                       hand-copied one starts lying at the next commit and gets quoted as if it did not.
+                       Ask the tree instead:
+                         wc -l src/main/kotlin/dev/lain/claudejb/session/ClaudeSession.kt
+    TooManyFunctions — its non-private member functions are the finding (ignorePrivate is on, so what is
+                       counted is real API surface, not extracted helpers). Same rule, same reason:
+                         grep -cE '^    ((internal|override|suspend|@TestOnly) )*fun ' \
+                           src/main/kotlin/dev/lain/claudejb/session/ClaudeSession.kt
 
   Both are true, and neither is fixable by the moves that fixed the rest. ClaudeSession is a deliberate
-  FACADE: ten collaborators have already been extracted out of it (LoginCoordinator, TokenAccountant,
-  TaskTracker, TranscriptReconciler, DiffLifecycleManager, SessionControlClient, PermissionCardManager,
-  HookBroker, HookActivityNarrator, SessionLauncher), and what remains is the orchestration itself plus the
-  verb list the UI calls. Shaving it further by moving thin delegates into a second object would trade one
-  wide-but-honest surface for indirection — a previous pass evaluated exactly that and rejected it in
-  writing. The real fix is a genuine split into session-lifecycle vs. UI-facing-commands, which is a large,
-  behaviour-preserving refactor of the hottest file in the repository and belongs in its own reviewed
-  change, not in the release that is already rewriting this much.
+  FACADE: collaborators have been extracted out of it release after release (LoginCoordinator,
+  TokenAccountant, TaskTracker, TranscriptReconciler, DiffLifecycleManager, SessionControlClient,
+  PermissionCardManager, HookBroker, HookActivityNarrator and SessionLauncher among them, and the list has
+  grown since), and what remains is the orchestration itself plus the verb list the UI calls. Shaving it
+  further by moving thin delegates into a second object would trade one wide-but-honest surface for
+  indirection — a previous pass evaluated exactly that and rejected it in writing. The real fix is a
+  genuine split into session-lifecycle vs. UI-facing-commands, which is a large, behaviour-preserving
+  refactor of the hottest file in the repository and belongs in its own reviewed change, not in the
+  release that is already rewriting this much.
 
   Why a baseline rather than raising the two thresholds: a threshold high enough to admit ClaudeSession
   would stop catching the NEXT class that grows to this size. This file accepts two named, examined findings

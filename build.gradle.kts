@@ -71,16 +71,27 @@ dependencies {
         // declares, does not exist in 252 at all — compiling against an IDE that cannot satisfy the plugin's
         // own dependencies makes `runIde` a sandbox the plugin refuses to load in, and the "build against the
         // floor" rule stops meaning anything.
-        // By BUILD NUMBER, not "2025.3": that marketing version is not published in the Maven repository the
+        // By BUILD NUMBER, not "2025.3.1": that marketing version is not published in the Maven repository the
         // plugin resolves from (only the point releases are), so the plain name fails to resolve.
-        // 253.28294.334 is the first 2025.3 release — i.e. the floor itself, not a point release above it.
-        // `useInstaller = false` resolves the Maven artifact instead of the `.tar.gz` installer. The installer
-        // for this build is not on the CDN (`ideaIC-2025.3.tar.gz` → 404), while the repository does carry
-        // `com.jetbrains.intellij.idea:ideaIC:253.28294.334`.
+        // `useInstaller = false` resolves the Maven artifact instead of the `.tar.gz` installer — smaller, and
+        // it carries everything this build needs, `com.intellij.modules.jcef` included (checked in the
+        // artifact's own `lib/product-backend.jar`).
         // NOT `IntellijIdeaCommunity`: the `ideaIC` artifact stopped being published at 2025.3 (253) — the very
         // floor this release moved to — and the Gradle plugin warns about it on every build. JetBrains ships a
         // single unified IDEA distribution from 253 onwards, which is what `intellijIdea(…)` resolves.
-        intellijIdea("253.28294.334") {
+        //
+        // **253.29346.138 (2025.3.1), not 253.28294.334 (2025.3) — and the ten days between them are the whole
+        // point.** `com.intellij.modules.jcef`, which `plugin.xml` declares a MANDATORY dependency on, does not
+        // exist in 2025.3: its `product-backend.jar` carries 38 `com.intellij.modules.*` aliases and none of
+        // them is that one. It appears in 2025.3.1 — 39 aliases, the extra one being exactly `jcef`. So on
+        // 2025.3 the IDE refuses to load this plugin outright ("has dependency on 'com.intellij.modules.jcef'
+        // which is not installed"), which is the same failure that made 5.1.1 dead on 2026.2, at the other end
+        // of the range. The dependency cannot simply be dropped: from 262 JCEF is a bundled plugin, and without
+        // declaring it the plugin's classloader has no `com.intellij.ui.jcef.*` at all. It is mandatory from
+        // the build that has it and impossible before — so the FLOOR moves, and `sinceBuild` below moves with
+        // it. (On 2025.3 itself `JBCefApp` does live in `lib/app.jar`, i.e. everything compiles and 5.1.1 ran
+        // there happily; it is the declaration that cannot be satisfied, not the classes that are missing.)
+        intellijIdea("253.29346.138") {
             useInstaller = false
         }
         // Bundled IDE Terminal: used to open an interactive `claude login` session (the OAuth flow needs a
@@ -202,6 +213,25 @@ tasks {
         testLogging { showStandardStreams = true }
     }
 
+    // The distributed PROJECTMAP.md index, checked against the sources it claims to index. WIRED INTO
+    // `check` (unlike `checkDrift` above), because it needs no network, no binary and no IDE — it reads the
+    // working tree and nothing else.
+    //
+    // Each map is two documents in one file: prose a person wrote, and — between the `MAP:GENERATED`
+    // markers — an index derived from the code. Only the derived half is compared here, and that split is
+    // what makes the gate possible at all: a hand-written line number is fiction after the next edit, so a
+    // map maintained by hand can only be checked by reading it, which nobody does. A stale map is worse
+    // than no map, because everybody believes it and nobody re-checks it.
+    //
+    //   python3 scripts/gen-projectmap.py            # regenerate every block after moving anything
+    //   ./gradlew checkProjectMap                    # or `./gradlew check`, which includes it
+    val checkProjectMap by registering(Exec::class) {
+        description = "Verify each PROJECTMAP.md's generated block still matches the sources it indexes."
+        group = "verification"
+        workingDir = rootProject.projectDir
+        commandLine("python3", "scripts/gen-projectmap.py", "--check")
+    }
+
     // Convenience alias: run only the heavy IntelliJ-fixture packages (headless + fake-claude integration).
     val integrationTest by registering {
         description = "Runs only the headless + fake-claude integration tests (subset of `test`)."
@@ -234,8 +264,20 @@ tasks {
         shouldRunAfter("integrationTest")
         // Let a remote runner override where the robot-server lives (defaults to 127.0.0.1:8082 in UiTestBase).
         System.getProperty("robot-server.url")?.let { systemProperty("robot-server.url", it) }
-        // RemoteRobot needs a running IDE + display; opt in explicitly (CI nightly with Xvfb, or local).
-        onlyIf { project.findProperty("uiTest.enabled") == "true" }
+        // RemoteRobot needs a running IDE on a display, and this task starts neither, so the flag is an
+        // acknowledgement that both are already up. It is asserted rather than used as an `onlyIf`: a Gradle
+        // skip is `BUILD SUCCESSFUL` with zero tests executed, which is the one outcome a verification task
+        // must never produce. `uiTest` hangs off no aggregate task (see `check` below), so the only way to
+        // reach this is to ask for it by name — and asking for it without the flag is a mistake worth a red.
+        doFirst {
+            if (project.findProperty("uiTest.enabled") != "true") {
+                throw GradleException(
+                    "uiTest needs an IDE already running with robot-server on a display, and does not start " +
+                        "one. Boot it with `./gradlew runIdeForUiTests` (under xvfb-run if headless), then " +
+                        "re-run this task with -PuiTest.enabled=true.",
+                )
+            }
+        }
     }
 
     // The uiTest source set inherits the test classpath, so the sandbox-project fixture can be contributed
@@ -245,7 +287,18 @@ tasks {
     }
 
     // `check` already depends on `test`, which now includes the headless/integration packages.
-    // uiTest stays out of `check` — runs nightly / manual (needs a display + running IDE).
+    //
+    // `uiTest` is kept out of TWO graphs, and both are needed — enumerating one and stopping there invites the
+    // conclusion that it is enough, which it is not:
+    //   1. out of `check`, because it needs a display and an already-running IDE, so it runs nightly or by
+    //      hand and would otherwise fail every ordinary `check`;
+    //   2. out of Kover's report graph, via `disabledForTestTasks` in the `kover { }` block below — a `Test`
+    //      task is pulled in as a dependency of `koverXmlReport`/`koverVerify` whether or not `check` wants
+    //      it, so staying out of `check` alone leaves the coverage tasks unable to run anywhere the IDE is
+    //      not already up.
+    check {
+        dependsOn(checkProjectMap)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +353,14 @@ intellijPlatformTesting {
                     "-Dide.mac.file.chooser.native=false",
                     "-DjbScreenMenuBar.enabled=false",
                     "-Dapple.laf.useScreenMenuBar=false",
-                    // Auto-trust opened projects so no "Trust this project?" modal blocks the robot.
-                    "-Dide.trust.all.projects=true",
+                    // Auto-trust opened projects so no "Trust this project?" modal blocks the robot. The key is
+                    // `idea.` — the neighbour above is `ide.` because it is a platform REGISTRY key, and this one
+                    // is a system property read by `TrustedProjects` via `Boolean.getBoolean`. The two
+                    // namespaces sit ten lines apart, so the wrong prefix reads as consistent with its
+                    // neighbour: verified against the 253 distribution, where `ide.trust.all.projects` appears
+                    // nowhere. Under Xvfb there is a real display, so the headless escape hatch
+                    // (`idea.trust.headless.disabled`) never fires and the modal has nothing to dismiss it.
+                    "-Didea.trust.all.projects=true",
                     "-Dide.show.new.ui.welcome.screen=false",
                     // Point the plugin at the deterministic fake binary + default fixture (per-test scenarios
                     // can override FAKE_FIXTURE; see docs/UI_TESTING.md). Read by ClaudeSettings test hook.
@@ -334,7 +393,12 @@ intellijPlatform {
             // Ceiling 263.*: declared ahead of the 2026.3 branch on purpose, so an EAP user is never locked out
             // by a range we forgot to widen. It is not a guess — `verifyPlugin` verifies against the EAP and RC
             // channels up to that bound (see the `select` block below), so the claim is checked on every run.
-            sinceBuild = "253"
+            // 253.29346.138 = IntelliJ IDEA 2025.3.1, the FIRST build that ships
+            // `com.intellij.modules.jcef` — the mandatory dependency this plugin declares. 2025.3 itself
+            // (253.28294.334, ten days earlier) does not have it, and there the IDE refuses to load the plugin
+            // at all. A floor of plain "253" was therefore a promise that could not be kept for the first
+            // release of that branch; see the platform declaration above for the full reasoning.
+            sinceBuild = "253.29346.138"
             untilBuild = "263.*"
         }
         // "What's new" on the Marketplace = the latest version section of RELEASE_NOTES.md, as HTML.
@@ -370,12 +434,20 @@ intellijPlatform {
         // only hook that runs BEFORE the workspace state is written — which is the whole point of it. An
         // experimental API is acceptable with a reason; a deprecated one is not acceptable at all, because
         // it has an announced removal date and the plugin has to keep working across the IDE range.
+        //
+        // MISSING_DEPENDENCIES is here for a reason found the hard way, and it is the most load-bearing entry
+        // in this list: a mandatory `<depends>` that the target IDE cannot satisfy means **the plugin does not
+        // load at all** — not a degraded feature, not a warning, nothing. The verifier detects it perfectly
+        // (pointed at 253.28294.334 it says "1 missing mandatory dependency" in as many words) and, without
+        // this line, still finished with BUILD SUCCESSFUL. A gate that finds the fault and passes anyway is
+        // worse than no gate: it is a green tick over a plugin that cannot start.
         failureLevel =
             listOf(
                 VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
                 VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
                 VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
                 VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
+                VerifyPluginTask.FailureLevel.MISSING_DEPENDENCIES,
             )
         ides {
             // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
@@ -405,9 +477,22 @@ intellijPlatform {
                 // purpose is verification WITHOUT the CDN, so in this mode there is nothing to download.
                 localIdes.forEach { local(it) }
             } else {
-                // Online (CI, or no local installs): recommended() spans the plugin's whole declared range
-                // including the since-build FLOOR — the gate that catches a too-new API — and select() adds the
-                // NEWEST EAP/RC. The upper bound matches the declared untilBuild; as of Aug 2026 the newest
+                // THE DECLARED FLOOR, PINNED BY BUILD NUMBER — and this line exists because its absence cost a
+                // release. The comment below used to claim that `recommended()` covers "the since-build floor";
+                // it does not. `recommended()` returns JetBrains' recommended set, which for 253 resolves to
+                // the LAST point release (253.33813.55), never the first. So the one build the plugin promises
+                // to support and is most likely to break on — the oldest — was the only one never verified,
+                // and `com.intellij.modules.jcef` missing from 2025.3 went unnoticed through every green run.
+                // Keep this in step with `sinceBuild` above: they are the same claim, stated twice, and a gate
+                // that drifts from the promise it checks is not a gate.
+                // `useInstaller = false` for the same reason the compile platform above uses it: the CDN has no
+                // `.tar.gz` named after a build number (`ideaIU-253.28294.334.tar.gz` → 404), only the Maven
+                // artifact carries one, and pinning the exact build is the entire point of this entry.
+                create(IntelliJPlatformType.IntellijIdea, "253.29346.138") {
+                    useInstaller = false
+                }
+                // Online (CI, or no local installs): recommended() adds JetBrains' recommended spread across
+                // the declared range, and select() adds the NEWEST EAP/RC. The upper bound matches the declared untilBuild; as of Aug 2026 the newest
                 // build on either channel is 262.9437.65 (2026.2.1 RC), so this resolves there today and picks
                 // up a real 263 automatically the day one ships.
                 //
@@ -470,45 +555,54 @@ tasks.withType<io.gitlab.arturbosch.detekt.DetektCreateBaselineTask>().configure
 }
 
 // ---------------------------------------------------------------------------
-// Coverage gates — per package, because one global number would be a lie either way.
+// Coverage gates. The INTENT is per package, because one global number would be a lie either way; what the
+// tool can actually enforce is a floor plus an aggregate, and the `verify` block below says why.
 //
 // The honest shape of this codebase is that its risk is NOT evenly distributed. `permission/` decides whether
 // the agent may read your SSH key; `ui/` paints a browser. A single global threshold either sets the bar so low
 // that the guard could rot unnoticed, or so high that it can only be met by writing tests against Swing and
-// JCEF that assert nothing anyone cares about. So the bar is per package, and it is set slightly BELOW what
-// each package measures today: a gate that catches regression, not a target that invites test-padding.
+// JCEF that assert nothing anyone cares about. So the exclusions below say which packages are not gated at
+// all, and the rules say what the gated ones must hold — each bound sitting slightly BELOW what is measured,
+// so it is a gate that catches regression rather than a target that invites test-padding.
 //
 // `ui`/`ui.jcef` are excluded rather than gated at a token value. They need a live IDE and a live Chromium, and
-// they are covered by a different layer entirely: 156 vitest tests drive the real shipped JS, and the release
-// checklist requires a manual pass through the UI. Excluding them says that out loud; gating them at 20% would
-// dress the same fact up as a passing check.
+// they are covered by a different layer entirely: the vitest suite drives the real shipped JS (`npm test`
+// reports how many, and that is the only honest way to say it — a count written here ages on its own, in
+// silence, with nobody to notice), and the release checklist requires a manual pass through the UI. Excluding
+// them says that out loud; gating them at 20% would dress the same fact up as a passing check.
 //
-// Measured 2026-08-05 (line coverage): permission 98.1 · protocol 87.3 · settings 86.1 · diff 72.8 ·
-// session 67.3 · context 42.1 · process 37.9 · ui.jcef 31.2 · ui 24.6 · TOTAL 53.3.
-// `context`/`process` are ungated for now: they wrap the OS (clipboard, process spawn, shell env) and most of
-// what is uncovered there cannot run in CI. That is a known gap, not an endorsement.
+// `context`/`process` are ungated: they wrap the OS (clipboard, process spawn, shell env) and most of what is
+// uncovered there cannot run in CI. That is a known gap, not an endorsement.
+//
+// The measured figures live in ONE place — docs/RELEASE_CHECKLIST.md §Coverage policy — beside the exclusion
+// list this block has to agree with. They are deliberately not repeated here: a measurement written into two
+// files is a measurement that will disagree with itself, and this file has no way to notice when it does.
 // ---------------------------------------------------------------------------
 kover {
-    // `checkDrift` must NOT be dragged into the coverage graph.
+    // Kover aggregates EVERY `Test` task in the project, so a task that is on-demand everywhere else is still
+    // pulled into the coverage graph and becomes a dependency of `koverXmlReport`/`koverVerify`. Being absent
+    // from `check` does not keep a task out of this one: it has to be named here.
     //
-    // Kover instruments and aggregates EVERY `Test` task in the project, and `checkDrift` is registered as one.
-    // That silently made it a dependency of `koverVerify`, so the `Static analysis` CI job ran the on-demand
-    // drift check — which downloads the latest SDK and probes a LOCALLY INSTALLED `claude` binary. There is no
-    // such binary on a runner, so it died with an IOException and failed the job.
-    //
-    // It passed locally, which is the whole lesson: the maintainer's machine has the binary, so the difference
-    // between "this task is on-demand" and "this task is wired into check" was invisible until CI ran it. The
-    // task's own KDoc already said "NOT wired into `check`" — it just was not true of the coverage graph.
+    // `checkDrift` is registered as a `Test` task and downloads the latest SDK and probes a LOCALLY INSTALLED
+    // `claude` binary, which a CI runner does not have.
     currentProject {
         instrumentation {
             disabledForTestTasks.add("checkDrift")
+            // `uiTest` is the same shape and must be out for two independent reasons. It is a `Test` task
+            // (registered above), so it lands in the dependency graph of `koverXmlReport`/`koverVerify` — and
+            // it drives an ALREADY-RUNNING IDE over HTTP, asserting `-PuiTest.enabled=true` rather than
+            // skipping, so without this line neither report can be produced anywhere that IDE is not already
+            // up on a display. Its coverage would also be empty either way: the code it exercises runs in that
+            // other IDE process, which this build never instruments.
+            disabledForTestTasks.add("uiTest")
         }
     }
     reports {
         filters {
             excludes {
-                // Need a live IDE / live Chromium to execute at all. Covered instead by the 156 vitest tests
-                // that drive the REAL shipped JS, and by the manual UI pass the release checklist requires.
+                // Need a live IDE / live Chromium to execute at all. Covered instead by the vitest suite,
+                // which drives the REAL shipped JS (`npm test` is what counts it), and by the manual UI pass
+                // the release checklist requires.
                 classes("dev.lain.claudejb.ui.*")
                 // Thin IDE-action shells: their bodies are one delegate call each, and exercising them means
                 // booting an IDE to assert that a menu item calls a method.
@@ -516,9 +610,8 @@ kover {
                 // Wrappers over the OS — system clipboard, process spawn, shell environment. Most of what is
                 // uncovered here cannot run on a CI box at all. A KNOWN GAP, listed so it is not mistaken for
                 // coverage; the parts that are pure ARE tested — `ClipboardCli`/`ImageAttachments` in `context/`
-                // (ClipboardCliTest, ImageAttachmentsTest) and `EnvScriptLoader.parse` in `process/`.
-                // (This line used to cite `AttachmentEncoder`, deleted in 5.5.0 with the last of the Swing
-                // composer it served — a comment naming a file that no longer exists is worse than no comment.)
+                // (ClipboardCliTest, ImageAttachmentsTest) and `EnvScriptLoader.parse` in `process/`. Those
+                // names are load-bearing: a comment citing a file that no longer exists is worse than none.
                 classes("dev.lain.claudejb.context.*", "dev.lain.claudejb.process.*")
                 // The Git integration's IDE-bound half: the availability probe (asks the running IDE's plugin
                 // set), the git4idea gateway (spawns `git log` through the platform) and the hand-off to the
@@ -540,19 +633,37 @@ kover {
             }
         }
         verify {
-            // NB: `KoverVerifyRule` still has no per-rule `filters` — re-checked at 0.9.9 (the latest release
-            // as of Aug 2026) against the DSL reference and the release notes, not just the jar. So
-            // the per-package thresholds this project wants — permission ≥95, protocol ≥80, session ≥65 — are
-            // not expressible one-by-one. What IS expressible is a FLOOR applied to every package
-            // individually, plus an aggregate. Both are real gates: the floor catches any single package
-            // collapsing, the aggregate catches death by a thousand cuts. The tighter per-package bars remain
-            // the intent; see docs/RELEASE_CHECKLIST.md.
+            // `KoverVerifyRule` has no per-rule `filters` — re-checked at 0.9.9, the version this build
+            // resolves, against the plugin's own DSL sources: a rule exposes `groupBy`, `disabled` and its
+            // bounds, and filters exist on the report set, never on a rule. A report variant is no substitute
+            // either, because a variant is scoped by source set and not by package. So a threshold per package
+            // cannot be written. What CAN be written is a FLOOR applied to every package on its own, plus an
+            // AGGREGATE over all gated code, and the two see different failures: the floor catches one package
+            // collapsing, the aggregate catches erosion spread too thin for any single package to show it.
+            //
+            // Each rule carries a line bound and a branch bound, because they answer different questions. A
+            // line bound says the code RAN. A branch bound says the decision was taken BOTH ways — and in
+            // `permission/` and `session/` a branch never taken is a security decision never exercised: the
+            // guard's deny path, the admission fixpoint's rejection. That code reaches high line coverage
+            // while never once having said no, which is exactly what a line bound cannot see.
+            //
+            // The branch floor is much lower than the line floor because a floor is fixed by the weakest
+            // package, and on branches the weakest is far below the rest. It is therefore a collapse detector,
+            // not a regression detector — and the aggregate cannot stand in for it, because a small package
+            // carries too little of the branch mass to move the total: `permission/` could lose half its
+            // branch coverage without the aggregate reaching its bound. The floor is the only bound here that
+            // looks at a package on its own.
+            //
+            // Both files must agree, and the measured figures every bound sits below live only in
+            // docs/RELEASE_CHECKLIST.md §Coverage policy.
             rule("every gated package holds its floor") {
                 groupBy = kotlinx.kover.gradle.plugin.dsl.GroupingEntityType.PACKAGE
                 minBound(65)
+                minBound(20, coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH)
             }
             rule("gated code as a whole") {
                 minBound(75)
+                minBound(40, coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH)
             }
         }
     }
