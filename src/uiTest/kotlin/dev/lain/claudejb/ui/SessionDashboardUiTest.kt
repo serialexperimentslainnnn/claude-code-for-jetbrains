@@ -33,7 +33,15 @@ class SessionDashboardUiTest : UiTestBase() {
 
         waitForWeb("the dashboard to open in the page", DASHBOARD_OPEN)
         assertTrue(jsBool(CONVERSATION_HIDDEN), "the transcript must be hidden while the dashboard fills the area")
-        assertTrue(jsInt(DASH_CARDS) > 0, "the dashboard opened with no cards in it")
+
+        // A view with nothing to show falls back to a placeholder that carries `.dash-card` itself, so a bare
+        // count of cards is true whenever the panel rendered at all and cannot fail. The pair can: either the
+        // view drew real cards, or it said which view is empty — and a panel that does neither is the failure
+        // this is here for.
+        assertTrue(
+            jsInt(REAL_CARDS) > 0 || js(EMPTY_NOTICE).isNotBlank(),
+            "the dashboard opened with neither a card nor a message naming the empty view",
+        )
 
         assertTrue(jsBool(TOGGLES_IN_BAR), "the view buttons are not in the tab bar — they are floating again")
         assertTrue(jsBool(TOGGLES_CLEAR_OF_PILLS), "the view buttons overlap a chat tab (WCAG 2.2 SC 2.4.11)")
@@ -56,8 +64,15 @@ class SessionDashboardUiTest : UiTestBase() {
         const val CONVERSATION_HIDDEN =
             "(function () { var c = document.getElementById(\"conversation\"); return String(!!c && c.hidden); })()"
 
-        const val DASH_CARDS =
-            "(function () { return String(document.querySelectorAll(\"#cc-dashboard .dash-card\").length); })()"
+        /** Cards with content of their own — the empty placeholder wears the same class and is excluded. */
+        const val REAL_CARDS =
+            "(function () { return String(document.querySelectorAll(" +
+                "\"#cc-dashboard .dash-card:not(.dash-empty)\").length); })()"
+
+        /** What the panel says when its view has nothing to show; blank when there is no placeholder at all. */
+        const val EMPTY_NOTICE =
+            "(function () { var e = document.querySelector(\"#cc-dashboard .dash-empty\"); " +
+                "return e ? e.textContent.trim() : \"\"; })()"
 
         const val TOGGLES_IN_BAR =
             "(function () { var t = document.querySelector(\".dash-toggles\"); var b = document.getElementById(\"tabsbar\"); " +
