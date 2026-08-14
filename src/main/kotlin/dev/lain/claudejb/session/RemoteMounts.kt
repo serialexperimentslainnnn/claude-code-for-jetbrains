@@ -13,7 +13,8 @@ import java.nio.file.Paths
  * *sits on* such a share and you have built a lateral-movement launchpad, not a coding assistant. So the plugin
  * (a) **refuses to start** a session whose project root is on a remote mount ([isRemote], gated in
  * `ClaudeSession.start`), and (b) feeds the per-tool guard the set of mounts to treat as foreign
- * ([SensitiveGuard.Policy.guardedRoots] / `blockForeignWslMounts`).
+ * ([SensitiveGuard.Policy.guardedRoots] / [SensitiveGuard.Policy.blockForeignWslMounts], assembled from
+ * [snapshot] in `SettingsSensitivePolicy`).
  *
  * Detection is best-effort and layered, because no single signal is portable:
  *  - `/proc/self/mountinfo` / `/proc/mounts` on Linux → the authoritative fstype per mount point (the parsing is
@@ -75,10 +76,6 @@ object RemoteMounts {
         }.getOrDefault(false)
     }
 
-    /** The guard policy inputs derived from the host: the mount roots to treat as foreign, and the WSL flag. */
-    fun guardedRoots(snap: Snapshot = snapshot()): List<String> = snap.remoteRoots
-    fun blockForeignWslMounts(snap: Snapshot = snapshot()): Boolean = snap.isWsl
-
     // ── detection ────────────────────────────────────────────────────────────────────────────────────────
 
     private fun detect(): Snapshot {
@@ -89,7 +86,7 @@ object RemoteMounts {
             ?.let { parseMounts(it).filter { m -> m.type.lowercase() in REMOTE_FS_TYPES }.map { m -> m.point } }
             .orEmpty()
             // Under WSL, every /mnt/* mount is a Windows drive surfaced over 9p/drvfs — including the local C:.
-            // Those are governed by the dedicated /mnt/c rule (isRemote / blockForeignWslMounts), so they must NOT
+            // Those are governed by the dedicated /mnt/c rule (isRemote / the guard's foreign-WSL rule), so must NOT
             // be treated as generic network mounts here, or /mnt/c (the sanctioned local disk) is flagged remote
             // and the plugin refuses to start on a perfectly normal WSL project.
             .filterNot { wsl && it.startsWith("/mnt/") }

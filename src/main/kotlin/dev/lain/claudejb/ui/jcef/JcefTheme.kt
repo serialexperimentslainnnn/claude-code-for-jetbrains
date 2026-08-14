@@ -15,7 +15,7 @@ import java.awt.Color
 import java.util.Locale
 
 /**
- * Produces the flat CSS-variable theme map the JCEF web layer consumes (see JCEF_CONTRACT §THEME).
+ * Produces the flat CSS-variable theme map the JCEF web layer consumes.
  *
  * Every value is derived from the live IDE theme (panel/editor backgrounds, label/inactive foregrounds, the
  * platform border) so the embedded chat blends into the IDE in both light and dark schemes; only the Claude

@@ -3,7 +3,7 @@ package dev.lain.claudejb.headless
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStoreTestAccess
+import dev.lain.claudejb.settings.SettingsStore
 
 /**
  * The settings persist into the IDE's PasswordSafe — the OS credential store — and nowhere else.
@@ -32,7 +32,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
         // `readFailed` is a flag on the store OBJECT, so it outlives the test that set it and would veto
         // every later save in this JVM. A clean read clears it — the same way the next IDE start would, and
         // it has to happen HERE because a method that saves before it loads would otherwise inherit the veto.
-        SettingsStoreTestAccess.load()
+        SettingsStore.load()
     }
 
     override fun tearDown() {
@@ -54,8 +54,8 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
             securityBlockForeignWslMounts = false
             envVars = "FOO=bar\nTOKEN=shhh"
         }
-        SettingsStoreTestAccess.save(saved)
-        val loaded = SettingsStoreTestAccess.load()
+        SettingsStore.save(saved)
+        val loaded = SettingsStore.load()
         assertEquals("claude-opus-5[1m]", loaded.model)
         assertEquals("acceptEdits", loaded.permissionMode)
         assertEquals(7, loaded.maxTurns)
@@ -82,7 +82,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
             .filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) }
             .map { it.name }
             .filterNot { it.startsWith("$") }
-        SettingsStoreTestAccess.save(ClaudeSettings.State())
+        SettingsStore.save(ClaudeSettings.State())
         val stored = SecretStore.get(SecretStore.SETTINGS_JSON).orEmpty()
         val missing = fields.filterNot { stored.contains("\"$it\"") }
         assertTrue("these settings are never persisted: $missing", missing.isEmpty())
@@ -91,7 +91,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
     /** With nothing stored, the plugin starts on the pinned tier, asking every time, thinking hard. */
     fun `test the defaults are Opus, ask each time, high effort`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
-        val fresh = SettingsStoreTestAccess.load()
+        val fresh = SettingsStore.load()
         assertEquals(dev.lain.claudejb.session.ClaudeSession.DEFAULT_MODEL, fresh.model)
         assertEquals("opus[1m]", fresh.model)
         assertEquals("default", fresh.permissionMode) // PermissionMode.DEFAULT = "Ask each time"
@@ -100,16 +100,16 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
 
     fun `test an unknown key from a newer version does not break an older one`() {
         SecretStore.set(SecretStore.SETTINGS_JSON, """{"model":"x","somethingFromTheFuture":{"a":1}}""")
-        assertEquals("x", SettingsStoreTestAccess.load().model)
+        assertEquals("x", SettingsStore.load().model)
     }
 
     /** Once a configuration is stored it IS the configuration: a legacy project file cannot overwrite it. */
     fun `test an existing configuration is never overwritten by a legacy one`() {
-        SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "the-one-in-use" })
+        SettingsStore.save(ClaudeSettings.State().apply { model = "the-one-in-use" })
         assertFalse(
-            SettingsStoreTestAccess.migrateFrom(ClaudeSettings.State().apply { model = "from-an-old-project" }),
+            SettingsStore.migrateFrom(ClaudeSettings.State().apply { model = "from-an-old-project" }),
         )
-        assertEquals("the-one-in-use", SettingsStoreTestAccess.load().model)
+        assertEquals("the-one-in-use", SettingsStore.load().model)
     }
 
     /**
@@ -122,7 +122,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
      */
     fun `test a legacy state carrying nothing is not a migration`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
-        assertFalse(SettingsStoreTestAccess.migrateFrom(ClaudeSettings.State()))
+        assertFalse(SettingsStore.migrateFrom(ClaudeSettings.State()))
         assertNull(SecretStore.get(SecretStore.SETTINGS_JSON))
     }
 
@@ -137,10 +137,10 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
      */
     fun `test a failed read refuses the next save`() {
         SecretStore.set(SecretStore.SETTINGS_JSON, "this is not a settings document")
-        assertEquals(ClaudeSettings.State().model, SettingsStoreTestAccess.load().model) // fell back to defaults
+        assertEquals(ClaudeSettings.State().model, SettingsStore.load().model) // fell back to defaults
         assertFalse(
             "a save after a failed read must be refused",
-            SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "defaults-must-not-win" }),
+            SettingsStore.save(ClaudeSettings.State().apply { model = "defaults-must-not-win" }),
         )
         assertEquals("this is not a settings document", SecretStore.get(SecretStore.SETTINGS_JSON))
     }
@@ -148,24 +148,24 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
     /** …and the veto lifts as soon as a read succeeds, or the settings would be read-only until a restart. */
     fun `test a later successful read lifts the veto`() {
         SecretStore.set(SecretStore.SETTINGS_JSON, "this is not a settings document")
-        SettingsStoreTestAccess.load()
+        SettingsStore.load()
         SecretStore.clear(SecretStore.SETTINGS_JSON)
-        SettingsStoreTestAccess.load()
-        assertTrue(SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "saved-again" }))
-        assertEquals("saved-again", SettingsStoreTestAccess.load().model)
+        SettingsStore.load()
+        assertTrue(SettingsStore.save(ClaudeSettings.State().apply { model = "saved-again" }))
+        assertEquals("saved-again", SettingsStore.load().model)
     }
 
     fun `test a legacy state that carries something is adopted`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
         assertTrue(
-            SettingsStoreTestAccess.migrateFrom(
+            SettingsStore.migrateFrom(
                 ClaudeSettings.State().apply {
                     model = "from-the-old-file"
                     claudePath = "/usr/bin/claude"
                 },
             ),
         )
-        assertEquals("from-the-old-file", SettingsStoreTestAccess.load().model)
+        assertEquals("from-the-old-file", SettingsStore.load().model)
     }
 
     /**
@@ -185,9 +185,9 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
             allowedTools = "Bash"
         }
 
-        assertTrue(SettingsStoreTestAccess.migrateFrom(legacy))
+        assertTrue(SettingsStore.migrateFrom(legacy))
 
-        val loaded = SettingsStoreTestAccess.load()
+        val loaded = SettingsStore.load()
         assertEquals("default", loaded.permissionMode)
         assertEquals("from-the-old-file", loaded.model) // the rest of the file is still adopted
         assertEquals("Bash", loaded.allowedTools)
@@ -200,23 +200,23 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
     fun `test a legacy permission mode nobody recognises is not adopted`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
         assertTrue(
-            SettingsStoreTestAccess.migrateFrom(
+            SettingsStore.migrateFrom(
                 ClaudeSettings.State().apply {
                     model = "from-the-old-file"
                     permissionMode = "something-a-newer-binary-might-take"
                 },
             ),
         )
-        assertEquals("default", SettingsStoreTestAccess.load().permissionMode)
+        assertEquals("default", SettingsStore.load().permissionMode)
     }
 
     /** A mode at least as strict as the default is a real setting and migrates like any other. */
     fun `test a legacy plan mode is adopted`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
         assertTrue(
-            SettingsStoreTestAccess.migrateFrom(ClaudeSettings.State().apply { permissionMode = "plan" }),
+            SettingsStore.migrateFrom(ClaudeSettings.State().apply { permissionMode = "plan" }),
         )
-        assertEquals("plan", SettingsStoreTestAccess.load().permissionMode)
+        assertEquals("plan", SettingsStore.load().permissionMode)
     }
 
     /**
@@ -230,7 +230,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
         assertFalse(
             "a file whose only content is a refused mode carries nothing and must not migrate",
-            SettingsStoreTestAccess.migrateFrom(ClaudeSettings.State().apply { permissionMode = "bypassPermissions" }),
+            SettingsStore.migrateFrom(ClaudeSettings.State().apply { permissionMode = "bypassPermissions" }),
         )
         assertNull("nothing was adopted, so no document may exist", SecretStore.get(SecretStore.SETTINGS_JSON))
     }

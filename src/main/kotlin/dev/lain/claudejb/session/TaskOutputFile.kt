@@ -41,10 +41,4 @@ object TaskOutputFile {
         TAG.find(text)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
         return PROSE.find(text)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
     }
-
-    /** The task id a `<task-notification>` refers to, so a settled task can be matched to its row. */
-    private val TASK_ID = Regex("""<task-id>\s*(.+?)\s*</task-id>""")
-
-    fun taskId(text: String?): String? =
-        text?.let { TASK_ID.find(it)?.groupValues?.getOrNull(1)?.takeIf { id -> id.isNotBlank() } }
 }
