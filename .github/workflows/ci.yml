@@ -10,7 +10,8 @@
 name: CI
 
 on:
-  # Pull requests ONLY — there is deliberately no `push` trigger.
+  # No `push` trigger, deliberately — the pull request is the door. The one addition to that is a nightly
+  # schedule, for the single suite that must not sit on the pull-request path at all (see `schedule:` below).
   #
   # A branch with an open PR fires `pull_request` on every push to it (the `synchronize` event), so the
   # iteration loop is fully covered, and covered ONCE. Having both triggers meant two complete pipelines per
@@ -35,10 +36,23 @@ on:
   # inert, not a second door — nothing runs on a push to a protected branch from this file.
   #
   # (`No bot PRs pending on develop` has no push half; `Build plugin` has no `if:` at all and is gated
-  # instead by `needs: [verify]`. So on `workflow_dispatch`, where no half matches, exactly two jobs run:
-  # `JVM tests` and `Frontend tests`.)
+  # instead by `needs: [verify]`. So on `workflow_dispatch` and on the schedule below, where no half matches,
+  # exactly three jobs run: `JVM tests`, `Frontend tests` and `UI end-to-end tests`.)
   pull_request:
     branches: [develop, main]
+  # Nightly, on the default branch. This exists for `UI end-to-end tests`, which answers to this trigger and
+  # to a manual run and to nothing else: that suite boots a real IDE behind a virtual framebuffer, it is
+  # slower than everything else in this file combined, and it fails for reasons no other job here can (a
+  # display, a browser, a window that has not finished painting). On the pull-request path it would teach
+  # people to re-run CI until it went green, which is how a real defect becomes noise.
+  #
+  # A trigger belongs to the WORKFLOW and not to one job, so this brings `JVM tests` and `Frontend tests` with
+  # it — the set is the one the parenthetical above works out, never a second count kept in step by hand.
+  # That is left as it is rather than gated away: a nightly run of the JVM and frontend suites against the
+  # default branch answers a question the pull-request path cannot — whether the branch everyone builds on is
+  # still green on its own, rather than green in the merge commit of somebody's pull request.
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 # Least privilege at the top; a job that needs more elevates it for itself. The default token is
@@ -189,6 +203,18 @@ jobs:
 
       - name: Prettier
         run: npm run format:check
+
+      # The distributed PROJECTMAP.md index, regenerated from the sources and compared. Only the half
+      # between the `MAP:GENERATED` markers is derived; the prose around it is hand-written and untouched.
+      # A map that has drifted is worse than no map — nobody re-checks it and everybody believes it — so it
+      # is gated rather than trusted, exactly like the attribution claims in `Build plugin`.
+      #
+      # A plain `run:`, with no action to pin: `python3` is installed EXPLICITLY in the image (see
+      # .github/ci-image/jvm-test.Dockerfile — `bin/fake-claude`, the integration suite's stand-in binary,
+      # needs it), and the script is standard library only. Same command a developer runs locally, which is
+      # also what `./gradlew checkProjectMap` invokes.
+      - name: Project map
+        run: python3 scripts/gen-projectmap.py --check
 
       - name: Upload analysis reports
         if: always()
@@ -541,3 +567,179 @@ jobs:
           name: plugin-distribution
           path: build/distributions/*.zip
           retention-days: 30
+
+  # The RemoteRobot end-to-end suite (src/uiTest): a real IDE, booted behind a virtual framebuffer and driven
+  # over HTTP. It is the only layer that can answer what neither jsdom nor the headless fixture can — that the
+  # tool window gives a live JCEF web view instead of the "needs JCEF" fallback, that keystrokes from the OS
+  # keyboard reach the page, that overflow and geometry are what the layout actually produced.
+  #
+  # NON-BLOCKING, by omission and by nothing else: no UI context appears in `required_status_checks` in
+  # .github/rulesets/{main,develop}.json, so a failure here reports RED, is visible on the run, and stops no
+  # merge. There is deliberately NO `continue-on-error:` anywhere in this job — that reports the job GREEN
+  # with a failed suite inside it, which is the same lie as a suite that ran nothing, only better dressed.
+  #
+  # PROMOTION CRITERION, written down because an informational job with no exit becomes one nobody reads: it
+  # becomes a required check once it has run thirty consecutive scheduled runs whose every failure was a real
+  # defect in the plugin — none attributable to the harness, the framebuffer or a timing window. The line to
+  # add then is `{ "context": "UI end-to-end tests" }` under `required_status_checks` in
+  # .github/rulesets/main.json, and in develop.json if it should gate both doors. Until that holds, a red run
+  # is triaged and never re-run until it passes: a retried UI failure converts a defect into noise.
+  ui-test:
+    name: UI end-to-end tests
+    runs-on: ubuntu-latest
+    # This job's characteristic failure is a HANG, not a red assertion — a background IDE that never finishes
+    # painting leaves a socket nobody ever answers. The budget is generous because the IDE boots, opens a
+    # project and indexes before the first assertion runs; the bounded readiness wait below is what turns a
+    # dead IDE into a fast, explained failure instead of letting it eat the whole budget.
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile, and it carries more weight here
+      # than in any other job: `runIdeForUiTests` builds its sandbox from the IntelliJ Platform artifact baked
+      # into that home. Point it elsewhere and this job silently downloads and extracts several GB per run.
+      GRADLE_USER_HOME: /opt/gradle-home
+    # Nightly and on demand, never on a pull request — see the `schedule:` comment in `on:` above. That also
+    # means this job never runs on code a fork author controls. It needs no credential of any kind either: the
+    # suite drives `bin/fake-claude`, whose `auth status` answers with a synthetic identity, so the sign-in
+    # card is satisfied without an account existing anywhere in this job.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image running this job carries no X11 whatsoever: it was built for headless Gradle and npm, and
+      # nothing in it has ever had to draw. This is the one job that does — a real IDE, with a real Chromium
+      # inside it.
+      #
+      # .github/ci-image/jvm-test.Dockerfile ALREADY bakes this exact package set, which is where it belongs:
+      # the image is this pipeline's only caching mechanism, so a `dnf install` per run is a network
+      # transaction whose failure mode is this job's worst one. This step survives because every workflow
+      # pins `jvm-test:v1.0.0`, and that tag names an image built BEFORE the Dockerfile gained the stack. A
+      # Dockerfile edit changes nothing on its own; the image has to be rebuilt and a new tag cut.
+      #
+      # DELETE THIS STEP in the same change that bumps the tag — in every workflow that names it, not just
+      # this one (ci.yml ×4, release.yml, codeql.yml, drift.yml). Leaving it behind costs one redundant
+      # install per nightly run; deleting it BEFORE the tag moves costs an IDE that never opens its port.
+      #
+      # A missing library here does not announce itself — the IDE simply never opens :8082 — which is exactly
+      # the silence the bounded wait below turns back into a message.
+      - name: Install the virtual display and the libraries the IDE draws through
+        run: |
+          set -euo pipefail
+          dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install \
+            xorg-x11-server-Xvfb \
+            gtk3 nss alsa-lib mesa-libgbm libxkbcommon-x11 \
+            libXtst libXi libXrender libXext libXrandr libXcursor \
+            liberation-fonts
+          dnf clean all
+
+      # Step one of the two-process dance that build.gradle.kts and docs/UI_TESTING.md both document: the IDE
+      # comes up under Xvfb and STAYS UP, and the suite is a second Gradle invocation that talks to it over
+      # :8082. Backgrounded here rather than split into a second job, because the two halves must share a host.
+      - name: Boot the IDE under test
+        run: |
+          set -euo pipefail
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            ./gradlew --no-daemon --stacktrace runIdeForUiTests > ide.log 2>&1 &
+          echo $! > ide.pid
+          echo "IDE launched, pid $(cat ide.pid)"
+
+      # Bounded, and it watches BOTH ends: the port answering, and the process still being alive. Polling the
+      # socket alone turns a crashed IDE into three minutes of silence and then a timeout that names the wrong
+      # thing; `kill -0` makes that case fail in seconds and prints the log that explains why.
+      - name: Wait for robot-server to answer
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8082 > /dev/null 2>&1; then
+              echo "robot-server is answering on :8082"
+              exit 0
+            fi
+            if ! kill -0 "$(cat ide.pid)" 2> /dev/null; then
+              echo "::error::the IDE exited before robot-server answered — last 100 lines of its log follow"
+              tail -n 100 ide.log
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::robot-server did not answer on :8082 within 180s — last 100 lines of the IDE log follow"
+          tail -n 100 ide.log
+          exit 1
+
+      # Step two. The step-level timeout is deliberate and independent of the job's: two Gradle invocations
+      # share this project directory, and the failure mode of that contention is a build WAITING on a lock,
+      # not one that errors. Bounding the client leaves budget for the teardown and the artifacts, which are
+      # the only things anyone can diagnose a nightly failure from.
+      - name: Run the RemoteRobot suite
+        timeout-minutes: 25
+        run: ./gradlew --no-daemon --stacktrace uiTest -PuiTest.enabled=true
+
+      # THE GATE ON THE GATE, and the reason this job exists in a shape anyone can trust. `uiTest` carries
+      # `onlyIf { project.findProperty("uiTest.enabled") == "true" }`, and a Gradle `onlyIf` SKIPS SILENTLY:
+      # without the flag the task never runs, the build reports SUCCESSFUL, and the step above is green having
+      # executed nothing. Passing `-PuiTest.enabled=true` is necessary and is NOT evidence — a renamed
+      # property, a renamed task or a filter matching no class all end the same way. So the evidence is
+      # asserted rather than assumed: the JUnit XML must exist, and the number of tests that actually ran must
+      # be greater than zero.
+      - name: Assert the suite executed tests
+        run: |
+          set -euo pipefail
+
+          results=build/test-results/uiTest
+          reports=$( { ls "$results"/*.xml 2> /dev/null || true; } | wc -l )
+
+          if [ "$reports" -eq 0 ]; then
+            echo "::error::no JUnit XML under $results — the suite left no evidence that it ran at all."
+            echo "::error::uiTest is gated by onlyIf { uiTest.enabled } in build.gradle.kts, and a skipped"
+            echo "::error::Gradle task still reports BUILD SUCCESSFUL."
+            exit 1
+          fi
+
+          # One <testsuite> element per class carries these as attributes; <testcase> carries none of these
+          # names, so summing every occurrence across the files cannot pick up anything but the suite totals.
+          count() {
+            grep -ho "$1=\"[0-9]\{1,\}\"" "$results"/*.xml | tr -dc '0-9\n' | awk '{ s += $1 } END { print s + 0 }'
+          }
+
+          declared=$(count tests)
+          skipped=$(count skipped)
+          executed=$(( declared - skipped ))
+
+          echo "$reports report(s): $declared declared, $skipped skipped, $executed executed"
+
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::every test was skipped — a suite that ran nothing is not a passing suite"
+            exit 1
+          fi
+
+      # `if: always()` so the IDE is stopped after a failed suite too. Note what it does not do: it runs a
+      # teardown, it does not touch the outcome — the job still fails on whatever the steps above decided.
+      - name: Stop the IDE
+        if: always()
+        run: |
+          kill "$(cat ide.pid)" 2> /dev/null || true
+          # `xvfb-run` is only the parent: the Gradle JVM beneath it does not die with it, and a survivor
+          # holds :8082 against whatever runs next on this host.
+          pkill -f runIdeForUiTests || true
+
+      - name: Upload UI test reports and the IDE log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-test-reports
+          path: |
+            build/reports/tests/uiTest/
+            build/test-results/uiTest/
+            ide.log
+          retention-days: 14
