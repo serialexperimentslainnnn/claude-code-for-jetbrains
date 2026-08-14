@@ -8,6 +8,9 @@ import com.intellij.remoterobot.search.locators.Locator
 import com.intellij.remoterobot.search.locators.byXpath
 import com.intellij.remoterobot.utils.keyboard
 import com.intellij.remoterobot.utils.waitFor
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import java.io.File
 import java.time.Duration
 
 /**
@@ -45,18 +48,18 @@ import java.time.Duration
  *    `script-src`). So the assertions in this suite are made against the real DOM, in the real browser, with
  *    real layout — which is precisely what the jsdom frontend suite (`npm test`) cannot check.
  *
- * ### Two preconditions the harness cannot satisfy by itself
- *  1. **`-Dide.browser.jcef.jsQueryPoolSize=10000`** must be on the IDE-under-test's command line (it is a
- *     documented requirement of [JCefBrowserFixture]: creating a JS query against an already-loaded browser
- *     needs pre-reserved callback slots). Without it every DOM-level test fails at fixture construction —
- *     loudly, with "Can't find cef browser" or an IllegalStateException, never silently green.
- *  2. **An identity.** `ClaudeSession.start()` refuses to launch without a credential (`AuthGate
- *     .hasCredential`), and `bin/fake-claude` has no `auth status` surface to answer with, so on a machine
- *     that holds no real credential in the IDE password safe no session is ever started and the tab shows the
- *     sign-in card. Every test here is therefore written to assert something that is true **whether or not a
- *     turn can run**; anything that needs a live reply (a tool card, a diff, a rewind, an agent tree) is not
- *     in this suite, and the reason is recorded in the report that came with this rewrite rather than papered
- *     over with a test that passes by asserting nothing.
+ * ### Two preconditions the IDE under test must meet — `runIdeForUiTests` supplies both
+ *  1. **`-Dide.browser.jcef.jsQueryPoolSize=10000`** on its command line (a documented requirement of
+ *     [JCefBrowserFixture]: creating a JS query against an already-loaded browser needs pre-reserved callback
+ *     slots). Without it every DOM-level test fails at fixture construction — loudly, with "Can't find cef
+ *     browser" or an IllegalStateException, never silently green.
+ *  2. **An identity.** `ClaudeSession.start()` refuses to launch without a credential, and `AuthGate
+ *     .hasCredential` falls through to the binary's own `auth status` when the IDE password safe holds none.
+ *     `bin/fake-claude` answers that probe, so a machine with an empty safe still gets a session rather than
+ *     the sign-in card. An IDE launched without the stand-in wired in has neither, and shows the card.
+ *
+ * No test here may assert something that is equally true of a chat that never started: **a test that passes by
+ * asserting nothing is the one failure a UI suite cannot detect in itself.**
  *
  * ## Fake `claude` binary (wired automatically)
  * The IDE under test points at a deterministic stand-in instead of the real `claude` binary:
@@ -80,22 +83,127 @@ abstract class UiTestBase {
     /** Cached per test instance: one fixture per browser, as [JCefBrowserFixture]'s own docs ask. */
     private var cachedWeb: JCefBrowserFixture? = null
 
+    /**
+     * How many chats the tab bar was drawing before [newChat] first ran in this test, and `null` while it has
+     * not run at all. It is the count [closeChatsOpenedHere] gives the IDE back to — recorded rather than
+     * assumed to be one, because the IDE under test restores whatever tabs the previous run left open.
+     */
+    private var chatsBeforeThisTest: Int? = null
+
+    /**
+     * Fails the test at once when the sandbox project is not a git repository of its own.
+     *
+     * `runIdeForUiTests` opens [SANDBOX] as the IDE's project, and git resolves its working tree by walking
+     * **up** from wherever a command runs. With no `.git` of its own that walk does not stop at the fixture: it
+     * reaches **this** repository. So a test driving one of the Git surfaces — the half of 5.5.0 with the most
+     * to gain from an end-to-end test, and therefore the one somebody writes next — would run `git restore`,
+     * `git checkout` or `git clean` against the plugin's own working tree. Nothing asks twice, and an
+     * uncommitted change has nothing underneath it to come back from.
+     *
+     * **It refuses; it does not repair.** A harness that writes into the tree so that it can run is the same
+     * defect wearing the fix's clothes, and which repository the fixture gets is a decision about what this one
+     * tracks — not something a test may take on its author's behalf.
+     *
+     * **It asserts rather than skips**, for the reason the `-PuiTest.enabled` gate in `build.gradle.kts`
+     * already gives: a skip is `BUILD SUCCESSFUL` with zero tests executed, the one outcome a verification task
+     * must never produce.
+     *
+     * It reads the disk of the machine running these tests, which is the machine running the IDE unless
+     * `-Drobot-server.url` points somewhere else.
+     */
+    @BeforeEach
+    fun requireSandboxIsItsOwnGitRepo() {
+        if (File(SANDBOX, ".git").exists()) return
+        val path = SANDBOX.absolutePath
+        throw IllegalStateException(
+            "the UI sandbox project is not a git repository of its own: $path has no .git, so git run there " +
+                "walks up into THIS repository and a Git action driven from a test would hit the plugin's own " +
+                "working tree instead of a fixture. Give the fixture its own history — `git init -b main " +
+                "$path && git -C $path add -A && git -C $path commit -m \"ui sandbox fixture\"` — which leaves " +
+                "this repository tracking those files exactly as it does today.",
+        )
+    }
+
+    /**
+     * Fails the test at once, naming the endpoint, when nothing answers there.
+     *
+     * Without it the first symptom of an IDE that never started is a wait expiring after [longTimeout] with a
+     * message about the page — a connection failure reported as a product failure, once per test, at the cost
+     * of the suite's whole runtime. The probe is the same component search the suite makes anyway, so an IDE
+     * that is up but has not built the chat strip yet passes it: what is checked here is the socket, not the UI.
+     */
+    @BeforeEach
+    fun requireRobotServer() {
+        runCatching { remoteRobot.findAll<ComponentFixture>(CHAT_TABS) }.onFailure { cause ->
+            throw IllegalStateException(
+                "no robot-server answering at ${robotServerUrl()} — start the IDE under test with " +
+                    "`./gradlew runIdeForUiTests`, or point the suite at another one with -Drobot-server.url. " +
+                    "Cause: ${cause.message}",
+                cause,
+            )
+        }
+    }
+
+    /**
+     * Gives back the chats [newChat] opened, so the IDE under test ends the test where it started.
+     *
+     * **A chat owns a JCEF browser for as long as its tab exists**, and nothing in the product closes a tab by
+     * itself. The IDE stays up for the whole suite — it is booted once, by `runIdeForUiTests`, and the nightly
+     * runner keeps it — so a chat opened and never closed is a live Chromium for the rest of the run, and the
+     * two tests that open chats adaptively can open ten apiece. Closing here rather than in each test is the
+     * same rule the rest of this class follows: [newChat] is the only thing that opens one, and it lives here.
+     *
+     * **Why the first chat is selected first.** The close travels as a `closeChat` bridge message from the page
+     * that issues it, and the chat [newChat] leaves selected is one of the ones being closed. Every page draws
+     * the whole bar, so the first chat's page can close every later one while staying alive to answer for it.
+     * The selection is waited for on the page we already have — for the reason spelled out in [newChat] — and
+     * only then is the fixture re-resolved.
+     */
+    @AfterEach
+    fun closeChatsOpenedHere() {
+        val baseline = chatsBeforeThisTest ?: return
+        chatsBeforeThisTest = null
+
+        js(SELECT_FIRST_CHAT)
+        waitForWeb("the first chat to take the selection back", FIRST_CHAT_IS_CURRENT)
+        web(refresh = true)
+        awaitChatPage()
+
+        js(closeChatsAfter(baseline))
+        waitForWeb("the chats this test opened to close", chatCountIsAtMost(baseline))
+        cachedWeb = null
+    }
+
     // ── Swing layer ──────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * Opens (or focuses) the "Claude Code" tool window, then returns the plugin's chat strip so callers can
      * scope further lookups to it.
      *
-     * Idempotent: the tool window auto-opens on startup (restore-or-create), so it only clicks the stripe
-     * button when the strip is not in the tree yet — clicking it while open would HIDE the window.
+     * **Idempotent by construction, not by a prior check.** `ToolWindow.activate` shows a hidden window and
+     * re-focuses a visible one; it never hides. The stripe button is a TOGGLE, so driving it needs a decision
+     * about whether the window is already open — and the only evidence RemoteRobot has for that is whether the
+     * strip is in the component tree, which is a different fact: a window that is open but has not built its
+     * content yet is indistinguishable from a closed one, and acting on that reading closes the window the
+     * test is about to use. Asking the platform removes the question rather than answering it better.
+     *
+     * The tool-window id is the one `plugin.xml` registers. Platform API only — no plugin class is named here,
+     * so this cannot go stale with a refactor of ours.
      */
     protected fun openClaudeToolWindow(): CommonContainerFixture {
-        if (remoteRobot.findAll<ComponentFixture>(CHAT_TABS).isEmpty()) {
-            remoteRobot.find<ComponentFixture>(
-                byXpath("//div[@class='SquareStripeButton' and @accessiblename='Claude Code']"),
-                shortTimeout,
-            ).click()
-        }
+        remoteRobot.runJs(
+            """
+            const projects = com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects();
+            if (projects.length > 0) {
+                const manager = com.intellij.openapi.wm.ToolWindowManager.getInstance(projects[0]);
+                const claude = manager.getToolWindow("Claude Code");
+                if (claude !== null) {
+                    claude.activate(null);
+                }
+            }
+            """.trimIndent(),
+            true,
+        )
         return chatTabs()
     }
 
@@ -107,7 +215,7 @@ abstract class UiTestBase {
         remoteRobot.find(CommonContainerFixture::class.java, CHAT_TABS, longTimeout)
 
     /**
-     * Clicks a tool-window title action by its action text ("New Chat", "Interrupt", "Diff History", …).
+     * Clicks a tool-window title action by its action text ("New Chat", "Interrupt", "Commands", …).
      *
      * `ActionButton` exposes the text as its accessible name and, with the shortcut appended, as its tooltip —
      * hence the OR, so a keymap that binds one of them does not break the locator.
@@ -257,6 +365,7 @@ abstract class UiTestBase {
      */
     protected fun newChat() {
         val before = chatPillCount()
+        if (chatsBeforeThisTest == null) chatsBeforeThisTest = before
         clickTitleAction("New Chat")
         waitForWeb(
             "the tab bar to show ${before + 1} chats",
@@ -315,6 +424,17 @@ abstract class UiTestBase {
         /** Poll interval for every wait in the suite. */
         val POLL: Duration = Duration.ofMillis(500)
 
+        /**
+         * The fixture project the IDE under test has open — the same path `build.gradle.kts` hands
+         * `runIdeForUiTests` as the IDE's first positional argument.
+         *
+         * Relative on purpose: a Gradle `Test` task runs with the project directory as its working directory,
+         * and resolving it here rather than from a system property keeps the path in one place. The failure in
+         * [requireSandboxIsItsOwnGitRepo] names the absolute path it looked at, so a working directory that is
+         * not the one assumed here says so instead of reading as a missing repository.
+         */
+        private val SANDBOX = File("src/uiTest/resources/sandbox-project")
+
         /** The plugin's chat strip — one per tool window, and the only Swing component the chat UI still has. */
         val CHAT_TABS: Locator = byXpath("//div[@javaclass='dev.lain.claudejb.ui.ChatTabsPanel']")
 
@@ -332,5 +452,30 @@ abstract class UiTestBase {
 
         /** Robot-server endpoint; override via `-Drobot-server.url` (e.g. a remote runner). */
         fun robotServerUrl(): String = System.getProperty("robot-server.url") ?: "http://127.0.0.1:8082"
+
+        /** The chat pills of the tab bar's first row, in bar order. */
+        private const val PILLS = "document.querySelectorAll(\"#tabsbar .tab-rows .tab-row .tab-capsule .pill\")"
+
+        /** Selects the leftmost chat — the one [closeChatsOpenedHere] then closes the others from. */
+        private const val SELECT_FIRST_CHAT =
+            "(function () { var p = $PILLS; if (p.length) { p[0].click(); } return String(p.length); })()"
+
+        private const val FIRST_CHAT_IS_CURRENT =
+            "(function () { var p = $PILLS; " +
+                "return String(p.length > 0 && p[0].getAttribute(\"aria-current\") === \"true\"); })()"
+
+        /**
+         * Presses the ✕ of every chat past [keep], back to front — the product's own close control, so this
+         * exercises the same `closeChat` round trip a user does instead of a private back door.
+         *
+         * The handlers capture their chat's id, so a pill detached by a repaint mid-pass still asks the host
+         * to close the right chat.
+         */
+        private fun closeChatsAfter(keep: Int) =
+            "(function () { var p = $PILLS; for (var i = p.length - 1; i >= $keep; i--) { " +
+                "var x = p[i].querySelector(\".pill-x\"); if (x) { x.click(); } } return String(p.length); })()"
+
+        private fun chatCountIsAtMost(keep: Int) =
+            "(function () { var p = $PILLS; return String(p.length <= $keep); })()"
     }
 }
