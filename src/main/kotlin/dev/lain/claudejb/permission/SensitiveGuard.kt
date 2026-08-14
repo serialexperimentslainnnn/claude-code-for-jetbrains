@@ -61,7 +61,10 @@ import kotlinx.serialization.json.JsonObject
  * ### Why the whole input, not a key list
  * A file argument is `file_path` — until an MCP server calls it `path`, `target`, `uri`, `destination`, or
  * something no one has seen. [ToolInputScanner.pathCandidates] walks **every string leaf** of the input, skipping
- * URLs and multi-line blobs so a `Write`'s *contents* are not mistaken for a filename.
+ * URLs and multi-line blobs so a `Write`'s *contents* are not mistaken for a filename. The one thing it goes by
+ * key for is the reverse question — whether a leaf is a *location* at all: a payload key
+ * (`ToolInputScanner.CONTENT_KEY`: `old_string`, `content`…) carries the text a call writes, not a place it
+ * touches, and a command key carries a text the paths genuinely live inside. Both are named there, with why.
  *
  * ### What this is, and what it is not
  * This is **not an LLM guardrail.** It does not ask the model to behave, and there is no prompt that talks it out

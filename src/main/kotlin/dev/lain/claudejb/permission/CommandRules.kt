@@ -66,9 +66,7 @@ object CommandRules {
      */
     private const val MATCH_EXCERPT_CHARS = 120
 
-    // ── rule exposed for tests ───────────────────────────────────────────────────────────────────────────
-
-    fun runsDangerousCommand(input: JsonObject): Boolean = dangerousCommand(input) != null
+    // ── the rule ─────────────────────────────────────────────────────────────────────────────────────────
 
     internal fun dangerousCommand(input: JsonObject): String? {
         for (command in ToolInputScanner.commandCandidates(input)) {
