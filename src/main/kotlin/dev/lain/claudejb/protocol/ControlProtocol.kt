@@ -93,10 +93,9 @@ object ControlProtocol {
      * A control request from its subtype and whatever fields it carries — the generic form of the named
      * builders below.
      *
-     * Most of those builders are this line with a different string: `{"subtype": "get_usage"}`. The named
-     * ones stay, because a call site reads better as `getUsageRequest(id)` than as a string, but a request
-     * declared in a catalogue (see `SessionQueries.Ask`) needs no hand-written builder at all — which is
-     * what makes adding one a single line instead of three edits in three files.
+     * This is the shape a request declared in a catalogue takes (`Asks`, sent through `SessionQueries.ask`):
+     * one line there and no hand-written builder here. A named builder below earns its place only when
+     * something sends that request directly, outside the catalogue.
      */
     fun of(requestId: String, subtype: String, params: JsonObjectBuilder.() -> Unit = {}): String =
         controlRequest(
@@ -132,27 +131,6 @@ object ControlProtocol {
     fun initializeRequest(requestId: String): String =
         controlRequest(requestId, buildJsonObject { put("subtype", "initialize") })
 
-    fun getContextUsageRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "get_context_usage") })
-
-    /**
-     * `get_usage` — every rate-limit window at once (session, weekly, per-model) plus the extra-credit
-     * balance. The plugin knew about this subtype since 4.0.1 and never sent it; the composer's quota pill was
-     * driven only by whichever `rate_limit_event` happened to arrive last, which can only ever describe ONE
-     * window. This is the request that answers "how much of my week is left".
-     */
-    fun getUsageRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "get_usage") })
-
-    fun getSessionCostRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "get_session_cost") })
-
-    fun mcpStatusRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "mcp_status") })
-
-    fun reloadPluginsRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "reload_plugins") })
-
     /** Sets the user-facing title for the current session. */
     fun renameSessionRequest(requestId: String, title: String): String =
         controlRequest(
@@ -160,57 +138,6 @@ object ControlProtocol {
             buildJsonObject {
                 put("subtype", "rename_session")
                 put("title", title)
-            },
-        )
-
-    /** Sets the session accent color (an agent color name or "default" to reset). */
-    fun setColorRequest(requestId: String, color: String): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "set_color")
-                put("color", color)
-            },
-        )
-
-    /** Returns the effective merged settings and the raw per-source settings. */
-    fun getSettingsRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "get_settings") })
-
-    /** Requests the responder's CLI binary version. */
-    fun getBinaryVersionRequest(requestId: String): String =
-        controlRequest(requestId, buildJsonObject { put("subtype", "get_binary_version") })
-
-    /** Requests at-mention file autocomplete suggestions for a partial path prefix. */
-    fun fileSuggestionsRequest(requestId: String, query: String): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "file_suggestions")
-                put("query", query)
-            },
-        )
-
-    /** Reads a file from the session filesystem (gated by the same read-permission rules as the Read tool). */
-    fun readFileRequest(requestId: String, path: String, maxBytes: Int? = null, encoding: String? = null): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "read_file")
-                put("path", path)
-                if (maxBytes != null) put("max_bytes", maxBytes)
-                if (encoding != null) put("encoding", encoding)
-            },
-        )
-
-    /** Rewinds file changes made since a specific user message. */
-    fun rewindFilesRequest(requestId: String, userMessageId: String, dryRun: Boolean? = null): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "rewind_files")
-                put("user_message_id", userMessageId)
-                if (dryRun != null) put("dry_run", dryRun)
             },
         )
 
@@ -235,16 +162,6 @@ object ControlProtocol {
             },
         )
 
-    /** Backgrounds in-flight foreground tasks (a single tool_use's task when given, else all — Ctrl+B semantics). */
-    fun backgroundTasksRequest(requestId: String, toolUseId: String? = null): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "background_tasks")
-                if (toolUseId != null) put("tool_use_id", toolUseId)
-            },
-        )
-
     /** Reconnects a disconnected or failed MCP server. NB: wire field is camelCase `serverName`. */
     fun mcpReconnectRequest(requestId: String, serverName: String): String =
         controlRequest(
@@ -263,37 +180,6 @@ object ControlProtocol {
                 put("subtype", "mcp_toggle")
                 put("serverName", serverName)
                 put("enabled", enabled)
-            },
-        )
-
-    /** Replaces the set of dynamically managed MCP servers (a `name -> server config` object). */
-    fun mcpSetServersRequest(requestId: String, servers: JsonObject): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "mcp_set_servers")
-                put("servers", servers)
-            },
-        )
-
-    /** Invokes an MCP tool via the subprocess MCP client without a model turn. */
-    fun mcpCallRequest(requestId: String, tool: String, arguments: JsonObject? = null): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "mcp_call")
-                put("tool", tool)
-                if (arguments != null) put("arguments", arguments)
-            },
-        )
-
-    /** Applies a set of flag-derived settings to the session. */
-    fun applyFlagSettingsRequest(requestId: String, settings: JsonObject): String =
-        controlRequest(
-            requestId,
-            buildJsonObject {
-                put("subtype", "apply_flag_settings")
-                put("settings", settings)
             },
         )
 
@@ -356,16 +242,6 @@ object ControlProtocol {
      */
     fun userDialogCancelled(requestId: String): String =
         success(requestId, buildJsonObject { put("behavior", "cancelled") })
-
-    /** request_user_dialog completed with a host-produced [result] (UserDialogResult = {behavior:"completed",result}). */
-    fun userDialogCompleted(requestId: String, result: JsonObject): String =
-        success(
-            requestId,
-            buildJsonObject {
-                put("behavior", "completed")
-                put("result", result)
-            },
-        )
 
     /** elicitation reply (ElicitResult). [action] ∈ accept|decline|cancel; [content] is only meaningful for accept. */
     fun elicitationResult(requestId: String, action: String, content: JsonObject? = null): String =
