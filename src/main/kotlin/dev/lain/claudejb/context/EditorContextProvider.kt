@@ -1,6 +1,7 @@
 package dev.lain.claudejb.context
 
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
@@ -73,12 +74,29 @@ object EditorContextProvider {
     }
 
     /**
-     * Plain-text contents of the system clipboard, or null. AWT first; on Linux it falls back to
-     * `wl-paste`/`xclip` (AWT's stringFlavor is empty/unreliable under the native Wayland toolkit). The
-     * fallback only reads a real `text/…` target — never `wl-paste -n` blindly, which on an image-only
-     * clipboard emits raw image bytes.
+     * Plain-text contents of the clipboard, or null. Three sources, in this order, and the order is the point.
+     *
+     * 1. **The IDE's own [CopyPasteManager]**, because it is the only one of the three that is not necessarily
+     *    this machine's. Under Remote Development the backend has no user at a keyboard — the clipboard the
+     *    user copied into is on the thin client — and the platform's clipboard is the abstraction that
+     *    participates in whatever syncing there is. Reading the JVM's raw clipboard there answers with the
+     *    REMOTE host's, which is not merely unhelpful: pasting an unrelated remote value into a credential
+     *    field is worse than pasting nothing.
+     * 2. **AWT**, unchanged, for the ordinary local case.
+     * 3. **`wl-paste`/`xclip`** on Linux, because AWT's `stringFlavor` is empty and unreliable under the
+     *    native Wayland toolkit. It only ever reads a real `text/…` target — never `wl-paste -n` blindly,
+     *    which on an image-only clipboard emits raw image bytes.
+     *
+     * Every step is `runCatching`: a clipboard owner that has gone away throws rather than answering, and on
+     * a headless backend the toolkit itself may refuse. An empty answer is a paste that does nothing, which
+     * is the correct failure here.
      */
     fun clipboardText(): String? {
+        runCatching {
+            CopyPasteManager.getInstance().getContents<String>(DataFlavor.stringFlavor)
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { return it }
+        }
         runCatching {
             val cb = Toolkit.getDefaultToolkit().systemClipboard
             if (cb.isDataFlavorAvailable(DataFlavor.stringFlavor)) {

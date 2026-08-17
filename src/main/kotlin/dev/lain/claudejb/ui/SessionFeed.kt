@@ -1,6 +1,7 @@
 package dev.lain.claudejb.ui
 
 import dev.lain.claudejb.protocol.UsageReport
+import dev.lain.claudejb.protocol.afterResets
 import dev.lain.claudejb.protocol.mergedOver
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.PlanInfo
@@ -104,7 +105,12 @@ internal class SessionFeed(
             // Merged, not replaced: when the binary's usage fetch falls back to its header-seeded object the
             // reply carries only five_hour/seven_day, and taking it literally made the per-model bars blink
             // out on that poll and back on the next. See `mergedOver`.
-            usage = report.mergedOver(usage)
+            //
+            // …and settled against the clock AFTER the merge, deliberately: a window carried over from an
+            // earlier reply is the one most likely to have rolled over since, so settling before the merge
+            // would leave exactly those at their old number. See `afterResets` — "100% · Reset time: soon",
+            // for as long as the IDE stayed open, was this.
+            usage = report.mergedOver(usage).afterResets(System.currentTimeMillis())
             onRefreshed()
         }
     }

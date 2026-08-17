@@ -137,10 +137,25 @@ describe('layer containment', () => {
     expect(zIndexOf('.find-bar')).toBeLessThan(10);
   });
 
-  it('the palette floats over the composer and stays inside the work area', () => {
-    // It is a child of #work, so its number is read there. Above the dock (it hangs over the composer),
-    // and small — a three-digit z-index in this scope is the sign of a layer that thinks it is on the page.
-    expect(zIndexOf('#palette')).toBeGreaterThan(zIndexOf('#dock'));
-    expect(zIndexOf('#palette')).toBeLessThan(10);
+  it('the palette hangs off the prompt card and only ever upwards', () => {
+    // Two failures are pinned here, in the two directions this has been wrong.
+    //
+    // It was `position: fixed` held clear of the composer by `padding-bottom: 72px` — a guess at a height
+    // that changes with every pill, queued prompt and attachment chip, so the list covered the box you were
+    // typing into exactly when you had most in it. `fixed` also measured against the VIEWPORT rather than the
+    // tool window, the same mistake the find bar made. Then it was a row of the dock, which fixed the overlap
+    // and put it above the plan-limit meters, a block away from the box it completes — and, being in the
+    // flow, it pushed the card down as it opened, moving the text under the cursor.
+    //
+    // `bottom: 100%` against the CARD is what settles both: it is anchored to the thing it completes, and it
+    // can only ever grow over what is above it. Covering the meters is fine; covering the composer is the bug.
+    const palette = ruleBody('#palette');
+    expect(palette).toMatch(/position:\s*absolute/);
+    expect(palette).not.toMatch(/position:\s*fixed/);
+    expect(palette).toMatch(/bottom:\s*100%/);
+    // …which only means anything if the card is the containing block.
+    expect(ruleBody('.composer-card')).toMatch(/position:\s*relative/);
+    // Bounded in rows rather than in viewport height: `46vh` was half the window on a tall IDE.
+    expect(ruleBody('.palette-box')).toMatch(/max-height:\s*calc\([\d.]+ \* var\(--palette-row\)\)/);
   });
 });

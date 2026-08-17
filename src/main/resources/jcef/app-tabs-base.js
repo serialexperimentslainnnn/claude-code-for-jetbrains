@@ -87,6 +87,59 @@
     return T.state.tree.length > 0 || T.state.tasks.length > 0;
   }
 
+  /**
+   * The selected chat's work in the order the SUBTAB ROW draws it: every agent depth-first, so a subagent
+   * follows the agent that started it, then the background tasks.
+   *
+   * ONE walk, exported, because two things need it — the row itself and the flicker guard's signature — and
+   * two traversals that have to agree is how a row that never refreshes ships: the guard would describe an
+   * order the row does not draw, an identical-looking signature would skip the repaint, and an agent that
+   * finished would keep its running colour forever. Same trap `openTree` names about its own children/tasks
+   * lookups, answered the same way.
+   *
+   * Each entry is `{kind:'agent'|'task', id, node, depth}`. [depth] follows [depthOf]: 1 = the chat's own, so
+   * `CC.diagramLabel` says `Agent (…)` there and `Subagent (…)` below it, exactly as the tree panel and the
+   * Workloads diagram do.
+   */
+  function workOrder() {
+    var out = [];
+    var seen = {};
+    var known = {};
+    T.state.tree.forEach(function (n) {
+      if (n && n.id) known[n.id] = n;
+    });
+    // A parent the payload does not carry is treated as no parent at all: the retention window drops nodes by
+    // age, so a live child of an expired parent is a real case, and hanging it at the top level is what keeps
+    // it VISIBLE. Dropping it would hide running work behind a bookkeeping detail.
+    function childrenOf(id) {
+      return T.state.tree.filter(function (n) {
+        if (!n || !n.id) return false;
+        var parent = n.parent == null || !known[n.parent] ? null : n.parent;
+        return parent === id;
+      });
+    }
+    function walk(id, depth) {
+      childrenOf(id).forEach(function (n) {
+        if (seen[n.id]) return; // a malformed parent link must not loop
+        seen[n.id] = true;
+        out.push({ kind: 'agent', id: n.id, node: n, depth: depth });
+        walk(n.id, depth + 1);
+      });
+    }
+    walk(null, 1);
+    // Whatever a cycle in the parent links kept out of the walk. An agent the host sent and the bar refuses to
+    // draw is the worse failure: the row is how you reach its transcript at all.
+    T.state.tree.forEach(function (n) {
+      if (!n || !n.id || seen[n.id]) return;
+      seen[n.id] = true;
+      out.push({ kind: 'agent', id: n.id, node: n, depth: 1 });
+    });
+    T.state.tasks.forEach(function (t) {
+      if (t && t.id) out.push({ kind: 'task', id: t.id, node: t, depth: 1 });
+    });
+    return out;
+  }
+
   T.send = send;
   T.bar = bar;
   T.nodeById = nodeById;
@@ -95,4 +148,5 @@
   T.isSelected = isSelected;
   T.depthOf = depthOf;
   T.hasWork = hasWork;
+  T.workOrder = workOrder;
 })();

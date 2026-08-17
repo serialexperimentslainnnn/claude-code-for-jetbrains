@@ -50,8 +50,23 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
      * into somebody's row.
      */
     fun render() {
+        val strip = panel.chatStrip()
+        // ASK the strip, and fall back to the last push only when there is no strip to ask — a panel outside
+        // one, which is the only case where the cached copy is the best answer there is.
+        //
+        // The cache is what broke: `chats` starts empty and is filled by a push, so a page that came up
+        // without having received one drew a bar with no chats in it and kept drawing one, because nothing
+        // pushes again until the LIST changes — and on a project with a single restored chat it never does.
+        // The strip always knows; a copy of what the strip knows only sometimes does.
+        val chats = strip?.chatList() ?: this.chats
+        // The bar is the one surface with no way to tell "drew nothing" from "was never asked", and both look
+        // like a tool window with no tabs. One line, at the only place that emits `cc.tabs`, so the log can
+        // answer which of the two it was without another build.
+        if (chats.isEmpty()) {
+            LOG.warn("Claude Code tab bar: nothing to draw (strip=${strip != null}, cached=${this.chats.size})")
+        }
         // Every open chat's session, so hovering ANY tab can show that chat's tree — not just this one's.
-        val others = panel.chatStrip()?.workloads().orEmpty().associate { it.chatId to it.session }
+        val others = strip?.workloads().orEmpty().associate { it.chatId to it.session }
         // The retention window and the instant to measure it from, read ONCE for the whole push: every chat
         // in this bar is then aged by the same instant, instead of the last one drawn being younger than the
         // first by however long the serialisation took.
@@ -200,5 +215,9 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
         m.agentId.takeIf { it.isNotBlank() }?.let { return it }
         val tool = m.toolUseId.takeIf { it.isNotBlank() } ?: return null
         return session.runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
+    }
+
+    private companion object {
+        val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ChatAgentTabs::class.java)
     }
 }

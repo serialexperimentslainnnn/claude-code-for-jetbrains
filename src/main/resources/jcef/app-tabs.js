@@ -12,10 +12,14 @@
  * wrong whenever it was measured at the wrong moment. Then a breadcrumb: fixed height, but you had to walk
  * it one segment at a time to find anything, and the menu hung off a `▾` the size of a few pixels.
  *
- * What is here now is neither. At rest the bar shows ONE subtab — the one whose transcript is on screen —
- * or nothing at all while you are in the chat itself. Pointing at the chat's `⋮` (or at that subtab) slides
- * open the ENTIRE tree, every level at once, indented; clicking any row opens it; moving the pointer away
- * slides it shut again. One gesture, no navigation, and the bar never costs more than two rows.
+ * What is here now is neither. TWO rows at most, whatever the tree does: the chats, and — for the chat on
+ * screen — a flat row of its subtabs, every agent, subagent and background task it started, led by the chat
+ * itself. That second row is the quick way in and out, one click per destination and no hierarchy in it.
+ * Pointing at any tab's `⋮` slides open the ENTIRE tree, every level at once, indented; clicking any row
+ * opens it; moving the pointer away slides it shut again. **The flat row and the tree are not two views of
+ * the same thing and neither replaces the other**: the row answers "take me there" in one click, the tree
+ * answers "what started what" — and the row is what keeps the bar's height independent of the tree's depth,
+ * which is the one property all three earlier designs failed.
  *
  * **What the host sends, and what this owns.** The host sends what EXISTS: the chat list, the agent tree flat
  * (`{id, parent, label, status, type}`) and the background tasks with their owner. This module owns what is
@@ -64,42 +68,58 @@
   // ---------------------------------------------------------------------------
   // rendering
 
-  /** The label of whatever is open, for the single subtab the bar shows at rest. */
-  function selectedPill() {
-    if (!T.selected) return null;
-    if (T.selected.kind === 'agent') {
-      var node = T.nodeById(T.selected.id);
-      if (!node) return null;
-      return T.pill({
-        label: CC.diagramLabel('agent', T.depthOf(node), node.label || 'Agent'),
-        title: (node.label || '') + (node.type ? '  ·  ' + node.type : ''),
-        status: node.status || null,
-        selected: true,
-        onMenu: true,
-        // Hovering THIS shows what THIS started, not the whole chat: the pointer is on it, so that is the
-        // question being asked.
-        menuRoot: node.id,
-        onClick: showChat, // clicking the open subtab goes back to the chat's own transcript
-        onPin: function () {
-          T.send({ type: 'pinSubtab', agentId: node.id });
-        },
-        onClose: function () {
-          T.send({ type: 'closeAgent', agentId: node.id });
-        },
-      });
-    }
-    var task = T.taskById(T.selected.id);
-    if (!task) return null;
+  /**
+   * ONE subtab as a pill: an agent, a subagent or a background task of the chat on screen.
+   *
+   * **The visible text is the bare name**, and the KIND rides in the tooltip and the accessible name
+   * (`Agent (…)` / `Subagent (…)` / `Background Task (…)` — the one vocabulary `CC.diagramLabel` owns, shared
+   * with the tree panel and the Workloads diagram). A row of twelve pills each beginning with `Agent (` spends
+   * the only scarce thing a tool window has on the word that repeats; the levels are read in the tree behind
+   * the ⋮, which is what that panel is for.
+   *
+   * **The state travels three ways on purpose** — the dot's colour, the word in the tooltip, and the same word
+   * in the accessible name — because colour alone carries nothing to a colour-blind reader or a screen reader
+   * (WCAG 2.2 SC 1.4.1). The word is whatever the HOST sent (`JcefStatus`: `running|completed|failed|stopped`);
+   * nothing here derives one, which is the rule that ended the bar saying `done` where the dashboard said
+   * `completed` for the same task.
+   *
+   * **Only the OPEN subtab carries controls** (the ⋮, the pin, and the close for an agent). Those are exactly
+   * what the single-subtab row this replaced already offered, kept where they are used and left off the other
+   * twenty pills, where they would only be forty more targets a few pixels wide in a 24px row.
+   */
+  function subtabPill(w) {
+    var node = w.node;
+    var isAgent = w.kind === 'agent';
+    var name = node.label || (isAgent ? 'Agent' : node.type || 'background');
+    var status = node.status || null;
+    var open = T.isSelected(w.kind, w.id);
     return T.pill({
-      label: CC.diagramLabel('task', 1, task.label || task.type || 'background'),
-      title: (task.label || '') + (task.running ? '  ·  running' : '  ·  finished'),
-      status: task.status || null,
-      selected: true,
-      onMenu: true,
-      onClick: showChat,
-      onPin: function () {
-        T.send({ type: 'pinSubtab', taskId: task.id });
+      label: name,
+      title: CC.diagramLabel(w.kind, w.depth, name) + (status ? '  ·  ' + status : ''),
+      status: status,
+      selected: open,
+      // Clicking the one already open goes back to the chat's own transcript — what the single-subtab row did,
+      // and what makes the `Chat` pill a convenience rather than the only way out.
+      onClick: function () {
+        if (open) showChat();
+        else if (isAgent) showAgent(w.id);
+        else showTask(w.id);
       },
+      // Hovering THIS shows what THIS started, not the whole chat: the pointer is on it, so that is the
+      // question being asked. A task starts nothing, so it has no tree to open.
+      onMenu: open && isAgent,
+      menuRoot: isAgent ? w.id : null,
+      onPin: open
+        ? function () {
+            T.send(isAgent ? { type: 'pinSubtab', agentId: w.id } : { type: 'pinSubtab', taskId: w.id });
+          }
+        : null,
+      onClose:
+        open && isAgent
+          ? function () {
+              T.send({ type: 'closeAgent', agentId: w.id });
+            }
+          : null,
     });
   }
 
@@ -113,6 +133,9 @@
 
   /** The chat the row was last aimed at. Null until the first draw, which is why the first draw centres. */
   var centredOn = null;
+
+  /** The same, for the subtab row: `kind:id` of whatever it was last aimed at, `''` for the chat itself. */
+  var centredSub = null;
 
   function render() {
     var host = T.bar();
@@ -146,6 +169,11 @@
     // aim at, so the offset is the only record of where the reader was.
     var priorCapsule = rows.querySelector('.tab-capsule');
     var priorScroll = priorCapsule ? priorCapsule.scrollLeft : 0;
+    // The subtab row keeps its own offset for the same reason, and it is read with its own class rather than
+    // by index: `.tab-capsule` matches the chats' capsule first, and asking for "the second one" would silently
+    // become "the chats' one" on any page where the subtab row is not drawn.
+    var priorSubs = rows.querySelector('.subtab-capsule');
+    var priorSubScroll = priorSubs ? priorSubs.scrollLeft : 0;
     while (rows.firstChild) rows.removeChild(rows.firstChild);
     host = rows;
 
@@ -198,27 +226,62 @@
       if (openChat !== centredOn) {
         centredOn = openChat;
         requestAnimationFrame(function () {
-          var open = capsule.querySelector('.pill.selected');
+          var open = capsule.querySelector('.pill-wrap.selected');
           if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'center' });
         });
       }
     }
 
-    // 2. The open subtab — ONE row, and only while something other than the chat is on screen. At rest the
-    //    bar says what you are reading and nothing else; the rest of the tree is a hover away.
-    var current = selectedPill();
-    if (current) {
-      host.appendChild(
-        h(
-          'div',
-          { class: 'tab-row trail' },
-          h('span', { class: 'trail-label', text: 'Subtab' }),
-          h('div', { class: 'tab-capsule' }, [current])
-        )
-      );
+    // 2. The SUBTABS of the chat on screen: its agents, its subagents and its background tasks, in the order
+    //    `workOrder` walks them — every agent depth-first, so a subagent follows the one that started it, then
+    //    the background tasks. ONE walk, shared with the flicker guard's signature (see app-tabs-base.js): two
+    //    traversals that have to agree is how a row that never refreshes ships.
+    //
+    //    It replaces the single-subtab row that lived here, and does not add a third: the bar is still at most
+    //    two rows however deep the tree goes, which is the invariant three earlier designs were thrown away
+    //    for. This is the QUICK way in and out — one click per destination, no hierarchy; the whole tree with
+    //    its levels is still one hover away behind any tab's ⋮, and that panel is where depth is read.
+    var work = T.workOrder();
+    if (work.length) {
+      // The chat itself leads the row, so "back to the conversation" is always a target and always in the same
+      // place — the same destination the tree panel offers as its root row. Without it the only way out is
+      // clicking the subtab you are already in, which is a gesture nobody guesses.
+      var subPills = [
+        T.pill({
+          label: 'Chat',
+          title: "This chat's own transcript",
+          selected: !T.selected,
+          onClick: showChat,
+        }),
+      ];
+      work.forEach(function (w) {
+        subPills.push(subtabPill(w));
+      });
+      var subs = h('div', { class: 'tab-capsule subtab-capsule' }, subPills);
+      T.wheelToScroll(subs);
+      T.dragToScroll(subs);
+      T.keepFocusVisible(subs);
+      // No modifier class on the ROW: `.subtab-capsule` is what carries the difference and what the CSS and
+      // the tests both key on, and a second class that nothing styles is a class that goes stale unnoticed.
+      host.appendChild(h('div', { class: 'tab-row' }, subs));
+      // The two rules the chats' row above learned the hard way, and this row is rebuilt just as often:
+      // (1) a container that is thrown away loses where the reader was, because a fresh element is born at
+      //     offset 0 — so the offset is read before the teardown and put back INSTANTLY (`.tab-capsule`
+      //     declares `scroll-behavior: smooth`, and a bare assignment would glide on every repaint);
+      // (2) the open one is re-centred only when the SELECTION changes. Re-aiming on every push undoes the
+      //     drag that was just restored, which is the same yank by another route.
+      if (priorSubScroll) T.scrollLeftTo(subs, priorSubScroll);
+      var openSub = T.selected ? T.selected.kind + ':' + T.selected.id : '';
+      if (openSub !== centredSub) {
+        centredSub = openSub;
+        requestAnimationFrame(function () {
+          var open = subs.querySelector('.pill-wrap.selected');
+          if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'center' });
+        });
+      }
     }
 
-    T.bar().hidden = !chatPills.length && !current;
+    T.bar().hidden = !chatPills.length && !work.length;
 
     // Re-anchor the panel to the ⋮ this repaint just created, showing THE SAME THING. Rebuilt in place, with
     // its content refreshed — which is the point: an agent that finished while you were looking at the tree
@@ -227,7 +290,7 @@
     if (reopen) {
       var anchor = null;
       if (reopen.chatId != null) {
-        var pills = rows.querySelectorAll('.tab-capsule .pill');
+        var pills = rows.querySelectorAll('.tab-capsule .pill-wrap');
         for (var pi = 0; pi < pills.length; pi++) {
           if (pills[pi].__chatId === reopen.chatId) anchor = pills[pi].querySelector('.pill-more');
         }

@@ -15,6 +15,26 @@
   var T = (CC.tabbar = CC.tabbar || {});
 
   /**
+   * The field boundary inside one signature entry — built from its CODE POINT, never typed as a character.
+   *
+   * A separator that cannot occur in the data is the right idea: `label:'ab', status:''` and
+   * `label:'a', status:'b'` are the same string once concatenated, and a collision here does not look like a
+   * bug — it looks like a row that stopped updating.
+   *
+   * How it is WRITTEN is the part that cost an afternoon. This file once carried a literal U+0000 between two
+   * quotes. That byte makes the source binary — `git diff` reports `Bin`, `grep` goes quiet on the file — and,
+   * fatally, the HTML parser rewrites U+0000 to U+FFFD while reading the script, so the text the browser
+   * hashes is no longer the text the host hashed. The page is served under a hash-pinned CSP, so the script
+   * was REFUSED: this whole file never ran, `T.drawnSignature` was never defined, and `render` threw on every
+   * push. The tab bar vanished and nothing anywhere said why — an exception inside `executeJavaScript` fires
+   * no `error` event and reaches no log.
+   *
+   * So: no non-printable character is ever typed into this page's sources. `String.fromCharCode` is
+   * unambiguous, survives every editor and every copy-paste, and cannot be mistyped invisibly.
+   */
+  var SEP = String.fromCharCode(31); // U+001F INFORMATION SEPARATOR ONE
+
+  /**
    * What the bar actually DRAWS, as a string — everything else in the payload is invisible here.
    *
    * The host pushes the whole bar on every agent event, several times a turn, and almost all of those
@@ -24,17 +44,30 @@
   function signature() {
     var parts = T.state.chats.map(function (chat) {
       var work = chat.selected ? T.hasWork() : (chat.tree || []).length > 0 || (chat.tasks || []).length > 0;
-      return [chat.id, chat.title, !!chat.selected, !!chat.attention, chat.pinned || '', work].join('');
+      return [chat.id, chat.title, !!chat.selected, !!chat.attention, chat.pinned || '', work].join(SEP);
     });
     if (T.selected) {
       var node = T.selected.kind === 'agent' ? T.nodeById(T.selected.id) : T.taskById(T.selected.id);
       parts.push(
         node
-          ? [T.selected.kind, T.selected.id, node.label || '', node.status || '', !!node.running].join('')
-          : T.selected.kind + '' + T.selected.id + 'gone'
+          ? [T.selected.kind, T.selected.id, node.label || '', node.status || '', !!node.running].join(SEP)
+          : [T.selected.kind, T.selected.id, 'gone'].join(SEP)
       );
     }
-    return parts.join('');
+    // The SUBTAB ROW, which is drawn whenever the chat on screen has started anything.
+    //
+    // Without it the row is frozen: the skip below is unconditional, so a push that only moves an agent's
+    // status would look identical to the last one and never repaint — an agent that finished would keep its
+    // running colour for the rest of the session, and one that started would never get a pill at all. What is
+    // drawn has to be described, and this row is drawn.
+    //
+    // Read through `T.workOrder`, the same walk the row itself renders from: a second traversal here would
+    // eventually disagree with that one, and a signature that describes a different row is worse than none.
+    T.workOrder().forEach(function (w) {
+      var n = w.node;
+      parts.push([w.kind, w.id, w.depth, n.label || '', n.type || '', n.status || '', !!n.running].join(SEP));
+    });
+    return parts.join(SEP);
   }
 
   /**
@@ -70,18 +103,18 @@
     if (foreign) parts.push(foreign.title || '');
     nodes.forEach(function (n) {
       if (!n) return;
-      parts.push([n.id, n.parent || '', n.label || '', n.type || '', n.status || '', !!n.running].join(''));
+      parts.push([n.id, n.parent || '', n.label || '', n.type || '', n.status || '', !!n.running].join(SEP));
     });
     tasks.forEach(function (t) {
       if (!t) return;
-      parts.push([t.id, t.owner || '', t.label || '', t.type || '', t.status || '', !!t.running].join(''));
+      parts.push([t.id, t.owner || '', t.label || '', t.type || '', t.status || '', !!t.running].join(SEP));
     });
-    return parts.join('');
+    return parts.join(SEP);
   }
 
   /** Everything currently drawn: the bar AND its open panel. */
   function drawnSignature() {
-    return signature() + '' + panelSignature();
+    return signature() + SEP + panelSignature();
   }
 
   /** The last drawn signature, so an identical push is a no-op instead of a rebuild. */
