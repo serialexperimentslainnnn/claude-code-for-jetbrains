@@ -61,6 +61,7 @@ TARGETS = [
     ("src/main/kotlin/dev/lain/claudejb/permission", KOTLIN),
     ("src/main/kotlin/dev/lain/claudejb/diff", KOTLIN),
     ("src/main/kotlin/dev/lain/claudejb/git", KOTLIN),
+    ("src/main/kotlin/dev/lain/claudejb/forge", KOTLIN),
     ("src/main/kotlin/dev/lain/claudejb/ui", KOTLIN),
     ("src/main/kotlin/dev/lain/claudejb/ui/jcef", KOTLIN),
     ("src/main/kotlin/dev/lain/claudejb/context", KOTLIN),
