@@ -40,6 +40,9 @@ object JcefTranscriptPayload {
         // The raw command text for a command call (Bash, PowerShell, MCP…) → the frontend renders it as its
         // own copyable code block in the tool card, instead of plain text in the collapsed header.
         e.commandText?.let { put("command", it) }
+        // …and the text the call SENDS → its own block, also outside the collapse toggle. A card showing only
+        // the reply says the call worked and never says what was said.
+        e.messageText?.let { put("message", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         // A completed Edit/Write/MultiEdit card is reviewable: the frontend shows a "View diff"
@@ -90,6 +93,7 @@ object JcefTranscriptPayload {
                     dto.toolUseId?.let { put("toolUseId", it) }
                     dto.filePath?.let { put("filePath", it) }
                     dto.commandText?.let { put("command", it) }
+                    dto.messageText?.let { put("message", it) }
                     put("state", agentRowState(dto, running, ownerRunning))
                     // A background task's view is nothing BUT its command and its output: shipping it
                     // collapsed means the one thing you opened the tab for is behind a click.

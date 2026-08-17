@@ -39,6 +39,13 @@ class TranscriptEntry(
      * render its output as a copyable code block rather than plain text. Null on every other row.
      */
     val commandText: String? = null,
+    /**
+     * Set on a [Speaker.TOOL] row whose call SENDS text — a message to another agent, a prompt, a question —
+     * to that text; see [dev.lain.claudejb.permission.ToolInputScanner.messageText]. Drives the card's own
+     * message block, which sits outside the collapse toggle for the same reason the command does: a card
+     * showing only `{"success":true,…}` says the call worked and never says what was said. Null otherwise.
+     */
+    val messageText: String? = null,
 ) {
     var text: String = text
         internal set
@@ -145,9 +152,11 @@ class TranscriptModel {
         toolState: ToolState = ToolState.FINISHED,
         filePath: String? = null,
         commandText: String? = null,
+        messageText: String? = null,
     ): TranscriptEntry {
         val entry = TranscriptEntry(
             nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath, commandText,
+            messageText,
         )
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry
