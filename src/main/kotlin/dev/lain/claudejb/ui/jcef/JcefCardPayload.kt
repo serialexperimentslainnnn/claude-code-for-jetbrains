@@ -5,6 +5,7 @@ import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.protocol.AskQuestion
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -93,4 +94,33 @@ object JcefCardPayload {
 
     fun permissionsJson(list: List<PendingPermission>, diffByRequest: Map<String, String> = emptyMap()): String =
         JsonArray(list.map { permissionJson(it, diffByRequest[it.requestId]) }).toString()
+
+    /**
+     * Every card on screen, from EVERY conversation that can put one there, each tagged with its own.
+     *
+     * There is one permission region and there are two sessions that can ask: the chat this page was built
+     * for, and the Git one embedded in its Git view. One region because a second place to look for the thing
+     * that is blocking you is a place people do not look — and one renderer, so a card cannot be displayed
+     * differently depending on which conversation raised it.
+     *
+     * `scope` is what tells the host which session an answer belongs to. Guessing from the request id would
+     * resolve the wrong turn on a collision, and what is being resolved is a command about to run against
+     * the working tree. An empty scope is the page's own session, so the ordinary path is unchanged.
+     */
+    fun permissionsJson(groups: List<Group>): String =
+        JsonArray(
+            groups.flatMap { group ->
+                group.cards.map { card ->
+                    val json = permissionJson(card, group.diffByRequest[card.requestId])
+                    if (group.scope.isEmpty()) json else JsonObject(json + ("scope" to JsonPrimitive(group.scope)))
+                }
+            },
+        ).toString()
+
+    /** One conversation's pending cards, and the reconstructed diffs for the reviewable ones among them. */
+    data class Group(
+        val cards: List<PendingPermission>,
+        val scope: String = "",
+        val diffByRequest: Map<String, String> = emptyMap(),
+    )
 }

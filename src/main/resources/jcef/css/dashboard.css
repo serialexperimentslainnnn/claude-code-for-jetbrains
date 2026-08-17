@@ -83,93 +83,8 @@
 /* ════════════════════════════════════════════════════════════════════════════
    SESSION DASHBOARD — overlay panel + cards  (Sprint 2)
    ════════════════════════════════════════════════════════════════════════════ */
-/* The view buttons — Chat · Session · Workloads — as one segmented control in the TAB BAR.
-   They used to be a `fixed` stack in the top-right corner, which is where the transcript's text is: they
-   covered what you were reading, and with a few chats open they covered the tabs as well.
-
-   A real flex ITEM, never an overlay. Overlapping the tabs would fail WCAG 2.2 SC 2.4.11 (Focus Not
-   Obscured): tab to the last chat and it would sit underneath these buttons — focused, and invisible.
-   Being in the flow makes that impossible by construction, rather than by keeping a `padding-right` in
-   sync with however wide the words happen to be in the current translation. */
-.dash-toggles {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface2) 55%, transparent);
-}
-.dash-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  user-select: none;
-  font-family: var(--font);
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--dim);
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-  /* No backdrop-filter here. It cost a blurred backdrop snapshot per button on every frame the tab bar
-     repaints, to blur a flat, nearly-opaque strip — spend that on the dock's veil, where it is visible. */
-  transition:
-    color 0.14s,
-    border-color 0.14s,
-    box-shadow 0.14s,
-    background-color 0.14s;
-}
-/* The view you are in: neon orange with a soft glow. Two shadows do the work — a tight one for the edge and
-   a wide, blurred one for the halo — because a single large blur reads as smudged rather than as lit.
-
-   The leading bullet stays. WCAG 1.4.1 forbids colour as the ONLY carrier of information, and "which of
-   these five am I looking at" is information; the glow is also the first thing to disappear under
-   forced-colours mode, where the system replaces our colours outright. */
-.dash-toggle.active {
-  color: var(--neon-orange);
-  border-color: var(--neon-orange);
-  background: color-mix(in srgb, var(--neon-orange) 12%, var(--surface));
-  font-weight: 600;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--neon-orange) 55%, transparent),
-    0 0 12px 2px color-mix(in srgb, var(--neon-orange) 45%, transparent);
-  text-shadow: 0 0 8px color-mix(in srgb, var(--neon-orange) 60%, transparent);
-}
-.dash-toggle.active::before {
-  content: '●';
-  font-size: 8px;
-  line-height: 1;
-}
-/* The way out. Marked with an arrow so it reads as "leave", not as a fifth view — the glyph carries that on
-   its own, without relying on colour (1.4.1). Later than the bullet rule at equal specificity, which is what
-   keeps the arrow on Chat when Chat is the lit one; a third rule for that case only restated this. */
-.dash-toggle.dash-exit::before {
-  content: '←';
-  font-size: 11px;
-  line-height: 1;
-}
-.dash-toggle.dash-exit {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-}
-.dash-toggle:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-/* NB a second `.dash-toggle.active` sat here repainting the selected view coral — later rule, same
-   specificity — so it was lit in one colour and haloed in the neon of the rule above. Deleted, not both. */
-.dash-toggle svg {
-  width: 13px;
-  height: 13px;
-  display: block;
-  fill: currentColor;
-}
+/* The view buttons (`.dash-toggles` / `.dash-toggle`) are styled in composer.css, beside the model and mode
+   pills they are now shaped like and next to which they sit. What stays here is the panel they open. */
 
 /* A CONTAINED LAYER over the conversation area, never a full-window overlay and never a replacement for the
    transcript. It shares the first cell of #work's grid with #conversation (base.css) and is stacked on top of
@@ -193,7 +108,10 @@
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
-  padding: 22px clamp(16px, 5vw, 40px) 30px;
+  /* Tighter than the transcript's own padding, and deliberately so: the transcript is prose and wants
+     breathing room, the dashboard is a dense readout and the same generosity turns it into a page you
+     scroll instead of a panel you glance at. */
+  padding: 12px clamp(10px, 2.5vw, 20px) 18px;
   animation: fade 0.2s var(--ease);
 }
 /* a responsive column of cards, centred with the reading column */
@@ -201,20 +119,25 @@
   max-width: var(--col);
   margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  /* 220, not 260: three columns fit where two did in the tool-window widths people actually use, which is
+     what stops a card of four numbers occupying half the panel. */
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
   align-items: start;
 }
 
+/* The card's own scale. Every number here was a third larger, and the panel read as a settings page rather
+   than an instrument: the content is short labels and figures, so the padding was most of what you saw. */
 .dash-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  padding: 16px 18px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+  font-size: 12px;
 }
 /* let wide cards (context bar, subagents, mcp) span the full row */
 .dash-card.wide {
@@ -258,6 +181,57 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+/* With no diagram there is nothing to give that height to, and a 520px empty box reads as a render that
+   failed rather than as a window that admits nothing. The card then sizes to the control and the one line
+   beside it. */
+.dash-card[data-card='workloads']:not(:has(.dg-view)) {
+  align-self: start;
+  min-height: 0;
+}
+
+/* ── the retention window, on the Workloads card ──────────────────────────────
+   The control the view cannot be read without: it decides which finished work is still listed, so a diagram
+   that has aged everything out and a project that never ran anything look the same. It sits under the card's
+   title rather than inside it because `.dash-title` is built by the shared card helper, and reaching into
+   another module's structure to inject a child is a coupling that breaks silently the day that helper
+   changes.
+
+   The `<select>` keeps its native appearance on purpose. `appearance: none` means drawing the arrow, and the
+   only ways to draw one are a `background-image` — `url()`, which this page's CSP forbids outright — or a
+   gradient/clip-path reimplementation of a glyph the platform already provides correctly at every zoom
+   level and in forced-colors mode. */
+.wl-window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Wrap rather than crush: in a narrow tool window the label drops above the control instead of squeezing
+     it down to the width of its arrow. */
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.wl-window-label {
+  color: var(--dim);
+  cursor: pointer;
+}
+.wl-window-select {
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* The popup rows are painted by the browser, and it takes these two from the element rather than from the
+   page: without them a dark IDE theme gets the platform's default light list, i.e. the one control on the
+   page that ignores the theme. */
+.wl-window-select option {
+  background: var(--surface);
+  color: var(--text);
+}
 /* The panel is one full-height row when Workloads is the view, so the card can actually use the space. */
 .dashboard > .dash-inner:has(.dash-card[data-card='workloads']) {
   min-height: 100%;
@@ -277,9 +251,9 @@
 .stat-row {
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  gap: 10px;
+  font-size: 11.5px;
+  line-height: 1.35;
 }
 .stat-label {
   flex: 1 1 auto;
@@ -702,6 +676,142 @@
 .dg-card.stopped {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   opacity: 0.85;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MINI SESSION VIEW — the same cards, folded into the composer's metrics strip
+   ════════════════════════════════════════════════════════════════════════════
+   Built by app-composer-readout.js as a sibling of `.usage-bars`, i.e. a row of the DOCK — never a layer over
+   anything. It has no `z-index` and needs none: it is in the flow, so the transcript gives up the space and
+   the prompt box stays exactly where it was. What that costs is height, which is why the body is capped and
+   scrolls (below) instead of being allowed to push the composer down as the session accumulates cards.
+
+   The cards are the dashboard's own builders, unchanged. Everything here is DENSITY: the panel is a page you
+   open, this is a strip you glance at, and the same padding that reads as breathing room at full width reads
+   as three cards and a scrollbar in a fold. */
+
+/* The two elements the JS toggles with the `hidden` attribute, said out loud rather than left to the
+   user-agent. `[hidden] { display: none }` is a UA rule, and ANY author declaration beats it whatever its
+   specificity — which is why `.usage-bars` above, carrying `display: grid` in its own rule, stays laid out
+   while it holds the `hidden` attribute. Neither rule below declares a `display` of its own, so the UA rule
+   would in fact suffice today; stating it is what stops the next declaration added here from silently
+   reopening that trap. */
+.dash-mini[hidden],
+.dash-mini-body[hidden] {
+  display: none;
+}
+
+/* Aligned with `.usage-bars`' own side margins so the fold sits in the same column as the bars above it,
+   rather than as a block that starts somewhere else. */
+.dash-mini {
+  margin: 0 4px 8px;
+}
+
+/* The disclosure. A quiet text control, not a `.btn`: it opens a detail view of numbers already on screen, so
+   it must not compete with the composer's own actions. No `outline` suppression anywhere — the shared
+   `:focus-visible` baseline (tabs.css) gives it its ring for free, because it is a real <button>. */
+.dash-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--dim);
+  font-family: var(--font);
+  font-size: 11.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.12s var(--ease);
+}
+.dash-mini-btn:hover {
+  color: var(--text);
+}
+/* Rotates to point down when the fold is open. It is `aria-hidden`, and the label beside it changes wording
+   at the same moment, so nothing depends on the reader perceiving the rotation (SC 1.4.1). Motion is
+   flattened globally by `body.reduced-motion` (boot.css); there is nothing to repeat here. */
+.dash-mini-caret {
+  flex: 0 0 auto;
+  font-size: 9px;
+  transition: transform 0.16s var(--ease);
+}
+.dash-mini[data-open='true'] .dash-mini-caret {
+  transform: rotate(90deg);
+}
+/* Never wraps: the two labels differ in width, and a control that becomes two lines when it is opened moves
+   everything under it — including the prompt box — as a side effect of being pressed. */
+.dash-mini-label {
+  white-space: nowrap;
+}
+
+/* BOUNDED, and this is the load-bearing rule of the whole section: the dock is a grid row that sizes to its
+   content, so an uncapped fold would grow it until the transcript had nowhere left to be. `vh` is the tool
+   window here — JCEF's viewport is the browser the tool window hosts — and the `min()` keeps a tall IDE from
+   turning a glance into half the panel. It is its own scroll container, which is why the JS carries the
+   offset across a rebuild. */
+.dash-mini-body {
+  margin-top: 4px;
+  max-height: min(32vh, 280px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.dash-mini-grid {
+  min-width: 0;
+}
+
+/* ── the standing facts, two lines under the reset row ────────────────────────
+   NOT the Session view's cards, and not a two-column table either. Both were tried. The cards repeated what
+   is already on screen — the plan bars and the context figure are the lines directly above — and put page
+   furniture in a strip; the table fixed the furniture and kept the wrong shape, since a column of labels down
+   the left is a reference table and this is five short facts.
+   So: `label: value` pairs flowing across two lines, in the readout's own grammar. They WRAP rather than
+   overflow, because the tool window is often narrow and a strip that scrolls sideways is a strip nobody
+   reads. */
+/* `space-between` so each line spans the strip's full width the way the plan-limit row above it does, instead
+   of bunching at the left and leaving the right half empty. It shares `.usage-bars`' side margins (see
+   `.dash-mini`), so the two rows start and end on the same pixels — which is what makes this read as another
+   line of the same readout rather than as a block that happens to sit under one. */
+.mini-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 16px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+/* A line that wrapped would otherwise stretch its last row across the width and leave the pairs floating a
+   long way apart; this keeps a wrapped remainder packed to the left where it reads as a continuation. */
+.mini-line > .mini-fact:last-child:not(:only-child) {
+  margin-right: auto;
+}
+/* Each pair is one unit: the label and its value break together or not at all, so a wrap never leaves
+   "Organization:" at the end of one line and its value at the start of the next. */
+.mini-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+.mini-key {
+  flex: 0 0 auto;
+  color: var(--dim);
+}
+/* The value can be a working directory — one long unbreakable token — so it is allowed to shrink and to be
+   cut rather than to widen the strip past the composer. The full text is in the pair's `title`. */
+.mini-val {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-empty {
+  color: var(--dim);
+  font-size: 11px;
 }
 
 /* ── toggle switch ──────────────────────────────────────────────────────────── */

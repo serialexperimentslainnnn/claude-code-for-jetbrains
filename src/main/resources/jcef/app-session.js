@@ -35,6 +35,18 @@
   var planBtn = null;
   var gitBtn = null;
   var panel = null;
+  /**
+   * The card grid, rebuilt on every render — and a PERSISTENT child of the panel rather than the panel
+   * itself.
+   *
+   * `render` used to empty `panel`, which is fine while everything in it is a card. The Git view's embedded
+   * conversation is not: it holds a text box the user is typing in and permission cards with state, and the
+   * host pushes a session payload several times a turn. Emptying their parent would take the caret with it
+   * on every delta. Clearing this element instead means the chat pane is simply a sibling nothing rebuilds.
+   */
+  var inner = null;
+  /** The view-button stack, held so it can be mounted whenever the composer's row turns up — see below. */
+  var toggles = null;
   var shown = false;
   var built = false;
 
@@ -116,17 +128,19 @@
   }
 
   function render() {
-    if (!panel) return;
-    // The panel is its own scroll container and this rebuilds it from nothing, which drops the offset to
-    // zero. The host pushes a payload several times a turn, so without carrying it across, reading anything
-    // below the fold — a plan, the history list — meant being sent back to the top mid-sentence.
+    if (!panel || !inner) return;
+    // Nothing to draw while the Git view is showing its conversation: the cards are hidden behind it, and
+    // rebuilding a hidden grid several times a turn is the waste `renderIfShown` exists to avoid.
+    if (gitChatOpen()) {
+      applyGitSub();
+      return;
+    }
+    // The panel is its own scroll container and this rebuilds its grid from nothing, which drops the offset
+    // to zero. The host pushes a payload several times a turn, so without carrying it across, reading
+    // anything below the fold — a plan, the history list — meant being sent back to the top mid-sentence.
     var offset = panel.scrollTop;
-    // Clear.
-    while (panel.firstChild) panel.removeChild(panel.firstChild);
-
-    // Cards live inside a centred .dash-inner grid (the grid/gap CSS targets `.dashboard > .dash-inner`; without
-    // this wrapper the cards stacked with no layout). The wrapper also caps the width to the reading column.
-    var inner = h('div', { class: 'dash-inner' });
+    // Clear. Only the grid: the Git chat pane is a sibling and must survive (see `inner`).
+    while (inner.firstChild) inner.removeChild(inner.firstChild);
 
     var s = lastSession || {};
     // EXCLUSIVE VIEWS, not one panel with as many scroll anchors. The anchor version was wrong in a way
@@ -157,10 +171,60 @@
         )
       );
     }
-    panel.appendChild(inner);
+    applyGitSub();
     // Restored after the content exists, or there is nothing to scroll and the browser clamps it to zero.
     panel.scrollTop = offset;
   }
+
+  /**
+   * Whether the Git view is currently showing its conversation rather than the repository.
+   *
+   * Two conditions, not one: the sub-view is remembered while you are elsewhere, so that coming back to Git
+   * returns you to the pane you left — but it must not hide the Session cards on the way past.
+   */
+  function gitChatOpen() {
+    return currentView === 'git' && gitSub === 'chat';
+  }
+
+  /**
+   * Shows either the cards or the Git conversation, and never both.
+   *
+   * `hidden` rather than detaching the pane: it stays in the document with its scroll offset, its caret and
+   * any half-filled permission card intact, which is the whole reason it is a persistent node.
+   */
+  function applyGitSub() {
+    var pane = typeof D.gitChatPane === 'function' ? D.gitChatPane() : null;
+    var chat = gitChatOpen();
+    if (inner) inner.hidden = chat;
+    if (pane) {
+      if (pane.parentNode !== panel) panel.appendChild(pane);
+      pane.hidden = !chat;
+      if (chat && typeof D.gitChatShown === 'function') D.gitChatShown();
+    }
+  }
+
+  /** Inside the Git view: the repository (`overview`) or the conversation about it (`chat`). */
+  var gitSub = 'overview';
+
+  D.gitSubView = function () {
+    return gitSub;
+  };
+
+  /**
+   * Switches between the Git view's two destinations.
+   *
+   * Owned here, beside `currentView`, because it is the same kind of state and the panel is what has to react
+   * to it. `app-session-git.js` draws the strip and calls this; it does not keep an answer of its own, or
+   * there would be two and they would disagree the first time the view was left and re-entered.
+   */
+  D.setGitSubView = function (view) {
+    var next = view === 'chat' ? 'chat' : 'overview';
+    if (gitSub === next) return;
+    gitSub = next;
+    if (built && shown) render();
+    var c = core();
+    if (c && typeof c.announce === 'function') c.announce(next === 'chat' ? 'Git chat' : 'Git overview');
+  };
 
   /**
    * The views, each declaring its own title, its cards and what it says when empty.
@@ -212,7 +276,13 @@
       title: 'Git',
       empty: 'No Git repository for this project.',
       cards: function (s) {
-        return [D.buildGitHeadCard(s.git), D.buildGitActionsCard(s.git), D.buildGitHistoryCard(s.git)];
+        return [
+          D.buildGitHeadCard(s.git),
+          D.buildGitTopologyCard(s.git),
+          D.buildGitForgeCard(s.git),
+          D.buildGitActionsCard(s.git),
+          D.buildGitHistoryCard(s.git),
+        ];
       },
     },
   };
@@ -322,6 +392,12 @@
       root.appendChild(panel);
     }
 
+    // Cards live inside a centred .dash-inner grid (the grid/gap CSS targets `.dashboard > .dash-inner`;
+    // without this wrapper the cards stacked with no layout). Built ONCE — `render` empties it rather than
+    // replacing it, so the Git chat pane beside it survives every push.
+    inner = h('div', { class: 'dash-inner' });
+    panel.appendChild(inner);
+
     // The stack: a way OUT, then the views. "Chat" is its own button rather than a state of another
     // one — leaving the dashboard is a different action from switching view, and making the user find
     // whichever button happens to be highlighted in order to leave is a puzzle, not an affordance.
@@ -359,33 +435,54 @@
       gitBtn,
       planBtn
     );
-    // Into the TAB BAR, not floating over the transcript. As a fixed stack in the corner it sat on top of
-    // the conversation and, with a few chats open, on top of the tabs themselves — the row it now lives in
-    // has always reserved the space for it (`.tab-row` padding-right).
-    var bar = document.getElementById('tabsbar');
-    if (bar) bar.appendChild(stack);
-    else root.appendChild(stack);
+    // Into the COMPOSER, as the row directly above the prompt box (app-composer-actions.js). It has been a
+    // `fixed` stack in the corner — on top of the transcript text and, with a few chats open, on top of the
+    // tabs — and then an item of the tab bar, which was better but tied it to a bar the page HIDES whenever
+    // the chat list arrives empty: the views vanished with it, and a recovered page came back with no way to
+    // reach Workloads, Git or Plan at all.
+    //
+    // What does not move is who owns the panel: this file still decides whether it is open and which view it
+    // shows. The composer only provides the container — and it may not have built one yet, which is why the
+    // mount is its own idempotent step ([mountToggles]) that BOTH sides call. Making this file wait for the
+    // composer instead would be a build order between two families, i.e. a dashboard that never appears in
+    // any context that does not also build a prompt box.
+    toggles = stack;
+    mountToggles();
 
     applyVisibility();
     render();
   }
 
+  /**
+   * Puts the view buttons in the composer's row, whenever both halves exist.
+   *
+   * Called by BOTH sides — this file when it builds the stack, and `app-composer-actions.js` when it builds
+   * the row — because either can be first and neither should have to wait for the other. Making the dashboard
+   * wait cost 41 frontend tests: every context that builds a session payload without a prompt box (which is
+   * most of them) simply never got a dashboard.
+   *
+   * Idempotent: appending a node that is already there is a move, and the guard keeps it from being one.
+   */
+  function mountToggles() {
+    var into = CC.composer && CC.composer.viewsRow && CC.composer.viewsRow();
+    if (into && toggles && toggles.parentNode !== into) into.appendChild(toggles);
+  }
+  D.mountToggles = mountToggles;
+
   function applyVisibility() {
     if (!panel || !toggleBtn) return;
-    var conv = conversation();
     if (shown) {
       panel.removeAttribute('hidden');
       panel.classList.add('open');
       // The transcript is COVERED, not hidden: it keeps its box and therefore its scroll offset, and the
-      // reader comes back to the line they were on instead of to the top of the conversation. `inert` is the
-      // other half of that — a transcript still painted underneath would keep its links and buttons
-      // focusable while invisible, which is WCAG 2.2 SC 2.4.11 (Focus Not Obscured), and it would also be
-      // read out by a screen reader over the panel that replaced it.
-      if (conv) conv.setAttribute('inert', '');
+      // reader comes back to the line they were on instead of to the top of the conversation. Declaring the
+      // cover is the other half of that (CC.coverTranscript, app-core.js) — and it is declared rather than
+      // set here because the waiting screens cover the same element.
+      CC.coverTranscript('dashboard', true);
     } else {
       panel.setAttribute('hidden', '');
       panel.classList.remove('open');
-      if (conv) conv.removeAttribute('inert');
+      CC.coverTranscript('dashboard', false);
       // Leaving the panel returns to the default view, so the next press of any button opens what it says
       // rather than whatever was last looked at.
       currentView = defaultView();
@@ -414,6 +511,18 @@
   D.toggleDashboard = toggle;
   D.dashboardShown = function () {
     return shown;
+  };
+
+  /**
+   * The last session payload the host pushed, for anything outside this file that draws from it.
+   *
+   * There is one such reader today — the composer's collapsible mini view of these same cards
+   * (`app-composer-readout.js`) — and it needs the payload without owning a second copy of it, or the two
+   * would disagree the moment one of them missed a push. It is a getter rather than a stashed second
+   * reference for exactly that reason: there is one payload, and this says where it is.
+   */
+  D.lastSession = function () {
+    return lastSession;
   };
 
   function ensureBuilt() {
@@ -448,6 +557,26 @@
   cc.meta = function (m) {
     if (metaBefore) metaBefore(m);
     if (m && m.gitIntegration === true) gitTab = true;
+    ensureBuilt();
+    renderIfShown();
+  };
+
+  /**
+   * Host: put the Git view on screen (the composer's Git button, `ClaudeToolWindowFactory.showGitView`).
+   *
+   * It RE-ARMS the once-only open above rather than setting the view itself, and that is the whole reason it
+   * is two lines. Two things would defeat a direct `currentView = 'git'`:
+   *
+   *   · the repository may not have been collected yet — the host kicks off the read as it sends this — and a
+   *     payload arriving without `git.available` makes `syncOptionalButtons` hide the Git button and bounce
+   *     the open view back to the default. Going through `openGitTabOnce` means the next push that DOES carry
+   *     a repository is the one that opens the view, instead of the request being silently dropped;
+   *   · pressing the button again after closing the panel has to work, and `gitOpened` is exactly the latch
+   *     that stops a routine payload push from reopening it.
+   */
+  cc.showGitView = function () {
+    gitTab = true;
+    gitOpened = false;
     ensureBuilt();
     renderIfShown();
   };
