@@ -132,6 +132,54 @@ class JcefBridgeTest {
         assertEquals("task42", m.taskId)
     }
 
+    // ── Git view ─────────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `parse gitAction carries the id and the commit hash`() {
+        val m = JcefBridge.parse(
+            """{"type":"gitAction","id":"commitRevert","hash":"8933592ffee1"}""",
+        ) as JcefBridge.Msg.GitAction
+        assertEquals("commitRevert", m.id)
+        assertEquals("8933592ffee1", m.hash)
+    }
+
+    @Test
+    fun `parse gitAction without a hash reads as no commit, not as a missing field`() {
+        // The action bar's buttons act on the repository and send no hash at all. ONE message type serves both
+        // bars — a second one for the history rail was a type nothing here parsed, i.e. a button whose press
+        // was dropped in silence — so the absent field has to mean something definite, and "" is it.
+        val m = JcefBridge.parse("""{"type":"gitAction","id":"commit"}""") as JcefBridge.Msg.GitAction
+        assertEquals("commit", m.id)
+        assertEquals("", m.hash)
+    }
+
+    @Test
+    fun `a turn carries the conversation it is for, and the ordinary one carries none`() {
+        // ONE composer, two conversations: this chat, and the one embedded in the Git view while that view is
+        // showing it. There is no second message type and no second text box — the turn is tagged, exactly as
+        // a request card's answer is, and the same line host-side routes both.
+        assertEquals(JcefBridge.Msg.Send("hello"), JcefBridge.parse("""{"type":"send","text":"hello"}"""))
+        assertEquals(
+            JcefBridge.Msg.Send("squash those two", JcefBridge.SCOPE_GIT),
+            JcefBridge.parse("""{"type":"send","text":"squash those two","scope":"git"}"""),
+        )
+        assertEquals(JcefBridge.Msg.Interrupt(), JcefBridge.parse("""{"type":"interrupt"}"""))
+        assertEquals(
+            JcefBridge.Msg.Interrupt(JcefBridge.SCOPE_GIT),
+            JcefBridge.parse("""{"type":"interrupt","scope":"git"}"""),
+        )
+    }
+
+    @Test
+    fun `parse a card resolution carries the conversation it belongs to`() {
+        // Two sessions draw cards into one page. Absent scope is the panel's own session — the ordinary path,
+        // which must keep parsing exactly as it did — and `git` is the conversation in the Git view.
+        val own = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true}""")
+        assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, ""), own)
+        val git = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true,"scope":"git"}""")
+        assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, JcefBridge.SCOPE_GIT), git)
+    }
+
     // ── "Claude Code was not found" boot card ────────────────────────────────────────────────────────────
 
     @Test
