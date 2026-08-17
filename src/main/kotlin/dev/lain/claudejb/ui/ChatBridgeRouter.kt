@@ -7,6 +7,7 @@ import com.intellij.openapi.ide.CopyPasteManager
 import dev.lain.claudejb.context.FilePickerHelper
 import dev.lain.claudejb.context.ImageAttachments
 import dev.lain.claudejb.diff.DiffPresenter
+import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
@@ -74,13 +75,47 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
     private fun onRequestCard(m: JcefBridge.Msg.RequestCard) = when (m) {
         // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
-        is JcefBridge.Msg.ResolvePermission -> session.resolvePermission(m.id, m.allow)
+        is JcefBridge.Msg.ResolvePermission -> onResolvePermission(m)
 
         is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
 
         is JcefBridge.Msg.ResolveElicitation -> session.resolveElicitation(m.id, m.action, m.content)
 
         is JcefBridge.Msg.AlwaysAllow -> onAlwaysAllow(m)
+    }
+
+    /**
+     * Resolves a permission card, and re-reads the plan when the card WAS the plan.
+     *
+     * Approving an `ExitPlanMode` request is the exact instant a plan becomes final — a deliberate act by the
+     * user, not something inferred from a tool name in the stream. Without this the Plan card only refreshed
+     * at the end of the turn, so asking the agent to revise its plan left the old one on screen for as long
+     * as the rest of the turn took, which reads as the card being broken.
+     *
+     * The flag has to be read BEFORE resolving: resolving removes the card.
+     */
+    private fun onResolvePermission(m: JcefBridge.Msg.ResolvePermission) {
+        val wasPlan = session.pendingPermissions().firstOrNull { it.requestId == m.id }?.isPlan == true
+        session.resolvePermission(m.id, m.allow)
+        // Only on approval: a rejected plan is not the session's plan, and the file the binary holds is
+        // whatever it was before.
+        if (wasPlan && m.allow) panel.feed.requestPlan()
+    }
+
+    /**
+     * A button on the Git view. The runtime is [GitIntegration]; this is the one line that reaches it.
+     *
+     * The chat a prompted action talks in is resolved rather than assumed: the view is drawn in the Git chat's
+     * own tab ([ClaudeSession.gitIntegration]), so this panel's session is normally already it — but asking the
+     * manager first means the prompt lands in the one Git chat there is even if the view is ever shown
+     * elsewhere, instead of in whichever conversation the user was having.
+     *
+     * `pushGit` on the way out: the repository has just moved, and the branch, the change list and the button's
+     * own state are all read back from it.
+     */
+    private fun onGitAction(m: JcefBridge.Msg.GitAction) {
+        val chat = { ChatSessionManager.getInstance(panel.project).gitChat() ?: session }
+        GitIntegration.getInstance(panel.project).perform(m.id, chat) { panel.pushGit() }
     }
 
     private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {
@@ -110,8 +145,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
 
         is JcefBridge.Msg.RevertEdit -> panel.edits.rewindOrRevert(m.toolUseId)
-
-        JcefBridge.Msg.OpenDiffHistory -> ClaudeToolWindowFactory.openDiffHistoryFor(panel.project, session)
 
         is JcefBridge.Msg.Open -> panel.links.open(m.url)
 
@@ -184,39 +217,60 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         is JcefBridge.Msg.StopTask -> session.queries.stopTask(m.taskId)
 
-        // The transcript card (and the dashboard lists) asking to go to an agent's tab. Reopens it when the
-        // user had closed it: closing hides a view, it never removes the agent or its transcript.
-        //
-        // With nothing to resolve it means the CHAT's own transcript — a background task the binary never
-        // attributed to an agent still ran somewhere, and that somewhere is this chat.
-        is JcefBridge.Msg.RevealAgent -> panel.agentTabs.revealElsewhere(m.chatId) { it.agentTabs.revealFromHost(m) }
+        is JcefBridge.Msg.GitAction -> onGitAction(m)
 
-        is JcefBridge.Msg.RevealBackgroundTask ->
-            panel.agentTabs.revealElsewhere(m.chatId) { it.transcript.showBackgroundTask(m.taskId) }
-
-        // The tab bar lives in the page, so its clicks arrive here like any other web→host message.
-        is JcefBridge.Msg.SelectChat -> panel.chatStrip()?.selectById(m.chatId)
-
-        is JcefBridge.Msg.CloseChat -> panel.chatStrip()?.closeById(m.chatId)
-
-        // No id means the chat's own transcript: that is how the breadcrumb's first segment goes back, and
-        // `Shown.Agent("")` would be a transcript for an agent that does not exist — an empty page.
-        is JcefBridge.Msg.SelectAgent -> panel.transcript.showTranscript(m.agentId.ifBlank { null })
-
-        // Pinning is the strip's business: it owns the tabs. This panel only knows WHAT was pinned.
-        is JcefBridge.Msg.PinSubtab -> panel.agentTabs.pinSubtab(m)
-
-        is JcefBridge.Msg.CloseAgent -> panel.agentTabs.closeAgent(m.agentId)
-
-        // Everything the two onboarding cards send (install / binary path / sign-in / logout) lives in
-        // its own collaborator — see OnboardingController. `handle` returns false only for messages that
-        // are not onboarding's, and every remaining SessionControl IS handled above, so falling through
-        // here means a new message was added without a handler: surface it instead of ignoring it.
+        // Everything the tab bar and the two onboarding cards send lives in its own collaborator — see
+        // [onNavigation] and OnboardingController. Both report whether the message was theirs, and every
+        // remaining SessionControl IS handled above, so falling through here means a new message was added
+        // without a handler: surface it instead of ignoring it.
         else -> {
-            val handled = panel.onboarding.handle(m)
-            if (!handled) logger.warn("unhandled session-control message: $m")
+            if (!onNavigation(m) && !panel.onboarding.handle(m)) {
+                logger.warn("unhandled session-control message: $m")
+            }
             Unit
         }
+    }
+
+    /**
+     * Going somewhere: the tab bar's own clicks, and the cards that send you to an agent or a task.
+     *
+     * Split out of [onSessionControl] for complexity only, and split HERE because these are the arms that
+     * reach the tab strip rather than the session. Returns false for a message that is not one of them, which
+     * is how the caller can tell "not mine" from "handled".
+     */
+    private fun onNavigation(m: JcefBridge.Msg.SessionControl): Boolean {
+        when (m) {
+            // The transcript card (and the dashboard lists) asking to go to an agent's tab. Reopens it when the
+            // user had closed it: closing hides a view, it never removes the agent or its transcript.
+            //
+            // With nothing to resolve it means the CHAT's own transcript — a background task the binary never
+            // attributed to an agent still ran somewhere, and that somewhere is this chat.
+            is JcefBridge.Msg.RevealAgent -> panel.agentTabs.revealElsewhere(m.chatId) { it.agentTabs.revealFromHost(m) }
+
+            is JcefBridge.Msg.RevealBackgroundTask ->
+                panel.agentTabs.revealElsewhere(m.chatId) { it.transcript.showBackgroundTask(m.taskId) }
+
+            // The "Chat" button. It used to only close the dashboard, so pressed while an agent's or a task's
+            // transcript was on screen it did nothing — and that is precisely the state a user wants out of.
+            is JcefBridge.Msg.ShowChatTranscript -> panel.transcript.showTranscript(null)
+
+            // The tab bar lives in the page, so its clicks arrive here like any other web→host message.
+            is JcefBridge.Msg.SelectChat -> panel.chatStrip()?.selectById(m.chatId)
+
+            is JcefBridge.Msg.CloseChat -> panel.chatStrip()?.closeById(m.chatId)
+
+            // No id means the chat's own transcript: that is how the breadcrumb's first segment goes back, and
+            // `Shown.Agent("")` would be a transcript for an agent that does not exist — an empty page.
+            is JcefBridge.Msg.SelectAgent -> panel.transcript.showTranscript(m.agentId.ifBlank { null })
+
+            // Pinning is the strip's business: it owns the tabs. This panel only knows WHAT was pinned.
+            is JcefBridge.Msg.PinSubtab -> panel.agentTabs.pinSubtab(m)
+
+            is JcefBridge.Msg.CloseAgent -> panel.agentTabs.closeAgent(m.agentId)
+
+            else -> return false
+        }
+        return true
     }
 
     private fun onLifecycle(m: JcefBridge.Msg.Lifecycle) = when (m) {
@@ -229,12 +283,21 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             panel.pushSession()
             feed.requestMcp()
             feed.requestVersion()
+            // The tab bar, like everything above it: this message means a page that knows NOTHING, whether it
+            // is the first load, a reload, or the next rung of the delivery ladder after one that failed.
+            // [ChatAgentTabs.render] is the only thing that ever emits `window.cc.tabs`, and the rest of its
+            // callers are events — a chat added, an agent scanned, a tab revealed or closed — so a page that
+            // came up between two of them had an empty chat list. The page then hides `#tabsbar` entirely,
+            // taking the dashboard's own view buttons with it (they are appended into that node), which is
+            // how a recovered page came back with neither tabs nor Workloads/Git/Plan.
+            panel.agentTabs.render()
+            // The Git view's first read. It has to happen once the page exists rather than in the panel's
+            // constructor: collecting spawns `git log`, so the answer arrives asynchronously, and a push into a
+            // browser that has not loaded yet is discarded.
+            panel.pushGit()
             panel.transcript.fullResync()
         }
 
-        JcefBridge.Msg.OpenPalette -> {}
-
-        // client-side overlay; nothing to do backend-side
         // INFO, not WARN. It fires once per chat tab opened, so WARN would put a warning in idea.log for a
         // healthy session — and a log that cries wolf is one nobody reads when it finally matters. INFO is the
         // IDE's default level, so it is still there when someone needs to read it back.

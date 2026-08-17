@@ -30,9 +30,10 @@ import java.io.File
  * live IDE and a JCEF browser, which is exactly why `ui/` is excluded from coverage and why nothing caught this.
  * Reading the file costs nothing and covers the whole class of defect.
  *
- * The 4-space indent is what scopes this to top-level class bodies: a nested `init` (an anonymous
- * `object : JComponent()`, as in `ChatTheme.avatarLabel()`) sits deeper and is correctly ignored — its
- * enclosing properties are not initialised by it.
+ * The 4-space indent is what scopes this to top-level class bodies: a nested `init` — the one in
+ * `GitIdeMenu`'s private `IdeGitGroup`, eight spaces deep — is not matched, and neither are the properties of
+ * the class it belongs to. It initialises nothing the enclosing class declares, so the ordering this pins is a
+ * question about the outer body alone.
  */
 class InitOrderContractTest {
 

@@ -18,6 +18,18 @@ import org.junit.jupiter.api.Test
  */
 class BackgroundTaskRegistryTest {
 
+    /**
+     * The registry's clock, moved by hand. Injected rather than read inside the registry so a completion
+     * instant can be asserted as a literal — the alternative is recomputing it here with the subject's own
+     * expression, which asserts nothing.
+     */
+    private var clock = 1_000_000_000L
+
+    /** When this run of the plugin started, as the registry is told it: the stamp a replayed task gets. */
+    private val runStarted = 900_000_000L
+
+    private fun stamping() = BackgroundTaskRegistry(now = { clock }, runStartedAtMillis = runStarted)
+
     private fun level(vararg tasks: Pair<String, String>) =
         tasks.map { (id, type) -> BackgroundTaskInfo(taskId = id, taskType = type, description = "desc $id") }
 
@@ -198,6 +210,87 @@ class BackgroundTaskRegistryTest {
         // `task_notification` fires for AGENTS too, which have their own tabs. It may never create here.
         assertFalse(reg.settle("never-seen", "completed"))
         assertNull(reg.taskOf("never-seen"))
+    }
+
+    // ── When a task stopped, which is what the retention window measures ──────────────────────────────────
+
+    @Test
+    fun `a task ended by its own notification is stamped at that instant`() {
+        val reg = stamping()
+        reg.observe(result("toolu_1", "t1"))
+        assertNull(reg.taskOf("t1")!!.completedAtMillis, "a running task has not completed")
+
+        clock = 1_000_000_000L
+        reg.settle("t1", "completed")
+
+        assertEquals(1_000_000_000L, reg.taskOf("t1")!!.completedAtMillis)
+    }
+
+    @Test
+    fun `a task ended by dropping out of the level is stamped at that instant`() {
+        val reg = stamping()
+        reg.observe(result("toolu_1", "t1"))
+        reg.observeLevel(level("t1" to "local_bash")) // claimed, so absence will end it
+
+        clock = 1_000_000_000L
+        reg.observeLevel(emptyList())
+
+        assertEquals(1_000_000_000L, reg.taskOf("t1")!!.completedAtMillis)
+    }
+
+    @Test
+    fun `an instant already written is never moved`() {
+        // The level signal re-sends its whole set on every membership change, several times a turn. A task
+        // that ended ten minutes ago must not be dated by whichever push happens to arrive next.
+        val reg = stamping()
+        reg.observe(result("toolu_1", "t1"))
+        reg.observeLevel(level("t1" to "local_bash"))
+        clock = 1_000_000_000L
+        reg.observeLevel(emptyList())
+
+        clock = 1_000_600_000L
+        reg.observeLevel(level("other" to "local_bash"))
+        reg.settle("t1", "completed")
+
+        assertEquals(1_000_000_000L, reg.taskOf("t1")!!.completedAtMillis)
+    }
+
+    @Test
+    fun `a task rebuilt from a previous run is stamped when this run started`() {
+        // Nobody here watched it end — the transcript did. Leaving it unstamped would put it outside the
+        // retention window for good; stamping it at admission means it is there when the IDE reopens and
+        // ages out like everything else.
+        val reg = stamping()
+        reg.seed(
+            listOf(
+                BackgroundTaskReplay.Replayed("t1", "toolu_1", null, "sleep 1", null, "out", ""),
+                BackgroundTaskReplay.Replayed("t2", "toolu_2", null, "sleep 2", null, "out", ""),
+            ),
+        )
+
+        // One instant for the whole run: two tasks that came back together vanish together.
+        assertEquals(900_000_000L, reg.taskOf("t1")!!.completedAtMillis)
+        assertEquals(900_000_000L, reg.taskOf("t2")!!.completedAtMillis)
+    }
+
+    @Test
+    fun `a task listed live again is not a completed one`() {
+        // The level says it is running, so it has not completed. Keeping the old instant would date its next
+        // ending to the previous one, and the row would disappear while the task was still writing output.
+        val reg = stamping()
+        reg.observe(result("toolu_1", "t1"))
+        reg.observeLevel(level("t1" to "local_bash"))
+        clock = 1_000_000_000L
+        reg.observeLevel(emptyList())
+        assertEquals(1_000_000_000L, reg.taskOf("t1")!!.completedAtMillis)
+
+        clock = 1_000_600_000L
+        reg.observeLevel(level("t1" to "local_bash"))
+        assertNull(reg.taskOf("t1")!!.completedAtMillis)
+
+        clock = 1_000_900_000L
+        reg.observeLevel(emptyList())
+        assertEquals(1_000_900_000L, reg.taskOf("t1")!!.completedAtMillis)
     }
 
     // ── What keeps the live-output poll alive ─────────────────────────────────────────────────────────────

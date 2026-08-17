@@ -69,7 +69,6 @@ object JcefBridge {
         data class Copy(val text: String) : Prompting
 
         object Ready : Lifecycle
-        object OpenPalette : Lifecycle
 
         /**
          * A one-shot report of what the embedded browser actually resolves at runtime — media queries, CSS
@@ -96,7 +95,6 @@ object JcefBridge {
         data class ViewDiff(val id: String) : Diffs
         data class ViewDiffByTool(val toolUseId: String) : Diffs
         data class RevertEdit(val toolUseId: String) : Diffs
-        object OpenDiffHistory : Diffs
         data class Open(val url: String) : Diffs
 
         /**
@@ -120,6 +118,16 @@ object JcefBridge {
         data class McpReconnect(val name: String) : SessionControl
         data class McpToggle(val name: String, val enabled: Boolean) : SessionControl
         data class StopTask(val taskId: String) : SessionControl
+
+        /**
+         * A button on the Git view: run the catalogue action with this [id].
+         *
+         * The id is ALL the page sends, and it is deliberately the only thing it can send. Which command that
+         * becomes, whether it is even a command, and what it runs against are decided host-side by
+         * [dev.lain.claudejb.ui.GitActionCatalog] — so an id this build does not know is dropped rather than
+         * carried any further, and nothing off the wire ever reaches an argument vector.
+         */
+        data class GitAction(val id: String) : SessionControl
 
         /**
          * Go to an agent's tab: sent by the Agent/Task card in the transcript and by the dashboard lists.
@@ -152,6 +160,9 @@ object JcefBridge {
          * [chatId] as in [RevealAgent]: Workloads spans every chat, so a task names the one it belongs to.
          */
         data class RevealBackgroundTask(val taskId: String, val chatId: String = "") : SessionControl
+
+        /** Back to the chat's own transcript, from whatever agent or task was on screen. */
+        data object ShowChatTranscript : SessionControl
 
         // The tab bar (app-tabs.js). It is part of the page, not a Swing strip above it, so selecting a chat,
         // an agent or closing either arrives here like every other web→host message.
@@ -232,12 +243,17 @@ object JcefBridge {
             ?: Msg.Unknown(type)
     }
 
+    /**
+     * NB there is no inbound `"palette"`: the palette is opened host→page (the toolbar's Commands button →
+     * `JcefChatPanel.showCommandPalette` → `cc.openPalette`), and the page opens its own through
+     * `CX.openPalette`. One was parsed here until 5.5.0 and no module ever sent it — see
+     * `bridge-inbound.test.js`, which is now the gate for that.
+     */
     private fun parseComposer(type: String, f: Fields): Msg? = when (type) {
         "send" -> Msg.Send(f.text("text"))
         "interrupt" -> Msg.Interrupt
         "cycleMode" -> Msg.CycleMode
         "ready" -> Msg.Ready
-        "palette" -> Msg.OpenPalette
         "diag" -> Msg.Diagnostics(f.text("report"))
         "copy" -> Msg.Copy(f.text("text"))
         "removeQueued" -> Msg.RemoveQueued(f.int("index", -1))
@@ -268,8 +284,6 @@ object JcefBridge {
         "viewDiffByTool" -> Msg.ViewDiffByTool(f.text("toolUseId"))
 
         "revertEdit" -> Msg.RevertEdit(f.text("toolUseId"))
-
-        "openDiffHistory" -> Msg.OpenDiffHistory
 
         "open" -> Msg.Open(f.text("url"))
 
@@ -303,6 +317,8 @@ object JcefBridge {
 
         "stopTask" -> Msg.StopTask(f.text("taskId"))
 
+        "gitAction" -> Msg.GitAction(f.text("id"))
+
         // The "Claude Code was not found" boot card.
         "installClaude" -> Msg.InstallClaude(f.text("method"))
 
@@ -317,6 +333,7 @@ object JcefBridge {
     private fun parseTabControls(type: String, f: Fields): Msg? = when (type) {
         "revealAgent" -> Msg.RevealAgent(f.text("agentId"), f.text("toolUseId"), f.text("chatId"))
         "revealBackgroundTask" -> Msg.RevealBackgroundTask(f.text("taskId"), f.text("chatId"))
+        "showChatTranscript" -> Msg.ShowChatTranscript
         "selectChat" -> Msg.SelectChat(f.text("chatId"))
         "closeChat" -> Msg.CloseChat(f.text("chatId"))
         "selectAgent" -> Msg.SelectAgent(f.text("agentId"))

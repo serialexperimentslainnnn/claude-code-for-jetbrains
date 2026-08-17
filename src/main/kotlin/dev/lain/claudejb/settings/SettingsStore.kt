@@ -47,6 +47,7 @@ internal object SettingsStore {
      * write over what is in there. Without that, one bad read at startup became a permanent overwrite on the
      * next save: the settings "breaking" with nobody having touched them.
      */
+    @Synchronized
     fun load(): ClaudeSettings.State {
         // NO STORE AT ALL is a third state, and it is neither of the two below.
         //
@@ -109,6 +110,10 @@ internal object SettingsStore {
      *
      * The distinction is load-bearing: [save] must not write defaults over a configuration it simply could
      * not read this run.
+     *
+     * It is one flag for the whole object, which is why every entry point that reads or writes the document
+     * ([load], [save], [mutate], [migrateFrom]) holds this object's monitor: a read on one thread and a write
+     * on another would otherwise interleave into a save that consults somebody else's verdict.
      */
     @Volatile
     private var readFailed = false
@@ -139,6 +144,7 @@ internal object SettingsStore {
      * configuration we never saw with the defaults we fell back to, which is a data loss caused entirely by
      * a transient safe.
      */
+    @Synchronized
     fun save(state: ClaudeSettings.State): Boolean {
         // Nowhere to write (a test JVM with no store of its own): refuse and say so, rather than report a
         // success nothing kept. Ahead of the [SafeAlarm] path deliberately — there is no failing OS store
@@ -167,6 +173,48 @@ internal object SettingsStore {
     }
 
     /**
+     * Applies [delta] to what is STORED — read, change, write — and reports whether it reached the safe.
+     *
+     * **No write is derived from an in-memory copy, and that is the whole rule.** The safe is
+     * application-wide, so two IDEs open on the same machine share one document; a save built from a copy
+     * taken minutes ago carries that copy's value for every field the other IDE has changed since, and
+     * replaces them. Re-reading first narrows what a save can overwrite to the fields [delta] actually
+     * touches. It also makes the platform's own flush at shutdown harmless: what that writes back is
+     * whatever was last handed to the safe, and what is handed to the safe here came from a fresh read.
+     *
+     * Within one process the monitor is what stops two mutations reading the same document and writing it
+     * back one after the other.
+     *
+     * **A failed read aborts the write.** [load] falls back to defaults when the safe cannot be reached, and
+     * applying a delta to those defaults produces a complete, plausible document that is not the user's
+     * configuration — the one thing that must never reach the safe. [save] refuses on the same condition;
+     * refusing here as well means nothing half-reconstructed is ever built, let alone written. A dropped
+     * mutation is recoverable by making it again; a wiped configuration is not.
+     */
+    @Synchronized
+    fun mutate(delta: (ClaudeSettings.State) -> Unit): Boolean {
+        val stored = load()
+        if (readFailed) {
+            log.warn("not applying the settings change: the stored settings could not be read this run")
+            return false
+        }
+        delta(stored)
+        return save(stored)
+    }
+
+    /**
+     * The stored settings, or null when the safe could not be read.
+     *
+     * [load]'s contract is "defaults when the safe cannot be reached", which is right for the first read of a
+     * session — the plugin has to start with something. It is wrong for a REFRESH of an in-memory copy that is
+     * already good: replacing a real configuration with defaults because a keyring was locked for a moment
+     * shows the user an empty settings page, and the page is a door onto a save. Null is the caller's signal
+     * to keep what it already has.
+     */
+    @Synchronized
+    fun loadOrNull(): ClaudeSettings.State? = load().takeUnless { readFailed }
+
+    /**
      * Adopts a legacy per-project state and writes it here, once.
      *
      * Returns true when it actually migrated, which is the caller's signal to remove the old file — the
@@ -189,6 +237,7 @@ internal object SettingsStore {
      * [LegacyPermissionMode] and [withoutWeakenedSecurity]. That check runs first, so a file whose only
      * content was such a mode counts as carrying nothing and does not create the document either.
      */
+    @Synchronized
     fun migrateFrom(legacy: ClaudeSettings.State): Boolean {
         if (exists()) return false // already migrated, or already configured here
         val adoptable = withoutWeakenedSecurity(legacy)

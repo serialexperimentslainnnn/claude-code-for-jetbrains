@@ -1,10 +1,10 @@
 /*
- * app-core.js — Claude Code JCEF shell core (Agent A1).
+ * app-core.js — Claude Code JCEF shell core.
  *
  * Creates window.cc (the Kotlin-facing API surface, populated by each module)
  * and window.CC (shared helpers + event bus + DOM mount points). Vanilla ES2019,
  * no frameworks, no external resources. Behaviour is attached via addEventListener
- * only. See JCEF_CONTRACT.md §JS MODULE PATTERN / §CODE BLOCKS / §THEME.
+ * only.
  *
  * Loaded FIRST: everything below exists before any other module runs. Three companions extend CC
  * immediately afterwards and are part of the same core — `app-core-markdown.js` (markdown + code blocks),

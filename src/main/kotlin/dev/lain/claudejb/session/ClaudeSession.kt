@@ -75,7 +75,22 @@ import java.util.concurrent.CopyOnWriteArrayList
  * One instance == one chat tab. The project-level [ChatSessionManager] owns the set of live sessions;
  * this class is a plain object (not a service) so several can coexist, mirroring the web UI's tabs.
  */
-class ClaudeSession(private val project: Project, @Volatile var title: String) : Disposable {
+class ClaudeSession(
+    private val project: Project,
+    @Volatile var title: String,
+    /**
+     * This session is the **Git integration's** chat rather than one of the user's own conversations.
+     *
+     * Immutable, and deliberately so: it decides that every tool call in this chat is put to the user as a
+     * card whatever the permission mode says ([PermissionBroker]'s `forceAsk`), and a security-relevant
+     * property that any caller could flip afterwards is not a property, it is a suggestion.
+     *
+     * Its other job is smaller and just as load-bearing: it keeps the tab called *Git*. Titles otherwise
+     * fall back to the first thing the user asked ([recordOpenAndTitle]), which for this chat would be
+     * whichever git command happened to open it.
+     */
+    val gitIntegration: Boolean = false,
+) : Disposable {
 
     private val log = thisLogger()
 
@@ -86,7 +101,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private val taskTracker = TaskTracker()
     private val reconciler = TranscriptReconciler(transcript)
     private val diffs = DiffLifecycleManager(project)
-    private val rollback = RollbackManager(project, transcript, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
+    private val rollback = RollbackManager(project, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
     private val controlClient = SessionControlClient(write = ::write)
 
     /**
@@ -266,7 +281,11 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         sessionId = { sessionId },
         ownerOfTask = ::ownerAgentOfTask,
         ui = object : AgentScanner.Ui {
-            override fun labelCards() = labelAgentCards()
+            override fun labelCards() {
+                labelAgentCards()
+                // A scan is the only thing that can make an agent settled, which is half the revival gate.
+                ensureAgentRevivalPoll()
+            }
             override fun onFresh(fresh: List<String>) = fireAgents(fresh)
             override fun onOutputGrew() = fireState()
             override fun edt(block: () -> Unit) = this@ClaudeSession.edt(block)
@@ -289,9 +308,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val tool = fromLink ?: fromEdge ?: return null
         return runningAgents.nodes.values.firstOrNull { it.meta.toolUseId == tool }?.agentId
     }
-
-    /** The `tool_use_id` of the call that started background task [taskId] — the card to jump back to. */
-    fun toolUseOfTask(taskId: String): String? = backgroundTaskRegistry.taskOf(taskId)?.toolUseId
 
     /**
      * The live background-task set from `system/background_tasks_changed` — a LEVEL signal (REPLACE semantics),
@@ -486,6 +502,40 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     /**
+     * Re-reads the agent tree while a turn runs, so an agent that is RESUMED stops reading as finished.
+     *
+     * No event covers this: a settled agent revives by getting more records in its own transcript, and a nested
+     * one has no `tool_use_id` at all, so it revives only through its parent. Neither writes anything to the
+     * main stream — the growth is visible only by walking the directory again, which is what
+     * [AgentRegistry.reopenIfGrown] acts on.
+     *
+     * A pass re-parses every admitted agent's whole transcript, so it costs far more than [outputTailTimer]'s
+     * `size` check and runs at [AGENT_REVIVAL_POLL_MS] rather than [QUOTA_POLL_MS]. Both halves of the gate are
+     * necessary conditions for the pass to be able to do anything: only the binary writes those files and it
+     * only writes them during a turn, and only a settled agent can be brought back — so a chat with no agents,
+     * and an idle chat, run no timer at all.
+     */
+    private val agentRevivalTimer = javax.swing.Timer(AGENT_REVIVAL_POLL_MS) { pollAgentRevival() }.apply {
+        isRepeats = true
+    }
+
+    private fun pollAgentRevival() {
+        if (!turnActive || !anySettledAgent()) {
+            agentRevivalTimer.stop()
+            return
+        }
+        agentScanner.scan()
+    }
+
+    /** Starts the revival poll if anything could revive. EDT. Idempotent — a running timer is left alone. */
+    private fun ensureAgentRevivalPoll() {
+        if (turnActive && anySettledAgent() && !agentRevivalTimer.isRunning) agentRevivalTimer.start()
+    }
+
+    /** Whether any agent has stopped running — the only kind a rescan can bring back. */
+    private fun anySettledAgent(): Boolean = runningAgents.nodes.values.any { it.status != AgentStatus.RUNNING }
+
+    /**
      * True once the `initialize` handshake has answered — i.e. the binary is up AND talking, with commands,
      * models and the account in hand. The GUI treats THIS, not process liveness, as "loaded": a spawned
      * process that has not answered yet would hand the user a chat whose menus and dashboard are empty and
@@ -549,6 +599,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             onAutoReviewed = diffs::autoOpenDiff,
             projectRoot = project.basePath,
             isRemembered = { toolName, input -> ClaudeSettings.getInstance(project).isToolAlwaysAllowed(toolName, input) },
+            // The Git chat's turns are started by a button in the IDE, so every one of its calls is put to the
+            // user — the permission mode and "Always allow" are answers they gave about their own work.
+            forceAsk = { gitIntegration },
             // Credentials / private keys / credential-dumping commands: never auto-approved, whatever the mode.
             sensitiveDecision = { toolName, input ->
                 ClaudeSettings.getInstance(project).sensitiveDecision(toolName, input, project.basePath)
@@ -623,12 +676,24 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         val settings = ClaudeSettings.getInstance(project)
         val binary = resolveBinary(settings) ?: return false
         if (!passesLaunchGates(settings)) return false
-        if (!auth.hasCredential(settings)) {
+        when (auth.heldCredential(settings)) {
             // Sign-in comes BEFORE the loading screen, not after it. Verifying auth needs no session, and
             // launching one we know is unauthenticated only buys a spawned process, a spinner, and a turn
             // that fails later for a reason the user already knew at click time.
-            onLoginNeeded()
-            return false
+            Credential.NONE -> {
+                onLoginNeeded()
+                return false
+            }
+
+            // Only a process could answer, and this runs on the EDT. Launch nothing and — the point of the
+            // third answer — raise NO card: the users who fall through to that branch are the ones whose
+            // binary keeps its credentials in an OS store, i.e. the ones already signed in. The boot watcher
+            // resolves it off the EDT within a tick and comes back here through [refreshBootState]. `true`
+            // because a prompt sent in that window belongs in the queue, which [pump] flushes on ready, not
+            // dropped by its caller.
+            Credential.UNKNOWN -> return true
+
+            Credential.HELD -> Unit
         }
         val workDir = project.basePath?.let(::File) ?: File(System.getProperty("user.home"))
 
@@ -737,17 +802,21 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         auth.absorbExistingLoginOnce()
         val settings = ClaudeSettings.getInstance(project)
         val binary = ClaudeBinaryLocator.locate(settings.claudePath)
-        if ((binary == null) != binaryMissing) {
-            binaryMissing = binary == null
-            edt { fireState() }
+        val missing = binary == null
+        // ONE hop, and what it buys is that the page can never be handed a state that does not exist. The
+        // binary going away under a live session — uninstalled, or a path that stopped resolving — has to stop
+        // that session before the install screen says it is not installed; done in two hops, the first pushes
+        // `binaryMissing` while the process is still up and the page draws the install card over a chat that is
+        // still answering. Stopping, flipping the flag and pushing in one EDT event makes that combination
+        // unreachable rather than brief.
+        edt {
+            if (missing && isRunning()) stop()
+            if (missing != binaryMissing) {
+                binaryMissing = missing
+                fireState()
+            }
         }
-        if (binary == null) {
-            // The binary went away under a live session — uninstalled, or a path that no longer resolves.
-            // Stop it before showing the install screen, or the user reads "not installed" while a process
-            // from the vanished copy is still answering.
-            edt { if (isRunning()) stop() }
-            return
-        }
+        if (binary == null) return
         // Persist a freshly-installed binary's path here too, not only in resolveBinary: the install card's
         // "it appeared" path went through a start() that could return before ever writing it down.
         if (settings.claudePath != binary.absolutePath) {
@@ -1133,6 +1202,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             if (!turnActive) {
                 turnActive = true
                 startQuotaPolling()
+                ensureAgentRevivalPoll()
                 fireState()
             }
             // Flush anything still queued from startup; the binary accumulates messages mid-turn.
@@ -1169,6 +1239,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             write(ControlProtocol.userMessageWithImages(next.text, next.images, uuid = msgUuid))
             turnActive = true
             startQuotaPolling()
+            // The other half of the revival gate: agents settled by an earlier turn become revivable again.
+            ensureAgentRevivalPoll()
         }
         promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
@@ -1311,7 +1383,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      */
     private fun recordOpenAndTitle(id: String) {
         AppExecutorUtil.getAppExecutorService().execute {
-            val resolved = SessionTitleReader.readTitle(id) ?: title
+            // The Git chat keeps its name (see [gitIntegration]): the fallback title is the first thing asked,
+            // which here is a git command and not what this tab is.
+            val resolved = if (gitIntegration) title else SessionTitleReader.readTitle(id) ?: title
             if (resolved != title) {
                 title = resolved
                 edt { fireTitleChanged() }
@@ -1605,11 +1679,8 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     }
 
     // -----------------------------------------------------------------------
-    // File rollback — delegated to [RollbackManager] (diff history panel)
+    // File rollback — delegated to [RollbackManager]; reached from a transcript card's Restore
     // -----------------------------------------------------------------------
-
-    /** Every reviewable file-writing edit in this session that has a captured snapshot, oldest first. */
-    fun reviewableEdits(): List<ReviewableEdit> = rollback.reviewableEdits()
 
     /** IDE-side revert of one edit (restore beforeText, refresh VFS, reseed read-state). EDT-only. Surfaces a
      *  notification either way, so a click is never a silent no-op. */
@@ -1622,18 +1693,6 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             notifyError("Couldn't revert $name (the file may be outside the project, missing, or locked).")
         }
         return ok
-    }
-
-    /** Rolls every edited file back to its oldest captured state. Returns the number reverted. EDT-only. Surfaces
-     *  a summary notification. */
-    fun revertAllEdits(): Int {
-        val n = rollback.revertAllEdits()
-        if (n > 0) {
-            notifyInfo("Rolled back $n file${if (n == 1) "" else "s"} to the state before Claude's edits.")
-        } else {
-            notifyError("No files were rolled back (nothing reverted).")
-        }
-        return n
     }
 
     /** Renames the current session (E5): tells the binary, updates the tab title, notifies listeners. */
@@ -1894,6 +1953,14 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         }
     }
 
+    /**
+     * End of a turn: fold the counters, retire the quota poll and surface the outcome.
+     *
+     * A failed turn is not retried and its prompt is not resent automatically — a silent replay re-runs tool
+     * calls the user never re-approved. That holds for a renewable access-token expiry too: the row states the
+     * turn did not complete and asks for the message to be sent again, instead of raising the sign-in card for
+     * an identity that is not missing. Which failures those are is [surfaceAuthFailure]'s decision.
+     */
     private fun onTurnResult(event: ClaudeEvent.Result) = edt {
         tokens.foldIntoSession()
         reconciler.onMessageBoundary()
@@ -1909,10 +1976,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             val message = event.result.result.ifBlank {
                 event.result.errors.joinToString("\n").ifBlank { "Turn ended with error: ${event.result.subtype}" }
             }
-            transcript.add(Speaker.ERROR, message)
-            // If the failure reads like a login/auth problem, offer to open an interactive terminal —
-            // /login can't run inside the TTY-less stream-json session — and raise the login card.
-            if (LoginDetection.needsLogin(message)) onLoginNeeded()
+            surfaceAuthFailure(message, message)
         } else {
             // A clean turn means we're authenticated; allow a future auth failure to prompt again.
             needsLogin = false
@@ -1922,6 +1986,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             ReviewPrompt.onSuccessfulTurn(project)
         }
         diffs.refreshTouched()
+        // The turn edge, which no agent event covers: an agent revived mid-turn and settled again emits
+        // nothing on the main stream, and a nested one emits nothing at all. Only re-walking the tree sees it.
+        agentScanner.scan()
         fireState()
         pump()
         // The binary's session file is the source of truth for the transcript; we don't persist our own.
@@ -1929,6 +1996,37 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // from the binary's resolved title. Off-EDT: the sidecar JSONL read is blocking IO.
         sessionId?.let { id -> recordOpenAndTitle(id) }
         fireAttention(if (event.result.isError) AttentionReason.ERROR else AttentionReason.TURN_DONE)
+    }
+
+    /**
+     * The ONE reaction to a failure that might be an authentication failure, shared by both routes that can
+     * see one: a failed turn result and an `auth_status` error. Two classifications of the same sentence is
+     * what makes a sign-in card appear on one route and not the other for the same event.
+     *
+     * The decision is [LoginDetection.resolve]'s, and it needs the credential safe to make it: an
+     * access-token expiry with a live refresh token is renewed without the user, so it gets an informative
+     * row and no card, while the identical wording with nothing left to renew is the end of the identity and
+     * must raise it. [AuthGate.canRenewCredential] is a read of the safe and the clock, which is what makes it
+     * askable from here — this runs on the EDT.
+     *
+     * @param failureText what the classification reads: the binary's own message.
+     * @param display what the transcript shows when this is a real failure. Never shown for a renewable
+     *   expiry, which gets a fixed literal instead: the binary's text can quote a token, and the transcript
+     *   carries no credential, ever.
+     */
+    private fun surfaceAuthFailure(failureText: String, display: String) {
+        when (LoginDetection.resolve(failureText, auth::canRenewCredential)) {
+            AuthFailure.EXPIRED -> transcript.add(Speaker.SYSTEM, EXPIRED_TOKEN_NOTICE)
+
+            // A missing identity: surface it and raise the sign-in card, since /login cannot run inside the
+            // TTY-less stream-json session.
+            AuthFailure.NO_IDENTITY -> {
+                transcript.add(Speaker.ERROR, display)
+                onLoginNeeded()
+            }
+
+            AuthFailure.NONE -> transcript.add(Speaker.ERROR, display)
+        }
     }
 
     /** Control traffic. Every request here MUST be answered, or the binary blocks on us forever. */
@@ -1970,6 +2068,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
                 // Also an admission seed, deliberately: a task_started can be missed (a resumed session
                 // reattaches mid-flight), and progress carries the same tool_use_id.
                 runningAgents.observeSpawn(event.info.toolUseId)
+                // The seed alone shows nothing: admission decides what MAY be shown, a scan is what reads the
+                // tree. Progress is the only signal a resumed agent emits, so without this its tab never appears.
+                agentScanner.scan()
                 taskTracker.onProgress(event.info)
                 fireState()
             }
@@ -1980,8 +2081,13 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
             }
 
             is ClaudeEvent.TaskNotification -> edt {
-                // Settled: the tab KEEPS its transcript and gains a status — reading why an agent failed is
-                // the case this feature came from. Only the live task map drops it.
+                // The tab KEEPS its transcript and gains a status — reading why an agent failed is the case
+                // this feature came from. Only the live task map drops it.
+                //
+                // Sent on EVERY notification, terminal or not, exactly like the `settle` call below: this
+                // signal carries progress as well as endings ([agentStatusOf] maps every live word to
+                // RUNNING), and which of the two it is belongs to the registry, not to the caller reading a
+                // string. Deciding it here is how the two registries would end up with two rules.
                 runningAgents.observeSettled(event.info.toolUseId, agentStatusOf(event.info.status))
                 // `output_file` has been modelled since 3.0.0 and never read. It is where the binary writes a
                 // background task's output — so with it a task's tab shows what it actually printed, live and
@@ -2100,10 +2206,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     private fun onAuthStatus(event: ClaudeEvent.AuthStatus) {
         authStatus = event.info
         event.info.error?.takeIf { it.isNotBlank() }?.let {
-            edt {
-                transcript.add(Speaker.ERROR, "Authentication error: $it")
-                if (LoginDetection.needsLogin(it)) onLoginNeeded()
-            }
+            // The same classification a failed turn gets: the binary reports one event through two channels,
+            // and a card that appears on one of them only is indistinguishable from a card that is broken.
+            edt { surfaceAuthFailure(it, "Authentication error: $it") }
         }
         edt { fireState() }
     }
@@ -2275,6 +2380,9 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
      * which swept up every LIVE status the binary emits — `started`, `running`, `in_progress` — and once
      * STOPPED became red, an agent that had just been launched was drawn as a dead one. Endings are named
      * explicitly; anything else is a notification about work in progress, so the agent is still running.
+     *
+     * [AgentStatus.RUNNING] is therefore this function's way of saying "not an ending", and
+     * [AgentRegistry.observeSettled] reads it as exactly that: it records the liveness and seals no instant.
      */
     private fun agentStatusOf(status: String): AgentStatus = when (status.lowercase()) {
         "completed", "complete", "done", "finished", "success", "succeeded" -> AgentStatus.COMPLETED
@@ -2389,6 +2497,7 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
         // Stop the shared timers so the disposed session leaks no EDT timer.
         quotaPollTimer.stop()
         outputTailTimer.stop()
+        agentRevivalTimer.stop()
         // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
         cancelPendingElicitations()
         diffs.clearReviewDiffs()
@@ -2411,6 +2520,29 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
     companion object {
         const val NOTIFICATION_GROUP = "Claude Code"
 
+        /**
+         * What the transcript says when a turn fails on an expired access token that the safe can still renew.
+         *
+         * **It names the one exit that exists, because the obvious one does not work.** The renewal happens in
+         * [launch], before the launch environment is built: the credential reaches the binary as
+         * `CLAUDE_CODE_OAUTH_TOKEN` in the process environment, which is fixed at spawn and immutable
+         * thereafter. So a running session cannot heal — and the binary will not heal it either, since with a
+         * token supplied by the environment it deliberately keeps that one rather than adopting the renewed
+         * credential from its own store. Re-sending the message therefore fails again, identically, for as long
+         * as the process lives.
+         *
+         * An earlier wording promised that "Claude Code renews it automatically and the session continues",
+         * which was true of no code path and left the user re-sending into the same failure indefinitely.
+         *
+         * It is a fixed literal rather than the binary's own text on purpose: that text can quote a token, and
+         * the transcript carries no credential, ever.
+         */
+        const val EXPIRED_TOKEN_NOTICE =
+            "Your access token expired while this chat was open. The sign-in itself is still valid and is " +
+                "renewed when a session starts, but a running one cannot pick up the new token — so this turn " +
+                "did not complete, and sending it again will fail the same way. Close this chat and open it " +
+                "again to continue."
+
         /** How long to wait for a reply to a host-initiated control request before failing it (watchdog). */
         const val CONTROL_TIMEOUT_SECONDS = 30L
 
@@ -2423,6 +2555,15 @@ class ClaudeSession(private val project: Project, @Volatile var title: String) :
          *  At 60s the context meter and cost sat visibly frozen through a whole turn and only told the truth
          *  after it ended, which reads as a broken meter exactly while the user is watching it. */
         const val QUOTA_POLL_MS = 1_000
+
+        /** Interval (ms) of the agent-revival rescan — see [agentRevivalTimer].
+         *
+         *  Five seconds, not one: a pass re-parses every admitted agent's transcript, and a session that ran
+         *  dozens of agents is exactly the one this feature exists for, so the cost scales with the worst case.
+         *  A revived agent takes seconds to produce anything a user could read, so five is below the point where
+         *  the tab's status could be told apart from instant — and the gate keeps the timer off a chat that is
+         *  idle or has nothing settled, which is the majority of a session's wall time. */
+        const val AGENT_REVIVAL_POLL_MS = 5_000
 
         /**
          * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating

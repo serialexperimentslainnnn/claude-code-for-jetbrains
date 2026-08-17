@@ -1,44 +1,66 @@
 package dev.lain.claudejb.session
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * How an agent's own transcript ENDS — the only evidence there is about an agent from a previous run.
+ * What an agent's own transcript says about whether it is over — the only evidence there is about an agent the
+ * plugin did not watch run.
  *
- * **Why this exists.** A settled status is remembered per process (`task_notification` → `statusByToolUse`),
- * so after a restart the plugin knows nothing about the agents it is restoring. Treating them all as "cut
- * off" painted every agent of every past session RED, which does not just look wrong — it **asserts that they
- * failed**, and most of them had finished perfectly. Painting them all green would be the same lie in the
- * other direction.
+ * A settled status is remembered per process (`task_notification` → `statusByToolUse`), so a restored agent
+ * carries nothing. The binary wrote the answer instead: the records of `agent-<id>.jsonl`. A finished assistant
+ * turn is `stop_reason: end_turn`; anything else at the end — `tool_use` waiting on a tool that never came back,
+ * `max_tokens`, a `user` line delivering a result nobody answered — is a turn that never closed.
  *
- * The binary already wrote the answer. The last record of `agent-<id>.jsonl` is either the assistant's final
- * message, with `stop_reason: end_turn` — the agent said its piece and stopped — or something else entirely:
- * `tool_use` (it was waiting on a tool that never came back), or a `user` line delivering a result it never
- * answered. Verified against real transcripts on this machine before being relied on.
+ * **Three verdicts, not two, because "ends on a finished turn" and "has ever finished a turn" are different
+ * questions.** A transcript that grows past its own ending is a resumption, and it is the plugin's only evidence
+ * of one: the agent is alive again, writing records after a turn it had already closed. Answering that with the
+ * same word as a transcript cut off mid-turn paints a running agent as dead, and answering a cut-off transcript
+ * with the same word as a resumption paints a dead agent as running. Each verdict maps to one liveness, so they
+ * stay apart.
  *
- * Pure: takes lines, returns a status. A malformed or absent line is not an ending.
+ * Pure: takes lines, returns a verdict. A blank line is not a record and a malformed one is not an ending.
  */
 internal object AgentEnding {
+
+    /** What an agent's own transcript says about whether it is over. */
+    enum class Ending {
+        /** The last record is a finished assistant turn (`stop_reason: end_turn`). */
+        COMPLETED,
+
+        /** A finished turn, and more records after it: the agent was resumed. */
+        RESUMED,
+
+        /** No finished turn at the end, and none before it either: cut off mid-turn. */
+        UNFINISHED,
+    }
 
     private val JSON = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
 
-    /**
-     * [AgentStatus.COMPLETED] when the transcript ends on a finished assistant turn, [AgentStatus.STOPPED]
-     * when it stops mid-flight, and null when there is nothing to judge (no transcript yet).
-     */
-    fun of(lines: List<String>): AgentStatus? {
-        val last = lines.lastOrNull { it.isNotBlank() } ?: return null
-        val record = runCatching { JSON.parseToJsonElement(last).jsonObject }.getOrNull() ?: return null
-        val message = record["message"]?.jsonObject
-        val stop = message?.get("stop_reason")?.jsonPrimitive?.contentOrNull
-        // `end_turn` is the model finishing. Anything else — `tool_use`, `max_tokens`, a user line — means the
-        // agent was still mid-turn when the process it belonged to went away.
-        return if (stop == "end_turn") AgentStatus.COMPLETED else AgentStatus.STOPPED
+    /** `null` when there is nothing to judge (no transcript yet, or nothing parseable). */
+    fun of(lines: List<String>): Ending? {
+        val records = lines.mapNotNull { line ->
+            if (line.isBlank()) null else runCatching { JSON.parseToJsonElement(line).jsonObject }.getOrNull()
+        }
+        if (records.isEmpty()) return null
+        val lastFinished = records.indexOfLast { it.endsTurn() }
+        return when {
+            lastFinished == records.lastIndex -> Ending.COMPLETED
+            lastFinished >= 0 -> Ending.RESUMED
+            else -> Ending.UNFINISHED
+        }
+    }
+
+    /** Safe casts, not `jsonObject`/`jsonPrimitive`: a record whose `message` or `stop_reason` has the wrong
+     *  shape is malformed, and malformed is not an ending. */
+    private fun JsonObject.endsTurn(): Boolean {
+        val message = this["message"] as? JsonObject ?: return false
+        return (message["stop_reason"] as? JsonPrimitive)?.contentOrNull == "end_turn"
     }
 }

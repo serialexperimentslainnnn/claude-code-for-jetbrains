@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.ToolWindowManager
 import dev.lain.claudejb.session.ChatSessionManager
+import dev.lain.claudejb.ui.ClaudeToolWindowFactory
 
 /**
  * Editor-popup action: send the current selection to Claude with an "explain this code" prompt, then focus the chat.
@@ -32,9 +33,19 @@ class ExplainSelectionAction : AnAction() {
             append("```")
         }
 
-        val session = ChatSessionManager.getInstance(project).activeOrCreate()
-        session.send(prompt)
-        ToolWindowManager.getInstance(project).getToolWindow("Claude Code")?.activate(null)
+        // Show the chat FIRST, then send into the one on screen. `activeOrCreate()` on its own can register a
+        // session the tool window has never built a tab for — the prompt then runs in a chat nobody can see,
+        // and opening the window afterwards builds a different one.
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(ClaudeToolWindowFactory.TOOL_WINDOW_ID)
+        if (toolWindow == null) {
+            ChatSessionManager.getInstance(project).activeOrCreate().send(prompt)
+            return
+        }
+        toolWindow.activate {
+            val session = ClaudeToolWindowFactory.activePanel(project)?.session
+                ?: ChatSessionManager.getInstance(project).activeOrCreate()
+            session.send(prompt)
+        }
     }
 
     override fun update(e: AnActionEvent) {

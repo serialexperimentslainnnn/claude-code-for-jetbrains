@@ -43,6 +43,7 @@ class PermissionBrokerMatrixTest {
         request: CanUseToolRequest,
         projectRoot: String?,
         alwaysAllowedTools: Set<String> = emptySet(),
+        forceAsk: Boolean = false,
     ): Observation {
         val obs = Observation()
         val broker = PermissionBroker(
@@ -53,6 +54,7 @@ class PermissionBrokerMatrixTest {
             onAutoReviewed = { tool, input, id -> obs.autoReviewed = Triple(tool, input, id) },
             isRemembered = { tool, _ -> tool in alwaysAllowedTools },
             projectRoot = projectRoot,
+            forceAsk = { forceAsk },
         )
         broker.handle("req-x", request)
         return obs
@@ -232,6 +234,49 @@ class PermissionBrokerMatrixTest {
         )
         assertTrue(obs.manualCard)
         assertNull(obs.autoReviewed)
+    }
+
+    // --- forceAsk (the Git integration's chat) -------------------------------------------------------
+    //
+    // These are the assertions the feature rests on, and the failure mode is SILENT: if `forceAsk` ever stops
+    // being consulted, a prompted git action under bypassPermissions runs with no card and nothing on screen
+    // says so. Note the "Always allow" case in particular — forcing the mode to `default` would NOT cover it,
+    // because `isRemembered` is a second, independent auto-approval.
+
+    @Test
+    fun `forceAsk beats bypassPermissions`(@TempDir root: Path) {
+        val obs = run("bypassPermissions", bashReq("git init"), root.toFile().canonicalPath, forceAsk = true)
+        assertTrue(obs.manualCard, "a plugin-started turn must be put to the user even on bypass")
+        assertFalse(obs.autoApproved)
+    }
+
+    @Test
+    fun `forceAsk beats a remembered always-allow`(@TempDir root: Path) {
+        val obs = run(
+            "default",
+            bashReq("git init"),
+            root.toFile().canonicalPath,
+            alwaysAllowedTools = setOf("Bash"),
+            forceAsk = true,
+        )
+        assertTrue(obs.manualCard, "forceAsk must be checked before isRemembered, not after")
+    }
+
+    @Test
+    fun `forceAsk beats acceptEdits for an inside-root write`(@TempDir root: Path) {
+        val f = File(root.toFile(), "a.kt").apply { writeText("a") }
+        val obs = run("acceptEdits", editReq(f.canonicalPath), root.toFile().canonicalPath, forceAsk = true)
+        assertTrue(obs.manualCard)
+        assertNull(obs.autoReviewed, "nothing was auto-approved, so no snapshot is captured for it")
+    }
+
+    @Test
+    fun `forceAsk only ever downgrades an approval — it never denies`(@TempDir root: Path) {
+        // The card is presented; the request is left OPEN for the user to answer. A `respond` here would mean
+        // the broker had already answered the binary, which is the one thing forceAsk must not do.
+        val obs = run("bypassPermissions", bashReq("git commit"), root.toFile().canonicalPath, forceAsk = true)
+        assertNull(obs.respond, "forceAsk turns an auto-approval into a question, not into a refusal")
+        assertNotNull(obs.presented)
     }
 
     // --- AskUserQuestion ----------------------------------------------------------------------------

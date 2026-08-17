@@ -1,7 +1,7 @@
 # Claude Code Native
 
 [![Version](https://img.shields.io/badge/version-5.5.0-E07B5A)](CHANGELOG.md)
-[![IDE](https://img.shields.io/badge/JetBrains-2025.3%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
+[![IDE](https://img.shields.io/badge/JetBrains-2025.3.1%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Claude%20Code%20Native-2A2A2A)](https://plugins.jetbrains.com/plugin/31965-claude-code-native)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -14,6 +14,12 @@ It drives the `claude` binary you already have installed, speaking its `stream-j
 protocol directly from Kotlin. There is no Node.js at runtime, no bundled SDK, and no credentials of
 ours — you bring your own Claude subscription or API key.
 
+> **This repository is the project's origin**, written and maintained by
+> [Lain](https://github.com/serialexperimentslainnnn) — every release on the JetBrains Marketplace is
+> published from here. Canonical location:
+> **<https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains>**. Forks are welcome and
+> licensed; see [Upstream and forks](#upstream-and-forks) for where they are and how to tell them apart.
+
 ## Contents
 
 - [How it compares](#how-it-compares)
@@ -22,7 +28,8 @@ ours — you bring your own Claude subscription or API key.
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Build from source](#build-from-source) · [How it works](#how-it-works)
-- [Documentation](#documentation) · [Licence](#licence-and-attribution)
+- [Documentation](#documentation)
+- [Upstream and forks](#upstream-and-forks) · [Licence](#licence-and-attribution)
 
 ## How it compares
 
@@ -52,17 +59,20 @@ This project is unofficial and not affiliated with Anthropic or JetBrains.
 
 ## Requirements
 
-**JetBrains IDE 2025.3 or newer** — `sinceBuild 253`, `untilBuild 263.*`, so the range is declared ahead
-of the 2026.3 branch and an EAP user is never locked out by a ceiling nobody widened. IntelliJ IDEA,
-PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip, DataSpell, Aqua and RustRover.
+**JetBrains IDE 2025.3.1 or newer** — `sinceBuild 253.29346.138`, `untilBuild 263.*`, so the range is
+declared ahead of the 2026.3 branch and an EAP user is never locked out by a ceiling nobody widened.
+IntelliJ IDEA, PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip, DataSpell, Aqua
+and RustRover.
 
-> **Why 2025.3 is a hard floor.** The whole chat UI is the IDE's embedded browser (JCEF). From build
-> **262** the platform ships that browser as a *separate bundled plugin*, `com.intellij.modules.jcef`,
-> and a plugin that does not declare a dependency on it gets no browser classes in its classloader at
-> all — every chat dies on `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp`. Declaring the
-> dependency is the fix, and that module id **does not exist before 2025.3**. There is no
-> browser-less mode to fall back to, so the dependency is declared hard and 2025.1 / 2025.2 are out.
-> **On 2025.1 or 2025.2, stay on plugin version 5.1.1.**
+> **Why 2025.3.1 is a hard floor — and why it is .1 and not .0.** The whole chat UI is the IDE's
+> embedded browser (JCEF). From build **262** the platform ships that browser as a *separate bundled
+> plugin*, `com.intellij.modules.jcef`, and a plugin that does not declare a dependency on it gets no
+> browser classes in its classloader at all — every chat dies on `NoClassDefFoundError:
+> com/intellij/ui/jcef/JBCefApp`. Declaring the dependency is the fix. That module id does not exist in
+> **2025.3** (build 253.28294.334) either, so there the IDE refuses to load the plugin outright; it
+> appears in **2025.3.1** (253.29346.138), ten days later. There is no browser-less mode to fall back
+> to, so the dependency is declared hard and the floor is the first build that can satisfy it.
+> **On 2025.1, 2025.2 or 2025.3.0, stay on plugin version 5.1.1** — or update your IDE.
 
 **The `claude` CLI**, installed separately. The plugin looks for it in this order:
 
@@ -183,8 +193,8 @@ Along the bottom: **provider · model · permission mode · effort · thinking**
 mid-conversation. Model and mode take effect immediately; toggling extended thinking restarts the
 session behind the scenes with `--resume`, so nothing is lost.
 
-**Attach files** sits to their left. On the right: **Auto-scroll (follow output)**, **Vibe Mode**,
-**Session history · diffs & rollback**, and **Send** (which becomes **Stop** during a turn).
+**Attach files** sits to their left. On the right: **Auto-scroll (follow output)**, **Vibe Mode**, and
+**Send** (which becomes **Stop** during a turn).
 
 The model list is read from the binary's own handshake and each entry shows its real version, so new
 tiers appear on their own — nothing is hardcoded. Older generations sit in a collapsed **Other
@@ -222,10 +232,10 @@ rewind the files to the turn that made that edit (probed with a dry run first); 
 the plugin offers to revert them itself from its own pre-write snapshot, with a confirmation you can
 tell it to remember.
 
-The history button — in the composer and in the tool window's title bar — opens **Diff History**: every
-Edit/Write in the session with a `+a/-b` summary, a **View diff**, a per-edit **Revert**, and one
-**Roll back all changes**. Reverting a write that *created* a file removes that file, which is the only
-way to undo a creation.
+Reverting a write that *created* a file removes that file, which is the only way to undo a creation.
+
+To see everything a long run touched rather than one edit at a time, use ⚙ ▸ **Review This Session's
+Changes…**, which diffs the whole session against its base. Undoing a *commit* is [Git](#git), below.
 
 #### Permission modes
 
@@ -260,9 +270,9 @@ in one transcript, interleaved and unfollowable.
 - **Closing a subtab hides a view; it destroys nothing.** The card that spawned it opens it again.
 - **Pin** turns the subtab you are reading into a tab of its own, next to the chats.
 
-**Workloads** (a view button in the tab bar, next to **Chat** and **Session**) draws everything running
-across *every* open chat as one diagram: chats at the root, agents beneath them, tasks under whoever
-started them. Every node is somewhere you can go, and a running task can be stopped from there.
+**Workloads** — one of the view buttons in the tab bar — draws everything running across *every* open
+chat as one diagram: chats at the root, agents beneath them, tasks under whoever started them. Every node
+is somewhere you can go, and a running task can be stopped from there.
 
 ### Background tasks
 
@@ -273,11 +283,18 @@ transcript after an IDE restart.
 
 ### The dashboard and your plan limits
 
+The tab bar carries the dashboard's view buttons: **Chat** (the way back out), **Session**, **Workloads**,
+and — only while the session has that surface to show — **Git** and **Plan**. One view at a time; the
+button that is lit is where you are.
+
 The **Session** view shows what the current session is doing and costing: the context breakdown by
 category, token usage and cost (input / output / cache read / cache write, in USD when the binary
 reports it), your plan's limit windows with the time left on each, the account you are signed in as
 (email / organisation / plan / provider), the active model, the working directory, the binary version,
 and MCP server health with per-server reconnect and enable/disable.
+
+**Plan** is the plan-mode document, on its own rather than as a card among the numbers — prose you go
+back and re-read while working. Its button appearing is also how you learn one has been written.
 
 Your plan limits also sit as small labelled bars under the composer, so you can see them without
 opening anything: **blue below 65%, amber below 85%, red at or above**. They refresh every 30 seconds
@@ -306,14 +323,16 @@ transcripts of its own** — only which tabs were open.
 **The plugin never deletes your conversations.** There is deliberately no "delete session" action. This
 is pinned by a source contract (`NoFileDeletionContractTest`), written after an earlier release
 destroyed a user's history: **recursive deletion is banned outright anywhere in the codebase**, and a
-single-file deletion is permitted only in four named source files, each for one purpose — every one of
-them a file the plugin itself wrote:
+single-file deletion is allowed only in the handful of source files that contract names, each for one
+purpose — and every file any of them removes is one the plugin itself wrote:
 
 - `~/.claude/.credentials.json`, once it has been harvested into the keychain — that removal *is* the
   feature;
 - the plugin's own superseded settings and bookkeeping files, after their contents have been adopted and
   the new location has confirmed the write: `.idea/claude-code.xml` and
   `~/.claude/ide/claude-code-native/settings.json`.
+
+Nothing else in the plugin can call a delete at all; the build fails if it tries.
 
 The one other thing the plugin can remove is a file that an `Edit`/`Write` *created*, and only when you
 press **Revert** on it — undoing a creation means removing it, not leaving a zero-byte husk. Nothing else
@@ -324,10 +343,14 @@ raises a notification and badges its tab. Suppressed for the chat already on scr
 
 ### Git
 
-The gear menu carries three Git entries. They are there only when the IDE's Git plugin is enabled **and**
-the project is a Git working copy — otherwise they are absent rather than greyed out, and that is
-re-derived every time the menu opens, so `git init`, or enabling the Git plugin, takes effect without
-reopening anything.
+The **Git** button in the tool window's title bar opens a chat dedicated to the integration, and with it
+the dashboard's **Git** view: where `HEAD` is, what can be done to the repository, and its recent history.
+Entries are there only when the IDE's Git plugin is enabled, and each one hides itself when it does not
+apply — absent rather than greyed out, re-derived every time the menu opens, so creating a repository or
+enabling the Git plugin takes effect without reopening anything.
+
+**Reading** is three gear entries, all of which hand off to the IDE's own Git UI rather than drawing
+another one:
 
 - **Recent Commits on `<branch>`…** — the label names the branch you have checked out, so the menu itself
   answers "which branch is Claude working on". Opening it lists the last 20 commits of the repository your
@@ -338,15 +361,40 @@ reopening anything.
   symlink-resolving check the write path uses.
 - **Open Git Log** — brings up the IDE's Version Control tool window.
 
-**Read-only, and it is the code that says so.** There is no write path in the Git package at all — no ref
-moves, no history rewriting, no remote traffic, and it never runs `git` itself. A source contract
-(`GitReadOnlyContractTest`) enforces that: an allowlist of four read-only APIs, plus a scan for the symbols
-that would mean the plugin had grown its own way to execute Git. Adding a write path fails the build.
-Undoing a commit is a new commit you make through the IDE's own Git UI.
+The package behind all three is **read-only, and it is the code that says so**: no ref moves, no history
+rewriting, no remote traffic, and it never runs `git` itself. A source contract
+(`GitReadOnlyContractTest`) enforces that — an allowlist of four read-only APIs, plus a scan for the
+symbols that would mean it had grown its own way to execute Git. Adding a write path fails the build.
 
-The plugin deliberately builds no Git UI of its own — the commit list is a picker, not a viewer, and
-everything you act on is the platform's own Git Log, in your theme and with your shortcuts. And none of
-this is sent to Claude: these entries tell *you* where the checkout stands.
+**Changing the repository** is offered three different ways, and which way an action gets is the design:
+
+- **Claude does it.** *Commit with Claude* and *Revert this file with Claude* — in the Git view, and in
+  the gear menu as **Commit Changes with Claude** and **Revert This File with Claude** — run no `git`.
+  Each puts a bounded prompt into the Git chat and lets Claude do the work, so the command is on screen in
+  an approval card before it runs and you can answer the tab ("squash those two", "not that file")
+  instead of getting one shot at a button. That tab's turns are **always approved by hand**, whatever
+  permission mode you are in and whatever you have marked "Always allow": the plugin started the turn, so
+  it does not inherit permissions you granted for your own work.
+- **The IDE does it.** Branches, pull, fetch, push, merge, rebase, stash, unstash and the commit dialog
+  are under ⚙ ▸ **Git Operations**, and those entries *are* the IDE's own actions — same dialogs, same
+  shortcuts, same enablement. They are there because the IDE does them better than a chat card would, and
+  reimplementing them would only make them worse.
+- **The plugin does it, once.** *Initialize repository*, offered in the Git view on a project that is not
+  a repository yet, runs `git init -b main` itself. It is the only `git` this plugin ever runs: a fixed
+  argument vector with no shell involved and nothing of yours in it, deliberately outside the read-only
+  package. `-b main` rather than a bare `git init`, which still lands on `master` unless you have set
+  `init.defaultBranch`. Being the plugin spawning a process rather than Claude asking for a tool,
+  **the [sensitive-data lock](#security) does not see it**: that guard sits on the tool requests the
+  binary makes, and this is not one. So the exception is exactly one command, on an empty directory,
+  behind a menu entry that only appears where there is no repository to damage.
+
+Those two facts do not contradict each other: the read-only contract is a claim about the `git/` package,
+and it still holds — the one direct execution lives in `ui/`, outside it, on purpose. No gate was
+bypassed.
+
+The plugin builds no Git UI of its own — the commit list is a picker, not a viewer, and everything you act
+on is the platform's own Git Log, in your theme and with your shortcuts. Nothing here is sent to Claude
+unless you pick an action that asks it something.
 
 ### Settings that matter
 
@@ -446,7 +494,7 @@ binary to Anthropic over the same channel it already uses in your terminal. See
 
 | Symptom | Usually |
 |---|---|
-| The chat never loads, or the tool window is blank | The embedded browser (JCEF) is unavailable. On **2025.1 / 2025.2** this version does not run at all — see [Requirements](#requirements). Otherwise check the `ide.browser.jcef.enabled` registry key |
+| The chat never loads, or the tool window is blank | The embedded browser (JCEF) is unavailable. Below build **253.29346.138** — so on 2025.1, 2025.2 and 2025.3.0 (`253.28294.334`) — this version does not run at all; see [Requirements](#requirements). Otherwise check the `ide.browser.jcef.enabled` registry key |
 | "Claude Code was not found" with the binary installed | It is somewhere the plugin does not look, or the IDE did not inherit your `PATH`. Paste the full path into the card, or set it in Settings |
 | Signed out again after a restart | The stored credential could not be renewed. Sign in again from the card, and check the IDE can reach your keychain |
 | A tool call is refused with no card to override it | The [security lock](#security) blocked it. The message names the rule and the Settings path; foreign-territory blocks are absolute by design |
@@ -504,16 +552,18 @@ The suite is a real pyramid:
 - **headless component** — `BasePlatformTestCase` in-process, for the project services and settings UI;
 - **integration** — a real `ClaudeSession` driven against the deterministic `bin/fake-claude` stand-in
   with JSONL fixtures;
-- **UI end-to-end** — RemoteRobot, gated behind `-PuiTest.enabled=true` (see
+- **UI end-to-end** — RemoteRobot against a real IDE, gated behind `-PuiTest.enabled=true` (see
   [`docs/UI_TESTING.md`](docs/UI_TESTING.md));
 - **frontend** — vitest + jsdom loading the real inlined `src/main/resources/jcef/*.js`, including a
   JS↔CSS class contract and an accessibility contract.
 
-CI runs on `pull_request` only — deliberately, so one commit does not pay for two identical pipelines. The
-gate is **not uniform**: a pull request into `develop` runs the JVM suite (with `koverVerify`) and the
-frontend suite; the expensive half — static analysis, `npm audit --omit=dev`, `verifyPlugin` and the
-artifact assertions — runs at the `develop → main` door, which is the merge that publishes. CodeQL also runs
-on pushes to those branches, and both CodeQL and the protocol-drift check run weekly.
+CI has no `push` trigger — deliberately, so one commit does not pay for two identical pipelines; the pull
+request is the door, and a branch with no pull request gets no checks. The gate is **not uniform**: a pull
+request into `develop` runs the JVM suite (with `koverVerify`) and the frontend suite; the expensive half —
+static analysis, `npm audit --omit=dev`, `verifyPlugin` and the artifact assertions — runs at the
+`develop → main` door, which is the merge that publishes. The UI end-to-end suite answers only to a nightly
+schedule and a manual dispatch, and is never a required check. CodeQL runs on pushes to both branches as
+well as on pull requests, and both CodeQL and the protocol-drift check run weekly.
 
 ## How it works
 
@@ -536,9 +586,9 @@ Architecture, protocol details and the empirically verified facts about the bina
 
 **5.5.0** — a tab and a transcript per agent, with the whole tree one hover away; a single **Workloads**
 diagram of everything running across every chat; background tasks that keep their output after they
-end and survive a restart; read-only [Git context](#git) in the gear menu; settings moved into the IDE's
-password safe. It also **fixes a plugin that was dead on 2026.2**, which is why the minimum IDE is now
-2025.3.
+end and survive a restart; a [Git integration](#git) whose write actions are asked of Claude rather than
+run by the plugin; settings moved into the IDE's password safe. It also **fixes a plugin that was dead on
+2026.2**, which is why the minimum IDE is now 2025.3.1.
 
 **5.1.x** — per-model plan-limit windows (the ones the CLI's `/usage` showed and the plugin did not),
 moved to their own row under the composer; older model generations selectable again behind an *Other
@@ -568,17 +618,66 @@ Using the plugin is covered above. Everything below is for working *on* it.
 | [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
 | [`docs/CI_SETUP.md`](docs/CI_SETUP.md) · [`docs/UI_TESTING.md`](docs/UI_TESTING.md) | CI/CD configuration and the RemoteRobot harness |
 | [`docs/TELEMETRY.md`](docs/TELEMETRY.md) | What is (and is not) collected — nothing |
-| [`docs/BACKLOG.md`](docs/BACKLOG.md) | What is worth doing next, probed against the real binary |
+
+## Upstream and forks
+
+**This repository is upstream.** It is not a fork of anything, and the claim is checkable rather than
+asserted — GitHub records a repository's ancestry, and for this one it is empty:
+
+```sh
+gh repo view serialexperimentslainnnn/claude-code-for-jetbrains --json isFork,parent
+# {"isFork":false,"parent":null}
+```
+
+The other anchors point at the same place: the Marketplace listing
+([plugin 31965](https://plugins.jetbrains.com/plugin/31965-claude-code-native)) is published from this
+repository by its author, every release tag here is cut by the release workflow and the artifacts are
+signed, and the commits carry the maintainer's signature.
+
+### Known forks
+
+The GPL exists so that people can fork, study and modify this. Nothing below is a complaint — it is
+simply a map, so that anyone who lands on a copy knows where the original is and can compare.
+
+| Fork | Owner | Last seen active |
+|---|---|---|
+| [luxgoldix-coder/claude-code-for-jetbrains](https://github.com/luxgoldix-coder/claude-code-for-jetbrains) | luxgoldix-coder | 2026-08-10 |
+
+*List reviewed 2026-08-13. It is maintained by hand and may lag; the live set is always*
+`gh api repos/serialexperimentslainnnn/claude-code-for-jetbrains/forks --jq '.[].full_name'`.
+
+### If you fork it
+
+Please do — and two asks, the first of which the licence already requires of you:
+
+1. **Say that it is modified, and by whom.** GPL-3.0 §5(a) requires a modified version to carry
+   prominent notices stating that you changed it and when. In practice that means editing this README,
+   the plugin description and the plugin `id` so a user can tell the two apart.
+2. **Use your own plugin id and your own signing key** before publishing anywhere. Two artifacts
+   claiming `dev.lain.claude-code-for-jetbrains` cannot coexist in a user's IDE, and a release signed
+   with this project's key would misattribute your work to this project — and this project's bugs
+   to you.
+
+Neither ask restricts what the licence grants you. They exist so that a user can always answer "whose
+build am I running, and where do I report this?".
 
 ## Licence and attribution
 
 Licensed under the **GNU General Public License v3.0** — see [`LICENSE`](LICENSE).
 
 The published archive redistributes third-party components (marked, DOMPurify, highlight.js,
-kotlinx.serialization). Their notices and licence texts are listed in
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with the full texts under
-[`LICENSES/`](LICENSES); all of them are packaged inside the artifact under `META-INF/`, because a
-notice sitting in a Git repository does not accompany the binary a user installs.
+kotlinx.serialization). Their notices are in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with the
+full licence texts under [`LICENSES/`](LICENSES) — each entry verified against the upstream `LICENSE` of
+the exact version that ships, not against a manifest or a minified file's banner.
+
+All of it is packaged **inside** the artifact, because a notice sitting in a Git repository does not
+accompany the binary a user installs. Both halves of that are enforced rather than promised: the
+*Build plugin* job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) unpacks the very zip the
+plugin verifier passed and fails the build unless the jar carries `META-INF/LICENSE`,
+`META-INF/THIRD-PARTY-NOTICES.md` and one `META-INF/licenses/…` text for **every** file under
+`LICENSES/` — the expected set is read from the checkout, so adding a dependency's licence text extends
+the check by itself. The same job fails if the zip contains a single `node_modules` entry, which is what
+turns "no npm code is distributed" from a claim into a check.
 
 ## Disclaimer
 

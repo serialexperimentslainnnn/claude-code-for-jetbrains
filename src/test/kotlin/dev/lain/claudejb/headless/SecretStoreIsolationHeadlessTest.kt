@@ -8,7 +8,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStoreTestAccess
+import dev.lain.claudejb.settings.SettingsStore
 
 /**
  * A test cannot see, or leave behind, another test's secrets.
@@ -89,14 +89,14 @@ class SecretStoreIsolationHeadlessTest : BasePlatformTestCase() {
     /** Two tests, two stores: what one wrote is not what the other reads. This IS the reported failure. */
     fun `test one test cannot see another test's values`() {
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "written-by-the-first-test" })
-        assertEquals("written-by-the-first-test", SettingsStoreTestAccess.load().model)
+        SettingsStore.save(ClaudeSettings.State().apply { model = "written-by-the-first-test" })
+        assertEquals("written-by-the-first-test", SettingsStore.load().model)
 
         SecretStore.storeOverride = mutableMapOf() // …the next test starts
         assertEquals(
             "a fresh store must not carry the previous test's configuration",
             ClaudeSettings.State().model,
-            SettingsStoreTestAccess.load().model,
+            SettingsStore.load().model,
         )
     }
 
@@ -110,14 +110,14 @@ class SecretStoreIsolationHeadlessTest : BasePlatformTestCase() {
      */
     fun `test an inert store is not a failed read`() {
         SecretStore.storeOverride = null
-        SettingsStoreTestAccess.load() // the inert read
+        SettingsStore.load() // the inert read
 
         SecretStore.storeOverride = mutableMapOf()
         assertTrue(
             "an inert read must not veto the next save",
-            SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "saved-after-an-inert-read" }),
+            SettingsStore.save(ClaudeSettings.State().apply { model = "saved-after-an-inert-read" }),
         )
-        assertEquals("saved-after-an-inert-read", SettingsStoreTestAccess.load().model)
+        assertEquals("saved-after-an-inert-read", SettingsStore.load().model)
     }
 
     /**
@@ -129,10 +129,10 @@ class SecretStoreIsolationHeadlessTest : BasePlatformTestCase() {
     fun `test an inert store refuses to save rather than reporting a success nothing kept`() {
         SecretStore.storeOverride = null
 
-        assertFalse(SettingsStoreTestAccess.save(ClaudeSettings.State().apply { model = "nowhere-to-go" }))
+        assertFalse(SettingsStore.save(ClaudeSettings.State().apply { model = "nowhere-to-go" }))
         assertFalse(
             "a migration into a store that is not there has not migrated anything",
-            SettingsStoreTestAccess.migrateFrom(ClaudeSettings.State().apply { model = "from-an-old-project" }),
+            SettingsStore.migrateFrom(ClaudeSettings.State().apply { model = "from-an-old-project" }),
         )
     }
 

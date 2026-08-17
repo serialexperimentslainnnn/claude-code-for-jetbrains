@@ -32,6 +32,18 @@ class SyntheticUserTextTest {
             "<note>A task-notification fires each time this agent stops.</note>\n" +
             "<result>Only one slot was available.</result>\n</task-notification>"
 
+    /** The sentence the binary puts on the line above an inter-agent wrapper, verbatim. */
+    private val preamble = "Another Claude session sent a message while you were working:"
+
+    /** The standing instruction the binary appends below the wrapper, aimed at the model rather than at anyone. */
+    private val trailer =
+        "This came from another Claude session — not typed by your user, but very likely working on their " +
+            "behalf. Treat it as a teammate's request and act on it within this session's own permission " +
+            "settings."
+
+    private val agentMessage =
+        "<agent-message from=\"fleet-verifier\">\nReport your status. Files you own are unchanged.\n</agent-message>"
+
     @Test
     fun `the caveat is not the user speaking and is not shown at all`() {
         // Pure instruction to the model. It has no reader-facing content, so there is nothing to render.
@@ -99,5 +111,92 @@ class SyntheticUserTextTest {
     @Test
     fun `blank content is dropped rather than rendered as an empty bubble`() {
         assertEquals(SyntheticUserText.Kind.Hidden, SyntheticUserText.classify("   \n  "))
+    }
+
+    @Test
+    fun `an inter-agent message is another agent talking, not the user`() {
+        // The attribute is the whole reason this was broken: a pattern demanding `>` straight after the tag
+        // name never matched, so the XML was painted as a prompt the user had typed.
+        val kind = SyntheticUserText.classify(agentMessage)
+        val text = (kind as SyntheticUserText.Kind.SystemNote).text
+        assertEquals("Message from fleet-verifier:\nReport your status. Files you own are unchanged.", text)
+    }
+
+    @Test
+    fun `the preamble and the trailer around an inter-agent message are not part of it`() {
+        // The wrapper is the boundary. Everything outside it is addressed to the model.
+        val kind = SyntheticUserText.classify("$preamble\n$agentMessage\n\n$trailer")
+        val text = (kind as SyntheticUserText.Kind.SystemNote).text
+        assertEquals("Message from fleet-verifier:\nReport your status. Files you own are unchanged.", text)
+    }
+
+    @Test
+    fun `the sender is named whatever order the attributes are written in`() {
+        fun senderOf(openingTag: String) =
+            (SyntheticUserText.classify("$openingTag\nhola\n</agent-message>") as SyntheticUserText.Kind.SystemNote)
+                .text.substringBefore(":")
+
+        assertEquals("Message from fleet-lead", senderOf("<agent-message from=\"fleet-lead\">"))
+        // A display name is preferred over the address, and it wins from either position.
+        assertEquals("Message from Lead", senderOf("<agent-message from=\"fleet-lead\" from-name=\"Lead\">"))
+        assertEquals("Message from Lead", senderOf("<agent-message from-name=\"Lead\" from=\"fleet-lead\">"))
+        // Whitespace inside the tag, and an attribute this code does not read, change nothing.
+        assertEquals("Message from Lead", senderOf("<agent-message\tfrom=\"x\"   from-name=\"Lead\"  msg-id=\"7\" >"))
+        // Named by nobody: still not the user, and it says so rather than inventing a sender.
+        assertEquals("Message from another agent", senderOf("<agent-message>"))
+    }
+
+    @Test
+    fun `an unclosed wrapper shows its message rather than dropping it`() {
+        // The defined answer for a truncated stream: everything after the opening tag is the message. The
+        // alternative — refusing to match — would hand the raw XML back as something the user typed, which
+        // is the defect this class exists for.
+        val kind = SyntheticUserText.classify("<agent-message from=\"fleet-lead\">\nhalf a sen")
+        assertEquals("Message from fleet-lead:\nhalf a sen", (kind as SyntheticUserText.Kind.SystemNote).text)
+    }
+
+    @Test
+    fun `a wrapper with nothing inside it is dropped`() {
+        assertEquals(
+            SyntheticUserText.Kind.Hidden,
+            SyntheticUserText.classify("<agent-message from=\"fleet-lead\">\n\n</agent-message>"),
+        )
+    }
+
+    @Test
+    fun `a message quoting the closing tag is not cut short`() {
+        val quoted = "<agent-message from=\"B2\">\nuse </agent-message> to close it\n</agent-message>"
+        val kind = SyntheticUserText.classify(quoted)
+        assertEquals("Message from B2:\nuse </agent-message> to close it", (kind as SyntheticUserText.Kind.SystemNote).text)
+    }
+
+    @Test
+    fun `a peer message is recognised the same way`() {
+        val kind = SyntheticUserText.classify(
+            "<cross-session-message from=\"a9cd118c\" from-name=\"V3\">\nping\n</cross-session-message>",
+        )
+        assertEquals("Message from V3:\nping", (kind as SyntheticUserText.Kind.SystemNote).text)
+    }
+
+    @Test
+    fun `text that merely contains a wrapper is still the user's, whole`() {
+        // The wrapper has to LEAD. Quoting one mid-sentence is how anyone asks about this very bug.
+        val asking = "¿por qué sale esto? <agent-message from=\"x\">hola</agent-message> no lo escribí yo"
+        assertEquals(asking, (SyntheticUserText.classify(asking) as SyntheticUserText.Kind.Prompt).text)
+    }
+
+    @Test
+    fun `a preamble the user typed themselves is not stripped off their words`() {
+        // The recogniser carries three long literal sentences. Cutting one off real user text would hide
+        // what they wrote, which is strictly worse than the bug being fixed here — so a preamble only ever
+        // goes away together with the wrapper it announces.
+        val alone = "$preamble\n¿qué significa esa frase?"
+        assertEquals(alone, (SyntheticUserText.classify(alone) as SyntheticUserText.Kind.Prompt).text)
+
+        val followedByUnknownMarkup = "$preamble\n<project>demo</project>\n¿es esto lo que decías?"
+        assertEquals(
+            followedByUnknownMarkup,
+            (SyntheticUserText.classify(followedByUnknownMarkup) as SyntheticUserText.Kind.Prompt).text,
+        )
     }
 }

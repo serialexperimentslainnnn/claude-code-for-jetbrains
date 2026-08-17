@@ -1,8 +1,9 @@
 # Telemetry & privacy
 
 **Short version:** Claude Code Native collects nothing. There is no
-analytics, no error reporting, no usage pings, no remote logging. The
-plugin opens no network connections of its own.
+analytics, no error reporting, no usage pings, no remote logging. The plugin
+opens no network connection to anything off your machine — the one socket it
+ever binds is a loopback one, described below.
 
 ## What stays on your machine
 
@@ -17,10 +18,11 @@ Everything the plugin keeps, it keeps locally:
   only, no content.
 - **Settings.** Since 5.5.0 they live in the **IDE's PasswordSafe** — the OS
   credential store (Keychain, KWallet/Secret Service, Credential Manager) or the
-  IDE's encrypted file — as one JSON document. They used to be
-  `.idea/claude-code.xml`: per project, plaintext, and committable. The move
-  exists because those settings carry an env block, and an env block is where an
-  API key or a credentialed proxy URL ends up.
+  IDE's encrypted file — as one JSON document, application-wide rather than per
+  project. A `.idea/claude-code.xml` left by an older version is adopted into the
+  safe once and then deleted: that file is per project, plaintext and
+  committable, and these settings carry an env block, which is where an API key
+  or a credentialed proxy URL ends up.
 - **Credentials.** The OAuth blob is harvested into that same safe and
   `~/.claude/.credentials.json` is deleted; API keys sit in their own safe slot.
   They reach the binary as environment variables — never as arguments, never in
@@ -32,6 +34,13 @@ Everything the plugin keeps, it keeps locally:
   after a restart your agents can be told apart from ones a terminal session
   left in the same directory.
 - **Logs.** The IDE's own `idea.log`, on your machine. Nothing is uploaded.
+- **The one socket.** The chat page is normally handed to the embedded browser
+  without any network at all. Where that cannot work — Remote Development, where
+  the document lives on the backend and the client reaches it through a port
+  forward — the plugin serves that one document over HTTP bound to the
+  **loopback address only**, on an OS-assigned port, behind a **one-shot token**;
+  any other path gets an empty 404. Nothing off-host can connect to it, and the
+  only thing it can ever serve is the plugin's own UI.
 
 ## What goes off-machine, and why
 

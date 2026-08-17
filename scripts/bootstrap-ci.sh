@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# One-shot CI/CD bootstrap: creates the deployment environment, sets its six secrets, and (optionally)
+L#!/usr/bin/env bash
+# One-shot CI/CD bootstrap: creates the deployment environment, sets its seven secrets, and (optionally)
 # applies the branch protections. Automates everything that can be automated and asks you only for what
 # you actually hold: the Marketplace token, and the JetBrains signing key if you still have it.
 #
@@ -70,7 +70,7 @@ echo "repository:  $REPO"
 echo "environment: $ENVIRONMENT"
 
 # --- 1. environment ------------------------------------------------------------------------------------
-say "1/6  Deployment environment"
+say "1/7  Deployment environment"
 
 # NO required reviewer, deliberately, and this reverses an earlier decision rather than overlooking one.
 #
@@ -116,7 +116,7 @@ for policy in "main:branch" "v*.*.*:tag"; do
 done
 
 # --- 2. Marketplace token ------------------------------------------------------------------------------
-say "2/6  JetBrains Marketplace token"
+say "2/7  JetBrains Marketplace token"
 
 if has_secret PUBLISH_TOKEN && ! ask "PUBLISH_TOKEN is already set. Replace it?"; then
   info "keeping the existing PUBLISH_TOKEN"
@@ -131,7 +131,7 @@ else
 fi
 
 # --- 3. JetBrains plugin signing key -------------------------------------------------------------------
-say "3/6  JetBrains plugin signing key (X.509/RSA — not GPG)"
+say "3/7  JetBrains plugin signing key (X.509/RSA — not GPG)"
 
 if has_secret PRIVATE_KEY && has_secret CERTIFICATE_CHAIN && has_secret PRIVATE_KEY_PASSWORD \
    && ! ask "The signing key is already configured. Replace it?"; then
@@ -191,7 +191,7 @@ else
 fi
 
 # --- 4. CI artifact signing key (GPG) ------------------------------------------------------------------
-say "4/6  CI artifact signing key (GPG)"
+say "4/7  CI artifact signing key (GPG)"
 
 if has_secret GPG_SIGNING_KEY && has_secret GPG_SIGNING_PASSPHRASE \
    && ! ask "The CI signing key is already configured. Rotate it?"; then
@@ -217,31 +217,42 @@ else
   #
   # Only the PUBLIC half is imported into your keyring. The private half stays in the temp dir and is
   # shredded on exit — it exists in exactly two places: that GitHub secret, and nowhere.
-  MAINTAINER_FPR=$(git config --get user.signingkey || true)
-  if [ -z "$MAINTAINER_FPR" ]; then
-    warn "git config user.signingkey is unset — cannot certify the CI key. Set it and re-run this step."
-    cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
-  elif ! gpg --list-keys "$MAINTAINER_FPR" >/dev/null 2>&1; then
-    warn "maintainer key $MAINTAINER_FPR is not in your keyring — cannot certify."
+  #
+  # BOTH certification authorities sign it, not just one. The certifiers are derived rather than written
+  # down: every primary key whose secret half lives on a SMARTCARD (field 15 of the `sec` colon record is
+  # the token serial), which on this repository is the root key and the intermediate CA. A fingerprint
+  # pasted into this script goes stale the first time a key is rotated and says nothing when it does;
+  # a derived list cannot, and every certification is verified individually below.
+  mapfile -t certifiers < <(gpg --list-secret-keys --with-colons \
+    | awk -F: '$1=="sec" && $15!="" { getline; if ($1=="fpr") print $10 }')
+
+  if [ ${#certifiers[@]} -eq 0 ]; then
+    warn "no hardware-held key in your keyring — the CI key cannot be certified by a CA."
+    warn "the exported key will carry no endorsement; users can only take its fingerprint on faith."
     cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
   else
     gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
-    info "certifying $ci_fpr with $MAINTAINER_FPR"
-    warn "TOUCH YOUR YUBIKEY when it asks."
-    if gpg --batch --yes --local-user "$MAINTAINER_FPR" --quick-sign-key "$ci_fpr"; then
-      # Export AFTER certifying: the exported block then carries the maintainer's signature on the uid.
-      gpg --armor --export "$ci_fpr" > docs/ci-signing-key.asc
-      info "certified — the exported key now carries the maintainer's endorsement"
-      gpg --check-sigs --with-colons "$ci_fpr" \
-        | awk -F: -v m="${MAINTAINER_FPR: -16}" '$1=="sig" && $5 ~ m {found=1} END {exit !found}' \
-        && info "verified: the certification is present in docs/ci-signing-key.asc" \
-        || warn "could not confirm the certification — check with: gpg --check-sigs $ci_fpr"
-    else
-      warn "certification failed (cancelled, or the YubiKey was not present)"
-      warn "re-run later:  gpg --local-user $MAINTAINER_FPR --quick-sign-key $ci_fpr"
-      warn "then:          gpg --armor --export $ci_fpr > docs/ci-signing-key.asc"
-      cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
-    fi
+    warn "TOUCH YOUR YUBIKEY once per certifier — ${#certifiers[@]} of them."
+    for fpr in "${certifiers[@]}"; do
+      uid=$(gpg --list-keys --with-colons "$fpr" | awk -F: '$1=="uid" {print $10; exit}')
+      info "certifying $ci_fpr with $fpr ($uid)"
+      # --quick-sign-key, never --quick-lsign-key: a LOCAL signature stays in your keyring and is stripped
+      # on export, so the endorsement would be invisible to every user it exists for.
+      gpg --batch --yes --local-user "$fpr" --quick-sign-key "$ci_fpr" \
+        || warn "certification with $fpr failed (cancelled, or that YubiKey was not present)"
+    done
+    # Export AFTER certifying: the exported block then carries the signatures on the uid.
+    gpg --armor --export "$ci_fpr" > docs/ci-signing-key.asc
+    for fpr in "${certifiers[@]}"; do
+      if gpg --check-sigs --with-colons "$ci_fpr" \
+           | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m {found=1} END {exit !found}'; then
+        info "verified: the certification by $fpr is in docs/ci-signing-key.asc"
+      else
+        warn "MISSING: no certification by $fpr. Re-run with that YubiKey present:"
+        warn "  gpg --local-user $fpr --quick-sign-key $ci_fpr"
+        warn "  gpg --armor --export $ci_fpr > docs/ci-signing-key.asc"
+      fi
+    done
   fi
 
   info "wrote docs/ci-signing-key.asc  (fingerprint $ci_fpr)"
@@ -276,13 +287,51 @@ else
   fi
 fi
 
-# --- 5. verify -----------------------------------------------------------------------------------------
-say "5/6  Verification"
+# --- 5. repository deploy key --------------------------------------------------------------------------
+say "5/7  Repository deploy key"
+
+# An SSH key scoped to THIS repository, for the only write CI performs: pushing the release tag. It is
+# generated here, the public half is registered on the repository and the private half goes straight into
+# the environment secret. Nothing is left on this machine — the pair lives in the 0700 temp dir and the
+# EXIT trap shreds it, so it exists in exactly two places: that secret, and the repository's key list.
+#
+# Two properties, both deliberate:
+#   * no passphrase — a CI job has nobody to type one, and what protects it is the environment scoping of
+#     the secret, not a passphrase stored in the same environment as the key;
+#   * repository scope. An account SSH key would carry write access to everything you can push to; a
+#     deploy key carries this repository and nothing else.
+#
+# NB gh binds a deploy key to the TOKEN that created it: de-authorizing the GitHub CLI, or letting that
+# token expire, REMOVES the key. If a release ever fails on the tag push, check it is still there:
+#   gh api "repos/$REPO/keys"
+if has_secret DEPLOY_KEY && ! ask "DEPLOY_KEY is already set. Rotate it?"; then
+  info "keeping the existing deploy key"
+else
+  title="ci-release-$(date -u +%Y-%m-%d)"
+  ssh-keygen -q -t ed25519 -N '' -C "$title" -f "$tmp/deploy_key"
+  # Retire the ones this script registered before. A rotation that leaves the previous key authorized has
+  # rotated nothing: the old private half is still a write credential wherever it ended up.
+  for id in $(gh api "repos/$REPO/keys" --jq '.[] | select(.title | startswith("ci-release-")) | .id' 2>/dev/null); do
+    gh api --method DELETE "repos/$REPO/keys/$id" >/dev/null && info "removed the previous deploy key ($id)"
+  done
+  gh repo deploy-key add "$tmp/deploy_key.pub" --repo "$REPO" --title "$title" --allow-write >/dev/null
+  gh secret set DEPLOY_KEY --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/deploy_key"
+  info "registered '$title' with write access; private half stored as DEPLOY_KEY and shredded locally"
+  # The fingerprint, not the key material: it is what `gh api "repos/$REPO/keys"` reports, so this line is
+  # the one thing that lets you confirm later that the registered key is the one this run generated.
+  info "fingerprint: $(ssh-keygen -lf "$tmp/deploy_key.pub" | cut -d' ' -f2)"
+  warn "NOTHING CONSUMES DEPLOY_KEY YET. release.yml pushes the tag with GITHUB_TOKEN, and switching that"
+  warn "push to this key also makes it TRIGGER workflows — which fires release.yml's own tag trigger and"
+  warn "starts a second run of the release it just finished. Guard that trigger before wiring it up."
+fi
+
+# --- 6. verify -----------------------------------------------------------------------------------------
+say "6/7  Verification"
 
 actual=$(gh secret list --env "$ENVIRONMENT" --repo "$REPO" --json name -q '.[].name' | sort)
-expected=$(printf '%s\n' CERTIFICATE_CHAIN GPG_SIGNING_KEY GPG_SIGNING_PASSPHRASE PRIVATE_KEY PRIVATE_KEY_PASSWORD PUBLISH_TOKEN | sort)
+expected=$(printf '%s\n' CERTIFICATE_CHAIN DEPLOY_KEY GPG_SIGNING_KEY GPG_SIGNING_PASSPHRASE PRIVATE_KEY PRIVATE_KEY_PASSWORD PUBLISH_TOKEN | sort)
 if [ "$actual" = "$expected" ]; then
-  info "all six environment secrets present"
+  info "all seven environment secrets present"
 else
   warn "missing: $(comm -23 <(echo "$expected") <(echo "$actual") | tr '\n' ' ')"
   warn "unexpected: $(comm -13 <(echo "$expected") <(echo "$actual") | tr '\n' ' ')"
@@ -309,8 +358,8 @@ fi
 info "deployments allowed from: $(gh api "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
   -q '[.branch_policies[] | "\(.type):\(.name)"] | join(", ")')"
 
-# --- 6. branch protection ------------------------------------------------------------------------------
-say "6/6  Branch protection"
+# --- 7. branch protection ------------------------------------------------------------------------------
+say "7/7  Branch protection"
 
 ./scripts/apply-rulesets.sh --dry-run
 echo

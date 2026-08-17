@@ -107,12 +107,11 @@ class UsageReportTest {
     }
 
     @Test
-    fun `window titles are descriptive, and the composer pill keeps its short labels`() {
-        // Two separate label sets on purpose: collapsing them once broke the composer pill, which has room for
-        // "5h" and not for "Current session".
+    fun `window titles are descriptive, and there is only one set of them`() {
+        // ONE label set: the composer readout and the dashboard card both draw a labelled bar. The short
+        // form ("5h") belonged to a quota PILL the readout replaced, and it is gone with it.
         assertEquals("Current session", RateLimitInfo.windowTitleFor("five_hour"))
         assertEquals("All models", RateLimitInfo.windowTitleFor("seven_day"))
-        assertEquals("5h", RateLimitInfo(rateLimitType = "five_hour").windowLabel())
 
         // An unknown window is still a window the user is limited by — label it rather than hide it.
         assertEquals("Cowork", RateLimitInfo.windowTitleFor("seven_day_cowork"))

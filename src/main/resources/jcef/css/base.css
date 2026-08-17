@@ -36,7 +36,10 @@
   --radius-sm: 9px; /* nested elements (chips, code, options) */
   --radius-pill: 999px;
   --gap: 14px;
-  --col: 860px; /* centred conversation column            */
+  /* The conversation column's cap. Every consumer applies it as `max-width`, so this declaration is the only
+     place the width is decided — `none` means the transcript, the dock and the dashboard's card grid use the
+     full width of the tool window, however wide the user drags it. */
+  --col: none;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 28px rgba(0, 0, 0, 0.22);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -99,21 +102,49 @@ body {
   overflow: hidden;
 }
 
-/* The work area: transcript + composer, and the two overlays (#boot, #auth-card) that cover them.
-   It is the containing block for those overlays, and that is its whole reason to exist: they used to be
-   `inset: 0` over #app, so a chat that was still starting covered the CHAT TABS too — and switching to
-   another chat while one boots is precisely what you want to do. Input is still blocked (`#app.booting`);
-   navigation no longer is. */
+/* The work area: the transcript and the composer, as two rows of one column — the conversation AREA, then
+   the dock.
+
+   #conversation and the dashboard panel are placed in the SAME cell, so the panel is a layer over the
+   transcript and not a replacement for it: a scroll container that stops being displayed loses its
+   scrollTop, and returning from the dashboard would then land at the top of a long conversation. The dock is
+   a row of its own, so nothing laid over the conversation can reach the composer, and the tab bar is outside
+   #work altogether — that containment is structural, not a tuned inset.
+
+   The waiting screens (#boot, #auth-card) are rows of #conversation, so they are covered by the same
+   layer and need nothing from this element. Input while the binary starts is blocked by `#app.booting`;
+   navigation is not.
+
+   `z-index: 0` on a positioned element is what makes all of that a RULE rather than an arrangement: it
+   opens a stacking context, so every number declared inside the work area is scoped to the work area. A
+   layer added here tomorrow stacks against its siblings whatever value it picks — it cannot out-number the
+   tab bar, which is not in this context at all. What is defended is the ORDER of the roles, not the digits:
+   the transcript is the floor, a panel over it comes next, then the dock, and last whatever hangs over the
+   composer. Each number is declared at its own rule, with the reason beside it; a role inserted between two
+   of them later changes the numbers and not the rule.
+
+   ONE criterion decides what is mounted outside all this, and it is not "it floats" — it is having
+   something to escape. #tabsbar clips its overflow, so a menu hanging off a tab is put on `document.body`
+   or it is cut off, and no rule inside the bar can save it. The find bar has nothing to escape: on the body
+   it was positioned against the VIEWPORT, which is where the tab row is, and it could hide a focused tab
+   outright (WCAG 2.2 SC 2.4.11). It is a child of #work now — the reason lives with its rule, in
+   dashboard.css. */
 #work {
   position: relative;
+  z-index: 0;
   flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
 }
 
+/* The base of the shared cell, and the floor of the stack: a layer over the transcript declares a higher
+   number (`.dashboard`, dashboard.css), and the transcript itself never competes. Explicit rather than
+   `auto`, which also keeps anything positioned INSIDE the transcript — a card, a sticky header — inside it. */
 #conversation {
-  flex: 1 1 auto;
+  grid-area: 1 / 1;
+  z-index: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -127,9 +158,14 @@ body {
   margin-right: auto;
 }
 
-/* dock = permissions + composer, pinned to the bottom with a soft blur veil */
+/* dock = permissions + composer, pinned to the bottom with a soft blur veil.
+   Its row is not the layer's row, and it also outranks it: a grid row is not a clip, so a layer that
+   overflows the cell above would otherwise paint straight over the composer — which is the exact failure
+   the waiting screens produced when they were `inset: 0` panels. Being LATER in the document already won
+   that fight by accident; `z-index: 2` is the same outcome stated on purpose, and it survives a reorder. */
 #dock {
-  flex: 0 0 auto;
+  grid-area: 2 / 1;
+  z-index: 2;
   position: sticky;
   bottom: 0;
   padding: 10px clamp(16px, 5vw, 40px) 16px;

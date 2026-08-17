@@ -40,8 +40,10 @@ internal class OnboardingController(
      * sits there. Answering it once at construction is what made an install or a sign-in performed outside
      * the card require closing and reopening the tab to take effect.
      *
-     * The check is silent and cheap (a filesystem stat and a safe read, no process spawn), and
-     * [ClaudeSession.refreshBootState] returns immediately once a session is running.
+     * It runs while a session is UP as well as before one exists, and it is BLOCKING — a filesystem stat, a
+     * PasswordSafe read (a keychain round-trip on some hosts) and, when nothing is held, `auth status` on the
+     * binary. Hence the pooled thread in [tick]: this is exactly the work the EDT must not do, and
+     * [ClaudeSession.refreshBootState] is where the throttles that keep it affordable live.
      */
     private val bootWatcher = Timer(BOOT_WATCH_MS) { tick() }.apply {
         isRepeats = true
@@ -259,8 +261,8 @@ internal class OnboardingController(
             ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, "")
             ApplicationManager.getApplication().invokeLater {
                 notifyInfo("Signed out of Claude", "Stored credentials were removed from the IDE.")
-                // Finds no credential and raises the sign-in card instead of launching. See
-                // ClaudeSession.hasCredential.
+                // Raises the sign-in card instead of launching, and does so without a probe: `signedOut` is
+                // set above, which is the branch of [AuthGate.heldCredential] that decides outright.
                 session.start()
             }
         }
@@ -274,7 +276,9 @@ internal class OnboardingController(
     }
 
     private companion object {
-        /** Cadence of the missing-binary watcher: pure file-existence checks, no process spawn. */
+        /** Cadence of the boot watcher. Three seconds is affordable because the expensive answer it needs —
+         *  whether the binary holds a login of its own — is cached for far longer than this interval, so the
+         *  poll costs a stat and a safe read on all but the first tick after that cache goes stale. */
         const val BOOT_WATCH_MS = 3_000
     }
 }

@@ -99,9 +99,6 @@
     CC.send({ type: 'diag', report: JSON.stringify(report) });
     return report;
   };
-  cc.diagnostics = function () {
-    return CC.diagnostics();
-  };
 
   // ---------------------------------------------------------------------------
   // 🌈 Vibe Mode: while on, a rAF loop cycles the theme vars through the spectrum so
@@ -165,8 +162,9 @@
         }
       }
     }
-    CC.vibeOn = on;
   }
+  // The one reader of the flag. It was also mirrored onto CC.vibeOn, which nothing ever read — two spellings
+  // of one piece of state is how they end up disagreeing.
   CC.isVibe = function () {
     return vibeOn;
   };

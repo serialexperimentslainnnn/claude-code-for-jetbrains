@@ -2,6 +2,7 @@ package dev.lain.claudejb.session
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -39,7 +40,17 @@ class AgentRegistryTest {
         }
     }
 
-    private fun registry() = AgentRegistry(subagentsDir = { dir })
+    /**
+     * The registry's clock, moved by hand. It is injected rather than read inside the registry so a stop
+     * instant can be asserted as a literal — the alternative is recomputing it here with the subject's own
+     * expression, which asserts nothing.
+     */
+    private var clock = 1_000_000_000L
+
+    /** When this run of the plugin started, as the registry is told it: the stamp an already-finished agent gets. */
+    private val runStarted = 900_000_000L
+
+    private fun registry() = AgentRegistry(subagentsDir = { dir }, now = { clock }, runStartedAtMillis = runStarted)
 
     /** Writes an agent whose transcript ENDS the way a real one does — see [AgentEnding]. */
     private fun agentEnding(id: String, stopReason: String?) {
@@ -50,6 +61,26 @@ class AgentRegistryTest {
             """{"type":"assistant","message":{"role":"assistant","stop_reason":"$stopReason","content":[]}}"""
         }
         Files.writeString(dir.resolve(AgentMeta.transcriptFile(id)), line)
+    }
+
+    /** A finished assistant turn: the one record shape that closes a turn — see [AgentEnding]. */
+    private val closedTurn = """{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}"""
+
+    /** An assistant turn parked on a tool that never came back. */
+    private val openTurn = """{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}"""
+
+    /** A tool result handed to the agent — a record, and not an ending: nobody answered it. */
+    private val deliveredResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}"""
+
+    /**
+     * Rewrites an agent's transcript file with exactly these records, in this order.
+     *
+     * Growth is the whole subject of the tests below, and the binary grows that file by appending records — so
+     * a test states the file's full contents before and after, and the difference between the two IS the
+     * evidence the registry reads.
+     */
+    private fun writeTranscript(id: String, vararg lines: String) {
+        Files.writeString(dir.resolve(AgentMeta.transcriptFile(id)), lines.joinToString("\n"))
     }
 
     @Test
@@ -219,5 +250,330 @@ class AgentRegistryTest {
         assertFalse(reg.nodes.isEmpty())
         // A session that never spawned an agent has no directory at all.
         assertTrue(AgentRegistry(subagentsDir = { null }).scan().isEmpty())
+    }
+
+    @Test
+    fun `an agent settled live is stamped when it stopped, not when it is scanned`() {
+        // The instant belongs to the ending, and scans happen whenever the directory is re-read: stamping at
+        // scan time would make every agent look as if it had just finished.
+        agent("mine", toolUseId = "toolu_ours")
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        clock = 1_000_060_000L
+        reg.scan()
+
+        assertEquals(1_000_000_000L, reg.nodes.getValue("mine").completedAtMillis)
+    }
+
+    @Test
+    fun `a repeated task_notification does not move the stop instant`() {
+        // `task_notification` repeats for the same Task call. A second write would rejuvenate an agent that
+        // stopped minutes ago, so an ending is sealed once and never rewritten.
+        agent("mine", toolUseId = "toolu_ours")
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        clock = 1_000_300_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+
+        assertEquals(1_000_000_000L, reg.nodes.getValue("mine").completedAtMillis)
+    }
+
+    @Test
+    fun `re-scanning rebuilds the same stop instant`() {
+        agent("mine", toolUseId = "toolu_ours")
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        clock = 1_000_060_000L
+        reg.scan()
+        clock = 1_000_600_000L
+        reg.scan()
+
+        assertEquals(1_000_000_000L, reg.nodes.getValue("mine").completedAtMillis)
+    }
+
+    @Test
+    fun `a nested subagent inherits its parent's stop instant`() {
+        // It has no toolUseId of its own, so nothing can ever stamp it directly — and it cannot outlive the
+        // turn that spawned it, so the parent's instant is its own.
+        agent("a1", toolUseId = "toolu_ours", depth = 1)
+        agent("a2", parent = "a1", depth = 2)
+        agent("a3", parent = "a2", depth = 3)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        clock = 1_000_120_000L
+        reg.scan()
+
+        assertEquals(1_000_000_000L, reg.nodes.getValue("a2").completedAtMillis)
+        assertEquals(1_000_000_000L, reg.nodes.getValue("a3").completedAtMillis)
+    }
+
+    @Test
+    fun `a running agent has no stop instant`() {
+        agent("mine", toolUseId = "toolu_ours")
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
+    fun `an agent that arrives already finished is stamped when this run started`() {
+        // Its status comes off a file left by a previous run, so nobody here watched it stop. Leaving it
+        // unstamped would put it outside the retention window for good; stamping it at admission means it is
+        // there when the IDE reopens and ages out like everything else.
+        agentEnding("finished", "end_turn")
+        val reg = registry()
+        reg.markRestored()
+
+        reg.scan()
+
+        val node = reg.nodes.getValue("finished")
+        assertEquals(AgentStatus.COMPLETED, node.status)
+        assertEquals(900_000_000L, node.completedAtMillis)
+    }
+
+    @Test
+    fun `an agent restored with nothing to judge is stamped when this run started`() {
+        agent("old", depth = 1)
+        val reg = registry()
+        reg.markRestored()
+
+        reg.scan()
+
+        val node = reg.nodes.getValue("old")
+        assertEquals(AgentStatus.STOPPED, node.status)
+        assertEquals(900_000_000L, node.completedAtMillis)
+    }
+
+    @Test
+    fun `agents that come back in the same run share one instant`() {
+        // One instant for the whole run, not a reading per agent: otherwise two agents restored together
+        // vanish from the view at different moments, for no reason anybody could name.
+        agentEnding("first", "end_turn")
+        agentEnding("second", "tool_use")
+        agent("third", depth = 1)
+        val reg = registry()
+        reg.markRestored()
+
+        clock = 1_000_000_000L
+        reg.scan()
+
+        assertEquals(900_000_000L, reg.nodes.getValue("first").completedAtMillis)
+        assertEquals(900_000_000L, reg.nodes.getValue("second").completedAtMillis)
+        assertEquals(900_000_000L, reg.nodes.getValue("third").completedAtMillis)
+    }
+
+    @Test
+    fun `the admission stamp survives later scans`() {
+        // Re-reading the directory is not an event in an agent's life: a stamp already written stays written,
+        // however many times the tree is rebuilt afterwards.
+        agentEnding("finished", "end_turn")
+        val reg = registry()
+        reg.markRestored()
+
+        reg.scan()
+        clock = 1_000_600_000L
+        reg.scan()
+        clock = 1_003_600_000L
+        reg.scan()
+
+        assertEquals(900_000_000L, reg.nodes.getValue("finished").completedAtMillis)
+    }
+
+    @Test
+    fun `an agent whose transcript grows past its ending is running again`() {
+        // THE BUG: once an agent showed finished, nothing could ever say otherwise. `statusByToolUse` answered
+        // first and nothing removed from it, so a resumed agent — writing records again after a turn it had
+        // closed — stayed green for the rest of the session while it was plainly working.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+
+        writeTranscript("mine", openTurn, closedTurn, deliveredResult)
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
+    fun `a reopened agent stays reopened while its transcript stands still`() {
+        // Nothing may oscillate: the same file read three times is one answer, not an alternating one.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+        writeTranscript("mine", openTurn, closedTurn, deliveredResult)
+        reg.scan()
+
+        clock = 1_000_600_000L
+        reg.scan()
+        clock = 1_003_600_000L
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
+    fun `an agent that settled and never writes again keeps its ending and its instant`() {
+        // THE LOAD-BEARING ONE. Reopening on evidence of growth is worth nothing if a re-read counts as growth:
+        // that turns the fix into the opposite bug, where no agent ever stays finished and every ending shows as
+        // live work for ever. A scan is not an event in an agent's life.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+
+        clock = 1_000_060_000L
+        reg.scan()
+        clock = 1_000_600_000L
+        reg.scan()
+        clock = 1_003_600_000L
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.COMPLETED, node.status)
+        assertEquals(1_000_000_000L, node.completedAtMillis)
+    }
+
+    @Test
+    fun `blank lines appended after an ending are not growth`() {
+        // A line-oriented file ends with a newline, and the binary may add one whenever it likes. Counting that
+        // as a further record would reopen every finished agent on disk at the next scan.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+
+        writeTranscript("mine", openTurn, closedTurn, "", "   ")
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.COMPLETED, node.status)
+        assertEquals(1_000_000_000L, node.completedAtMillis)
+    }
+
+    @Test
+    fun `the first scan of a settled agent reopens nothing, however long its transcript`() {
+        // The evidence of growth is a comparison, so the first pass has nothing to compare against: it records
+        // the baseline and reopens nobody. Otherwise an agent whose file was already long — every restored
+        // chat — would be declared resumed the moment the plugin first looked at it.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", closedTurn, deliveredResult, openTurn, deliveredResult)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+
+        clock = 1_000_060_000L
+        reg.scan()
+
+        val node = reg.nodes.getValue("mine")
+        assertEquals(AgentStatus.COMPLETED, node.status)
+        assertEquals(1_000_000_000L, node.completedAtMillis)
+    }
+
+    @Test
+    fun `a restored agent whose transcript went past a closed turn is running`() {
+        // Nobody here watched it, so its own transcript is the only evidence — and it says the agent closed a
+        // turn and then wrote again. That is a live agent, not one to paint red.
+        agent("resumed", depth = 1)
+        writeTranscript("resumed", closedTurn, deliveredResult)
+        val reg = registry()
+        reg.markRestored()
+
+        clock = 1_000_000_000L
+        reg.scan()
+
+        val node = reg.nodes.getValue("resumed")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
+    fun `a restored agent that only ever ended mid-turn is still cut off`() {
+        // The other half of the same rule, and red is the right answer here: this work was genuinely cut off.
+        agent("midflight", depth = 1)
+        writeTranscript("midflight", deliveredResult, openTurn)
+        val reg = registry()
+        reg.markRestored()
+
+        reg.scan()
+
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("midflight").status)
+    }
+
+    @Test
+    fun `a nested subagent reopens with the parent whose transcript grew`() {
+        // It has no toolUseId, so nothing can reopen it directly: it follows its parent, including back into
+        // life. Parents are resolved first in a scan, so this happens in the same pass rather than the next.
+        agent("a1", toolUseId = "toolu_ours", depth = 1)
+        agent("a2", parent = "a1", depth = 2)
+        writeTranscript("a1", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+
+        writeTranscript("a1", openTurn, closedTurn, deliveredResult)
+        reg.scan()
+
+        val node = reg.nodes.getValue("a2")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
+    fun `reopening admits nobody who was not ours already`() {
+        // Admission is the rule that keeps a session resumed from the terminal out of the tab bar — 84 agents in
+        // one real session. A growing transcript is evidence about an agent's liveness, never about its owner.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, closedTurn)
+        agent("foreign", toolUseId = "toolu_terminal")
+        writeTranscript("foreign", openTurn, closedTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        clock = 1_000_000_000L
+        reg.observeSettled("toolu_ours", AgentStatus.COMPLETED)
+        reg.scan()
+
+        writeTranscript("mine", openTurn, closedTurn, deliveredResult)
+        writeTranscript("foreign", openTurn, closedTurn, deliveredResult)
+        reg.scan()
+
+        assertEquals(setOf("mine"), reg.nodes.keys)
     }
 }

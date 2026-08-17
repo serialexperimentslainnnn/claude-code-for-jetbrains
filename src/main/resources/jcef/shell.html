@@ -34,7 +34,13 @@
          covered the chat tabs, and a binary that comes up in a fraction of a second painted a full-window
          panel and removed it, which read as the plugin flashing. As transcript content they cannot cover
          anything they do not own, and the composer stays usable — a prompt typed while the binary starts is
-         queued and sent when it is ready (see `ClaudeSession.send`). -->
+         queued and sent when it is ready (see `ClaudeSession.send`).
+
+         WHERE A LAYER GOES, for whoever adds the next one: beside `#conversation`, as a child of `#work` —
+         the two share the first cell of its grid, so the layer covers exactly the transcript. Never a child
+         of `#app` and never `position: fixed` over the page: `#tabsbar` lives outside `#work` and the dock is
+         the row below, so the tabs and the composer are out of reach by construction rather than by an inset
+         that happens to stop in the right place. The stacking that backs that up is in base.css. -->
       <div id="work">
         <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
           <div id="empty" class="empty-state">

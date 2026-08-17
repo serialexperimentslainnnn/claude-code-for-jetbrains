@@ -102,7 +102,7 @@ and diffs, which stay native through the IDE's `DiffManager`.
 | `src/main/kotlin/dev/lain/claudejb/settings/` | Persistence: one serialized document in the IDE PasswordSafe, the launch env derived from it, and the one-shot adoption of the legacy project file. | [map](src/main/kotlin/dev/lain/claudejb/settings/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/ui/` | Everything Swing is still allowed to be — tool window, tabs, menus, dialogs, the Settings page — plus the assembler that drives the web view and its collaborators. | [map](src/main/kotlin/dev/lain/claudejb/ui/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/ui/jcef/` | The host side of the web view: the browser and page delivery, the pure bridge, and one JSON builder per card. | [map](src/main/kotlin/dev/lain/claudejb/ui/jcef/PROJECTMAP.md) |
-| `src/main/kotlin/dev/lain/claudejb/actions/` | `AddFileAsContextAction`, `AddSelectionAsContextAction`, `ExplainSelectionAction`, and `AttachmentActions` behind them. | — |
+| `src/main/kotlin/dev/lain/claudejb/actions/` | `AddFileAsContextAction`, `AddSelectionAsContextAction`, `ExplainSelectionAction`, and `AttachmentActions` behind them. They reach a chat through `ClaudeToolWindowFactory.activePanel(project)` and never cast the tool window's content themselves — it holds ONE `Content`, and its component is the strip. | — |
 | `src/main/kotlin/dev/lain/claudejb/util/` | `InstalledPlugins` — reads a plugin id off its descriptor, because `PluginId.getId(…)` is banned (see Minefields). | — |
 | `src/main/resources/jcef/` | **The whole user interface**: `shell.html`, the `app-*.js` modules in an order that is a contract, the `css/` parts, and the vendored libraries. Served as ONE document under a hash-pinned CSP. | [map](src/main/resources/jcef/PROJECTMAP.md) |
 | `src/main/resources/META-INF/` | `plugin.xml`, plus `claude-terminal.xml` and `claude-git.xml` for the two optional dependencies, and the licences and third-party notices that ship inside the artifact. | — |
@@ -197,7 +197,13 @@ On this machine only: node needs `OPENSSL_CONF=/dev/null`, and `claude` is a sys
 
 - **The signature defect of this repository is code that is implemented, tested and unreachable.** It has
   happened repeatedly, in features users were waiting for. `ReachabilityContractTest` is the gate that catches
-  it now; when it fires the answer is to wire the symbol or delete it, **never to exempt it**.
+  it now; when it fires the answer is to wire the symbol or delete it, **never to exempt it**. Three of its
+  blind spots are covered elsewhere and the rest are not: `bridge-contract.test.js` (a `window.cc.<name>` the
+  host calls and no module implements) and `bridge-inbound.test.js` (a message type the bridge parses and the
+  page never sends · a `cc.<name>` neither side calls). **Nothing gates class MEMBERS, and nothing gates
+  reachability along a PATH** — a collaborator that is called, but not from every route that should reach it,
+  compiles, tests and ships. Closing a tab, restarting a session, restoring one and pinning a second view of
+  it are four different routes, and each is a place a call site was left behind.
 - **The plugin running in the IDE is not this working tree, so behaviour observed through the IDE is evidence
   about the INSTALLED build until `git diff HEAD` says otherwise.** There is no hot reload here: a build is
   produced, installed by hand and validated. A defect reproduced in the IDE — a refused permission, a stale

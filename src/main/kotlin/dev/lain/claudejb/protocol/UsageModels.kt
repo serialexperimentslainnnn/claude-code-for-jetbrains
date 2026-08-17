@@ -65,30 +65,16 @@ data class RateLimitInfo(
      */
     fun resetsAtIso(): String? = resetsAt?.let { java.time.Instant.ofEpochSecond(it).toString() }
 
-    val isWarning: Boolean get() = status == "allowed_warning" || status == "rejected"
     val isExhausted: Boolean get() = status == "rejected"
-
-    /**
-     * SHORT window label for the composer's quota pill (e.g. "5h", "7d"), where there is room for a few
-     * characters and no more. The dashboard wants a sentence instead — see [windowTitleFor].
-     */
-    fun windowLabel(): String = when (rateLimitType) {
-        "five_hour" -> "5h"
-        "seven_day" -> "7d"
-        "seven_day_opus" -> "7d Opus"
-        "seven_day_sonnet" -> "7d Sonnet"
-        "overage" -> "overage"
-        else -> "quota"
-    }
 
     companion object {
         /** The event's fraction → percent. [UsageWindow] needs no such factor: it is already 0..100. */
         private const val PERCENT = 100
 
         /**
-         * DESCRIPTIVE label for a window, for the usage panel — where each bar needs to say what it measures.
-         * Deliberately separate from [windowLabel]: the pill is space-constrained and the panel is not, and
-         * collapsing the two is what broke the pill the first time this was written.
+         * DESCRIPTIVE label for a window: what each bar measures. The ONE label — the composer's readout and
+         * the dashboard's card both draw a labelled bar and both call this. There used to be a short form
+         * ("5h", "7d") for a composer quota PILL, and it outlived the pill by a release.
          *
          * Unknown keys are title-cased rather than dropped. The binary keeps adding windows
          * (`seven_day_cowork`, `seven_day_omelette`, and several codenamed ones), and a window we cannot label

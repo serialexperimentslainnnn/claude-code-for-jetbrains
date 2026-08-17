@@ -130,9 +130,9 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ContextCategory` | class | `UsageModels.kt:19` |  |
 | `SessionCostUsage` | class | `UsageModels.kt:30` | `apiUsage` block of the `get_session_cost` control response: the binary's **authoritative cumulative** token tally for … |
 | `RateLimitInfo` | class | `UsageModels.kt:43` |  |
-| `UsageWindow` | class | `UsageModels.kt:117` | One usage window from the `get_usage` control reply, e.g. |
-| `ExtraUsage` | class | `UsageModels.kt:164` | `rate_limits.extra_usage` — the pay-as-you-go credit balance shown once the plan's windows are spent. |
-| `UsageReport` | class | `UsageModels.kt:183` | The `get_usage` control reply, flattened into what a UI actually needs. |
+| `UsageWindow` | class | `UsageModels.kt:103` | One usage window from the `get_usage` control reply, e.g. |
+| `ExtraUsage` | class | `UsageModels.kt:150` | `rate_limits.extra_usage` — the pay-as-you-go credit balance shown once the plan's windows are spent. |
+| `UsageReport` | class | `UsageModels.kt:169` | The `get_usage` control reply, flattened into what a UI actually needs. |
 | `isHiddenUsageWindow` | fun | `UsageReportParser.kt:33` | Whether [window] is one of the [HIDDEN_WINDOWS] the UI never shows. |
 | `MODEL_SCOPED_KEY_PREFIX` | val | `UsageReportParser.kt:43` | Prefix of the synthetic key given to a `model_scoped` window, whose real identity is its `display_name`. |
 | `parseUsageReport` | fun | `UsageReportParser.kt:53` | Parses a `get_usage` reply. |

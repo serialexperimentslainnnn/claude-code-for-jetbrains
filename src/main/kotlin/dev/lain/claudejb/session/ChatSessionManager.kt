@@ -36,8 +36,24 @@ class ChatSessionManager(private val project: Project) : Disposable {
     fun removeListener(listener: Listener) = listeners.remove(listener)
 
     /** Creates a fresh chat (does not start the process — the caller wires UI then calls [ClaudeSession.start]). */
-    fun create(): ClaudeSession {
-        val session = ClaudeSession(project, "Chat ${counter.incrementAndGet()}")
+    fun create(): ClaudeSession = register(ClaudeSession(project, "Chat ${counter.incrementAndGet()}"))
+
+    /**
+     * The Git integration's chat, if one is open — the "find" half of the find-or-create behind every prompted
+     * Git action ([createGitChat] is the other).
+     *
+     * Held as a property of the session rather than a field here, so there is one answer and it cannot go stale:
+     * a chat the user closed is out of [sessions] already, and the next Git action opens a new one.
+     */
+    fun gitChat(): ClaudeSession? = sessions.firstOrNull { it.gitIntegration }
+
+    /**
+     * Creates the Git integration's chat: named for what it is, and marked so its turns run with forced
+     * approval (see [ClaudeSession.gitIntegration]). It does not take a number from the user's own chats.
+     */
+    fun createGitChat(): ClaudeSession = register(ClaudeSession(project, GIT_CHAT_TITLE, gitIntegration = true))
+
+    private fun register(session: ClaudeSession): ClaudeSession {
         sessions.add(session)
         active = session
         fireChanged()
@@ -69,6 +85,9 @@ class ChatSessionManager(private val project: Project) : Disposable {
     }
 
     companion object {
+        /** What the Git integration's tab is called. Fixed, and pinned as such by [ClaudeSession.gitIntegration]. */
+        const val GIT_CHAT_TITLE = "Git"
+
         fun getInstance(project: Project): ChatSessionManager = project.service()
     }
 }

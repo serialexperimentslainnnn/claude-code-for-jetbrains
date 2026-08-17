@@ -1,4 +1,4 @@
-/* app-composer.js — A3 (composer)
+/* app-composer.js — the composer.
  * Owns: cc.state(s), cc.meta(m), cc.openPalette(), cc.focusInput()
  * Builds the composer DOM in CC.els.composer and the slash palette in CC.els.palette.
  * Pure renderer: never holds data/transport, only emits via CC.send().
@@ -53,14 +53,6 @@
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" ' +
       'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M4 4.5 8 8l4-3.5"/><path d="M4 9 8 12.5l4-3.5"/></svg>'
-    );
-  }
-  // history / rollback (a clock with a counter-clockwise arrow)
-  function historyGlyph() {
-    return (
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M3 3v5h5"/><path d="M3.05 13a9 9 0 1 0 2.6-6.36L3 8"/><path d="M12 7v5l3 2"/></svg>'
     );
   }
 
@@ -145,20 +137,6 @@
       },
       vibeIcon
     );
-    // History / rollback button — opens the session's Diff History (view diffs + roll back edits).
-    var historyBtn = h('button', {
-      class: 'bar-icon',
-      title: 'Session history · diffs & rollback',
-      attrs: { type: 'button', 'aria-label': 'Session history and rollback' },
-      on: {
-        click: function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          send({ type: 'openDiffHistory' });
-        },
-      },
-    });
-    historyBtn.innerHTML = historyGlyph();
     // Auto-follow scrolling toggle (on by default). Emits on the CC bus; the transcript follows.
     var followBtn = h('button', {
       class: 'bar-icon active',
@@ -175,7 +153,7 @@
     });
     followBtn.innerHTML = followGlyph();
     followBtnRef = followBtn;
-    var barRight = h('div', { class: 'bar-right' }, followBtn, vibeBtn, historyBtn, sendBtn);
+    var barRight = h('div', { class: 'bar-right' }, followBtn, vibeBtn, sendBtn);
     var bar = h('div', { class: 'composer-bar' }, barLeft, barRight);
 
     // readout (subtle session line)

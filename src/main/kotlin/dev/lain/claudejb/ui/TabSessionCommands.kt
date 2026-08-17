@@ -35,6 +35,35 @@ internal class TabSessionCommands(
 
     private fun activeSession(): ClaudeSession? = tabs.selectedChat?.session
 
+    /**
+     * The chat the Git integration talks in: found and brought to the front if it is already open, created and
+     * opened if it is not. Every prompted Git action goes through here, and none of them ever writes into the
+     * chat the user is working in — a turn of git plumbing in the middle of their conversation costs them
+     * context, money and a transcript they have to read past.
+     *
+     * It is a real chat, on purpose. You can answer it (*"squash those two"*, *"not that file"*) and it carries
+     * on from there, which is the whole point of prompting an agent instead of shelling out to `git`. What it is
+     * not is a chat like the others: its turns run with forced approval, and its title does not drift
+     * ([ClaudeSession.gitIntegration] owns both).
+     *
+     * **Not persisted.** After a restart it comes back as an ordinary chat — its conversation is real and worth
+     * keeping — and the next Git action opens a fresh one. Remembering which id it was would mean a new field in
+     * [SessionHistory] for a label.
+     *
+     * EDT: it may add a tab.
+     */
+    fun gitChat(): ClaudeSession {
+        val manager = ChatSessionManager.getInstance(project)
+        manager.gitChat()?.let { session ->
+            // Already open: select its tab so the answer lands somewhere the user is looking.
+            tabs.tabFor(session)?.let { tabs.select(it) }
+            return session
+        }
+        val session = manager.createGitChat()
+        openChat(session)
+        return session
+    }
+
     /** A restorable tab: the binary session id, its resolved title and the transcript read back from the session file. */
     private data class RestoredSession(val id: String, val title: String?, val entries: List<EntryDTO>)
 

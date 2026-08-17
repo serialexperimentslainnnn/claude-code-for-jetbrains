@@ -3,7 +3,7 @@
 #
 # WHY THIS KEY IS SEPARATE FROM THE MAINTAINER KEY, AND MUST STAY SEPARATE
 # ----------------------------------------------------------------------
-# The maintainer key (6CD3…435A) lives on a YubiKey. It cannot be exported — that is the point of it — so
+# The maintainer key lives on a YubiKey. It cannot be exported — that is the point of it — so
 # it cannot sign inside a runner. Automating artifact signatures therefore requires a SOFTWARE key whose
 # private material sits in a GitHub secret, readable by the job that references it and by anything that
 # compromises the runner.

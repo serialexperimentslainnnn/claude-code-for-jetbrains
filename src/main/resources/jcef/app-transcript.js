@@ -1,4 +1,4 @@
-/* app-transcript.js — A2 (transcript)
+/* app-transcript.js — the transcript itself: the row registry and the pass that places each row.
  *
  * Implements cc.batch(entries) and cc.clear() plus the search hook per §TRANSCRIPT.
  * Relies ONLY on globals created by app-core.js (window.CC): h, escape, markdown,
@@ -99,6 +99,11 @@
   }
 
   // ---- state --------------------------------------------------------------
+  // The host's memory cap on transcript rows, mirrored here so the notice can state the number the model
+  // actually enforces instead of a second number that drifts from it. Pinned to `TranscriptModel.MAX_ENTRIES`
+  // by TranscriptCapContractTest — the two constants cannot diverge without the build going red.
+  var MAX_ENTRIES = 2000;
+
   // id -> { el, speaker, bodyNode, kind, text, meta, state, toolUseId }
   var rows = new Map();
   // toolUseId -> tool card element (the .tool node)
@@ -154,10 +159,17 @@
       // Only for a SMALL step, and never mid-stream: a smooth scroll across a long distance (jumping to the
       // bottom of a restored transcript) is a slow crawl the user has to wait out, and re-issuing one every
       // streaming delta cancels and restarts it constantly, which stalls the scroll entirely.
+      //
+      // BOTH cases name their behaviour, and the instant one is the reason: `#conversation` carries
+      // `scroll-behavior: smooth` in the stylesheet, and neither `element.scrollTop = …` nor a `behavior:'auto'`
+      // scroll overrides that — both take the computed value of the property, so the case this code routes AWAY
+      // from smooth would animate anyway, reduced motion included. `instant` is the value that overrides the
+      // property. The `scrollTo` capability test is not decoration: jsdom has no scroll methods on Element, so
+      // the assignment below is what the test harness runs.
       var distance = c.scrollHeight - c.scrollTop - c.clientHeight;
       var smooth = distance > 0 && distance < SMOOTH_SCROLL_MAX_PX && !CC.reducedMotion;
-      if (smooth && typeof c.scrollTo === 'function') {
-        c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
+      if (typeof c.scrollTo === 'function') {
+        c.scrollTo({ top: c.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
       } else {
         c.scrollTop = c.scrollHeight;
       }
@@ -421,6 +433,88 @@
     }
     TX.resetSearch();
     showEmptyState(true);
+  };
+
+  // ---- public: cc.trimRows ------------------------------------------------
+
+  /** Drops one row from the registry and from the DOM. Same teardown the speaker-changed rebuild does. */
+  function dropRow(id) {
+    var rec = rows.get(id);
+    if (!rec) {
+      return;
+    }
+    if (rec.el && rec.el.parentNode) {
+      rec.el.parentNode.removeChild(rec.el);
+    }
+    if (rec.toolUseId) {
+      toolCards.delete(rec.toolUseId);
+    }
+    rows.delete(id);
+  }
+
+  function trimNoticeText(total) {
+    return (
+      total +
+      (total === 1 ? ' earlier row was' : ' earlier rows were') +
+      ' dropped to keep the transcript at ' +
+      MAX_ENTRIES +
+      ' rows. Nothing was lost: the session file on disk still holds the whole conversation.'
+    );
+  }
+
+  /**
+   * ONE notice row, at the head of the transcript, saying how many rows the cap has dropped in total. It is
+   * updated in place, never appended a second time — the cap trims on nearly every added row once the ceiling
+   * is reached, so a row per trim would bury the transcript in its own bookkeeping.
+   *
+   * A total of 0 means no notice at all: the row is absent, not present and empty.
+   */
+  function renderTrimNotice(total) {
+    var c = conversationEl();
+    if (!c) {
+      return;
+    }
+    var node = c.querySelector('.trim-notice');
+    if (total <= 0) {
+      if (node) {
+        c.removeChild(node);
+      }
+      return;
+    }
+    var text = trimNoticeText(total);
+    if (node) {
+      node.textContent = text;
+      return;
+    }
+    // First trim of this transcript: announce it once. The count then keeps climbing on the screen without
+    // being re-announced — a live region rewritten per trimmed row talks over itself and gets switched off.
+    // `__order` stays unset, which is what keeps the notice at the head: `reposition` only ever inserts a row
+    // before a MANAGED sibling, so no row can ever be placed above it.
+    c.insertBefore(el('div', { class: 'notice trim-notice', text: text }), c.firstChild);
+    var C = CCobj();
+    if (C.announce) {
+      C.announce(text);
+    }
+  }
+
+  /**
+   * The host's transcript model dropped its oldest rows to stay under the cap: remove those nodes and state
+   * the cumulative total (`{ids:[…], total:N}` — see ChatTranscriptView.trimNotice).
+   *
+   * An EMPTY id list is not a no-op and does not mean "remove everything": it is a pure notice refresh, sent
+   * when a transcript is (re)attached, because `cc.clear()` took the notice with it and the resend that
+   * follows only carries rows that still exist.
+   */
+  cc.trimRows = function (payload) {
+    if (!payload) {
+      return;
+    }
+    var ids = Array.isArray(payload.ids) ? payload.ids : [];
+    for (var i = 0; i < ids.length; i++) {
+      dropRow(ids[i]);
+    }
+    var total = typeof payload.total === 'number' ? payload.total : 0;
+    renderTrimNotice(total);
   };
 
   // ---- subscribe to bus events -------------------------------------------

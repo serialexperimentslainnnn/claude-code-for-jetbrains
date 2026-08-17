@@ -1,12 +1,13 @@
 package dev.lain.claudejb.headless
 
+import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStoreTestAccess
+import dev.lain.claudejb.settings.SettingsStore
 import dev.lain.claudejb.ui.ClaudeSettingsConfigurable
 import dev.lain.claudejb.ui.SettingsModelSection
 import javax.swing.JComboBox
@@ -28,7 +29,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
     override fun setUp() {
         super.setUp()
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStoreTestAccess.load()
+        SettingsStore.load()
         // Reused light-fixture project service; restore defaults so isModified/reset assertions are stable.
         ClaudeSettings.getInstance(project).replaceState(ClaudeSettings.State())
     }
@@ -47,8 +48,20 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         return field.get(modelSectionOf(c)) as JComboBox<String>
     }
 
+    /**
+     * Opening the page asks the safe for the stored document off the EDT and answers back on it, so a method
+     * that opened a page leaves work behind in two places. Draining both here — the queue, then the event
+     * queue — is what keeps that work inside the method that started it: without it the answer lands in
+     * whatever store the NEXT test class installs, replacing its settings mid-method.
+     */
+    private fun drainReload() {
+        ClaudeSettings.awaitWrites()
+        PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+    }
+
     override fun tearDown() {
         try {
+            drainReload()
             SecretStore.storeOverride = null
             val manager = ChatSessionManager.getInstance(project)
             manager.all().forEach { runCatching { manager.remove(it) } }
@@ -277,6 +290,9 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         alwaysAllowTools = "Read"
         restoreOpenChatsOnStartup = false
         reduceMotion = true
+        // Any allowed value other than the default, so "the form wrote it back" is distinguishable from
+        // "the form left the default alone".
+        workloadWindowMinutes = 60
         securityBlockCredentials = false
         securityBlockDangerousCommands = false
         securityBlockForeignOtherUserHome = false
@@ -300,7 +316,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         val FORM_OWNED = setOf(
             // SettingsModelSection
             "effort", "permissionMode", "thinkingTokens", "includePartialMessages",
-            "restoreOpenChatsOnStartup", "reduceMotion",
+            "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",
             // SettingsSecuritySection
             "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockForeignOtherUserHome",
             "securityBlockForeignNetworkMounts", "securityBlockForeignWslMounts",
@@ -327,6 +343,78 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
 
         /** On the form, but written only on a real edit — see the assertion at the end of the test. */
         val UNWRITTEN_UNLESS_EDITED = setOf("model")
+    }
+
+    /**
+     * REGRESSION: opening the page draws what is STORED, not a copy loaded when the service was created.
+     *
+     * The in-memory settings are loaded once per service and nothing invalidates them, so a change made in a
+     * second IDE is invisible here indefinitely. That matters most on this page precisely because it is the
+     * one surface that shows every field and then writes them ALL back: drawn from a stale copy, pressing OK
+     * on an unrelated setting replaced the other IDE's whole configuration with this one's. So the page asks
+     * the safe when it opens, and OK is measured against the answer.
+     */
+    fun `test opening the page adopts what another IDE stored`() {
+        val settings = ClaudeSettings.getInstance(project)
+        settings.replaceState(ClaudeSettings.State()) // this IDE's copy, loaded before the other one wrote
+        val elsewhere = ClaudeSettings.State().apply { permissionMode = "acceptEdits" }
+        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+
+        val c = newConfigurable()
+        try {
+            c.createComponent()
+            drainReload()
+            assertEquals("the page never re-read the safe", "acceptEdits", settings.state.permissionMode)
+            c.apply()
+        } finally {
+            c.disposeUIResources()
+        }
+        assertEquals(
+            "OK on an untouched page replaced the other IDE's configuration",
+            "acceptEdits",
+            SettingsStore.load().permissionMode,
+        )
+    }
+
+    /**
+     * …and the other half: while the page is open, nothing from outside is applied over the user, and OK wins.
+     *
+     * The refresh is asynchronous — the read belongs off the EDT — so its answer can arrive after the user has
+     * already typed. It is dropped in that case: a settings field that changes under someone's fingers between
+     * their keystroke and their click is worse than a stale one, because they will click OK on a value they
+     * never chose. What they typed is what gets stored.
+     */
+    fun `test an outside change is not applied under a typed edit and OK wins`() {
+        val settings = ClaudeSettings.getInstance(project)
+        settings.replaceState(ClaudeSettings.State())
+        val elsewhere = ClaudeSettings.State().apply {
+            model = "from-the-other-ide"
+            sensitiveExtraGlobs = "**/other.env" // no section owns this one: adoption is visible through it
+        }
+        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+
+        val c = newConfigurable()
+        try {
+            c.createComponent() // the refresh is in flight; the user is quicker than the keyring
+            modelComboOf(c).selectedItem = "typed-by-the-user"
+            assertTrue(c.isModified())
+            drainReload() // the answer arrives with an edit already on screen
+            assertEquals(
+                "an outside change was applied over what the user had typed",
+                "typed-by-the-user",
+                modelComboOf(c).editor.item,
+            )
+            c.apply()
+        } finally {
+            c.disposeUIResources()
+        }
+        val stored = SettingsStore.load()
+        assertEquals("OK did not win", "typed-by-the-user", stored.model)
+        assertEquals(
+            "the refresh was skipped instead of merely not drawn, so the other IDE's field was clobbered",
+            "**/other.env",
+            stored.sensitiveExtraGlobs,
+        )
     }
 
     fun `test disposeUIResources does not throw`() {

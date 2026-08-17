@@ -11,7 +11,6 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
@@ -45,8 +44,12 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
         val tabs = ChatTabsPanel()
         tabs.onEvents(
-            selected = { tab -> (tab?.component as? JcefChatPanel)?.let { manager.setActive(it.session) } },
-            closed = { tab -> (tab.component as? JcefChatPanel)?.let { manager.remove(it.session) } },
+            selected = { tab -> tab?.session?.let { manager.setActive(it) } },
+            // A PINNED tab is a second view of a chat, not a chat: closing it closes the view. Removing the
+            // session here would dispose the `claude` process of the chat that spawned the agent — leaving its
+            // own tab open over a dead session, and dropping it from the restorable set. The chat's own close
+            // takes its pinned views with it (see ChatTabsPanel.close), so nothing is left behind either way.
+            closed = { tab -> if (!tab.isPinnedView) tab.session?.let { manager.remove(it) } },
         )
         // ONE content, holding the whole strip. Not closeable: closing it would take every chat with it, and
         // the tool window would be left showing nothing with no way back.
@@ -70,7 +73,11 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 NewChatAction { openChat(project, tabs, manager.create()) },
                 InterruptAction(tabs),
                 CommandsAction(tabs),
-                DiffHistoryAction { openDiffHistory(project, tabs) },
+                // The slot the Diff History button used to hold, and the integration's only visible door: the
+                // gear entries hide themselves, so the one that matters on a project with no repository was
+                // buried in a menu you had to already suspect. Reading Git stays in that menu, where it has
+                // always been — the title bar has room for one Git button, and this is the one nobody can find.
+                GitPromptedActions.toolbarAction(project) { commands.gitChat() },
                 CloseAllDiffsAction(project),
             ),
         )
@@ -152,15 +159,6 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
     private fun activePanel(tabs: ChatTabsPanel): JcefChatPanel? = tabs.selectedChat
 
-    /** The toolbar's Diff History button: the active session's, or a hint when there is no chat open. */
-    private fun openDiffHistory(project: Project, tabs: ChatTabsPanel) {
-        val session = activePanel(tabs)?.session ?: run {
-            Messages.showInfoMessage(project, "Open a chat first.", "Diff History")
-            return
-        }
-        showDiffHistory(project, tabs, session)
-    }
-
     private fun buildGearGroup(project: Project, tabs: ChatTabsPanel, commands: TabSessionCommands) =
         DefaultActionGroup().apply {
             // Context · Cost · Account · MCP all live in the formatted JCEF dashboard now — open that
@@ -185,6 +183,12 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             // itself when there is no Git (see [GitContextActions]), which is re-derived on every menu open,
             // so a repository created after the tool window opened still shows up.
             addAll(GitContextActions.gearEntries(project))
+            // The write half: the plugin runs no Git of its own, it asks Claude in a chat of its own — see
+            // [GitPromptedActions]. Same hide-when-it-does-not-apply rule, so this adds nothing visible to a
+            // project without a repository beyond the one entry that offers to create one.
+            addAll(GitPromptedActions.gearEntries(project) { commands.gitChat() })
+            // And the operations the IDE genuinely does better — as the IDE's OWN actions, not copies of them.
+            add(GitIdeMenu.gearEntry())
             addSeparator()
             add(
                 simple("Settings…") {
@@ -225,7 +229,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
 
         override fun update(e: AnActionEvent) {
-            // Greyed on a non-chat tab (Diff History), where there is no session to sign out of.
+            // Greyed while there is no chat on screen, and so no session to sign out of.
             e.presentation.isEnabled = tabs.selectedChat != null
         }
 
@@ -260,12 +264,6 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
     }
 
-    /** Opens (or focuses) the Diff History tab for the active session — every reviewable edit, with revert. */
-    private class DiffHistoryAction(private val onOpen: () -> Unit) :
-        AnAction("Diff History", "Review and revert Claude's edits in this session", AllIcons.Vcs.History) {
-        override fun actionPerformed(e: AnActionEvent) = onOpen()
-    }
-
     /** Closes every diff tab the plugin opened (auto-approved and manually reviewed). Greyed when none open. */
     private class CloseAllDiffsAction(private val project: Project) :
         AnAction("Close All Diffs", "Close every diff tab Claude has opened", AllIcons.Actions.GC) {
@@ -288,39 +286,27 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         /** The id this plugin registers its tool window under (`plugin.xml`), and looks it up by. */
         const val TOOL_WINDOW_ID = "Claude Code"
 
+        /**
+         * The chat panel currently on screen, for callers OUTSIDE the tool window (the editor actions).
+         *
+         * The one place that knows the shape of the content, deliberately: the tool window holds a SINGLE
+         * `Content` whose component is the [ChatTabsPanel] (the chats are its cards), so casting
+         * `selectedContent.component` to a `JcefChatPanel` — which is what `actions/` did — is a cast that can
+         * never succeed. It compiled, it returned null, and the actions silently took their fallback branch.
+         *
+         * Null when the tool window has never been opened: its content, and therefore every chat, is built by
+         * [createToolWindowContent]. Callers that need a chat must [ToolWindow.activate] first and ask again.
+         */
+        fun activePanel(project: Project): JcefChatPanel? {
+            val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return null
+            val strip = toolWindow.contentManager.selectedContent?.component as? ChatTabsPanel ?: return null
+            return strip.selectedChat
+        }
+
         /** Min gap between attention notifications for the same session, to avoid spam. */
         const val NOTIFY_THROTTLE_MS = 3000L
 
         /** Max characters in a chat tab label before it's ellipsized (full title stays in the tooltip). */
         const val TAB_TITLE_MAX = 22
-
-        /**
-         * Opens (or focuses) the Diff History / rollback tab for [session] in the Claude Code tool window.
-         * Callable from anywhere (e.g. the JCEF composer's history button), not just the toolbar action.
-         */
-        fun openDiffHistoryFor(project: Project, session: ClaudeSession) {
-            val tw = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return
-            // The tool window holds ONE content: the tab strip. Everything the user sees is a tab inside it.
-            val tabs = tw.contentManager.contents.firstNotNullOfOrNull { it.component as? ChatTabsPanel } ?: return
-            showDiffHistory(project, tabs, session)
-            tw.activate(null)
-        }
-
-        /**
-         * Shows [session]'s Diff History tab: an existing one is [DiffHistoryPanel.refresh]ed and re-selected so it
-         * reflects edits made since it was surfaced, otherwise a fresh closeable tab is added.
-         *
-         * ONE implementation for both doors (the toolbar button and the composer's history button). They were two
-         * copies of the same fifteen lines, which is two places for the refresh-vs-recreate rule to drift apart.
-         */
-        private fun showDiffHistory(project: Project, tabs: ChatTabsPanel, session: ClaudeSession) {
-            val existing = tabs.all().firstOrNull { (it.component as? DiffHistoryPanel)?.boundSession === session }
-            if (existing != null) {
-                (existing.component as DiffHistoryPanel).refresh()
-                tabs.select(existing)
-                return
-            }
-            tabs.select(tabs.add(DiffHistoryPanel(project, session), "Diff History", "Diff History", null))
-        }
     }
 }

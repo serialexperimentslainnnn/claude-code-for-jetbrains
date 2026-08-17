@@ -54,6 +54,10 @@ internal object GitContextActions {
         OpenGitLogAction(project),
     )
 
+    // NB there is deliberately no Git Log button in the title bar. The one title-bar slot Git gets belongs to
+    // the door that is otherwise invisible — [GitPromptedActions.toolbarAction], the integration, whose gear
+    // entries hide themselves. Reading history is already discoverable from the gear menu below.
+
     // ── what the entries say (pure: this is what the tests pin) ───────────────────────────────────────────────
 
     /**
@@ -186,7 +190,7 @@ internal object GitContextActions {
     }
 
     /**
-     * Shared behaviour of the three entries: how they find the service, and the fact that they **disappear**
+     * Shared behaviour of the entries: how they find the service, and the fact that they **disappear**
      * instead of greying out when there is no Git to talk to.
      */
     private abstract class GitEntry(protected val project: Project, text: String, description: String) :

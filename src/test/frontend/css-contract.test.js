@@ -83,3 +83,64 @@ describe('JS↔CSS class contract', () => {
     }
   });
 });
+
+/**
+ * The stacking contract: which layer may cover which, stated in the stylesheet instead of emerging from
+ * document order. jsdom lays nothing out, so the numbers themselves are the only thing there is to assert —
+ * and they are the thing that broke twice, both times the same way: a waiting screen laid over the whole of
+ * `#app` covered the chat tabs, and covered the composer once the tabs were spared.
+ *
+ * What makes those failures unrepeatable is not the numbers but the SCOPE: `#work` is a stacking context, so
+ * a layer added inside the work area competes with its siblings there and with nothing else. The tab bar is
+ * outside that context, and the dock outranks the cell the layers share.
+ */
+describe('layer containment', () => {
+  const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /** The body of one top-level rule — exact selector plus ` {`, so `#work` is not `#work > *`. */
+  function ruleBody(selector) {
+    const at = css.indexOf(selector + ' {');
+    if (at < 0) throw new Error('no rule for ' + selector);
+    return css.slice(css.indexOf('{', at) + 1, css.indexOf('}', at));
+  }
+  const zIndexOf = (selector) => {
+    const m = /z-index:\s*(-?\d+)/.exec(ruleBody(selector));
+    if (!m) throw new Error('no z-index on ' + selector);
+    return Number(m[1]);
+  };
+
+  it('the work area is a stacking context, so a layer inside it cannot out-number the tab bar', () => {
+    // A positioned element with an explicit z-index opens one; `auto` would leave every number inside the
+    // work area competing at the root, which is where 100s and 120s came from.
+    expect(ruleBody('#work')).toMatch(/position:\s*relative/);
+    expect(zIndexOf('#work')).toBe(0);
+    expect(ruleBody('#tabsbar')).toMatch(/position:\s*relative/);
+    expect(zIndexOf('#tabsbar')).toBeGreaterThan(zIndexOf('#work'));
+  });
+
+  it('the dock outranks every layer over the transcript, and the transcript is the floor', () => {
+    // A grid row is not a clip: without this the only thing keeping a layer off the composer is that the
+    // dock happens to come later in the document.
+    expect(zIndexOf('#conversation')).toBe(0);
+    expect(zIndexOf('.dashboard')).toBeGreaterThan(zIndexOf('#conversation'));
+    expect(zIndexOf('#dock')).toBeGreaterThan(zIndexOf('.dashboard'));
+  });
+
+  it('the find bar is anchored inside the work area, never over the tab bar', () => {
+    // `fixed` put it 12px below the top of the WINDOW, which is the tab row; in a narrow tool window it is
+    // nearly as wide as that row, so a tab focused with the search open could be hidden outright — WCAG 2.2
+    // SC 2.4.11. Anchored inside #work it is 12px below the tabs and cannot reach them at any width, which
+    // is a different kind of guarantee from a z-index that happens to be lower.
+    expect(ruleBody('.find-bar')).toMatch(/position:\s*absolute/);
+    expect(ruleBody('.find-bar')).not.toMatch(/position:\s*fixed/);
+    expect(zIndexOf('.find-bar')).toBeGreaterThan(zIndexOf('#dock'));
+    expect(zIndexOf('.find-bar')).toBeLessThan(10);
+  });
+
+  it('the palette floats over the composer and stays inside the work area', () => {
+    // It is a child of #work, so its number is read there. Above the dock (it hangs over the composer),
+    // and small — a three-digit z-index in this scope is the sign of a layer that thinks it is on the page.
+    expect(zIndexOf('#palette')).toBeGreaterThan(zIndexOf('#dock'));
+    expect(zIndexOf('#palette')).toBeLessThan(10);
+  });
+});

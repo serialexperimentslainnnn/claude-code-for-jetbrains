@@ -62,3 +62,69 @@ describe('permission cards — reconcile by id on re-push', () => {
     expect(region.querySelector('[data-card-id="reqB"]')).toBe(nodeB);
   });
 });
+
+// Keeping the NODE is only half of keeping the card: a node re-appended to the parent it is already in is
+// removed and inserted again — the DOM has no move — and a subtree that leaves the document comes back with
+// its scroll offsets at zero and its focus gone. Both were happening on every push, and every push is a
+// second request arriving or another one resolving, which is exactly when there is something on screen to
+// lose. The card body is a scroll container (`.perm-diff`, capped at 28vh), so a real diff scrolls.
+describe('permission cards — a push that changes nothing moves nothing', () => {
+  const elicitCard = (id) => ({
+    id,
+    tool: 'Mcp',
+    title: 'Input requested',
+    elicitation: { description: 'Credentials', fields: [{ name: 'user', title: 'User', required: true }] },
+  });
+
+  /** Every childList mutation the region records while `fn` runs, as [removed, added] pairs. */
+  const mutations = (win, region, fn) => {
+    const records = [];
+    const observer = new win.MutationObserver((list) => list.forEach((m) => records.push(m)));
+    observer.observe(region, { childList: true });
+    fn();
+    observer.takeRecords().forEach((m) => records.push(m));
+    observer.disconnect();
+    return records.map((m) => [m.removedNodes.length, m.addedNodes.length]);
+  };
+
+  it('re-inserts nothing when the same list is pushed again', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    const region = win.CC.els.permissions;
+    const list = [editCard('reqA', '@@\n-a\n+b'), editCard('reqB', '@@\n-c\n+d')];
+    win.cc.permissions(list);
+
+    // The identical push the host makes on any permission change. `appendChild` on a node already in place
+    // reports a removal AND an addition — measured here, not assumed — so the assertion is that there is no
+    // record at all, which is the only state in which the offset and the caret survive.
+    expect(mutations(win, region, () => win.cc.permissions(list))).toEqual([]);
+  });
+
+  it('keeps the caret in the field being typed into while another request arrives', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    const region = win.CC.els.permissions;
+    win.cc.permissions([elicitCard('reqA')]);
+    const field = region.querySelector('[data-card-id="reqA"] input[name="user"]');
+    field.focus();
+    expect(win.document.activeElement).toBe(field);
+
+    // A second card arriving must not evict the first one from the document: jsdom blurs a focused element
+    // whose subtree is detached, exactly as the browser does.
+    win.cc.permissions([elicitCard('reqA'), editCard('reqB', '@@\n-c\n+d')]);
+    expect(win.document.activeElement).toBe(field);
+  });
+
+  it('still puts a reordered list in the order the host sent', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    const region = win.CC.els.permissions;
+    win.cc.permissions([editCard('reqA', '@@\n-a\n+b'), editCard('reqB', '@@\n-c\n+d')]);
+    const ids = () => [...region.children].map((n) => n.getAttribute('data-card-id'));
+    expect(ids()).toEqual(['reqA', 'reqB']);
+
+    // Only what MOVED may move: the region ends in the pushed order, and the untouched card is still the
+    // same node it was.
+    const nodeB = region.querySelector('[data-card-id="reqB"]');
+    win.cc.permissions([editCard('reqB', '@@\n-c\n+d'), editCard('reqA', '@@\n-a\n+b')]);
+    expect(ids()).toEqual(['reqB', 'reqA']);
+    expect(region.querySelector('[data-card-id="reqB"]')).toBe(nodeB);
+  });
+});

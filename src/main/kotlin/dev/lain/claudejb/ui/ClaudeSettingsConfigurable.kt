@@ -45,11 +45,26 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
     override fun getDisplayName(): String = "Claude Code"
 
+    /**
+     * The settings document the form currently shows.
+     *
+     * Not the same object as `settings.state` at every moment, and that is what it is for: a reload can replace
+     * the in-memory copy while this page is open, and "has the user changed anything" must keep being asked
+     * against what the user was actually shown.
+     */
+    private var shown: ClaudeSettings.State? = null
+
     override fun createComponent(): JComponent {
         var form = FormBuilder.createFormBuilder()
         sections.forEach { form = it.addTo(form) }
         val built = form.addComponentFillVertically(JPanel(), 0).panel
         reset()
+        // The in-memory settings are loaded once per service and nothing invalidates them, so another IDE's
+        // change is invisible until something asks. Opening this page is that moment: it is the one surface
+        // that shows every field and then writes them all back, so drawing it from a stale copy is how one
+        // IDE's settings silently replace the other's. The answer arrives asynchronously (the read belongs
+        // off the EDT) and is dropped if the user has already typed — nothing changes under their fingers.
+        settings.reload { if (!isModified()) reset() }
         // Pin the form to its preferred width on the LEFT instead of letting it stretch edge-to-edge: on a wide
         // (2K+) monitor a full-width form spread the text fields and the 4-column tool grids across the whole
         // screen. BorderLayout.WEST gives `built` its preferred width (now bounded, since the HTML notes wrap at
@@ -70,10 +85,9 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         }
     }
 
-    override fun isModified(): Boolean {
-        val s = settings.state
-        return sections.any { section -> section.changedFields(s).any { it } }
-    }
+    /** False before the page is built: with no widgets, nothing has been changed. */
+    override fun isModified(): Boolean =
+        shown?.let { s -> sections.any { section -> section.changedFields(s).any { it } } } ?: false
 
     override fun apply() {
         // The WHOLE page is validated first: a section that refuses its input must not leave the sections
@@ -84,13 +98,18 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         // The form edits the whole state in bulk, so it saves once at the end rather than through
         // `update {}` per field. Since 5.5.0 nothing persists for us: without this, everything above is
         // in memory only and gone at the next restart.
+        //
+        // Whole, and deliberately: this is the one write that is allowed to overwrite what another IDE stored
+        // while the page was open. The user is looking at every field and pressing OK on all of them.
         settings.save()
         settings.applyTo(session)
+        shown = s
     }
 
     override fun reset() {
         val s = settings.state
         sections.forEach { it.reset(s) }
+        shown = s
     }
 
     override fun disposeUIResources() = sections.forEach { it.dispose() }

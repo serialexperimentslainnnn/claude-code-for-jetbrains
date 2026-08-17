@@ -111,6 +111,35 @@
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
+
+/* THE MEASURE, and the reason it is here and not on the column.
+   `--col` is `none` (base.css): the transcript, the dock and the dashboard take the whole width of the tool
+   window, because a user who drags that window wider is almost always doing it to read a diff, a table or a
+   wide tool card — capping the column made the drag buy nothing, which is why the old 860px went. Prose is
+   the one thing that does not improve with width: the eye loses the start of the next line somewhere past
+   80 characters, and at 1600px this text would run to ~245.
+
+   So the cap moves off the container and onto the running text alone. `ch` rather than px because the unit
+   IS the measure — it tracks whatever size the IDE theme hands the page, where a pixel value silently stops
+   meaning 75 characters the moment the font changes. 70ch of "0" is ~75–80 characters of ordinary lowercase,
+   the comfortable range and the number WCAG 2.1 SC 1.4.8 (AAA) names.
+
+   Deliberately NOT capped: `pre`, tables, images and every tool card. Those are structure, they are what the
+   width was widened for, and a table folded to 70ch is unreadable in a way a long line never is. Nor the
+   user's own card: that text is verbatim, so it is a text node rather than a `<p>`, and the cap would have to
+   go on the card itself — which would turn "a soft full-width card, not a bubble" into a bubble. It is also
+   the text least read at length: it is the prompt you just typed. */
+.body p,
+.body li,
+.body blockquote,
+.body h1,
+.body h2,
+.body h3,
+.body h4,
+.body h5,
+.body h6 {
+  max-width: 70ch;
+}
 .body > :first-child {
   margin-top: 0;
 }
@@ -725,6 +754,14 @@ details.fold .fold-body p:first-child {
 }
 .notice p:last-child {
   margin-bottom: 0;
+}
+/* The memory cap dropped rows off the head of the transcript, and one persistent row at the top says how many.
+   Dashed and centred so it reads as the BOUNDARY of the scrollback rather than as one more thing that happened
+   inside it — it is the only notice that is a property of the transcript instead of an event in it. */
+.notice.trim-notice {
+  background: transparent;
+  border-style: dashed;
+  text-align: center;
 }
 .notice.error {
   color: var(--danger);

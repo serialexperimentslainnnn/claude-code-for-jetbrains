@@ -162,7 +162,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `MemoryRecallFormatter.body` | fun | `MemoryRecallFormatter.kt:22` | Markdown bullet list of the recalled memories (one per line: scope, path, truncated snippet). |
 | `NoticeNarrator` | class | `NoticeNarrator.kt:16` | Everything the binary says that is not part of a turn: refusals, uploads, plugin installs, denials, recalled memories, … |
 | `PermissionCardManager` | class | `PermissionCardManager.kt:20` | Holds the queue of permission requests awaiting the user's Accept/Reject (rendered as inline chat cards), extracted … |
-| `PluginAgentIndex` | class | `PluginAgentIndex.kt:51` | What belongs to a **plugin** session: every agent, subagent and background task it started, each with its parent and … |
+| `PluginAgentIndex` | class | `PluginAgentIndex.kt:52` | What belongs to a **plugin** session: every agent, subagent and background task it started, each with its parent and … |
 | `QuotaWarnings` | class | `QuotaWarnings.kt:17` | Telling the user their quota is running out, once per threshold. |
 | `RemoteMounts` | object | `RemoteMounts.kt:30` | Answers one question that turns out to be load-bearing: **is this path on a network / removable / foreign … |
 | `RemoteMounts.snapshot` | fun | `RemoteMounts.kt:54` | The host snapshot, computed once. |
@@ -219,10 +219,10 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ToolNaming.toolFilePath` | fun | `ToolNaming.kt:60` | The tool call's file argument as a path **relative to [projectRoot]**, or null when the tool takes no file / the path … |
 | `ToolNaming.relativizeToRoot` | fun | `ToolNaming.kt:67` | `/abs/root/src/Foo.kt` + root `/abs/root` → `src/Foo.kt`. |
 | `ToolNaming.formatToolUse` | fun | `ToolNaming.kt:81` | Concise one-line representation of a tool call, mirroring the CLI's "Tool(arg)" bullets. |
-| `Speaker` | class | `TranscriptModel.kt:6` | Who produced a transcript entry; drives styling in the chat panel. |
-| `ToolState` | class | `TranscriptModel.kt:13` | Lifecycle of a tool call, reflected on its box: [LOADING] just dispatched (light blue), [RUNNING] actively executing — … |
-| `TranscriptEntry` | class | `TranscriptModel.kt:16` | One renderable line of the conversation. |
-| `TranscriptModel` | class | `TranscriptModel.kt:84` | Observable list of [TranscriptEntry]. |
+| `Speaker` | class | `TranscriptModel.kt:7` | Who produced a transcript entry; drives styling in the chat panel. |
+| `ToolState` | class | `TranscriptModel.kt:14` | Lifecycle of a tool call, reflected on its box: [LOADING] just dispatched (light blue), [RUNNING] actively executing — … |
+| `TranscriptEntry` | class | `TranscriptModel.kt:17` | One renderable line of the conversation. |
+| `TranscriptModel` | class | `TranscriptModel.kt:85` | Observable list of [TranscriptEntry]. |
 | `TranscriptReconciler` | class | `TranscriptReconciler.kt:28` | Streaming reconciliation for a single session's top-level assistant output. |
 | `WorkloadWindow` | object | `WorkloadWindow.kt:11` | The one place the "Show workloads completed in the last X minutes" visibility rule lives, so the tab bar and the … |
 | `WorkloadWindow.ALL` | val | `WorkloadWindow.kt:14` | The "All" sentinel for [WINDOW_MINUTES]: no age ever hides a workload. |

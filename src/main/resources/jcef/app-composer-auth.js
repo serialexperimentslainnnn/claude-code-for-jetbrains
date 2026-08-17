@@ -2,7 +2,10 @@
  *
  * One subject: the OAuth/API-key card raised whenever the plugin has no usable credential — which step of the
  * flow is on screen, what each button sends, and clearing a credential out of the DOM the moment it is sent.
- * Driven from renderState via CX.renderAuth, and from the host via cc.authState / cc.showAuth.
+ * Driven from renderState via CX.renderAuth (which step of the flow is on screen comes from the host via
+ * cc.authState). Whether the card is WANTED is a function of the pushed state and of nothing else — see
+ * CX.authWanted. There is deliberately no "raise it anyway" entry point: a second criterion is how the two
+ * waiting screens end up disagreeing about which of them is up.
  */
 (function () {
   'use strict';
@@ -13,8 +16,6 @@
 
   // ---- sign-in card ---------------------------------------------------------
 
-  /** Raised by cc.showAuth() (fresh install) until dismissed or resolved. Read by the boot screen too. */
-  CX.authForced = false;
   var authWired = false;
   var announcedAuth = false;
 
@@ -65,25 +66,29 @@
     setAuthStep(String(s.step), s.url, s.message);
   };
 
-  /** Host → card, proactively (a fresh install has no credentials): raise it without waiting for state. */
-  cc.showAuth = function () {
-    CX.authForced = true;
-    setAuthStep('idle');
-    renderAuth(lastAuthState || {});
+  /**
+   * Whether the sign-in card is wanted for a state — the ONE criterion, shared with the boot screen so the
+   * two waiting screens cannot disagree about which of them is up.
+   *
+   * Two suppressions, both from the flow's own order (install -> sign in -> loading -> chat). The install card
+   * wins, because signing in is meaningless without a binary. And a session that is STARTING wins, because
+   * during startup the answer is still being computed: a launch that resolves the credential in a fraction of
+   * a second would otherwise paint the card and remove it, which reads as the plugin flashing.
+   *
+   * The criterion is `starting`, never `running`. Startup is the only window in which the card is premature;
+   * for the rest of a session's life a credential can still expire or be revoked, and this card is the only
+   * control that repairs it — suppressing it there leaves a live chat that can no longer take a turn, and no
+   * way to sign in from the tab it happened in.
+   */
+  CX.authWanted = function (s) {
+    return !!s.needsLogin && !s.binaryMissing && !s.starting;
   };
 
-  var lastAuthState = null;
-
   function renderAuth(s) {
-    lastAuthState = s;
     var card = document.getElementById('auth-card');
     if (!card) return;
-    // Two gates, both from the same rule (install -> sign in -> loading -> chat): the install card wins,
-    // because signing in is meaningless without a binary; and a RUNNING session wins over both, so the
-    // card cannot linger over a live chat once the sign-in it was asking for has happened.
-    var visible = (!!s.needsLogin || CX.authForced) && !s.binaryMissing && !s.running;
+    var visible = CX.authWanted(s);
     if (!visible && !card.hidden) {
-      CX.authForced = false;
       announcedAuth = false;
       setAuthStep('idle');
     }
@@ -95,7 +100,6 @@
       }
     }
     card.hidden = !visible;
-    if (!s.needsLogin && !CX.authForced) CX.authForced = false;
   }
   CX.renderAuth = renderAuth;
 
@@ -166,7 +170,6 @@
     // with no exit — observed live before the raw-TTY Enter fix, and worth an escape hatch regardless.
     on('auth-cancel-verify', cancel);
     on('auth-dismiss', function () {
-      CX.authForced = false;
       CC.send({ type: 'dismissAuth' });
     });
     on('auth-retry', function () {

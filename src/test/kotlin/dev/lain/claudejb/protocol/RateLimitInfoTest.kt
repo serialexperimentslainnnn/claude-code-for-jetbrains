@@ -57,40 +57,9 @@ class RateLimitInfoTest {
     // --- status flags ---
 
     @Test
-    fun `allowed_warning is a warning but not exhausted`() {
-        val info = RateLimitInfo(status = "allowed_warning")
-        assertTrue(info.isWarning)
-        assertFalse(info.isExhausted)
-    }
-
-    @Test
-    fun `rejected is both warning and exhausted`() {
-        val info = RateLimitInfo(status = "rejected")
-        assertTrue(info.isWarning)
-        assertTrue(info.isExhausted)
-    }
-
-    @Test
-    fun `allowed is neither warning nor exhausted`() {
-        val info = RateLimitInfo(status = "allowed")
-        assertFalse(info.isWarning)
-        assertFalse(info.isExhausted)
-    }
-
-    // --- windowLabel ---
-
-    @Test
-    fun `window labels map known rate limit types`() {
-        assertEquals("5h", RateLimitInfo(rateLimitType = "five_hour").windowLabel())
-        assertEquals("7d", RateLimitInfo(rateLimitType = "seven_day").windowLabel())
-        assertEquals("7d Opus", RateLimitInfo(rateLimitType = "seven_day_opus").windowLabel())
-        assertEquals("7d Sonnet", RateLimitInfo(rateLimitType = "seven_day_sonnet").windowLabel())
-        assertEquals("overage", RateLimitInfo(rateLimitType = "overage").windowLabel())
-    }
-
-    @Test
-    fun `unknown or null rate limit type falls back to quota`() {
-        assertEquals("quota", RateLimitInfo(rateLimitType = "something_new").windowLabel())
-        assertEquals("quota", RateLimitInfo(rateLimitType = null).windowLabel())
+    fun `only rejected is exhausted`() {
+        assertTrue(RateLimitInfo(status = "rejected").isExhausted)
+        assertFalse(RateLimitInfo(status = "allowed_warning").isExhausted)
+        assertFalse(RateLimitInfo(status = "allowed").isExhausted)
     }
 }

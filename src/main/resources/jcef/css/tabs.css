@@ -89,8 +89,14 @@ body.vibe .composer-card:focus-within {
    agent tree deepens moves the transcript under the pointer while you are reading it. */
 /* One ROW: the tab rows on the left, the dashboard's view switcher on the right. Side by side as flex
    items rather than one overlaying the other — see `.dash-toggles` for the conformance reason. */
+/* Above the work area, and above it by declaration rather than by being drawn somewhere else. The bar and
+   #work do not overlap today, so this changes no pixel — what it changes is what a future layer can do:
+   #work is a stacking context (base.css), so nothing laid over the transcript can out-number this row and
+   cover a chat tab. A layer that hides a focusable tab is WCAG 2.2 SC 2.4.11 (Focus Not Obscured), which
+   is how the dashboard's view buttons came out of a `fixed` corner stack and into this bar. */
 #tabsbar {
   position: relative;
+  z-index: 1;
   display: flex;
   align-items: flex-start;
   gap: 8px;

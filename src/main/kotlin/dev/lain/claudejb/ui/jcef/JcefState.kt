@@ -12,7 +12,7 @@ import kotlinx.serialization.json.put
 
 /**
  * Serializes a [ClaudeSession]'s composer-relevant runtime state into the JSON payloads the JCEF web layer's
- * `cc.state(s)` / `cc.meta(m)` consume (see JCEF_CONTRACT §COMPOSER). The web layer is a pure renderer: it
+ * `cc.state(s)` / `cc.meta(m)` consume. The web layer is a pure renderer: it
  * receives the live labels, the option lists (with the selected flag pre-computed), and nothing else — all
  * branching/state lives in the Kotlin backend, which is the single source of truth.
  *
@@ -173,6 +173,13 @@ object JcefState {
             // trusting the paste event's clipboardData. See JcefBridge.Msg.PasteClipboard, which
             // ChatBridgeRouter dispatches to AttachmentTray.pasteFromClipboard().
             put("hostClipboard", hostClipboardPreferred)
+            // This tab IS the Git chat, so it opens on the Git view instead of the transcript.
+            //
+            // A property of the SESSION, not a mode the page can put itself into: the flag comes from
+            // [ClaudeSession.gitIntegration], which is also what forces approval on every turn in this chat.
+            // Letting the page decide would make the view reachable from a conversation running under the
+            // user's own permission mode, and the whole point of the Git chat is that it does not.
+            put("gitIntegration", session.gitIntegration)
             // Install routes for THIS OS, for the boot card shown when no `claude` binary exists. The host
             // decides the list (it knows the OS and the distro); the web app only renders buttons. `display`
             // is the exact command a button will run — corporate networks block individual installers, so

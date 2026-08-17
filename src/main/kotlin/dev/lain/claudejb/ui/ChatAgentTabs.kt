@@ -5,6 +5,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.wm.ToolWindowManager
 import dev.lain.claudejb.session.PluginAgentIndex
+import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefTabsData
 
@@ -51,9 +52,20 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
     fun render() {
         // Every open chat's session, so hovering ANY tab can show that chat's tree — not just this one's.
         val others = panel.chatStrip()?.workloads().orEmpty().associate { it.chatId to it.session }
+        // The retention window and the instant to measure it from, read ONCE for the whole push: every chat
+        // in this bar is then aged by the same instant, instead of the last one drawn being younger than the
+        // first by however long the serialisation took.
+        val windowMinutes = ClaudeSettings.getInstance(project).workloadWindowMinutes
         panel.host.exec(
             "window.cc.tabs && window.cc.tabs(" +
-                JcefTabsData.tabsJson(session, chats, hiddenAgents, others) + ")",
+                JcefTabsData.tabsJson(
+                    session,
+                    chats,
+                    hiddenAgents,
+                    windowMinutes,
+                    System.currentTimeMillis(),
+                    others,
+                ) + ")",
         )
     }
 

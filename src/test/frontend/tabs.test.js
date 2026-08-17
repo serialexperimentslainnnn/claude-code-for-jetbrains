@@ -312,14 +312,159 @@ describe('tab bar', () => {
     expect(sent.length).toBe(1); // the chat still selects
   });
 
+  // NB this one PASSES WHILE BLIND, and that is worth knowing rather than fixing: jsdom has no scroll methods
+  // on Element and treats scrollLeft as a plain property, so it exercises the fallback and can say nothing
+  // about the behaviour the real browser applies. It pins the translation of the gesture, no more. The
+  // assertion that covers what actually broke is the next test, which looks at the argument.
   it('the wheel scrolls the chats, because a vertical wheel does not move a horizontal row', () => {
     const capsule = bar().querySelector('.tab-capsule');
-    // jsdom lays nothing out, so overflow is simulated: the handler must consult it before scrolling.
+    // jsdom lays nothing out, so the overflow is simulated. The handler does not measure it — a measurement
+    // that says "nothing to scroll" when there is leaves the row inert with no way to tell why — but a row
+    // with somewhere to go is the situation being described.
     Object.defineProperty(capsule, 'scrollWidth', { value: 900, configurable: true });
     Object.defineProperty(capsule, 'clientWidth', { value: 300, configurable: true });
     capsule.scrollLeft = 0;
     capsule.dispatchEvent(new win.WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
     expect(capsule.scrollLeft).toBe(120);
+  });
+
+  it('the wheel asks for an INSTANT scroll, and consecutive ticks accumulate', () => {
+    // `.tab-capsule` declares `scroll-behavior: smooth`, and an assignment to scrollLeft takes its behaviour
+    // from that declaration: it starts an animation and leaves the offset reading where the animation BEGAN.
+    // Two things broke on that, both invisible to the test above. The read-back could not tell whether the row
+    // had moved, so the gesture never claimed the wheel; and the next tick computed its target from the stale
+    // offset, so fast wheeling re-aimed at the same place instead of walking along the row. Naming the
+    // behaviour is the fix — 'auto' would not be, since 'auto' means "ask the CSS".
+    const capsule = bar().querySelector('.tab-capsule');
+    capsule.scrollLeft = 0;
+    const asked = [];
+    // A real instant scroll has landed by the time the call returns; a smooth one has not, which is the whole
+    // bug. Modelling the instant one is what lets the second tick be asserted at all.
+    capsule.scrollTo = (opts) => {
+      asked.push(opts);
+      capsule.scrollLeft = opts.left;
+    };
+
+    const first = new win.WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+    capsule.dispatchEvent(first);
+    expect(asked).toEqual([{ left: 120, behavior: 'instant' }]);
+    // Having moved, the gesture belongs to the row: the page must not scroll underneath it as well.
+    expect(first.defaultPrevented).toBe(true);
+
+    capsule.dispatchEvent(new win.WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true }));
+    expect(asked[1].left).toBe(240);
+  });
+
+  it('repainting the bar does not pile up another document-wide drag listener', () => {
+    // The drag continues over the whole document once it starts, so half of it cannot live on the capsule.
+    // The bar builds a NEW capsule on every repaint — several times a turn — and a `document` listener added
+    // per capsule outlives the element it was added for: an unbounded pile, each handler running on every
+    // mouse move and each holding a discarded row alive. Those two halves are registered once, for the page.
+    const before = bar().querySelector('.tab-capsule');
+    const added = [];
+    const real = win.document.addEventListener.bind(win.document);
+    win.document.addEventListener = (type, fn, opts) => {
+      added.push(type);
+      return real(type, fn, opts);
+    };
+    try {
+      for (let i = 0; i < 5; i++) {
+        win.cc.tabs({ chats: [{ id: '1', title: `Chat ${i}`, selected: true }], tree: TREE, tasks: TASKS });
+      }
+    } finally {
+      win.document.addEventListener = real;
+    }
+
+    // The repaints were real ones — a rebuild replaces the capsule — so the count below is about the
+    // listeners and not about a render that never happened.
+    expect(bar().querySelector('.tab-capsule')).not.toBe(before);
+    expect(added.filter((t) => t === 'mousemove' || t === 'mouseup')).toEqual([]);
+
+    // ...and the row that survived all that is still draggable: the fix is one registration, not none.
+    const capsule = bar().querySelector('.tab-capsule');
+    capsule.scrollLeft = 0;
+    const at = (type, x) =>
+      new win.MouseEvent(type, { clientX: x, button: 0, bubbles: true, cancelable: true });
+    capsule.dispatchEvent(at('mousedown', 300));
+    win.document.dispatchEvent(at('mousemove', 240));
+    expect(capsule.scrollLeft).toBe(60);
+    win.document.dispatchEvent(at('mouseup', 240));
+  });
+
+  // The row is rebuilt from nothing on every repaint (the test above proves the capsule is a NEW element), and
+  // a new element starts at offset zero. So everything the reader did to the row — the drag, the wheel — was
+  // undone several times a turn, and then the selected tab was re-centred on top of that, which aimed the row
+  // at the tab they had deliberately scrolled away from.
+  describe('the row stays where the reader put it', () => {
+    const MANY = [
+      { id: '1', title: 'Chat 1', selected: true },
+      { id: '2', title: 'Chat 2' },
+      { id: '3', title: 'Chat 3' },
+    ];
+    const push = (chats, tree) => win.cc.tabs({ chats, tree: tree || TREE, tasks: TASKS });
+
+    it('carries the offset across a repaint', () => {
+      push(MANY);
+      const before = bar().querySelector('.tab-capsule');
+      before.scrollLeft = 180;
+
+      // A repaint with the SAME selection: an agent event, a renamed chat — several times a turn.
+      push(MANY.map((c) => ({ ...c, title: c.title + '!' })));
+      const after = bar().querySelector('.tab-capsule');
+      expect(after).not.toBe(before); // a real rebuild, or the assertion below proves nothing
+      expect(after.scrollLeft).toBe(180);
+    });
+
+    it('asks for the restore INSTANTLY, because the capsule scrolls smoothly', () => {
+      // `.tab-capsule` declares `scroll-behavior: smooth`, which a bare assignment obeys: the row would GLIDE
+      // back into place on every repaint instead of simply being where it was. jsdom has no scroll methods on
+      // Element, so the call has to be observed on a stub — the same technique the wheel test uses.
+      push(MANY);
+      bar().querySelector('.tab-capsule').scrollLeft = 200;
+      const asked = [];
+      win.Element.prototype.scrollTo = function (opts) {
+        asked.push(opts);
+        this.scrollLeft = opts.left;
+      };
+      try {
+        push(MANY.map((c) => ({ ...c, title: c.title + '!' })));
+      } finally {
+        delete win.Element.prototype.scrollTo;
+      }
+      expect(asked).toEqual([{ left: 200, behavior: 'instant' }]);
+    });
+
+    it('re-centres the selected chat when the selection CHANGES, and not on every repaint', () => {
+      // jsdom has no `scrollIntoView` at all, and the code tests for it before calling — so the stub is what
+      // makes the centring observable, and its absence is what the module already tolerates. The frame
+      // callback is run inline for the same reason: the centring is deliberately deferred to one, and a
+      // real frame is not something a test can wait for.
+      const centred = [];
+      const rafBefore = win.requestAnimationFrame;
+      win.requestAnimationFrame = (fn) => fn();
+      win.Element.prototype.scrollIntoView = function (opts) {
+        centred.push([this.querySelector('.pill-label').textContent, opts.inline]);
+      };
+      try {
+        setup(); // a fresh page: the first draw has to start the row aimed at the open chat
+        push(MANY);
+        expect(centred).toEqual([['Chat 1', 'center']]);
+
+        push(MANY.map((c) => ({ ...c, title: c.title + '!' }))); // same chat open — leave the row alone
+        expect(centred.length).toBe(1);
+
+        push([
+          { id: '1', title: 'Chat 1' },
+          { id: '2', title: 'Chat 2', selected: true },
+          { id: '3', title: 'Chat 3' },
+        ]);
+        expect(centred.length).toBe(2);
+        expect(centred[1]).toEqual(['Chat 2', 'center']);
+      } finally {
+        delete win.Element.prototype.scrollIntoView;
+        win.requestAnimationFrame = rafBefore;
+      }
+    });
   });
 
   it('a running node carries its state as a class, like the tool card it belongs to', () => {

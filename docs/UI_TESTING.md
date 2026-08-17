@@ -119,8 +119,10 @@ exit $ST
 Notes:
 - CI runs on **GitHub Actions**, and this suite is deliberately **not** part of the gate: it needs a display,
   it is slower than everything else combined, and a flaky required check teaches people to re-run until green.
-  Add it as a scheduled or `workflow_dispatch` workflow on a runner with `xvfb` if you want it automated —
-  never as a required status check.
+  It runs as the `UI end-to-end tests` job in `ci.yml` under `xvfb-run`, on a nightly schedule and on
+  `workflow_dispatch` only — never on a push or a pull request, so a fork PR cannot start it, and **never as a
+  required status check**. It carries no `continue-on-error`: a job that cannot fail proves nothing, so it
+  fails when `build/test-results/uiTest` holds no JUnit XML and again when every declared test was skipped.
 - Override the endpoint with `-Drobot-server.url=http://<host>:<port>` (forwarded to the `uiTest` task) when
   the IDE runs on another machine.
 - `runIdeForUiTests` also disables the privacy/consent dialogs, tips and the trust prompt, and opens the tiny
@@ -130,7 +132,7 @@ Notes:
 
 | Test | Proves |
 |------|--------|
-| `ChatSmokeUiTest` | The tool window gives a **live web view**, not the "needs JCEF" Swing fallback: `#conversation` and the composer textarea exist, the bar draws ≥1 chat and marks exactly one with `aria-current`. This is the cheap guard on the failure the 253 floor exists for (no `com.intellij.modules.jcef` ⇒ `NoClassDefFoundError` in `JcefHost.<init>`). |
+| `ChatSmokeUiTest` | The tool window gives a **live web view**, not the "needs JCEF" Swing fallback: `#conversation` and the composer textarea exist, the bar draws ≥1 chat and marks exactly one with `aria-current`. This is the cheap guard on the failure the **`253.29346.138`** floor exists for (no `com.intellij.modules.jcef` ⇒ `NoClassDefFoundError` in `JcefHost.<init>`). |
 | `ComposerUiTest` | Keystrokes from the **OS keyboard** reach the page (the focus bug that made a new tab unusable for a whole release), and Enter sends while Shift+Enter keeps a multi-line draft. |
 | `NewChatTabUiTest` | The whole 5.5.0 tab round trip: a Swing action builds a panel, `ChatTabsPanel` adds a `CardLayout` card and pushes the chat list into **every** open page, a pill click comes back as a `selectChat` bridge message, the strip swaps the card, both pages repaint with the selection moved. |
 | `TabBarScrollUiTest` | The chat row scrolls by wheel (Chromium will not move a horizontal scroller with a vertical wheel — `app-tabs.js` translates the gesture) and by grabbing it. **Overflow is a layout fact**, so jsdom cannot answer this: there `scrollWidth`/`clientWidth`/`scrollLeft` are all 0. |

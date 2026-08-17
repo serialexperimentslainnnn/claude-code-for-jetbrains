@@ -1,16 +1,18 @@
-/* app-session.js — A5 (session dashboard)
- * Implements cc.session(payload) and cc.mcp(payload) per JCEF_CONTRACT2.md §cc.session/cc.mcp.
+/* app-session.js — the dashboard panel, and which of its views you are looking at.
+ * Implements cc.session(payload) and cc.mcp(payload).
  * A ".dash-toggle" button in the tab bar shows/hides a ".dashboard" panel that overlays
  * CC.els.conversation (the composer stays visible). Hidden by default.
  * Consumes app-core.js globals (window.CC: h, escape, send). Vanilla ES2019,
  * addEventListener only, no external resources, themeable via CSS classes only.
  *
- * This file owns the SHELL: the panel, the view switcher, what is rendered when, and the two Kotlin-facing
- * methods. The cards themselves are three companions hanging off the shared `CC.dash` namespace, which
- * `app-session-base.js` creates and must therefore load first — `app-session-cards.js` (plan limits, context,
- * cost, account, session facts), `app-session-mcp.js` (the servers) and `app-session-workloads.js` (the
- * diagram of everything that is running). This file loads LAST of the family: it builds the panel eagerly at
- * the bottom, so every builder it can reach for has to exist by then.
+ * This file owns the SHELL: the panel, the view switcher, what is rendered when, and the Kotlin-facing
+ * methods — `cc.session` and `cc.mcp` outright, plus a wrapper over the composer's `cc.meta` for the one
+ * field that decides which view a tab opens on. The cards themselves are four companions hanging off the
+ * shared `CC.dash` namespace, which `app-session-base.js` creates and must therefore load first —
+ * `app-session-cards.js` (plan limits, context, cost, account, session facts), `app-session-mcp.js` (the
+ * servers), `app-session-workloads.js` (the diagram of everything that is running) and `app-session-git.js`
+ * (the repository). This file loads LAST of the family: it builds the panel eagerly at the bottom, so every
+ * builder it can reach for has to exist by then.
  */
 (function () {
   'use strict';
@@ -28,9 +30,18 @@
 
   // ---- DOM handles (created on build) ----------------------------------------
   var toggleBtn = null;
+  // Held because they are shown and hidden as the session gains and loses a plan or a Git surface — see
+  // `syncOptionalButtons`.
+  var planBtn = null;
+  var gitBtn = null;
   var panel = null;
   var shown = false;
   var built = false;
+
+  /** The host said this tab exists to show Git (`cc.meta({gitIntegration:true})`). */
+  var gitTab = false;
+  /** …and the Git view has already been opened once, so a later push does not reopen a panel the user shut. */
+  var gitOpened = false;
 
   // ---------------------------------------------------------------------------
   // Render the whole dashboard body from the stashed payloads.
@@ -45,11 +56,71 @@
    * stashed and drawn when it is next shown.
    */
   function renderIfShown() {
+    // The Plan and Git buttons live in the TAB BAR, not in the panel, so they have to be kept current even
+    // while the panel is closed — otherwise a plan written during a turn would go unannounced until you
+    // happened to open the dashboard, which is precisely the discoverability problem they exist to fix.
+    syncOptionalButtons();
+    openGitTabOnce();
     if (built && shown) render();
+  }
+
+  /**
+   * Shows the Plan and Git buttons when the session has one, and hides them when it does not.
+   *
+   * Hiding one while it is the OPEN view would leave the panel showing a view with no way back to it and no
+   * lit button, so that case falls back to the default view — the plan vanishing is a real transition (the
+   * session left plan mode), not an error, and it should read as one.
+   */
+  function syncOptionalButtons() {
+    var s = lastSession;
+    optionalButton(planBtn, 'plan', !!(s && s.plan && s.plan.body));
+    optionalButton(gitBtn, 'git', !!(s && s.git && s.git.available));
+  }
+
+  function optionalButton(btn, view, has) {
+    if (!btn) return;
+    btn.hidden = !has;
+    if (!has && currentView === view) {
+      currentView = defaultView();
+      markActiveButton();
+    }
+  }
+
+  /**
+   * Which view the panel falls back to: Git in a tab that exists to show Git, Session everywhere else.
+   *
+   * The same answer serves the first render and every return to the panel, so a Git tab cannot open on Git
+   * and then land on Session the second time you look at it.
+   */
+  function defaultView() {
+    return gitTab && lastSession && lastSession.git && lastSession.git.available ? 'git' : 'session';
+  }
+
+  /**
+   * A Git tab opens ON the Git view, once.
+   *
+   * The host makes this tab to show the visualiser, so opening it on an empty chat would make the user press
+   * a button to reach the only reason the tab exists. Once only: after that the panel is the user's, and a
+   * routine payload push must not reopen what they closed.
+   */
+  function openGitTabOnce() {
+    if (gitOpened || !gitTab || defaultView() !== 'git') return;
+    ensureBuilt();
+    if (!built) return; // no mount points yet; the next push tries again
+    gitOpened = true;
+    currentView = 'git';
+    shown = true;
+    // Only the visibility here: the caller renders immediately afterwards, and rendering twice for one push
+    // is the exact waste `renderIfShown` exists to avoid.
+    applyVisibility();
   }
 
   function render() {
     if (!panel) return;
+    // The panel is its own scroll container and this rebuilds it from nothing, which drops the offset to
+    // zero. The host pushes a payload several times a turn, so without carrying it across, reading anything
+    // below the fold — a plan, the history list — meant being sent back to the top mid-sentence.
+    var offset = panel.scrollTop;
     // Clear.
     while (panel.firstChild) panel.removeChild(panel.firstChild);
 
@@ -58,11 +129,11 @@
     var inner = h('div', { class: 'dash-inner' });
 
     var s = lastSession || {};
-    // FOUR EXCLUSIVE VIEWS, not one panel with four scroll anchors. The anchor version was wrong in a way
+    // EXCLUSIVE VIEWS, not one panel with as many scroll anchors. The anchor version was wrong in a way
     // that only shows up in use: with no agents there is no Agents card to scroll to, so pressing "Agents"
     // simply left the Session cards on screen — the button looked broken because it did nothing visible.
     //
-    // One registry, looked up by view: adding a fifth view is a line here and a line in the button stack,
+    // One registry, looked up by view: adding a view is a line here and a line in the button stack,
     // and no branch anywhere else. The nested ternary this replaces was four levels deep and had the same
     // failure mode as any conditional chain — the next view would have been appended to the tail of it.
     var view = VIEWS[currentView] || VIEWS.session;
@@ -87,10 +158,12 @@
       );
     }
     panel.appendChild(inner);
+    // Restored after the content exists, or there is nothing to scroll and the browser clamps it to zero.
+    panel.scrollTop = offset;
   }
 
   /**
-   * The four views, each declaring its own title, its cards and what it says when empty.
+   * The views, each declaring its own title, its cards and what it says when empty.
    *
    * A view that renders nothing must still say WHICH view is empty: "No session data yet" under the Agents
    * button is the same failure as showing the Session cards — the panel answering a question nobody asked.
@@ -101,8 +174,6 @@
       empty: 'No session data yet.',
       cards: function (s) {
         return [
-          // First: when there IS a plan, it is what the session is about, and everything below is telemetry.
-          D.buildPlanCard(s.plan),
           D.buildUsageCard(s.usage),
           D.buildContextCard(s.context),
           D.buildCostCard(s.cost),
@@ -123,11 +194,32 @@
         return [D.buildWorkloadsCard(s)];
       },
     },
+    // Its own view rather than a card among the Session stats, and its button only exists while there IS a
+    // plan (see `syncOptionalButtons`). A plan is prose you go back and re-read while working, not a number
+    // you glance at — and buried in a grid of stat cards it was unfindable, which is exactly how it was
+    // reported. The button appearing is also the notice that one has been written.
+    plan: {
+      title: 'Plan',
+      empty: 'No plan for this session.',
+      cards: function (s) {
+        return [D.buildPlanCard(s.plan)];
+      },
+    },
+    // The repository, what can be done to it, and what has happened in it. Like Plan, its button only exists
+    // while the session HAS the surface (`git.available`) — a project with no Git support would otherwise get
+    // a permanent button onto a view that can only say so.
+    git: {
+      title: 'Git',
+      empty: 'No Git repository for this project.',
+      cards: function (s) {
+        return [D.buildGitHeadCard(s.git), D.buildGitActionsCard(s.git), D.buildGitHistoryCard(s.git)];
+      },
+    },
   };
 
   // ---------------------------------------------------------------------------
   /**
-   * One of the four view buttons.
+   * One of the view buttons.
    *
    * Each button owns a VIEW, and the rule is the one people expect from a switcher: pressing another view
    * switches to it, pressing the one you are already in closes the panel and gives you the chat back. The
@@ -221,16 +313,16 @@
     // The id is what the view buttons point `aria-controls` at, so the relation between the stack and the
     // panel it opens is programmatic rather than only visual.
     panel = h('div', { class: 'dashboard', attrs: { hidden: '', id: 'cc-dashboard' } });
-    // Overlay the conversation; the composer (in #dock) stays visible.
-    // Insert as a sibling of #conversation so CSS can position it over the
-    // conversation area without covering the dock.
+    // A sibling of #conversation, and so a child of #work: the two share the first cell of its grid, which
+    // is what makes this a layer over a transcript that stays laid out rather than a swap for it. The dock
+    // is the row below and the tab bar is outside #work, so neither can be covered (dashboard.css).
     if (conv.parentNode) {
       conv.parentNode.insertBefore(panel, conv.nextSibling);
     } else {
       root.appendChild(panel);
     }
 
-    // The stack: a way OUT, then the four views. "Chat" is its own button rather than a state of another
+    // The stack: a way OUT, then the views. "Chat" is its own button rather than a state of another
     // one — leaving the dashboard is a different action from switching view, and making the user find
     // whichever button happens to be highlighted in order to leave is a puzzle, not an affordance.
     toggleBtn = viewButton('Session', null);
@@ -242,11 +334,31 @@
         click: function (ev) {
           ev.preventDefault();
           if (shown) toggle();
+          // "Chat" means the CHAT, not merely "not the dashboard". Closing the panel was all this did, so
+          // pressed while an agent's or a task's transcript was on screen — which is the state you most
+          // want out of — it did nothing at all, and with no pill for a task there was no other way back.
+          CC.send({ type: 'showChatTranscript' });
           announceView();
         },
       },
     });
-    var stack = h('div', { class: 'dash-toggles' }, chatBtn, toggleBtn, viewButton('Workloads', 'workloads'));
+    planBtn = viewButton('Plan', 'plan');
+    // Hidden until the session actually has a plan — see `syncOptionalButtons`. Most sessions never write one,
+    // and a permanent button whose view says "No plan for this session" is the panel answering a question
+    // nobody asked, which is the same reason the Session cards are not shown by default.
+    planBtn.hidden = true;
+    gitBtn = viewButton('Git', 'git');
+    // Same rule, same reason: hidden until the host reports a Git surface for this project.
+    gitBtn.hidden = true;
+    var stack = h(
+      'div',
+      { class: 'dash-toggles' },
+      chatBtn,
+      toggleBtn,
+      viewButton('Workloads', 'workloads'),
+      gitBtn,
+      planBtn
+    );
     // Into the TAB BAR, not floating over the transcript. As a fixed stack in the corner it sat on top of
     // the conversation and, with a few chats open, on top of the tabs themselves — the row it now lives in
     // has always reserved the space for it (`.tab-row` padding-right).
@@ -264,18 +376,22 @@
     if (shown) {
       panel.removeAttribute('hidden');
       panel.classList.add('open');
-      // Hide the transcript while the dashboard fills the conversation area — the dock (composer) stays visible.
-      if (conv) conv.setAttribute('hidden', '');
+      // The transcript is COVERED, not hidden: it keeps its box and therefore its scroll offset, and the
+      // reader comes back to the line they were on instead of to the top of the conversation. `inert` is the
+      // other half of that — a transcript still painted underneath would keep its links and buttons
+      // focusable while invisible, which is WCAG 2.2 SC 2.4.11 (Focus Not Obscured), and it would also be
+      // read out by a screen reader over the panel that replaced it.
+      if (conv) conv.setAttribute('inert', '');
     } else {
       panel.setAttribute('hidden', '');
       panel.classList.remove('open');
-      if (conv) conv.removeAttribute('hidden');
+      if (conv) conv.removeAttribute('inert');
       // Leaving the panel returns to the default view, so the next press of any button opens what it says
       // rather than whatever was last looked at.
-      currentView = 'session';
+      currentView = defaultView();
     }
     // Button labels never change (see viewButton); the highlight says where you are. "Chat" is always on
-    // screen — it is one of the five places you can be, not a mode of the others — and it is the one lit up
+    // screen — it is one of the places you can be, not a mode of the others — and it is the one lit up
     // when the dashboard is closed, because then the chat IS the view you are looking at.
     markActiveButton();
   }
@@ -290,6 +406,14 @@
   // out of the way (see app-session-workloads.js), and this is the only door it needs.
   D.leaveDashboard = function () {
     if (shown) toggle();
+  };
+
+  // The Git view's header carries an explicit Show/Hide chat button (app-session-git.js). It drives THIS
+  // toggle rather than one of its own: the panel's visibility has a single owner, and a second one would be a
+  // second answer to "is the chat on screen". `dashboardShown` is what lets that button label itself.
+  D.toggleDashboard = toggle;
+  D.dashboardShown = function () {
+    return shown;
   };
 
   function ensureBuilt() {
@@ -309,6 +433,21 @@
 
   cc.mcp = function (payload) {
     lastMcp = payload && typeof payload === 'object' ? payload : null;
+    ensureBuilt();
+    renderIfShown();
+  };
+
+  /**
+   * `cc.meta` belongs to the composer, which loads earlier; this WRAPS it rather than replacing it.
+   *
+   * The one field read here is `gitIntegration`: the host marking a tab as the Git tab, so it opens on the
+   * visualiser instead of on an empty chat. Everything else in the meta stays the composer's, and no other
+   * tab changes behaviour — a tab without the flag is exactly what it was.
+   */
+  var metaBefore = typeof cc.meta === 'function' ? cc.meta : null;
+  cc.meta = function (m) {
+    if (metaBefore) metaBefore(m);
+    if (m && m.gitIntegration === true) gitTab = true;
     ensureBuilt();
     renderIfShown();
   };

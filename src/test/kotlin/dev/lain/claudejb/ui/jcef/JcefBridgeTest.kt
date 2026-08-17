@@ -24,7 +24,6 @@ class JcefBridgeTest {
         assertTrue(JcefBridge.parse("""{"type":"interrupt"}""") is JcefBridge.Msg.Interrupt)
         assertTrue(JcefBridge.parse("""{"type":"cycleMode"}""") is JcefBridge.Msg.CycleMode)
         assertTrue(JcefBridge.parse("""{"type":"ready"}""") is JcefBridge.Msg.Ready)
-        assertTrue(JcefBridge.parse("""{"type":"palette"}""") is JcefBridge.Msg.OpenPalette)
     }
 
     @Test

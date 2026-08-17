@@ -7,6 +7,7 @@ import com.intellij.openapi.project.Project
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.jetbrains.annotations.TestOnly
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -125,12 +126,14 @@ class PluginAgentIndex {
         }
     }
 
-    /** Whether [agentId] was spawned under a plugin session — the admission gate for [AgentRegistry]. */
-    @Synchronized
-    fun isAdmitted(sessionId: String, agentId: String): Boolean =
-        agents(sessionId).any { it.id == AgentMeta.bareAgentId(agentId) }
-
-    /** Every agent this plugin has ever admitted for [sessionId], in admission order. */
+    /**
+     * Every agent this plugin has ever admitted for [sessionId], in admission order.
+     *
+     * The admission gate reads THIS (`AgentScanner`), and ids are stored bare: `agent-<id>.jsonl` is a file
+     * name, while the sidecar's `parentAgentId` is the same id unprefixed, and taking the file name as the
+     * identity collapses the tree into one level. Callers holding either spelling normalise with
+     * [AgentMeta.bareAgentId] before comparing.
+     */
     @Synchronized
     fun admittedAgents(sessionId: String): List<String> = agents(sessionId).map { it.id }
 
@@ -182,7 +185,14 @@ class PluginAgentIndex {
         }
     }
 
-    /** Every background task recorded for [sessionId], in the order they were first seen. */
+    /**
+     * Every background task recorded for [sessionId], in the order they were first seen.
+     *
+     * The only way to observe what [recordTask] persisted — nothing in the UI asks the index for tasks (the
+     * live set comes from `BackgroundTaskRegistry`); the record exists so a task keeps its place in the tree
+     * across restarts.
+     */
+    @TestOnly
     @Synchronized
     fun taskIds(sessionId: String): List<String> =
         session(sessionId).nodes.filter { it.type == Kind.TASK }.map { it.id }
