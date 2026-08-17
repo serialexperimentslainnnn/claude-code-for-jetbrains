@@ -14,6 +14,14 @@ working — or update the IDE.
 - **A tab per agent, with its own transcript**, reachable from a bar under the chats that keeps the whole
   tree — agents, their agents, background tasks — one hover away. Closing a tab hides a view and destroys
   nothing, and any subtab can be pinned as a tab of its own.
+- **The chat's own buttons are in the chat.** New chat, Stop, Commands, Git, Close all diffs and Log out sit
+  in a row above the prompt box, where they are used, instead of in the tool window's title bar — which now
+  holds only the IDE's own controls. Stop is greyed unless a turn is running, and Close all diffs unless
+  there is a diff open.
+- **Install, sign-in and loading are screens over the transcript, and nothing else.** Whichever one a tab
+  owes you covers the conversation and leaves the chat tabs and the prompt box alone, so you can switch
+  chats while one starts and type into a chat whose binary is still coming up — what you type is queued and
+  sent the moment it is ready. A start that takes a moment draws no screen at all.
 - **Workloads**: everything running across every open chat as one diagram, replacing the three lists that
   were three views of the same tree. Finished work ages out of it on a window you choose in Settings — five
   minutes through four hours, or All — while anything still running is always shown.
@@ -81,6 +89,31 @@ working — or update the IDE.
   better and lets you undo the undo.
 
 ### Fixed
+- **Agents stayed "running" for the rest of the session after they had finished, failed or been killed** —
+  and with them the Task card in the transcript and their row in Workloads, which take their state from the
+  agent. That last part is why finished work never aged out of the diagram: the window deliberately never
+  hides anything still running. An agent's own record is now read while the session is live, not only when
+  restoring one, so it settles whether or not the binary announces it; and a status this build does not
+  recognise is shown as a failure rather than as work still in progress, because a red row is wrong loudly
+  and a spinning one is wrong in silence.
+- **"Commit with Claude" wrote its whole turn into the conversation you were in** whenever the Git tab was
+  not already open — which was most of the time, since nothing opened it on its own. It always goes to the
+  Git chat now, which is created if it does not exist. Opening it that way no longer drags you over to it
+  either: the tab appears and badges itself when its turn wants you, and pressing the **Git** button is
+  still what takes you there.
+- **The Git view kept naming the branch you had left.** It now follows the IDE's own Git plugin, so a
+  checkout made anywhere — the IDE, this plugin, a terminal outside it — updates the view.
+- **⚙ ▸ Git Operations did nothing.** The entries are the IDE's own actions and were being invoked without
+  the context they resolve their target from, so each one quietly decided it was unavailable. They run now,
+  and an action the IDE genuinely refuses says so instead of looking broken.
+- **Your plan showed as 100% used until you restarted the binary.** Once a limit window's reset time passes,
+  the plugin reports it as the 0% it is rather than repeating the number from the window that just ended.
+- **The command palette covered the box you were typing in**, and the taller the composer got the more of it
+  it hid. It sits above the prompt box now instead of floating over it, it is bounded to a readable number
+  of rows, and an unqueried list is in alphabetical order rather than whatever order the commands arrived in.
+- **Typing a slash command took two presses of Enter** — the first completed it, the second sent it. The
+  list is for picking with the mouse; the keyboard enters it only when you press an arrow, and until then
+  Enter sends. Scrolling or clicking the list no longer takes the caret out of the composer either.
 - **The plugin was dead on 2026.2.** The IDE now ships its embedded browser as a separate bundled plugin, and
   the whole chat UI is that browser, so every chat failed to open. The plugin declares that dependency now,
   which is also why the minimum IDE moved: it first exists in 2025.3.1.
@@ -94,13 +127,12 @@ working — or update the IDE.
 - **The tab row could not be scrolled or reached once a few chats were open.** It is bounded and the titles
   are capped (the full one is in the tooltip), the mouse wheel scrolls it, you can grab the row and drag it,
   and selecting a chat centres it.
-- **The Chat / Session / Workloads buttons floated over the transcript** and over the tabs. They are part of
-  the tab row now, so they cannot cover anything.
+- **The Chat / Session / Workloads / Git / Plan buttons floated over the transcript** and over the tabs, and
+  then disappeared entirely whenever the chat list arrived empty. They are a row of their own directly above
+  the prompt box now, in the same shape as the model and mode pills, so they cover nothing and are always
+  there.
 - **Hovering a tab showed the agents of the chat you were in** rather than the agents of the tab under the
   pointer.
-- **The waiting screens covered the chat and flashed on every new one.** Install, sign-in and loading are
-  part of the conversation now instead of panels laid over it, so they no longer hide the tabs or the
-  composer; you can type while the session starts, and a fast start draws no screen at all.
 - **A restored chat showed the agent's own bookkeeping as things you had said** — task notifications, the
   "Caveat: the messages below were generated…" preamble, a `/compact` you ran. They are shown for what they
   are now, and that also stops one of them becoming the chat's title.
@@ -132,6 +164,14 @@ Repository and build only — none of it changes the plugin you install.
   plugin, which is where the obligation to include it lands.
 - `.gitignore` is an allowlist: it ignores everything and names what belongs, so a new file has to be added
   deliberately rather than leaking by default.
+- The published artifact is checked against an allowlist of what it may contain, rather than against a list
+  of things it must not. The repository's own project map was riding inside the plugin jar — 20 KB of
+  internal notes in every release — and banning that one filename would only have caught the file already
+  known about.
+- Two more reachability gates, each closing a blind spot the first one declares: one for `private`
+  declarations, which only their own file can reach and which the compiler does not report; and one for a
+  page module or stylesheet that exists on disk and is never loaded, which is served to nobody while its own
+  tests pass.
 
 ## [5.1.1] — 2026-08-10
 
