@@ -1393,8 +1393,14 @@ class ClaudeSession(
                 title = resolved
                 edt { fireTitleChanged() }
             }
-            SessionHistory.getInstance(project)
-                .setOpenSessions(ChatSessionManager.getInstance(project).all().mapNotNull { it.sessionId })
+            // Every chat that HAS a tab. The Git conversation is drawn inside the Git view and has none, so
+            // recording it here would make the next startup open one for it — undoing the whole point of it
+            // not being a tab. Same exclusion as `ChatSessionManager.persistOpenTabs`, and for one reason.
+            SessionHistory.getInstance(project).setOpenSessions(
+                ChatSessionManager.getInstance(project).all()
+                    .filterNot { it.gitIntegration }
+                    .mapNotNull { it.sessionId },
+            )
         }
     }
 
