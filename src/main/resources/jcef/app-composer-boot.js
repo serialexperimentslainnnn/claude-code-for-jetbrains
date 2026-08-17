@@ -63,6 +63,10 @@
     if (!showBoot) announcedBoot = false;
     // `booting`, not `showBoot`: the chat stays inert for the sign-in screen too.
     if (app) app.classList.toggle('booting', booting);
+    // Both screens are opaque layers over the transcript, so whichever is up, what is under it must be out of
+    // reach as well as out of sight — a focusable link behind an opaque panel is WCAG 2.2 SC 2.4.11. Declared
+    // for the pair, from the one place that knows about both; the dashboard declares its own (app-core.js).
+    CC.coverTranscript && CC.coverTranscript('waiting', showBoot || awaitingAuth);
     var card = document.getElementById('boot-missing');
     if (card) card.hidden = !missing;
     if (missing && !announcedMissing) {
