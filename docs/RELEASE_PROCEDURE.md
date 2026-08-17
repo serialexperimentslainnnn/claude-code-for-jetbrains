@@ -124,13 +124,12 @@ but it means merging or closing those PRs is a release step, not an afterthought
 
 ```bash
 JAVA_HOME=~/.jdks/jbr-21.0.11 \
-  ./gradlew test koverVerify detekt spotlessCheck checkProjectMap verifyPlugin buildPlugin
+  ./gradlew test koverVerify detekt spotlessCheck verifyPlugin buildPlugin
 npm ci && npm test && npm run lint && npm run format:check
 npm audit --omit=dev --audit-level=low
 ```
 
-Everything CI runs, run locally first — including `checkProjectMap` (the
-distributed map is a gate, not documentation) and the audit of the *distributed*
+Everything CI runs, run locally first — including the audit of the *distributed*
 scope, which is the one that blocks. All tests must pass, and `verifyPlugin`
 must report **Compatible** across the declared range — the floor,
 `253.29346.138`, through the newest IDEA **and PyCharm** EAP/RC — with no
