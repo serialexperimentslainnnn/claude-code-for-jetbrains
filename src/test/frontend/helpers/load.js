@@ -58,6 +58,30 @@ function jcefHostSource() {
 }
 
 /**
+ * The names in one of `JcefHost`'s declared, ORDERED lists — `appNames` or `CSS_PARTS`.
+ *
+ * One parser for both, because both lists are the same shape and both are read by more than one test now
+ * (the harness below loads them; `asset-manifest.test.js` compares them against the directory). A second
+ * reader of the same Kotlin would eventually disagree with this one, and the gate that compares two lists is
+ * exactly the place where that disagreement would read as a finding about the product.
+ *
+ * The DECLARATION is located, not the first mention: both names are used above their own `val` in
+ * `buildPage`. Everything up to the first `)` is the list, which holds while no entry contains a bracket.
+ */
+function declaredList(name, entry) {
+  const host = jcefHostSource();
+  // Line comments FIRST, before anything looks for the closing bracket. Both lists are commented between
+  // their entries — that is where the ordering rules are written, next to the entry they govern — and a
+  // comment containing a `)` used to end the list early. The failure is silent and it does not look like
+  // itself: the harness loads a truncated page, so every module after the comment is simply absent and the
+  // symptom is a pile of "cc.<name> is not a function" in tests about something else entirely.
+  const block = host.slice(host.indexOf(`val ${name} = listOf(`)).replace(/\/\/[^\n]*/g, '');
+  const found = block.slice(0, block.indexOf(')')).match(entry);
+  if (!found) throw new Error(`helpers/load: could not read ${name} from JcefHost.kt`);
+  return found.map((quoted) => quoted.replace(/"/g, ''));
+}
+
+/**
  * The app modules, in the order the page loads them — read from `JcefHost.appNames`, never from a list kept
  * here and never from `readdirSync`.
  *
@@ -66,11 +90,12 @@ function jcefHostSource() {
  * product never serves — the same reason `readCss` reads `CSS_PARTS`.
  */
 function appModules() {
-  const host = jcefHostSource();
-  const block = host.slice(host.indexOf('val appNames = listOf('));
-  const names = block.slice(0, block.indexOf(')')).match(/"(app-[\w.-]+\.js)"/g);
-  if (!names) throw new Error('helpers/load: could not read appNames from JcefHost.kt');
-  return names.map((quoted) => quoted.replace(/"/g, ''));
+  return declaredList('appNames', /"(app-[\w.-]+\.js)"/g);
+}
+
+/** The stylesheet parts, in cascade order — read from `JcefHost.CSS_PARTS`, for the same reason. */
+function cssParts() {
+  return declaredList('CSS_PARTS', /"([\w-]+\.css)"/g);
 }
 
 /**
@@ -114,14 +139,9 @@ function appJsFiles() {
  * product never serves, and a part added to the host but not to the tests would go unchecked.
  */
 function readCss() {
-  const host = jcefHostSource();
-  // The DECLARATION, not the first mention: `CSS_PARTS` is also used in `buildPage` above it.
-  const block = host.slice(host.indexOf('val CSS_PARTS = listOf('));
-  const parts = block.slice(0, block.indexOf(')')).match(/"([\w-]+\.css)"/g);
-  if (!parts) throw new Error('helpers/load: could not read CSS_PARTS from JcefHost.kt');
-  return parts
-    .map((quoted) => fs.readFileSync(path.join(JCEF, 'css', quoted.replace(/"/g, '')), 'utf8'))
+  return cssParts()
+    .map((part) => fs.readFileSync(path.join(JCEF, 'css', part), 'utf8'))
     .join('\n');
 }
 
-module.exports = { loadFrontend, readApp, appJsFiles, readCss, JCEF };
+module.exports = { loadFrontend, readApp, appJsFiles, appModules, cssParts, readCss, JCEF };
