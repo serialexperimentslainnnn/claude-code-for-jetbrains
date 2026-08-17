@@ -101,7 +101,10 @@ class AgentRegistryTest {
         assertEquals(listOf("mine"), reg.scan())
         val node = reg.nodes.getValue("mine")
         assertEquals("Task mine", node.meta.label())
-        assertEquals(AgentStatus.RUNNING, node.status)
+        // COMPLETED, not RUNNING: the fixture's one record is a text-only assistant answer with nothing after
+        // it, which is a finished turn — and in a LIVE session that transcript is now read, where it used to
+        // be ignored in favour of a flat "we watched it start, so it is running".
+        assertEquals(AgentStatus.COMPLETED, node.status)
         // Parsed by the same reader the session restore uses — one code path for live and restored.
         assertEquals(1, node.entries.size)
         assertEquals("hello from the agent", node.entries.first().text)
@@ -214,6 +217,43 @@ class AgentRegistryTest {
         assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("midflight").status)
         assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("unanswered").status)
         assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("nothing-written").status)
+    }
+
+    @Test
+    fun `a live agent finishes without a task_notification ever arriving`() {
+        // THE BUG, reported live: an agent stayed RUNNING for the rest of the session even though it had
+        // plainly finished, and so did the Task card standing for it in the transcript — ClaudeSession hands
+        // that card's state to the agent, so the two symptoms are one cause. The only thing that could ever
+        // end an agent was its `task_notification`, and the binary does not emit one that this can key on for
+        // every shape of agent it runs (several call sites carry no `tool_use_id` at all). Meanwhile the
+        // answer was already on disk and already parsed: the agent's own transcript, which the LIVE path
+        // never looked at.
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn, deliveredResult)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("mine").status)
+
+        writeTranscript("mine", openTurn, deliveredResult, closedTurn)
+        reg.scan()
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("mine").status)
+    }
+
+    @Test
+    fun `an agent we watched start is never painted as cut off`() {
+        // The asymmetry that keeps the live reading separate from the restore one. The same unfinished
+        // transcript means "cut off" for a RESTORED agent, whose process is gone, and "still working" for one
+        // we watched start in this session. Collapsing them is how a reopened IDE painted live agents red.
+        agent("live", toolUseId = "toolu_ours")
+        writeTranscript("live", openTurn)
+        agentEnding("restored", "tool_use")
+        val reg = registry()
+        reg.markRestored()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("live").status)
+        assertEquals(AgentStatus.STOPPED, reg.nodes.getValue("restored").status)
     }
 
     @Test

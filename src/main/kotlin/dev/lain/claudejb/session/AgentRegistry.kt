@@ -345,7 +345,9 @@ class AgentRegistry(
      *    therefore inherits the parent's instant too — the child stopped when the turn did — and inherits
      *    nothing while that parent is still running.
      * 3. **Did we watch it start?** An agent whose Task call is in [observedToolUse] was launched by THIS
-     *    process, so it is running whatever else is true — and a running agent has no stop instant.
+     *    process, so there is a live process behind it and it can never read as cut off — but WHETHER it is
+     *    still working is a question its own transcript answers ([liveStatusOf]), and answering it "running"
+     *    flatly is what left agents running for ever when no `task_notification` settled them.
      * 4. **How its own transcript ends** ([AgentEnding]), for an agent from a previous run. A settled status
      *    is per-process memory, so after a restart the plugin knows nothing about what it is restoring —
      *    and calling all of it "cut off" painted every agent of every past session RED, which does not just
@@ -354,8 +356,9 @@ class AgentRegistry(
      *    one that grew past such an ending is an agent that was resumed ([statusOf]).
      *    No instant comes with it: that status is read off a file, not watched, so nothing here can vouch
      *    for when it happened — [settledStateOf] stamps it at admission instead.
-     * 5. Otherwise RUNNING — unless the chat was RESTORED and left no transcript to judge, in which case the
-     *    process it belonged to is gone and its work was cut off, again with nothing to date it by.
+     * 5. Otherwise its transcript again ([liveStatusOf]) — same evidence as rule 4 and the same reading as
+     *    rule 3, since a chat that was never restored has a live process behind every agent in it. Only a
+     *    RESTORED chat takes rule 4's stricter reading, where an unfinished transcript means cut off.
      *
      * **Rules 2 and 3 are the fix for a live report**: `restoring` is set when a chat comes back from disk
      * and is never cleared (it is what admits that chat's own subagents), so rule 5 used to swallow agents
@@ -371,9 +374,49 @@ class AgentRegistry(
             statusByToolUse[id]?.let { return Settled(it, completedAtByToolUse[id]) }
         }
         meta.parentAgentId?.let { resolved[it] }?.let { return Settled(it.status, it.completedAtMillis) }
-        if (meta.toolUseId?.let { it in observedToolUse } == true) return Settled(AgentStatus.RUNNING, null)
-        if (!restoring) return Settled(AgentStatus.RUNNING, null)
+        if (meta.toolUseId?.let { it in observedToolUse } == true) return liveStateOf(meta, lines)
+        if (!restoring) return liveStateOf(meta, lines)
         return Settled(statusOf(AgentEnding.of(lines)), null)
+    }
+
+    /**
+     * What an agent WE WATCHED START is doing — the transcript decides, and the only thing it cannot say is
+     * "stopped".
+     *
+     * Rules 3 and 5 used to return [AgentStatus.RUNNING] flatly, which meant that in a live session the
+     * agent's own transcript was **never consulted at all**: the single thing that could ever end an agent was
+     * its `task_notification`. When one does not arrive — and it does not for every shape of agent the binary
+     * runs, several of which emit the notification with no `tool_use_id` for [observeSettled] to key on — the
+     * agent stayed RUNNING for the rest of the session, and so did the Task card standing for it in the
+     * transcript, since [dev.lain.claudejb.session.ClaudeSession] hands that card's state to the agent
+     * ([AgentStatus.RUNNING] → `ToolState.RUNNING`). One cause, both symptoms.
+     *
+     * The evidence was already read: [scan] parses every agent's file on every pass, and the notification is
+     * an optimisation on top of it, not the only witness. So the same [AgentEnding] the restore path uses
+     * answers here too — with one asymmetry that is the whole point of a separate function. A transcript that
+     * has not closed a turn means two different things depending on who is asking: for a RESTORED agent the
+     * process that was writing it is gone, so it was cut off ([AgentStatus.STOPPED]); for one we watched start
+     * in THIS session there is a live process behind it, so it is still working. Collapsing the two is how
+     * every agent in a freshly reopened IDE came up red while it was plainly running.
+     *
+     * **It also has to say WHEN, and that is not the same question.** An ending read off a transcript carries
+     * no instant, and [settledStateOf] fills an empty one with [runStartedAtMillis] — right for an agent
+     * restored from a previous run, whose real ending nothing here witnessed, and wrong for one that finished
+     * a minute ago in front of us: it dates the ending to when the IDE started, which is hours old by the
+     * afternoon, so the agent is already outside the retention window the moment it finishes. The instant
+     * this path reports is therefore [now], sealed the first time the transcript says the turn closed.
+     *
+     * Sealed, not re-read, because [dev.lain.claudejb.session.AgentScanner] scans repeatedly: stamping every
+     * pass would walk the instant forward with the clock and the agent would never age out at all — the same
+     * bug, in the other direction. And sealed in the SAME map the `task_notification` path uses, so the two
+     * cannot disagree about when one agent stopped, and so [reopenIfGrown] unseals both alike: an agent that
+     * is resumed and finishes AGAIN is dated by its second ending, not by its first.
+     */
+    private fun liveStateOf(meta: AgentMeta, lines: List<String>): Settled = when (AgentEnding.of(lines)) {
+        AgentEnding.Ending.COMPLETED ->
+            Settled(AgentStatus.COMPLETED, meta.toolUseId?.let { completedAtByToolUse.computeIfAbsent(it) { now() } })
+
+        AgentEnding.Ending.RESUMED, AgentEnding.Ending.UNFINISHED, null -> Settled(AgentStatus.RUNNING, null)
     }
 
     /**

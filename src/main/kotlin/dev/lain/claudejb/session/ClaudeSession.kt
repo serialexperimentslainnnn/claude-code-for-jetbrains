@@ -2068,6 +2068,8 @@ class ClaudeSession(
                 // Also an admission seed, deliberately: a task_started can be missed (a resumed session
                 // reattaches mid-flight), and progress carries the same tool_use_id.
                 runningAgents.observeSpawn(event.info.toolUseId)
+                // BEFORE the scan, which is what rebuilds the tree from what the registry knows.
+                settleFromLifecycle(event.info.toolUseId, event.info.status)
                 // The seed alone shows nothing: admission decides what MAY be shown, a scan is what reads the
                 // tree. Progress is the only signal a resumed agent emits, so without this its tab never appears.
                 agentScanner.scan()
@@ -2077,6 +2079,12 @@ class ClaudeSession(
 
             is ClaudeEvent.TaskUpdated -> edt {
                 taskTracker.onUpdated(event.info)
+                // This message carries no `tool_use_id` — only the task id — so the agent it ends can only be
+                // found through what an earlier `task_started`/`task_progress` recorded, which is exactly what
+                // the tracker holds. Without this the ONE signal that says `killed` reached the task map and
+                // stopped there, and the agent it belonged to stayed running for the rest of the session.
+                val ended = settleFromLifecycle(taskTracker.tasks[event.info.taskId]?.toolUseId, event.info.patch.status)
+                if (ended) agentScanner.scan()
                 fireState()
             }
 
@@ -2374,21 +2382,58 @@ class ClaudeSession(
     }
 
     /**
-     * `task_notification`'s status string → the agent lifecycle the tab shows.
+     * A lifecycle status carried by `task_progress` or `task_updated`, applied to the agent ONLY when it ends
+     * it. Returns whether it did.
      *
-     * **Only the endings end it.** This used to send everything that was not `completed`/`failed` to STOPPED,
-     * which swept up every LIVE status the binary emits — `started`, `running`, `in_progress` — and once
-     * STOPPED became red, an agent that had just been launched was drawn as a dead one. Endings are named
-     * explicitly; anything else is a notification about work in progress, so the agent is still running.
+     * Both messages carry the same `status` vocabulary as a notification — `pending | running | completed |
+     * failed | killed | paused` — and both were read for the task map and for nothing else. So `killed`, which
+     * only ever arrives this way, never reached [AgentRegistry]: the agent it belonged to went on reporting
+     * RUNNING, and with it the Task card in the transcript and its row in Workloads, which take their state
+     * from the agent.
      *
-     * [AgentStatus.RUNNING] is therefore this function's way of saying "not an ending", and
+     * A LIVE status is deliberately not forwarded. [AgentRegistry.observeSettled] treats RUNNING as "unsettle
+     * this", so pushing every progress tick through it would undo an ending that had already been observed —
+     * and re-opening a genuinely resumed agent is already handled from the evidence that actually says so, its
+     * transcript growing past its last finished turn (`AgentRegistry.reopenIfGrown`).
+     */
+    private fun settleFromLifecycle(toolUseId: String?, status: String?): Boolean {
+        if (toolUseId.isNullOrBlank() || status.isNullOrBlank()) return false
+        val ending = agentStatusOf(status).takeIf { it != AgentStatus.RUNNING } ?: return false
+        runningAgents.observeSettled(toolUseId, ending)
+        return true
+    }
+
+    /**
+     * A task lifecycle status → the agent lifecycle the tab shows.
+     *
+     * **Both halves are named, and the fallback is the harmful-if-wrong one on purpose.** It first sent
+     * everything that was not `completed`/`failed` to STOPPED, which swept up every LIVE word the binary emits
+     * — `started`, `running`, `in_progress` — and once STOPPED became red, an agent that had just been
+     * launched was drawn as a dead one. Inverting that made the opposite mistake available: with only the
+     * endings named and `else -> RUNNING`, a status this build has never heard of reads as live work, and an
+     * agent stuck on RUNNING is *invisible* — it never settles, never leaves the Workloads window (which
+     * exempts running work by design) and never turns its Task card green or red.
+     *
+     * So the live words are an allowlist too, and anything outside both lists is [AgentStatus.FAILED]. An
+     * unknown status means the binary has stopped saying something we understand about a piece of work; a red
+     * row is wrong loudly, and a permanently spinning one is wrong silently.
+     *
+     * [AgentStatus.RUNNING] is also this function's way of saying "not an ending", and
      * [AgentRegistry.observeSettled] reads it as exactly that: it records the liveness and seals no instant.
      */
     private fun agentStatusOf(status: String): AgentStatus = when (status.lowercase()) {
         "completed", "complete", "done", "finished", "success", "succeeded" -> AgentStatus.COMPLETED
-        "failed", "failure", "error" -> AgentStatus.FAILED
+
+        // Still working, or not started yet — `paused` among them: paused work has not finished and nothing
+        // about it failed, and the thing that resumes it is the same binary that paused it.
+        "", "running", "in_progress", "in-progress", "started", "starting", "pending", "queued", "paused",
+        -> AgentStatus.RUNNING
+
+        // Ended without finishing. Red, like a failure: from the outside the work did not get done and
+        // nothing is going to do it.
         "stopped", "cancelled", "canceled", "interrupted", "aborted", "killed" -> AgentStatus.STOPPED
-        else -> AgentStatus.RUNNING
+
+        else -> AgentStatus.FAILED
     }
 
     private fun fireAgents(fresh: List<String>) = listeners.forEach { it.onAgentsChanged(fresh) }

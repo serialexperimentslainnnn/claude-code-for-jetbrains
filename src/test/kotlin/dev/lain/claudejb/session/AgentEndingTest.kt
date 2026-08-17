@@ -110,4 +110,52 @@ class AgentEndingTest {
 
         assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
     }
+
+    // ── the second shape a finished turn comes in ────────────────────────────────────────────────────────
+    //
+    // Measured over the 566 agent transcripts on one developer machine: 41 end on a real model's final answer
+    // carrying NO `stop_reason` at all, and `end_turn` alone called every one of them cut off — i.e. painted a
+    // finished agent red, asserting a failure that never happened.
+
+    /** The agent's answer, with no `stop_reason` recorded on it — 41 of 566 transcripts end exactly here. */
+    private val bareAnswer =
+        """{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"done"}]}}"""
+
+    /** What the BINARY writes when it cuts an agent off: its own record, under a reserved model name. */
+    private val sessionLimit =
+        """{"type":"assistant","message":{"role":"assistant","model":"<synthetic>","stop_sequence":"","content":[{"type":"text","text":"You've hit your session limit"}]}}"""
+
+    @Test
+    fun `a final answer with no stop_reason is completed`() {
+        val lines = listOf(toolUse, toolResult, bareAnswer)
+
+        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(lines))
+    }
+
+    @Test
+    fun `the same record mid-transcript is not an ending`() {
+        // The exclusion that keeps this a SECOND rule rather than a looser one. Admitting a text-only
+        // assistant record into the resumption scan turned 100 of those 566 transcripts into "resumed", i.e.
+        // a hundred dead agents painted as live — the exact mistake in the other direction.
+        val lines = listOf(bareAnswer, toolUse, toolResult)
+
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+    }
+
+    @Test
+    fun `a synthetic ending is the binary cutting the agent off, not the agent finishing`() {
+        // Every synthetic ending in that corpus is "You've hit your session limit": work stopped mid-flight,
+        // which must keep reading as cut off however text-shaped the record is.
+        val lines = listOf(toolUse, toolResult, sessionLimit)
+
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+    }
+
+    @Test
+    fun `an answer still holding a tool call is waiting, not finished`() {
+        val pending =
+            """{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"one moment"},{"type":"tool_use","id":"t1","name":"Read"}]}}"""
+
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(listOf(pending)))
+    }
 }
