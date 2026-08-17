@@ -124,9 +124,12 @@ describe('palette — matching is scored', () => {
     expect(names()[0]).toBe('review');
   });
 
-  it('an unqueried palette keeps the host order, since nothing distinguishes the entries', () => {
+  it('an unqueried palette is alphabetical, not whatever order the host listed', () => {
+    // The host order was defended as a decision, and it is one for its FIRST entry only: the plugin's own
+    // commands go ahead of the binary's. Everything after that is the order `slash_commands` happened to
+    // arrive in — no order at all to read — so a long list looked unsorted, which is exactly the complaint.
     type('/');
-    expect(names()).toEqual(commands().map((c) => c.name));
+    expect(names()).toEqual([...commands().map((c) => c.name)].sort());
   });
 
   it('ties break on the shorter name — the more specific answer wins', () => {
@@ -141,12 +144,25 @@ describe('palette — matching is scored', () => {
   });
 });
 
-describe('palette — the keyboard belongs to the list while it is open', () => {
-  const active = () => palette().querySelector('.palette-item.active .palette-name').textContent;
+describe('palette — the keyboard enters the list, it is never taken by it', () => {
+  const activeEl = () => palette().querySelector('.palette-item.active .palette-name');
+  const active = () => (activeEl() ? activeEl().textContent : null);
 
-  it('arrows move the selection and wrap', () => {
+  it('has no selected row until an arrow says so', () => {
+    // A highlighted row that Enter does not choose is a promise the list is not keeping — to the eye and to a
+    // screen reader alike, which is why `aria-activedescendant` follows the same rule.
     type('/commit');
+    expect(rows().length).toBeGreaterThan(1);
+    expect(active()).toBeNull();
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+  });
+
+  it('the first arrow lands on the end it points at, and then it wraps', () => {
+    // Not "one step from a notional index 0", which made the first ArrowDown select the SECOND command.
+    type('/commit');
+    press('ArrowDown');
     expect(active()).toBe('/commit');
+    expect(input.getAttribute('aria-activedescendant')).toBe('palette-opt-0');
     press('ArrowDown');
     expect(active()).toBe('/git:commit');
     press('ArrowUp');
@@ -155,13 +171,46 @@ describe('palette — the keyboard belongs to the list while it is open', () => 
     expect(active()).toBe('/btw'); // wraps to the last
   });
 
-  it('Enter picks the selected command instead of sending the turn', () => {
+  it('Enter picks the row the arrows selected, instead of sending the turn', () => {
     type('/commit');
+    press('ArrowDown');
     press('ArrowDown');
     press('Enter');
     expect(input.value).toBe('/git:commit ');
     expect(sent.filter((m) => m.type === 'send')).toEqual([]);
     expect(isOpen()).toBe(false);
+  });
+
+  it('Enter SENDS a command that was typed out — one press, not two', () => {
+    // THE BUG: the capture listener took Enter whatever the user was doing, so typing a command out and
+    // pressing Enter completed it (`/commit ` in the box, nothing sent) and only a second Enter sent the turn.
+    // The list is for picking with the mouse; typing is the other way of doing the same job and must not cost
+    // more. So the palette stands down and the event carries on to the composer.
+    // Asserted on the TURN, not on `defaultPrevented`: the composer stops the event too, because Enter must
+    // not also insert a newline. What separates the two behaviours is whether the command was sent or merely
+    // written out with a trailing space.
+    type('/commit');
+    press('Enter');
+    expect(sent.filter((m) => m.type === 'send')).toEqual([{ type: 'send', text: '/commit' }]);
+    expect(isOpen()).toBe(false);
+  });
+
+  it('typing again takes the keyboard back out of the list', () => {
+    type('/comm');
+    press('ArrowDown');
+    expect(active()).toBe('/commit');
+    type('/commi'); // still composing — Enter is the composer's again
+    expect(active()).toBeNull();
+    press('Enter');
+    expect(sent.filter((m) => m.type === 'send')).toEqual([{ type: 'send', text: '/commi' }]);
+  });
+
+  it('hovering a row does not arm Enter', () => {
+    // The pointer used to move the selection, so where the mouse happened to rest decided what the keyboard
+    // would pick. `.palette-item:hover` draws the row under the pointer; that is the whole of what hover does.
+    type('/commit');
+    rows()[2].dispatchEvent(new win.MouseEvent('mouseenter', { bubbles: true }));
+    expect(active()).toBeNull();
   });
 
   it('Escape closes the list instead of interrupting the turn', () => {
@@ -214,8 +263,12 @@ describe('palette — accessibility (WCAG 2.2 AA)', () => {
     expect(input.getAttribute('aria-activedescendant')).toBeNull();
   });
 
-  it('the active option is named by aria-activedescendant and follows the arrows', () => {
+  it('the active option is named by aria-activedescendant, once there is one', () => {
+    // There is no active option until the keyboard enters the list, and the attribute says so: announcing a
+    // selected option that Enter would not choose describes a control that is not behaving that way.
     type('/commit');
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+    press('ArrowDown');
     expect(input.getAttribute('aria-activedescendant')).toBe(rows()[0].id);
     press('ArrowDown');
     expect(input.getAttribute('aria-activedescendant')).toBe(rows()[1].id);

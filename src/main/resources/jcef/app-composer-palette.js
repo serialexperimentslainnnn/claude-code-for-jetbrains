@@ -25,7 +25,20 @@
   var h = CX.h;
 
   var commands = []; // from cc.meta
-  var paletteState = { items: [], active: 0 };
+  /**
+   * [navigated] is what makes Enter mean one thing at a time.
+   *
+   * The list is a convenience for picking a command with the mouse; typing one out is the other way of doing
+   * the same job, and it must not cost more. It used to: the capture listener took Enter unconditionally, so
+   * typing `/commit` and pressing Enter COMPLETED `/commit ` instead of sending it, and only the second Enter
+   * sent the turn. So the keyboard enters the list explicitly — an arrow — and until it does, Enter belongs to
+   * the composer and the palette gets out of its way.
+   *
+   * It also governs what is drawn: while it is false NO row is `.active` and there is no
+   * `aria-activedescendant`, because a highlighted row that Enter does not choose is a promise the list is not
+   * keeping — visually and to a screen reader alike.
+   */
+  var paletteState = { items: [], active: 0, navigated: false };
   // Escape closed the list while the query was still valid. Without this, the very next keystroke would
   // re-open what the user just dismissed, and there would be no way to type a message that starts with "/".
   var dismissed = false;
@@ -92,10 +105,16 @@
   /**
    * Score, keep the matches, and sort them best-first. Ties break on the shorter name — of two commands that
    * match a query equally well, the shorter one is the one the query names and the longer one merely extends
-   * — and then on the host's own order, so the result is deterministic rather than engine-dependent.
+   * — and then ALPHABETICALLY.
    *
-   * With NO query there is nothing to rank, so the host order stands: it is a decision (the plugin's own
-   * commands come first), and re-sorting it by length would be inventing a ranking out of no evidence.
+   * **Alphabetically, and not "the host's order", which is what this used to fall back to at both ends.** The
+   * host order was defended here as a decision, and it is one for exactly its first entry: `JcefState.metaJson`
+   * puts the plugin's own commands ahead of the binary's. Everything after that is the order the binary
+   * happened to list `slash_commands` in — no order at all from where the reader sits. So an unqueried palette
+   * showed a long list nobody had sorted, which is what "it filters but it does not sort" describes.
+   *
+   * A name is the thing being chosen, so the name is what orders the list. It also makes the result stable
+   * across sessions: the same catalogue always draws in the same order, whatever the binary emits.
    */
   function rank(q) {
     var scored = [];
@@ -104,13 +123,12 @@
       var name = c && c.name != null ? String(c.name) : '';
       var description = c && c.description != null ? String(c.description) : '';
       var points = score(name, description, q);
-      if (points > 0) scored.push({ name: name, description: description, score: points, order: i });
+      if (points > 0) scored.push({ name: name, description: description, score: points });
     }
-    if (!q) return scored;
     scored.sort(function (a, b) {
-      if (a.score !== b.score) return b.score - a.score;
-      if (a.name.length !== b.name.length) return a.name.length - b.name.length;
-      return a.order - b.order;
+      if (q && a.score !== b.score) return b.score - a.score;
+      if (q && a.name.length !== b.name.length) return a.name.length - b.name.length;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
     });
     return scored;
   }
@@ -131,9 +149,12 @@
       p.appendChild(box);
       p.__list = list;
 
-      // outside-click hides
-      p.addEventListener('mousedown', function (e) {
-        if (e.target === p) hidePalette();
+      // THE PALETTE NEVER TAKES THE CARET. A mousedown on a div blurs whatever was focused, so merely
+      // scrolling this list — or clicking the gap between two rows — emptied the composer of its caret, and
+      // the one text field on screen stopped being the one you were typing in. Preventing the default on
+      // mousedown is what keeps focus where it is; the click still fires, so picking a row still works.
+      box.addEventListener('mousedown', function (e) {
+        e.preventDefault();
       });
     }
     return p;
@@ -145,6 +166,7 @@
     dismissed = false;
     p.removeAttribute('hidden');
     paletteState.active = 0;
+    paletteState.navigated = false;
     filterPalette(queryOf(composerInput() && composerInput().value) || '');
     linkInput(true);
   }
@@ -192,11 +214,15 @@
     return 'palette-opt-' + index;
   }
 
+  /** There is an active option only once the keyboard has entered the list — see [paletteState]. */
   function syncActiveDescendant() {
     var input = composerInput();
     if (!input) return;
-    if (paletteState.items.length) input.setAttribute('aria-activedescendant', optionId(paletteState.active));
-    else input.removeAttribute('aria-activedescendant');
+    if (paletteState.navigated && paletteState.items.length) {
+      input.setAttribute('aria-activedescendant', optionId(paletteState.active));
+    } else {
+      input.removeAttribute('aria-activedescendant');
+    }
   }
 
   function filterPalette(q) {
@@ -204,8 +230,10 @@
     if (!p || !p.__list) return;
     paletteState.items = rank((q || '').toLowerCase().replace(/^\//, ''));
     // Reset selection to the first (best) match on every query change — otherwise a stale index
-    // stays highlighted on a command that no longer matches what you typed.
+    // stays highlighted on a command that no longer matches what you typed. Typing also takes the keyboard
+    // back OUT of the list: you are composing again, so Enter is the composer's until an arrow says otherwise.
     paletteState.active = 0;
+    paletteState.navigated = false;
     renderPaletteList();
   }
 
@@ -222,20 +250,23 @@
     }
     for (var i = 0; i < items.length; i++) {
       (function (it, idx) {
-        var active = idx === paletteState.active;
+        var active = paletteState.navigated && idx === paletteState.active;
+        // What the QUERY is pointing at, which is not the same thing as what the keyboard has selected — and
+        // drawn differently on purpose. The best match tells you what you are converging on while you type;
+        // it must not look like a chosen row, because Enter does not choose it (it sends what you typed).
+        // The keyboard takes over on the first arrow, and then `.active` is the one that is lit.
+        var match = !paletteState.navigated && idx === 0 && paletteState.items.length > 1;
         var row = h(
           'div',
           {
-            class: 'palette-item' + (active ? ' active' : ''),
+            class: 'palette-item' + (active ? ' active' : '') + (match ? ' match' : ''),
             attrs: { id: optionId(idx), role: 'option', 'aria-selected': active ? 'true' : 'false' },
             on: {
+              // No `mouseenter` handler: `.palette-item:hover` already draws the row the pointer is on, and
+              // moving the selection with the pointer meant the mouse silently decided what Enter would pick.
               click: function (e) {
                 e.preventDefault();
                 pickPalette(idx);
-              },
-              mouseenter: function () {
-                paletteState.active = idx;
-                updatePaletteActiveClass();
               },
             },
           },
@@ -253,7 +284,7 @@
     if (!p || !p.__list) return;
     var rows = p.__list.querySelectorAll('.palette-item');
     for (var i = 0; i < rows.length; i++) {
-      if (i === paletteState.active) {
+      if (paletteState.navigated && i === paletteState.active) {
         rows[i].classList.add('active');
         rows[i].setAttribute('aria-selected', 'true');
       } else {
@@ -264,10 +295,22 @@
     syncActiveDescendant();
   }
 
+  /**
+   * Moves the keyboard selection, ENTERING the list on the first press.
+   *
+   * The first arrow lands on the end it points at — down on the first row, up on the last — rather than
+   * stepping off a selection that was not there. Stepping from a notional index 0 would make the first press
+   * of ArrowDown select the SECOND command, which is one row of quiet wrongness every time.
+   */
   function movePaletteActive(delta) {
     var n = paletteState.items.length;
     if (!n) return;
-    paletteState.active = (paletteState.active + delta + n) % n;
+    if (!paletteState.navigated) {
+      paletteState.navigated = true;
+      paletteState.active = delta > 0 ? 0 : n - 1;
+    } else {
+      paletteState.active = (paletteState.active + delta + n) % n;
+    }
     updatePaletteActiveClass();
     // keep active in view
     var p = CC.els && CC.els.palette;
@@ -325,6 +368,13 @@
         return;
       }
       if (e.key === 'Enter' && !e.shiftKey) {
+        // ONLY when the keyboard is in the list. Otherwise this is someone who typed a command out and means
+        // to send it: the palette closes and the event goes on to the composer, which sends the turn. Taking
+        // Enter here unconditionally is what made every typed command cost two presses.
+        if (!paletteState.navigated) {
+          hidePalette();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         pickPaletteActive();
