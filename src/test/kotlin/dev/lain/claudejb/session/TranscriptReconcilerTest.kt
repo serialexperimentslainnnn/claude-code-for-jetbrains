@@ -152,6 +152,96 @@ class TranscriptReconcilerTest {
         assertEquals(1, model.entries.size)
     }
 
+    // ── Whose output this is ─────────────────────────────────────────────────────────────────────────────
+    //
+    // A subagent streams through the SAME channel as the main conversation and is told apart by nothing but
+    // `parent_tool_use_id`. Its rows belong to its own tab, rebuilt from the binary's per-agent file — so a
+    // labelled block is DROPPED here, never re-routed. The failure these pin is the one the per-agent tabs
+    // exist to end: consecutive "Thought process" rows from different agents in one unfollowable stream.
+
+    @Test
+    fun `a thinking block labelled with a parent tool use id never reaches this transcript`() {
+        val model = TranscriptModel()
+        val reconciler = TranscriptReconciler(model)
+
+        reconciler.appendThinking("the agent's reasoning", parentToolUseId = "toolu_agent_1")
+        reconciler.finalizeThinking("the agent's whole reasoning", parentToolUseId = "toolu_agent_1")
+
+        assertTrue(model.entries.isEmpty())
+    }
+
+    @Test
+    fun `an unlabelled thinking block still reaches this transcript`() {
+        val model = TranscriptModel()
+        val reconciler = TranscriptReconciler(model)
+
+        reconciler.appendThinking("my own reasoning", parentToolUseId = null)
+        reconciler.finalizeThinking("my own whole reasoning", parentToolUseId = null)
+
+        assertEquals(1, model.entries.size)
+        assertEquals(Speaker.THINKING, model.entries.single().speaker)
+        assertEquals("my own whole reasoning", model.entries.single().text)
+    }
+
+    @Test
+    fun `a subagent's text is dropped too, and does not cut the main run's thinking block`() {
+        // The drop has to leave the live pointers alone. An admitted foreign text delta would close the main
+        // run's growing thinking block, so its next delta would open a SECOND "Thought process" row — the
+        // interleaving reappearing as fragmentation rather than as foreign content.
+        val model = TranscriptModel()
+        val reconciler = TranscriptReconciler(model)
+
+        reconciler.appendThinking("first half ")
+        reconciler.appendAssistant("the agent talking", parentToolUseId = "toolu_agent_1")
+        reconciler.appendThinking("second half")
+
+        assertEquals(1, model.entries.size)
+        assertEquals(Speaker.THINKING, model.entries.single().speaker)
+        assertEquals("first half second half", model.entries.single().text)
+    }
+
+    @Test
+    fun `a subagent's finalized thinking cannot clear the pointer the main run's own finalize needs`() {
+        // Regression guard for the 4.0.4 duplicated "Thought process": the subagent's block must return
+        // BEFORE the pointers are read, or it would reset `settledThinking` and the main run's finalized
+        // block would then be appended as a second, out-of-order row instead of replacing the streamed one.
+        val model = TranscriptModel()
+        val reconciler = TranscriptReconciler(model)
+        reconciler.appendThinking("streamed reasoning")
+        val streamed = model.entries.single()
+
+        reconciler.finalizeThinking("the agent's reasoning", parentToolUseId = "toolu_agent_1")
+        reconciler.finalizeThinking("my full reasoning")
+
+        assertEquals(1, model.entries.size)
+        assertSame(streamed, model.entries.single())
+        assertEquals("my full reasoning", model.entries.single().text)
+    }
+
+    @Test
+    fun `a streamed thinking block replaced by its finalized form is exactly one row`() {
+        // The 4.0.4 regression in its plainest form, kept next to the routing tests because that is the pair
+        // that breaks together: the finalize must REPLACE the streamed row, never append beside it.
+        val model = TranscriptModel()
+        val reconciler = TranscriptReconciler(model)
+
+        reconciler.appendThinking("let me ")
+        reconciler.appendThinking("think about it")
+        reconciler.finalizeThinking("let me think about it, summarized")
+
+        assertEquals(1, model.entries.size)
+        assertEquals(Speaker.THINKING, model.entries.single().speaker)
+        assertEquals("let me think about it, summarized", model.entries.single().text)
+    }
+
+    @Test
+    fun `belongsHere is the one rule, stated once`() {
+        // The dispatch side (the delta buffer) asks this directly rather than re-spelling `== null`, so the
+        // streamed and the finalized halves cannot drift apart the way they did when each had its own `if`.
+        assertTrue(TranscriptReconciler.belongsHere(null))
+        assertFalse(TranscriptReconciler.belongsHere("toolu_agent_1"))
+    }
+
     @Test
     fun `onMessageBoundary drops all three pointers so the next delta starts fresh`() {
         val model = TranscriptModel()
