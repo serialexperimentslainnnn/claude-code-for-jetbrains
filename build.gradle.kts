@@ -613,11 +613,17 @@ kover {
                 // `GitCommitInfo` — the pure half, and the only place a bug would be silent — is NOT excluded:
                 // it stays gated and is covered by GitCommitInfoTest. The read-only and API contracts are
                 // pinned by source/reflection tests instead (GitReadOnlyContractTest, GitApiContractTest).
+                //
+                // The trailing `*` is not decoration. `GitGateway.refs()` sorts with
+                // `compareByDescending {}.thenBy {}`, and each of those compiles to a SYNTHETIC class of its
+                // own (`GitGateway$refs$$inlined$thenBy$1` and friends) that an exact-name pattern does not
+                // match. A lambda added inside an excluded object would otherwise start counting against the
+                // package's floor, which reads as coverage erosion in code that was never gated.
                 classes(
-                    "dev.lain.claudejb.git.GitAvailability",
-                    "dev.lain.claudejb.git.GitGateway",
-                    "dev.lain.claudejb.git.GitHistoryService",
-                    "dev.lain.claudejb.git.GitLogNavigator",
+                    "dev.lain.claudejb.git.GitAvailability*",
+                    "dev.lain.claudejb.git.GitGateway*",
+                    "dev.lain.claudejb.git.GitHistoryService*",
+                    "dev.lain.claudejb.git.GitLogNavigator*",
                 )
                 // A single line delegating to PluginManager.isPluginInstalled. It exists precisely BECAUSE it
                 // must run against a real platform (PluginId is a Kotlin class since 2025.2, so the naive call
