@@ -2,6 +2,8 @@ package dev.lain.claudejb.protocol
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.time.Instant
+import java.time.OffsetDateTime
 
 // ---------------------------------------------------------------------------
 // get_context_usage response (binary -> host): drives the context meter (/context).
@@ -137,6 +139,21 @@ data class UsageWindow(
      */
     fun utilizationPercent(): Int? =
         utilization?.let { Math.round(it).toInt().coerceIn(0, PERCENT) }
+
+    /**
+     * Whether this window's reset moment has already passed, so whatever [utilization] says is a number about
+     * a window that no longer exists. See `UsageReport.afterResets`, the one caller.
+     *
+     * A `resets_at` this cannot read answers **false**: an unparseable timestamp is not evidence of anything,
+     * and reading it as "reset" would zero a window on a spelling change.
+     */
+    fun hasReset(nowMillis: Long): Boolean {
+        val at = resetsAt?.takeIf { it.isNotBlank() } ?: return false
+        val instant = runCatching { OffsetDateTime.parse(at).toInstant() }
+            .recoverCatching { Instant.parse(at) }
+            .getOrNull() ?: return false
+        return instant.toEpochMilli() <= nowMillis
+    }
 
     // NOT a private companion: kotlinx generates `serializer()` ON the companion, and `parseUsageReport`
     // calls `UsageWindow.serializer()` by hand — making it private hides the generated accessor with it.

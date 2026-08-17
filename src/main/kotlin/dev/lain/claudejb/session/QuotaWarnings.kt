@@ -90,10 +90,27 @@ class QuotaWarnings(private val log: Logger, private val announce: Announce) {
         if (limits == null || limits is JsonNull) {
             // NOT the same as an empty object: the binary sends null when plan limits do not apply at all
             // (API key, Bedrock, Vertex) or when its own fetch had nothing to fall back on.
-            log.info("get_usage: rate_limits=null (available=${payload?.get("rate_limits_available")})")
+            logOnce("get_usage: rate_limits=null (available=${payload?.get("rate_limits_available")})")
             return
         }
-        log.info("get_usage: ${limits.toString().take(LOG_CHARS)}")
+        logOnce("get_usage: ${limits.toString().take(LOG_CHARS)}")
+    }
+
+    /**
+     * Writes [line] only when it differs from the last one written.
+     *
+     * The reply is asked for on both turn edges and on a timer, so an idle session repeated the same numbers
+     * about eight times a minute — measured on one afternoon's `idea.log`: 1349 entries of a ~2 KB payload,
+     * megabytes of a file whose value is being readable. Keeping it at INFO is deliberate (a user-visible
+     * number that turns out to be wrong must leave the raw value behind that produced it), so the volume is
+     * cut where it comes from — the repetition — and not by hiding the evidence at a level nobody enables.
+     */
+    private var lastLogged: String? = null
+
+    private fun logOnce(line: String) {
+        if (line == lastLogged) return
+        lastLogged = line
+        log.info(line)
     }
 
     private companion object {

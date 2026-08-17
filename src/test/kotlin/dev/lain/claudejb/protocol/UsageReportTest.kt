@@ -10,10 +10,13 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Instant
 
 /**
  * [parseUsageReport] against the shape the binary really returns.
@@ -455,5 +458,62 @@ class UsageReportTest {
         assertNull(UsageWindow().utilizationPercent())
         assertEquals(100, UsageWindow(utilization = 250.0).utilizationPercent())
         assertEquals(0, UsageWindow(utilization = -5.0).utilizationPercent())
+    }
+
+    // --- afterResets: a window past its reset is 0%, whatever the binary keeps saying ---
+
+    @Test
+    fun `a window whose reset has passed reads zero`() {
+        // THE BUG: the binary answers `get_usage` with the utilization it last computed and a `resets_at`
+        // that is now in the past, and it goes on doing so until it is restarted. So the composer sat at
+        // "100% · Reset time: soon" for as long as the IDE stayed open — the most alarming thing this plugin
+        // can put on screen, and untrue. A window past its reset has a known utilization, and it is zero.
+        val report = UsageReport(
+            windows = listOf(
+                "five_hour" to UsageWindow(utilization = 100.0, resetsAt = "2026-08-17T17:00:00.000Z"),
+                "seven_day" to UsageWindow(utilization = 68.0, resetsAt = "2026-08-20T17:00:00.000Z"),
+            ),
+        )
+
+        val settled = report.afterResets(Instant.parse("2026-08-17T17:00:05Z").toEpochMilli())
+
+        assertEquals(0.0, settled.windows.first { it.first == "five_hour" }.second.utilization)
+        assertEquals(68.0, settled.windows.first { it.first == "seven_day" }.second.utilization)
+    }
+
+    @Test
+    fun `both spellings of resets_at are understood`() {
+        // Both were observed in one afternoon's replies, from the same binary, minutes apart. Reading only one
+        // of them would leave half the windows stuck at their old number and look like an intermittent bug.
+        val zulu = UsageWindow(utilization = 90.0, resetsAt = "2026-08-17T17:00:00.000Z")
+        val offset = UsageWindow(utilization = 90.0, resetsAt = "2026-08-17T17:00:01.137340+00:00")
+        val after = Instant.parse("2026-08-17T18:00:00Z").toEpochMilli()
+
+        assertTrue(zulu.hasReset(after))
+        assertTrue(offset.hasReset(after))
+    }
+
+    @Test
+    fun `an unreadable or absent reset time changes nothing`() {
+        // An unparseable timestamp is not evidence of a reset. Reading it as one would zero every window the
+        // day the binary changes how it spells them — silently, and in the safe-looking direction.
+        val now = Instant.parse("2026-08-17T18:00:00Z").toEpochMilli()
+        val report = UsageReport(
+            windows = listOf(
+                "odd" to UsageWindow(utilization = 42.0, resetsAt = "whenever"),
+                "none" to UsageWindow(utilization = 43.0),
+            ),
+        )
+
+        assertSame(report, report.afterResets(now))
+        assertFalse(UsageWindow(resetsAt = "whenever").hasReset(now))
+        assertFalse(UsageWindow().hasReset(now))
+    }
+
+    @Test
+    fun `a window still inside its window is left alone`() {
+        val window = UsageWindow(utilization = 30.0, resetsAt = "2026-08-17T17:00:00.000Z")
+
+        assertFalse(window.hasReset(Instant.parse("2026-08-17T16:59:00Z").toEpochMilli()))
     }
 }
