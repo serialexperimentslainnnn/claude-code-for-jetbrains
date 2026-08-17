@@ -106,6 +106,34 @@ fun UsageReport.mergedOver(previous: UsageReport?): UsageReport {
     return if (carried.isEmpty()) this else copy(windows = sortUsageWindows(windows + carried))
 }
 
+/**
+ * Zeroes every window whose reset moment has already passed — **the fix for a plan that reads 100% spent
+ * when it is not**.
+ *
+ * The binary keeps answering `get_usage` with the utilization it last computed and a `resets_at` that is now
+ * in the PAST. Nothing in that reply is a lie: the number was true of a window that has since rolled over,
+ * and the binary refreshes it when it feels like it — in practice, when it is restarted. So the composer sat
+ * at "100% · Reset time: soon" for as long as the user left the IDE open, which is the most alarming thing
+ * this plugin can put on screen and it was wrong.
+ *
+ * A window past its reset has a KNOWN utilization, and it is zero: that is what resetting means. Reporting it
+ * as such is not a guess — the guess was carrying the old number across the boundary. Applied once, where the
+ * reply is accepted, so the four things that read `windows` cannot disagree about it.
+ *
+ * [nowMillis] is a parameter for the reason [dev.lain.claudejb.session.WorkloadWindow] gives: a rule that
+ * reads its own clock cannot be reasoned about from outside it.
+ *
+ * The `resets_at` timestamps arrive in two spellings — `2026-08-17T17:00:00.000Z` and
+ * `2026-08-17T17:00:01.137340+00:00`, both observed in one afternoon's replies — so both are parsed, and
+ * anything else leaves the window exactly as it came. An unreadable timestamp is not evidence of a reset.
+ */
+fun UsageReport.afterResets(nowMillis: Long): UsageReport {
+    val settled = windows.map { (key, window) ->
+        if (window.hasReset(nowMillis)) key to window.copy(utilization = 0.0) else key to window
+    }
+    return if (settled == windows) this else copy(windows = settled)
+}
+
 private const val MODEL_SCOPED = "model_scoped"
 
 /** The raw per-limit array the binary's own per-model projection reads from, relayed to us untouched. */
