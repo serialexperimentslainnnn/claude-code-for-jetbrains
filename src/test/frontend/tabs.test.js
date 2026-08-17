@@ -1,13 +1,18 @@
-// The tab bar: the chats, the one open subtab, and the diagram behind the ⋮.
+// The tab bar: the chats, the subtabs of the one you are in, and the tree behind the ⋮.
 //
 // Three designs came before this one — a capsule per level joined by a measured <svg> thread, then a
 // breadcrumb, then a hover menu per segment — and the rules pinned here are what survived them:
 //  - the bar is at most TWO rows whatever the depth of the tree; the tree lives in a popup;
-//  - the popup is the WHOLE tree at once (every level), not one menu per level;
+//  - the second row is FLAT — every agent, subagent and background task of the chat on screen, one click
+//    each, led by the chat itself. It is the quick way in and out, not a second tree;
+//  - the popup is the WHOLE tree at once (every level), not one menu per level, and it stays;
 //  - the ⋮ is a real control with a hit area, and hover opens the same thing;
 //  - a chat that started nothing has no ⋮ and no second row;
 //  - going back to the chat's own transcript says so with an EMPTY agentId — the host reads a blank id as
-//    "the chat", never as an agent whose id is the empty string.
+//    "the chat", never as an agent whose id is the empty string;
+//  - a subtab pill shows the BARE name and is announced with its kind and its state, because a row of pills
+//    all beginning with `Agent (` spends the width on the word that repeats — and because colour alone is
+//    not allowed to be the only carrier of a state (WCAG 2.2 SC 1.4.1).
 const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('tab bar', () => {
@@ -18,10 +23,38 @@ describe('tab bar', () => {
   const dots = () => bar().querySelector('.pill-more');
   const cards = () => Array.from(win.document.querySelectorAll('.tab-menu .tab-menu-item'));
   const cardText = () => cards().map((el) => el.textContent);
+
+  /** The subtabs row's capsule — the row carries no modifier class, this is what identifies it. */
+  const subCapsule = () => bar().querySelector('.subtab-capsule');
+  /**
+   * A TAB is the `.pill-wrap`: the chat's own `<button class="pill">` plus its controls as SIBLINGS.
+   *
+   * They used to be spans inside that button, which is interactive content nested where the content model
+   * forbids it — invisible to assistive technology, and not reliably clickable in Chromium, which is what
+   * made the × dead. So these helpers select the wrapper, and a control is found on IT and never under the
+   * pill: a helper that still reached inside would keep passing while the markup that broke came back.
+   */
+  const subPills = () => Array.from(subCapsule() ? subCapsule().querySelectorAll('.pill-wrap') : []);
+  const subLabels = () => subPills().map((p) => p.querySelector('.pill-label').textContent);
+  const openSubPill = () => subCapsule() && subCapsule().querySelector('.pill-wrap.selected');
+  /** The tab for a chat by its visible title, wherever its controls live. */
+  const chatTab = (title) =>
+    Array.from(bar().querySelectorAll('.tab-capsule .pill-wrap')).find(
+      (p) => p.querySelector('.pill-label').textContent === title
+    );
+  /** The subtab whose transcript is on screen — null while that is the chat's own. */
   const subtab = () => {
-    const row = bar().querySelector('.tab-row.trail');
-    return row ? row.querySelector('.pill-label').textContent : null;
+    const open = openSubPill();
+    if (!open) return null;
+    const text = open.querySelector('.pill-label').textContent;
+    return text === 'Chat' ? null : text;
   };
+  /** How the open subtab is ANNOUNCED: the kind and the state live here, not in the visible text. */
+  const subtabName = () => {
+    const open = openSubPill();
+    return open ? open.getAttribute('aria-label') : null;
+  };
+
   const click = (el) => el.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   const hover = (el) => el.dispatchEvent(new win.MouseEvent('mouseenter', { bubbles: false }));
 
@@ -54,9 +87,12 @@ describe('tab bar', () => {
     expect(dots()).toBe(null);
   });
 
-  it('at rest it shows the chats and nothing else', () => {
-    expect(bar().querySelectorAll('.tab-row').length).toBe(1);
+  it('at rest it shows the chats and the subtabs of the one you are in', () => {
+    expect(bar().querySelectorAll('.tab-row').length).toBe(2);
+    // Nothing but the chat's own transcript is open, and the row says so with its first pill rather than by
+    // being absent: a row that appears and disappears moves the transcript under the pointer.
     expect(subtab()).toBe(null);
+    expect(subLabels()[0]).toBe('Chat');
     expect(dots()).not.toBe(null);
   });
 
@@ -76,16 +112,25 @@ describe('tab bar', () => {
     const deep = cards().find((el) => el.textContent.includes('Dependencias sin usar'));
     click(deep);
     expect(sent.pop()).toEqual({ type: 'selectAgent', agentId: 'c' });
-    // The open subtab names itself the way every other view does: what it is, then its title.
-    expect(subtab()).toBe('Subagent (Dependencias sin usar)');
+    expect(subtab()).toBe('Dependencias sin usar');
+    // The kind and the state are in the accessible name, the way every other view says them.
+    expect(subtabName()).toBe('Subagent (Dependencias sin usar)  ·  completed');
     // Two rows for a tree three levels deep: the bar's height does not follow the tree's depth.
     expect(bar().querySelectorAll('.tab-row').length).toBe(2);
   });
 
   it('the open subtab goes back to the chat, with a blank agentId', () => {
     win.cc.revealAgentTab('b');
-    expect(subtab()).toBe('Subagent (Dependencias de desarrollo)');
-    click(bar().querySelector('.tab-row.trail .pill'));
+    expect(subtab()).toBe('Dependencias de desarrollo');
+    click(openSubPill());
+    expect(sent.pop()).toEqual({ type: 'selectAgent', agentId: '' });
+    expect(subtab()).toBe(null);
+  });
+
+  it('the Chat pill is the way back, and it is always in the same place', () => {
+    win.cc.revealAgentTab('b');
+    expect(subLabels()[0]).toBe('Chat');
+    click(subPills()[0]);
     expect(sent.pop()).toEqual({ type: 'selectAgent', agentId: '' });
     expect(subtab()).toBe(null);
   });
@@ -94,7 +139,8 @@ describe('tab bar', () => {
     click(dots());
     click(cards().find((el) => el.textContent.includes('npm run dev')));
     expect(sent.pop()).toEqual({ type: 'revealBackgroundTask', taskId: 't1' });
-    expect(subtab()).toBe('Background Task (npm run dev)');
+    expect(subtab()).toBe('npm run dev');
+    expect(subtabName()).toContain('Background Task (npm run dev)');
   });
 
   it('hovering the chat tab opens the menu — after a delay, not instantly', () => {
@@ -147,7 +193,7 @@ describe('tab bar', () => {
 
   it('the open subtab can be pinned as a tab of its own', () => {
     win.cc.revealAgentTab('b');
-    const pin = bar().querySelector('.tab-row.trail .pill-pin');
+    const pin = openSubPill().querySelector('.pill-pin');
     // A subtab is a VIEW — this browser painting somebody else's transcript — so it is gone the moment you
     // look elsewhere. The pin is how you keep one.
     expect(pin).not.toBe(null);
@@ -155,9 +201,87 @@ describe('tab bar', () => {
     expect(sent.pop()).toEqual({ type: 'pinSubtab', agentId: 'b' });
   });
 
+  it('only the OPEN subtab carries controls', () => {
+    // The row can hold a dozen pills. Giving every one of them a ⋮, a pin and a × would put forty targets a
+    // few pixels wide in a 24px row — and the controls only ever act on what you are reading anyway. These
+    // are exactly what the single-subtab row this replaced already offered.
+    win.cc.revealAgentTab('b');
+    const open = openSubPill();
+    expect(open.querySelector('.pill-pin')).not.toBe(null);
+    expect(open.querySelector('.pill-more')).not.toBe(null);
+    expect(open.querySelector('.pill-x')).not.toBe(null);
+    const others = subPills().filter((p) => p !== open);
+    expect(others.length).toBeGreaterThan(0);
+    for (const p of others) {
+      expect(p.querySelector('.pill-pin, .pill-more, .pill-x')).toBe(null);
+    }
+  });
+
+  /**
+   * The × closes the chat — the whole path, from the click to the message.
+   *
+   * **This test did not exist, and that is why the button spent a day doing nothing.** There were three
+   * references to `.pill-x` in this file and all three were about its SHAPE: that it exists on the open
+   * subtab, that it does not exist on the others, and that its box is 20px in the stylesheet. Nothing ever
+   * pressed it. A control whose only job is to send one message needs a test that presses it and reads the
+   * message, or "it renders" and "it works" are the same green.
+   */
+  it('the × on a chat sends closeChat for THAT chat, and nothing else', () => {
+    win.cc.tabs({
+      chats: [
+        { id: '1', title: 'Chat 1', selected: true },
+        { id: '2', title: 'Chat 2' },
+      ],
+      tree: TREE,
+      tasks: TASKS,
+    });
+    const pill = chatTab('Chat 2');
+    sent = [];
+    click(pill.querySelector('.pill-x'));
+    // Exactly one message, and it names the chat the × belongs to — not the selected one, which is the
+    // mistake a handler that reads the current selection instead of its own row would make.
+    expect(sent).toEqual([{ type: 'closeChat', chatId: '2' }]);
+  });
+
+  it('pressing the × does not also select the chat it is closing', () => {
+    // The × sits inside the pill's own hit area. Without `stopPropagation` the click reaches the pill too,
+    // so closing a background chat would first switch to it — a visible jump to a tab that is going away.
+    win.cc.tabs({
+      chats: [
+        { id: '1', title: 'Chat 1', selected: true },
+        { id: '2', title: 'Chat 2' },
+      ],
+      tree: TREE,
+      tasks: TASKS,
+    });
+    const pill = chatTab('Chat 2');
+    sent = [];
+    click(pill.querySelector('.pill-x'));
+    expect(sent.map((m) => m.type)).not.toContain('selectChat');
+  });
+
+  it('the × is reachable and named for assistive technology, not just visible', () => {
+    // A `<span role="button">` INSIDE a `<button>` is interactive content nested in a place the content
+    // model forbids, and the `button` role is Children Presentational: a conforming browser deletes the
+    // descendants from the accessibility tree, so the × is never announced and tabbing to it lands on a
+    // control with no name (SC 4.1.2). Whatever the markup becomes, these two have to hold.
+    win.cc.tabs({
+      chats: [
+        { id: '1', title: 'Chat 1', selected: true },
+        { id: '2', title: 'Chat 2' },
+      ],
+      tree: TREE,
+      tasks: TASKS,
+    });
+    const pill = chatTab('Chat 2');
+    const x = pill.querySelector('.pill-x');
+    expect(x.getAttribute('aria-label')).toContain('Chat 2');
+    expect(x.closest('button')).toBe(null);
+  });
+
   it('an open subtab lists what THAT agent started, not the whole chat', () => {
     win.cc.revealAgentTab('b');
-    click(bar().querySelector('.tab-row.trail .pill-more'));
+    click(openSubPill().querySelector('.pill-more'));
     const text = cardText().join(' ');
     // Rooted at the hovered agent: its own child, yes; its parent and its parent's siblings, no — the
     // pointer is on it, so that is the question being asked.
@@ -168,7 +292,11 @@ describe('tab bar', () => {
 
   it('the host can reveal an agent, and closing it returns to the chat', () => {
     win.cc.revealAgentTab('b');
-    expect(subtab()).toBe('Subagent (Dependencias de desarrollo)');
+    // The VISIBLE text is the bare name; the kind and the state are in the accessible name instead. A dozen
+    // pills all beginning "Subagent (" spend the only scarce thing in a tool window — width — on the word
+    // that repeats.
+    expect(subtab()).toBe('Dependencias de desarrollo');
+    expect(subtabName()).toContain('Subagent (Dependencias de desarrollo)');
     win.cc.clearAgentSelection();
     expect(subtab()).toBe(null);
   });
@@ -443,6 +571,10 @@ describe('tab bar', () => {
       const rafBefore = win.requestAnimationFrame;
       win.requestAnimationFrame = (fn) => fn();
       win.Element.prototype.scrollIntoView = function (opts) {
+        // The CHAT row only. The subtab row centres its own open pill on the same terms, in its own capsule
+        // and with its own test — collecting both here would make this assertion fail whenever that row
+        // simply did its job, which is a test measuring the wrong thing rather than a defect.
+        if (this.closest('.subtab-capsule')) return;
         centred.push([this.querySelector('.pill-label').textContent, opts.inline]);
       };
       try {
@@ -464,6 +596,185 @@ describe('tab bar', () => {
         delete win.Element.prototype.scrollIntoView;
         win.requestAnimationFrame = rafBefore;
       }
+    });
+  });
+
+  // The second row: everything the chat on screen started, flat, one click each. The guard is the thing to
+  // watch here — `render` returns early on an unchanged signature, so a row the signature does not describe is
+  // a row that is drawn once and then frozen for the rest of the session.
+  describe('the subtabs row', () => {
+    it('lists the chat and everything it started, in the order the tree is walked', () => {
+      // Depth-first, so a subagent follows the agent that started it, then the background tasks. Same walk the
+      // guard reads (`T.workOrder`): two traversals that have to agree is how a stale row ships.
+      expect(subLabels()).toEqual([
+        'Chat',
+        'Inventario de dependencias',
+        'Dependencias de desarrollo',
+        'Dependencias sin usar',
+        'npm run dev',
+      ]);
+      // Still two rows: this is a flat quick-access row, not a second tree.
+      expect(bar().querySelectorAll('.tab-row').length).toBe(2);
+    });
+
+    it('paints the state word the HOST sent, and never derives one', () => {
+      // One vocabulary for every view (`JcefStatus`: running|completed|failed|stopped). The bar used to say
+      // `done` where the dashboard said `completed`, so one task had two colours and two CSS rules.
+      const dotOf = (name) =>
+        subPills()
+          .find((p) => p.querySelector('.pill-label').textContent === name)
+          .querySelector('.pill-dot');
+      expect(dotOf('Inventario de dependencias').className).toBe('pill-dot running');
+      expect(dotOf('Dependencias sin usar').className).toBe('pill-dot completed');
+      // An unknown word is painted as it arrives rather than mapped onto one of ours: the host owns the
+      // vocabulary, and a page that "corrects" it is how the two views drifted apart in the first place.
+      win.cc.tabs({
+        chats: CHATS,
+        tree: TREE.map((n) => (n.id === 'a' ? { ...n, status: 'stopped' } : n)),
+        tasks: TASKS,
+      });
+      expect(dotOf('Inventario de dependencias').className).toBe('pill-dot stopped');
+    });
+
+    it('says the state in words too, not only in the colour of the dot', () => {
+      // WCAG 2.2 SC 1.4.1: colour is never the only carrier. The word rides in the accessible name and in the
+      // tooltip, which is also what a voice-control user has to say to reach the pill.
+      const pill = subPills().find(
+        (p) => p.querySelector('.pill-label').textContent === 'Inventario de dependencias'
+      );
+      expect(pill.getAttribute('aria-label')).toContain('running');
+      expect(pill.getAttribute('title')).toContain('running');
+      // And the visible text is contained in the accessible name (SC 2.5.3 Label in Name).
+      expect(pill.getAttribute('aria-label')).toContain('Inventario de dependencias');
+    });
+
+    it('a chat that started nothing has no subtabs row at all', () => {
+      win.cc.tabs({ chats: CHATS, tree: [], tasks: [] });
+      expect(subCapsule()).toBe(null);
+      expect(bar().querySelectorAll('.tab-row').length).toBe(1);
+    });
+
+    // The three DOM-identity tests, the same shape as the ones over the chats' row above. This row is the one
+    // the guard was most likely to freeze, because the whole reason it exists is to show work that MOVES.
+    it('an identical push does not rebuild it', () => {
+      const before = subCapsule();
+      win.cc.tabs({ chats: CHATS, tree: TREE, tasks: TASKS });
+      win.cc.tabs({ chats: CHATS, tree: TREE, tasks: TASKS });
+      expect(subCapsule()).toBe(before);
+    });
+
+    it('an agent that FINISHES repaints it — the failure the guard would hide', () => {
+      // Without the row in the signature this push looks identical to the last one: the agent would keep its
+      // running colour for the rest of the session, and nothing on screen would say otherwise.
+      const before = subCapsule();
+      win.cc.tabs({
+        chats: CHATS,
+        tree: TREE.map((n) => (n.id === 'a' ? { ...n, status: 'completed' } : n)),
+        tasks: TASKS,
+      });
+      expect(subCapsule()).not.toBe(before);
+      expect(
+        subPills()
+          .find((p) => p.querySelector('.pill-label').textContent === 'Inventario de dependencias')
+          .querySelector('.pill-dot.completed')
+      ).not.toBe(null);
+    });
+
+    it('an agent that STARTS repaints it, and gets its own pill', () => {
+      const before = subCapsule();
+      win.cc.tabs({
+        chats: CHATS,
+        tree: TREE.concat([{ id: 'd', parent: 'a', label: 'Nuevo', type: 'Explore', status: 'running' }]),
+        tasks: TASKS,
+      });
+      expect(subCapsule()).not.toBe(before);
+      expect(subLabels()).toContain('Nuevo');
+    });
+
+    it('carries its OWN offset across a repaint', () => {
+      // Two capsules in the bar now, each with its own reader position. The subtab row is read by class and
+      // not by index for exactly this reason: `.tab-capsule` matches the chats' one first.
+      const before = subCapsule();
+      before.scrollLeft = 140;
+      bar().querySelector('.tab-capsule').scrollLeft = 60;
+      win.cc.tabs({
+        chats: CHATS,
+        tree: TREE.map((n) => (n.id === 'a' ? { ...n, status: 'completed' } : n)),
+        tasks: TASKS,
+      });
+      // A real rebuild, or the two assertions below prove nothing at all.
+      expect(subCapsule()).not.toBe(before);
+      expect(subCapsule().scrollLeft).toBe(140);
+      expect(bar().querySelector('.tab-capsule').scrollLeft).toBe(60);
+    });
+
+    it('re-centres the open subtab when the SELECTION changes, and not on every repaint', () => {
+      // Same rule as the chats' row, and the same reason: re-aiming on every push undoes the drag that was
+      // just restored, which makes the row unreadable while a turn is running.
+      const centred = [];
+      const rafBefore = win.requestAnimationFrame;
+      win.requestAnimationFrame = (fn) => fn();
+      win.Element.prototype.scrollIntoView = function () {
+        if (this.closest('.subtab-capsule')) centred.push(this.querySelector('.pill-label').textContent);
+      };
+      try {
+        win.cc.revealAgentTab('b');
+        expect(centred).toEqual(['Dependencias de desarrollo']);
+
+        // A push that only moves a status: same subtab open, leave the row where the reader put it.
+        win.cc.tabs({
+          chats: CHATS,
+          tree: TREE.map((n) => (n.id === 'c' ? { ...n, status: 'failed' } : n)),
+          tasks: TASKS,
+        });
+        expect(centred.length).toBe(1);
+
+        win.cc.revealAgentTab('c');
+        expect(centred).toEqual(['Dependencias de desarrollo', 'Dependencias sin usar']);
+      } finally {
+        delete win.Element.prototype.scrollIntoView;
+        win.requestAnimationFrame = rafBefore;
+      }
+    });
+
+    it('is scrollable and bounded like the row above it', () => {
+      // It can hold a dozen pills in a tool window a few hundred pixels wide, so it needs every one of the
+      // gestures the chats' row needed — the wheel translated, the row grabbable — or its far end is
+      // unreachable. Registered on the capsule, so the check is that the capsule got them.
+      const capsule = subCapsule();
+      capsule.scrollLeft = 0;
+      capsule.dispatchEvent(new win.WheelEvent('wheel', { deltaY: 90, bubbles: true, cancelable: true }));
+      expect(capsule.scrollLeft).toBe(90);
+
+      const at = (type, x) =>
+        new win.MouseEvent(type, { clientX: x, button: 0, bubbles: true, cancelable: true });
+      capsule.dispatchEvent(at('mousedown', 300));
+      win.document.dispatchEvent(at('mousemove', 260));
+      expect(capsule.scrollLeft).toBe(130);
+      win.document.dispatchEvent(at('mouseup', 260));
+    });
+
+    it('the pills are sized to the composer register, capped and ellipsised', () => {
+      // jsdom lays nothing out, so only the stylesheet can be asserted. The cap is what stops one chat named
+      // after a long first prompt filling the bar; the height is what makes the bar read as the same product
+      // as the composer's control row (`.composer-bar .pill`: 26px, `0 9px`, 11.5px).
+      const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+      // Anchored at the start of a line, unlike the looser lookup the older test uses: `.pill {` is a
+      // SUBSTRING of several composer selectors, and matching one of those would assert the composer's
+      // numbers while claiming to assert the tab bar's.
+      const block = (selector) => {
+        const at = css.indexOf('\n' + selector + ' {');
+        return at < 0 ? '' : css.slice(at, css.indexOf('}', at));
+      };
+      expect(block('.pill')).toMatch(/height:\s*24px/);
+      expect(block('.pill')).toMatch(/font-size:\s*11\.5px/);
+      expect(block('.subtab-capsule .pill')).toMatch(/height:/);
+      // The invariants that kept breaking, restated so a size change cannot quietly take them with it.
+      expect(block('.pill-label')).toMatch(/text-overflow:\s*ellipsis/);
+      expect(block('.tab-capsule .pill')).toMatch(/max-width:/);
+      // A control inside a pill keeps a declared box rather than whatever the glyph measures.
+      expect(block('.pill-x')).toMatch(/width:\s*20px/);
+      expect(block('.pill-x')).toMatch(/height:\s*20px/);
     });
   });
 

@@ -82,11 +82,17 @@ body.vibe .composer-card:focus-within {
   }
 }
 
-/* ── tab bar: the chats, and a breadcrumb of where you are inside one ────────────────────────────────
-   Drawn by app-tabs.js. Two rows at most, both of fixed height: the chats' capsule, and the trail
-   (`Chat › Agent › Subagent`). It replaced a stack of one capsule per level tied together by an <svg>
-   thread — see the module header for why. Nothing here wraps or grows: a bar that changes height as the
-   agent tree deepens moves the transcript under the pointer while you are reading it. */
+/* ── tab bar: the chats, and the subtabs of the one you are in ───────────────────────────────────────
+   Drawn by app-tabs.js. Two rows at most, both of fixed height: the chats' capsule, and the subtabs of the
+   chat on screen (its agents, subagents and background tasks, led by the chat itself). It replaced a stack of
+   one capsule per level tied together by an <svg> thread — see the module header for why. Nothing here wraps
+   or grows: a bar that changes height as the agent tree deepens moves the transcript under the pointer while
+   you are reading it, which is why the second row is FLAT and the hierarchy lives in the ⋮ popup.
+
+   The whole bar is sized to the composer's control row (`.composer-bar .pill`, composer.css: 26px tall,
+   `0 9px`, 11.5px type) — a tab is a control of the same weight as a model selector, and two registers a few
+   pixels apart read as one of them being wrong rather than as two bars. The pill itself is 24px so that pill
+   plus the capsule's own padding lands on that 26px. */
 /* One ROW: the tab rows on the left, the dashboard's view switcher on the right. Side by side as flex
    items rather than one overlaying the other — see `.dash-toggles` for the conformance reason. */
 /* Above the work area, and above it by declaration rather than by being drawn somewhere else. The bar and
@@ -100,7 +106,7 @@ body.vibe .composer-card:focus-within {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 6px 10px 4px;
+  padding: 3px 8px 2px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--bg) 85%, transparent);
   flex: 0 0 auto;
@@ -111,14 +117,22 @@ body.vibe .composer-card:focus-within {
   max-width: 100%;
   overflow: hidden;
 }
-/* The chats' row and the open subtab's row, stacked; they take whatever the switcher leaves. */
+/* `hidden` is a user-agent rule, and ANY author `display` beats it whatever the specificity — so the
+   `display: flex` above quietly cancelled the attribute `app-tabs.js` sets when there is nothing to draw.
+   What that left was not a hidden bar but a 6px strip of padding and border, which reads as "there is no tab
+   bar" rather than as "the bar is empty". Anything that declares `display` and is also hidden by script needs
+   this line; it is the other half of that declaration, not a defensive extra. */
+#tabsbar[hidden] {
+  display: none;
+}
+/* The chats' row and the subtabs' row, stacked; they take whatever the switcher leaves. */
 .tab-rows {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
 .tab-row {
@@ -137,9 +151,22 @@ body.vibe .composer-card:focus-within {
    They keep their size and the row scrolls instead — but they do not GROW without limit either. Since 5.5.0
    a chat is named after the first thing you asked it, so an untruncated tab is as wide as that sentence, and
    three of those fill the bar on their own. Capped and ellipsised; the full title is in the tooltip. */
-.tab-capsule .pill {
+/* THE TAB is the wrapper, not the pill: the chat's own button and its glyph controls are siblings inside it.
+   They were nested — the controls were spans with `role="button"` INSIDE the pill's `<button>` — and that is
+   what made the × dead: interactive content in a place the content model forbids, so Chromium's hit-testing
+   never delivered the press to the span's handler, and the ARIA `button` role being Children Presentational
+   deleted all three from the accessibility tree on top of it. */
+.pill-wrap {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   max-width: 22ch;
+  min-width: 0;
+}
+/* The label is what gives way when the tab is too narrow, never the controls: a truncated title is still a
+   tab you can read and close, a truncated × is a tab you cannot. */
+.tab-capsule .pill {
+  min-width: 0;
 }
 /* The capsule around the chats' pills — the oval that encloses the set. */
 /* The capsule scrolls; the ROW is what bounds it.
@@ -150,10 +177,10 @@ body.vibe .composer-card:focus-within {
 .tab-capsule {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
-  padding: 3px 6px;
+  padding: 1px 5px;
   border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--surface2) 55%, transparent);
@@ -181,39 +208,79 @@ body.vibe .composer-card:focus-within {
   user-select: none;
 }
 
-/* The trail sits a hair further left than the capsule above it, so the first segment's text lines up with
-   the first chat pill's rather than with the capsule's border. */
-.tab-row.trail {
-  padding-left: 2px;
-}
+/* ── the subtabs row ─────────────────────────────────────────────────────────
+   The chat on screen, then everything it started. It carries no caption: the chats' row above has none
+   either, and in a tool window a word of label is a chunk of the only scarce dimension there is.
 
-/* The row holding the ONE open subtab, with its little caption. */
-.trail-label {
-  flex: 0 0 auto;
-  color: var(--dim);
-  font-size: 11px;
+   It is deliberately QUIETER than the row above it — a recessed capsule and no border of its own. The two
+   rows are not peers: the chats are the navigation, the subtabs belong to whichever chat is open and change
+   under you as a turn runs. Making them look identical made the bar read as four rows of equals. */
+.subtab-capsule {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--surface2) 35%, transparent);
+}
+/* The subtab pills sit a size below the chats': same type, less padding, no border until they are hovered or
+   open. A row that can hold a dozen of them cannot spend a hairline and 18px of chrome on each. */
+.subtab-capsule .pill {
+  height: 21px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: none;
+}
+.subtab-capsule .pill:hover {
+  border-color: color-mix(in srgb, var(--text) 20%, transparent);
+  background: color-mix(in srgb, var(--surface) 70%, var(--text) 8%);
+}
+.subtab-capsule .pill.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* The two glyph controls that live INSIDE a pill, next to the ×: the ⋮ that shows the whole tree, and the pin
    that promotes the open subtab to a tab of its own. Both need a real hit area — the version before this was a
-   bare glyph a few pixels wide. */
+   bare glyph a few pixels wide.
+
+   A declared box rather than padding around a glyph, and it is the box that matters: `padding: 0 4px` around
+   a `⋮` gives a target roughly 13px wide, and the pill shrank by six pixels in this same change. Stated as a
+   square the size stops being whatever the glyph happens to measure in the IDE's font.
+
+   **Declared gap, not a claim of conformance**: 20×20 is short of the 24×24 CSS pixels WCAG 2.2 SC 2.5.8
+   (Target Size (Minimum), AA) asks for, and the spacing exception does not rescue it either — these controls
+   sit against each other, so the 24px circles centred on them intersect. Three of them at 24px is 72px of a
+   pill capped at 22ch, which is most of the tab. The row-level answer is that every one of these functions is
+   also reachable from the ⋮ popup, which is a comfortable list; the one that is not is the close. Do not shrink
+   these further, and if the pill ever grows back, grow them first. */
 .pill-more,
-.pill-pin {
+.pill-pin,
+.pill-x {
   flex: 0 0 auto;
-  margin-left: 2px;
-  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 1px;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-pill);
+  background: none;
   color: var(--dim);
-  font-size: 13px;
+  font-family: var(--font);
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 .pill-more:hover,
-.pill-pin:hover {
+.pill-pin:hover,
+.pill-x:hover {
   color: var(--accent);
   background: var(--accent-soft);
 }
-.pill.tab-open .pill-more {
+.pill-x:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.pill-wrap.tab-open .pill-more {
   color: var(--accent);
 }
 
@@ -322,20 +389,28 @@ body.vibe .composer-card:focus-within {
 }
 
 /* A pill: the IDE's own surface colour, a hairline outline, and the accent only when selected — where it
-   carries the outline AND the text AND the weight, so selection never rests on colour alone. */
+   carries the outline AND the text AND the weight, so selection never rests on colour alone.
+
+   The size is the composer's control register (see the section header). `height` rather than vertical
+   padding, because the row's job is to be exactly as tall as it says it is whatever the type does.
+
+   NB `.pill` is SHARED with the composer's control row, which overrides `height`, `padding`, `font-size` and
+   `gap` at `.composer-bar .pill` (composer.css) — so the four sizing declarations below reach the tab bar
+   only. `max-width` and `line-height` are NOT overridden there: those two are the ones to think twice about. */
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex: 0 0 auto;
   max-width: 220px;
-  padding: 5px 12px;
+  height: 24px;
+  padding: 0 9px;
   border: 1px solid color-mix(in srgb, var(--text) 26%, transparent);
   border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 11.5px;
   line-height: 1.35;
   cursor: pointer;
   white-space: nowrap;
@@ -375,7 +450,33 @@ body.vibe .composer-card:focus-within {
   border-radius: var(--radius-pill);
   background: var(--dim);
 }
+/* Running fades sky blue ↔ amber, the SAME two hues and the same 1.3s beat as the tool card the work belongs
+   to (`toolRun` / `toolRunIc`, transcript.css). One vocabulary for "this is happening": a third palette in the
+   tab bar would mean the row and the transcript disagreeing about a colour for the same running agent. Its own
+   keyframes because that one animates `border-color` and this is a filled dot; the timing is what is shared.
+   The movement is also the non-colour half of the signal — a dot that pulses reads as live where a static blue
+   one does not — and the word itself is in the pill's tooltip and accessible name (WCAG 2.2 SC 1.4.1). */
 .pill-dot.running {
+  background: var(--info);
+  animation: pillRun 1.3s ease-in-out infinite;
+}
+@keyframes pillRun {
+  0%,
+  100% {
+    background: var(--info);
+  }
+  50% {
+    background: var(--warning);
+  }
+}
+/* An animation that loops forever is exactly what SC 2.3.3 is about, and the state must survive it being off:
+   the dot keeps the sky blue it starts on, and the word in the tooltip is unchanged.
+   Gated on `body.reduced-motion`, NOT on `@media (prefers-reduced-motion)` — this page's motion switch is the
+   HOST's (the IDE setting, mirrored onto the body), and a media query would be a second, independent answer
+   that the user's own preference in Settings could not turn off. The blanket rule at the end of boot.css
+   already stops every animation on that class; this one is here to say what the dot falls back TO. */
+body.reduced-motion .pill-dot.running {
+  animation: none;
   background: var(--info);
 }
 .pill-dot.completed {
@@ -390,20 +491,9 @@ body.vibe .composer-card:focus-within {
   background: var(--neon-orange);
 }
 
-.pill-x {
-  flex: 0 0 auto;
-  margin-right: -4px;
-  padding: 0 3px;
-  border-radius: var(--radius-pill);
-  color: var(--dim);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-.pill-x:hover {
-  background: color-mix(in srgb, var(--danger) 22%, transparent);
-  color: var(--text);
-}
+/* NB `.pill-x` is declared with the ⋮ and the pin, further up — the three are one control family and one
+   box. It had a second block here with a negative right margin, which pulled it into the pill's own padding
+   back when it was a child of the pill. It is a sibling now, so that margin would pull it out of the tab. */
 
 /* Visually hidden but present for assistive technology. NOT `display:none` or `visibility:hidden` — both
    remove the node from the accessibility tree, which would silence the live region entirely. The clip-path

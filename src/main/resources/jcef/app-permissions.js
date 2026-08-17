@@ -34,6 +34,24 @@
     if (c && typeof c.send === 'function') c.send(obj);
   }
 
+  /**
+   * Sends a message ABOUT a card, tagged with whichever conversation the card belongs to.
+   *
+   * There are two now: the chat this browser was built for, and the one embedded in the Git view
+   * (`app-session-gitchat.js`), which is a second `claude` process with permission requests of its own. Both
+   * are drawn by the builders below — one renderer, so a card cannot look different depending on where it
+   * appears — and `scope` is what tells the host which session to answer. It rides on the message rather than
+   * on a second set of message types because the alternative, letting the host guess from the request id,
+   * would resolve the wrong turn on any collision, silently and irreversibly.
+   *
+   * Absent scope means the panel's own session, so nothing about the ordinary path changes.
+   */
+  function sendFor(card, obj) {
+    var scope = card && card.scope ? String(card.scope) : null;
+    if (scope) obj.scope = scope;
+    send(obj);
+  }
+
   function isHttpUrl(u) {
     if (!u || typeof u !== 'string') return false;
     // Anchor at start; only http/https schemes are permitted.
@@ -121,7 +139,7 @@
               Object.keys(selections).forEach(function (qText) {
                 answers[qText] = selections[qText].join(', ');
               });
-              send({ type: 'resolveQuestion', id: id, answers: answers });
+              sendFor(card, { type: 'resolveQuestion', id: id, answers: answers });
             },
           },
         }),
@@ -131,7 +149,7 @@
           text: 'Cancel',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: false });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: false });
             },
           },
         })
@@ -272,7 +290,7 @@
     function resolve(action) {
       var msg = { type: 'resolveElicitation', id: id, action: action };
       if (action === 'accept') msg.content = collectContent();
-      send(msg);
+      sendFor(card, msg);
     }
 
     var serverName = e.serverName != null ? String(e.serverName) : card.title || 'Server';
@@ -348,7 +366,7 @@
           text: 'Approve plan',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: true });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: true });
             },
           },
         }),
@@ -357,7 +375,7 @@
           text: 'Keep planning',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: false });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: false });
             },
           },
         })
@@ -428,7 +446,7 @@
       text: 'Accept',
       on: {
         click: function () {
-          send({ type: 'resolvePermission', id: id, allow: true });
+          sendFor(card, { type: 'resolvePermission', id: id, allow: true });
         },
       },
     });
@@ -440,7 +458,7 @@
         text: 'Reject',
         on: {
           click: function () {
-            send({ type: 'resolvePermission', id: id, allow: false });
+            sendFor(card, { type: 'resolvePermission', id: id, allow: false });
           },
         },
       }),
@@ -452,7 +470,7 @@
           text: 'View diff',
           on: {
             click: function () {
-              send({ type: 'viewDiff', id: id });
+              sendFor(card, { type: 'viewDiff', id: id });
             },
           },
         })
@@ -465,7 +483,7 @@
           text: 'Always allow',
           on: {
             click: function () {
-              send({ type: 'alwaysAllow', tool: tool, id: id });
+              sendFor(card, { type: 'alwaysAllow', tool: tool, id: id });
             },
           },
         })
@@ -503,13 +521,16 @@
    * needs your permission to run Bash" is actionable in a way that "Claude needs your response" is not.
    * Resolution is left silent on purpose — the user just acted, so they know.
    */
-  var lastPendingCount = 0;
-  function announcePending(list) {
+  // Counted PER REGION. There are two mounts now — the dock and the Git view's embedded chat — and a single
+  // counter would make a card arriving in one of them cancel the announcement of a card arriving in the
+  // other, which is exactly the case where the user is least likely to be looking at the right pane.
+  var pendingCounts = new WeakMap();
+  function announcePending(list, region) {
     var C = core();
     if (!C || typeof C.announce !== 'function') return;
     var count = list.length;
-    var previous = lastPendingCount;
-    lastPendingCount = count;
+    var previous = pendingCounts.get(region) || 0;
+    pendingCounts.set(region, count);
     if (count === 0 || count <= previous) return;
     if (count === 1) {
       var only = list[0] || {};
@@ -526,11 +547,20 @@
     C.announce(count + ' requests are waiting for your response.');
   }
 
-  function permissions(list) {
-    var region = mount();
+  /**
+   * Draws [list] into [into], or into the dock when no container is given.
+   *
+   * The container is a parameter because the Git view embeds a second conversation with permission requests
+   * of its own (`app-session-gitchat.js`), and every turn in that chat runs with forced approval — a view
+   * that could show the conversation but not its cards would be a view you cannot finish anything from. ONE
+   * renderer with two mounts, never two renderers: the card is where the command is shown before it runs, so
+   * a second implementation is a second place for that to go wrong.
+   */
+  function permissions(list, into) {
+    var region = into || mount();
     if (!region) return;
     if (!list || !Array.isArray(list)) list = [];
-    announcePending(list);
+    announcePending(list, region);
 
     // Reconcile by card id rather than wiping + rebuilding the whole region. A blunt innerHTML='' on every push
     // (the host re-pushes on ANY permission change — a second card arriving, one resolving) destroyed the
@@ -582,4 +612,7 @@
 
   window.cc = window.cc || {};
   window.cc.permissions = permissions;
+  // The renderer, for the Git view's embedded chat. Exposed rather than duplicated — see `permissions`.
+  window.CC = window.CC || {};
+  window.CC.permissions = { render: permissions };
 })();
