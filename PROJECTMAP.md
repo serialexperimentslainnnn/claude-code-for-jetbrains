@@ -186,7 +186,9 @@ On this machine only: node needs `OPENSSL_CONF=/dev/null`, and `claude` is a sys
 - Conventional Commits, enforced by `.githooks/commit-msg` and commitlint.
 - **This map is distributed and half-generated, and the halves never mix.** Everything between
   `<!-- MAP:GENERATED BEGIN -->` and `<!-- MAP:GENERATED END -->` is overwritten by
-  `scripts/gen-projectmap.py`; the prose around it is not, and `checkProjectMap` fails when the two disagree.
+  `scripts/gen-projectmap.py`; the prose around it is not. **Nothing gates it** — these maps are an
+  orientation index for AI-assisted sessions, excluded from the plugin artifact, so a stale one costs a
+  session and never a user. Run the script when you want it current.
   So the generated half answers **where** and the hand-written half answers **why** and **careful** — a note
   written inside the markers is lost on the next run. **A symbol's one-line "Owns" is extracted from the
   source, never typed into the map**: the first sentence of its KDoc for Kotlin, and for a JS module the
