@@ -1,4 +1,4 @@
-/* app-permissions.js — A4 (permissions)
+/* app-permissions.js — the permission cards.
  * Renders cc.permissions(list) into CC.els.permissions per §PERMISSIONS.
  * Consumes app-core.js globals (window.CC: h, escape, markdown, send).
  * Vanilla ES2019, addEventListener only, no external resources, themeable via classes only.
@@ -566,8 +566,18 @@
       if (ck == null || !wanted[ck]) region.removeChild(child);
     }
 
-    // Append in list order; appendChild MOVES an existing node (keeping its state) rather than recreating it.
-    for (var m = 0; m < ordered.length; m++) region.appendChild(ordered[m]);
+    // Put each card in its place, and TOUCH NOTHING that is already in it.
+    //
+    // Reusing the node is not the same as leaving it alone: re-appending a node that is already there is not a
+    // no-op, it is a removal followed by an insertion (both the browser and jsdom report the pair), and a
+    // subtree that leaves the document comes back with its scroll offsets at zero and its focus gone. The
+    // host re-pushes the whole list on every permission change — a second request arriving, another one
+    // resolving — so the diff you were reading (`.perm-diff`, capped at 28vh, so anything real scrolls)
+    // jumped back to its first line, and the elicitation field you were typing into lost the caret. Only the
+    // cards whose position actually changed are moved; in the ordinary push, nothing moves at all.
+    for (var m = 0; m < ordered.length; m++) {
+      if (region.children[m] !== ordered[m]) region.insertBefore(ordered[m], region.children[m] || null);
+    }
   }
 
   window.cc = window.cc || {};

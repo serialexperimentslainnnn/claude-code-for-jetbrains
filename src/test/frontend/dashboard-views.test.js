@@ -269,14 +269,42 @@ describe('dashboard views', () => {
     expect(chat().hidden).toBe(false);
     expect(lit()).toEqual(['Workloads']);
 
-    const labels = Array.from(win.document.querySelectorAll('.dash-toggles button')).map(
-      (b) => b.textContent
-    );
-    expect(labels).toEqual(['Chat', 'Session', 'Workloads']);
+    // The Plan button is in the DOM but HIDDEN: most sessions never write a plan, and a permanent button
+    // whose view reads "No plan for this session" is the panel answering a question nobody asked.
+    const visibleLabels = () =>
+      Array.from(win.document.querySelectorAll('.dash-toggles button'))
+        .filter((b) => !b.hidden)
+        .map((b) => b.textContent);
+    expect(visibleLabels()).toEqual(['Chat', 'Session', 'Workloads']);
 
     chat().dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
     expect(panel().hasAttribute('hidden')).toBe(true);
     expect(lit()).toEqual(['Chat']);
+  });
+
+  it('the Plan button appears only when there is a plan, and its arrival IS the notice', () => {
+    const planBtn = () =>
+      Array.from(win.document.querySelectorAll('.dash-toggles button')).find((b) => b.textContent === 'Plan');
+    // No plan: present in the DOM, hidden. This is the discoverability fix — the plan used to be a card
+    // buried among the Session stats, where the person who asked for it could not find it.
+    win.cc.session({ plan: null });
+    expect(planBtn().hidden).toBe(true);
+
+    win.cc.session({ plan: { body: '## Plan\n\n1. Do the thing', path: '/tmp/plan.md' } });
+    expect(planBtn().hidden).toBe(false);
+
+    openView('plan');
+    expect(panel().textContent).toContain('Do the thing');
+    // The path is provenance, so it is shown — but the body is what the view is for.
+    expect(panel().textContent).toContain('/tmp/plan.md');
+
+    // Leaving plan mode is a real transition, not an error: the button goes, and the panel must not be
+    // left showing a view with no lit button and no way back to it.
+    win.cc.session({ plan: null });
+    expect(planBtn().hidden).toBe(true);
+    expect(
+      Array.from(win.document.querySelectorAll('.dash-toggle.active')).map((b) => b.textContent)
+    ).not.toContain('Plan');
   });
 
   it('one press switches, and pressing the open view returns to the chat', () => {

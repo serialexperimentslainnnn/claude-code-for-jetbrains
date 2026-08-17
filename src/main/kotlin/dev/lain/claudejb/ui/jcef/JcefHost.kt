@@ -17,6 +17,7 @@ import org.cef.browser.CefFrame
 import org.cef.callback.CefCallback
 import org.cef.callback.CefSchemeHandlerFactory
 import org.cef.handler.CefLifeSpanHandlerAdapter
+import org.cef.handler.CefLoadHandler
 import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.handler.CefRequestHandlerAdapter
 import org.cef.handler.CefResourceHandler
@@ -31,6 +32,60 @@ import java.util.Base64
 import java.util.LinkedList
 import javax.swing.JComponent
 import javax.swing.border.EmptyBorder
+
+/**
+ * How the assembled page reaches the browser, in the order the rungs are tried.
+ *
+ * There is more than one rung because the same document has to arrive in two different places. Locally the CEF
+ * scheme handler is the best of them: it costs no socket and still carries real response headers. Under Remote
+ * Development the browser runs in the thin client while the scheme is registered in the backend, so the client
+ * resolves nothing at all — [LOOPBACK] is the rung that still carries those headers there, reached through the
+ * user's own port forward. [INLINE] is `loadHTML`: it always renders, and it is the one rung that loses the
+ * headers, which is why it sits below the socket rather than above it. [NOTICE] renders no chat at all — it
+ * names the port and the command that opens the forward.
+ *
+ * Declaration order is the ladder order: a rung is only ever promoted to a strictly later one.
+ */
+internal enum class PageRoute { SCHEME, LOOPBACK, INLINE, NOTICE }
+
+/**
+ * The rung to try after [current] failed to bring the page up, or null when there is none left.
+ *
+ * [PageRoute.NOTICE] is reachable only when a loopback port actually bound ([loopbackBound]): with no port there
+ * is no forward to ask for, and a notice naming a port that does not exist is worse than the blank view it
+ * replaces.
+ */
+internal fun nextPageRoute(current: PageRoute, loopbackBound: Boolean): PageRoute? = when (current) {
+    PageRoute.SCHEME -> PageRoute.LOOPBACK
+    PageRoute.LOOPBACK -> PageRoute.INLINE
+    PageRoute.INLINE -> PageRoute.NOTICE.takeIf { loopbackBound }
+    PageRoute.NOTICE -> null
+}
+
+/** The first status code that means the server answered with an error instead of the document. */
+private const val HTTP_ERROR_FLOOR = 400
+
+/**
+ * Whether a finished load actually delivered the document we asked for — the question `onLoadEnd` alone does
+ * not answer, because it fires for a failed navigation too (Chromium loads its own error page and reports the
+ * load as ended).
+ *
+ * Both arguments are needed and neither is sufficient. [loadFailed] is the network verdict, reported to
+ * `onLoadError` just before the end of the same load: it is the ONLY signal that a rung of the ladder was not
+ * reachable at all, which is the Remote Development case — the scheme resolves in the thin client to nothing.
+ * [httpStatusCode] is the server's, and it is what catches a rung that answered but not with the page: the
+ * loopback server replies 404 to any path that is not the one-shot URL.
+ *
+ * A status of `0` is NOT a failure. It is what a non-HTTP load reports, and the ladder's own `loadHTML` rungs
+ * would be read as broken by a naive `!= 200` — they are served at 200 by the platform's own scheme handler
+ * today, and a rule that depends on that is a rule that breaks when the platform changes how `loadHTML` works.
+ *
+ * The consequence of getting this wrong is not a blank frame: [JcefHost.exec] queues everything the page owes
+ * until the load ends, so treating a failed load as a success **drains that queue into a page that cannot run
+ * it**, and the next rung comes up with nothing left to draw.
+ */
+internal fun pageArrived(httpStatusCode: Int, loadFailed: Boolean): Boolean =
+    !loadFailed && httpStatusCode >= 0 && httpStatusCode < HTTP_ERROR_FLOOR
 
 /**
  * Thin wrapper over [JBCefBrowser] that hosts the JCEF chat frontend and provides the async JS bridge.
@@ -48,11 +103,15 @@ import javax.swing.border.EmptyBorder
  *    any remote resource, so nothing can be exfiltrated and there is no CORS surface (we emit no
  *    `Access-Control-Allow-Origin`). `Clear-Site-Data` wipes cookies/storage each load; we set neither anyway.
  *  - JS→Kotlin: a [JBCefJSQuery] forwards raw JSON to [onMessage] on the EDT. Kotlin→JS: [exec] runs JS via the
- *    host API (not subject to the page CSP), queued until load-end then flushed in order.
+ *    host API (not subject to the page CSP), queued until a load that actually delivered the page ([pageArrived])
+ *    and then flushed in order — a load that failed leaves the queue for the rung that follows it.
  *  - Navigation is cancelled and popups refused; links are routed through the bridge and gated host-side.
  *
- * If scheme registration is somehow unavailable we fall back to `loadHTML`, where the same hash-pinned CSP still
- * applies via the page's own meta tag. All ready-flag and queue access is confined to the EDT.
+ * Delivery is the [PageRoute] ladder rather than a single route: a rung that has not produced a live web app
+ * [READY_WATCHDOG_MS] after it was asked for promotes to the next one, and each rung is delivered at most once
+ * per browser, so the ladder always terminates. Only [PageRoute.SCHEME] and [PageRoute.LOOPBACK] carry the real
+ * headers; [PageRoute.INLINE] keeps the hash-pinned CSP through the page's own meta tag and loses the rest. All
+ * ready-flag, route and queue access is confined to the EDT.
  */
 class JcefHost(
     parentDisposable: Disposable,
@@ -70,20 +129,36 @@ class JcefHost(
     /** JS strings queued before the page was ready. EDT-only. */
     private val pending = LinkedList<String>()
 
-    /** The assembled page, kept so the first-open self-heal can reload it via `loadHTML`. */
+    /** The assembled page, kept so a later rung of the ladder can serve the very same bytes. */
     private var page: Page? = null
 
     /** True once the web app has actually announced itself (the `ready` bridge message reached us). EDT-only. */
     private var webReady: Boolean = false
 
-    /** One-shot guard so the self-heal reload can't loop. EDT-only. */
-    private var reloadedOnce: Boolean = false
+    /** The rung the page is currently being delivered by. Only ever moves forward. EDT-only. */
+    private var route: PageRoute? = null
+
+    /** The loopback server backing [PageRoute.LOOPBACK], from the moment it binds until it is stopped. */
+    @Volatile
+    private var loopback: LoopbackPageServer? = null
+
+    /** True once the parent disposable has fired, so a bind that lands after teardown closes its own socket. */
+    @Volatile
+    private var disposed: Boolean = false
 
     /**
-     * First-open self-heal: if the very first scheme-served load comes up blank (the process-global scheme
-     * handler can race the first browser's `loadURL`, yielding a page with no scripts → no `__ccSend` → a dead
-     * chat that only a manual tab-reopen fixed), this watchdog reloads the page via `loadHTML` (independent of
-     * the scheme) so the chat heals itself. Cancelled as soon as the web app announces ready.
+     * Whether the load now ending reported an error for the main frame. Written and read on the CEF thread
+     * that delivers the load callbacks, so it is volatile rather than EDT-confined — see [installLoadHandler].
+     */
+    @Volatile
+    private var mainFrameLoadFailed: Boolean = false
+
+    /**
+     * What advances the ladder. A rung that has not produced a live web app this long after it was asked for has
+     * not worked: the scheme handler is process-global and can race the first browser's `loadURL`, leaving a page
+     * with no scripts and therefore no `__ccSend`, and under Remote Development the scheme resolves in the client
+     * to nothing at all. It is armed when a rung is *delivered* rather than when a load ends, because a rung that
+     * never reaches the browser never produces a load-end either. Cancelled as soon as the web app announces ready.
      */
     private val readyWatchdog = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
 
@@ -106,6 +181,16 @@ class JcefHost(
             // The browser must be disposed with the parent; register early so even an early failure cleans up.
             Disposer.register(parentDisposable, b)
 
+            // Whatever socket the ladder opens dies with the parent, even when `dispose()` is never called, and
+            // the flag closes the race where a bind completes after teardown has already run.
+            Disposer.register(
+                parentDisposable,
+                Disposable {
+                    disposed = true
+                    loopback?.stop()
+                },
+            )
+
             // Select the non-deprecated create(JBCefBrowserBase) overload via a typed local — assigning to `base`
             // (rather than an `as` cast on `b`) avoids smart-narrowing `b`, which stays a JBCefBrowser below.
             val base: JBCefBrowserBase = b
@@ -120,11 +205,9 @@ class JcefHost(
             installNavigationGuards(b)
             installLoadHandler(b, query)
 
-            // Prefer serving from the secure-context origin (real HTTP security headers); fall back to a raw
-            // data-page load (the hash-pinned CSP still applies via the page meta tag) if registration fails.
             val page = buildPage()
             this.page = page
-            if (registerScheme(page)) b.loadURL(PAGE_URL) else b.loadHTML(page.html)
+            deliver(b, page, startRoute(schemeAvailable = registerScheme(page)))
         }
     }
 
@@ -144,13 +227,16 @@ class JcefHost(
     }
 
     /**
-     * The web app announced it is alive (the `ready` bridge message). Cancels the first-open self-heal watchdog,
-     * and settles the keyboard focus. Called by the panel when it receives `Msg.Ready`. Idempotent.
+     * The web app announced it is alive (the `ready` bridge message). Stops the ladder where it stands and
+     * settles the keyboard focus. Called by the panel when it receives `Msg.Ready`. Idempotent.
      */
     fun markWebReady() {
         runOnEdt {
             webReady = true
             readyWatchdog.cancelAllRequests()
+            // Everything is inlined, so the page is a single request and its one-shot secret is already spent:
+            // the socket has no remaining purpose and an open port that serves nothing is surface for nothing.
+            loopback?.stop()
             // THE focus fix (see requestFocus): CEF is told it has the focus only now, once the page it must paint
             // the caret in actually exists.
             if (inputComponent()?.isFocusOwner == true) grantCefFocus()
@@ -193,18 +279,60 @@ class JcefHost(
     /** Optional eager teardown; both the browser and the JS query are also registered with the parent disposable,
      *  and [Disposer.dispose] is a no-op on an already-disposed object, so calling this twice is safe. */
     fun dispose() {
+        loopback?.stop()
         jsQuery?.let { Disposer.dispose(it) }
         browser?.let { Disposer.dispose(it) }
     }
 
     // --- internals -------------------------------------------------------------------------------------------
 
+    /**
+     * The three load callbacks are one unit: `onLoadStart` clears the verdict, `onLoadError` records it, and
+     * `onLoadEnd` reads it. They arrive on the same CEF thread in that order for a given navigation, so the
+     * flag needs visibility across threads ([Volatile]) but no lock.
+     *
+     * The queue is what makes the order matter. A rung that never brought the page up must leave [pending]
+     * exactly as it found it, so the next rung inherits it: draining into a page that cannot run the JS spends
+     * the state the page needs to exist and hands the promotion an empty queue.
+     */
     private fun installLoadHandler(b: JBCefBrowser, query: JBCefJSQuery) {
         b.jbCefClient.addLoadHandler(
             object : CefLoadHandlerAdapter() {
+                override fun onLoadStart(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    transitionType: CefRequest.TransitionType?,
+                ) {
+                    if (frame != null && !frame.isMain) return
+                    mainFrameLoadFailed = false
+                }
+
+                override fun onLoadError(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    errorCode: CefLoadHandler.ErrorCode?,
+                    errorText: String?,
+                    failedUrl: String?,
+                ) {
+                    if (frame != null && !frame.isMain) return
+                    mainFrameLoadFailed = true
+                }
+
                 override fun onLoadEnd(cefBrowser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
                     // Only react to the top frame finishing.
                     if (frame != null && !frame.isMain) return
+                    if (!pageArrived(httpStatusCode, mainFrameLoadFailed)) {
+                        // Neither the bridge injection nor the drain: this page cannot run either, and the
+                        // queue belongs to the rung that comes next. The rung name and the status go in the
+                        // log; the URL never does — under LOOPBACK it carries the one-shot token.
+                        runOnEdt {
+                            log.warn(
+                                "Claude Code chat page did not load over ${route ?: "an unknown route"} " +
+                                    "(http status $httpStatusCode) — keeping the queued state for the next one",
+                            )
+                        }
+                        return
+                    }
                     val inject = "window.__ccSend = function(p){ " + query.inject("p") + " };"
                     executeNow(b, inject)
                     runOnEdt {
@@ -212,7 +340,6 @@ class JcefHost(
                         while (pending.isNotEmpty()) {
                             executeNow(b, pending.poll())
                         }
-                        armReadyWatchdog(b)
                     }
                 }
             },
@@ -221,21 +348,89 @@ class JcefHost(
     }
 
     /**
-     * Arms the first-open self-heal: if the web app hasn't announced ready a short while after load-end, the
-     * scheme-served page likely came up blank — reload it once via `loadHTML` (scheme-independent) so the chat
-     * heals itself instead of staying dead until the user reopens the tab. EDT-only.
+     * The rung this browser starts on: the best one available, but never below one that has already proven
+     * necessary in this IDE run. Without that memory every chat tab in a remote session would pay the watchdog
+     * out again before reaching the rung the previous tab already established. EDT-only.
      */
+    private fun startRoute(schemeAvailable: Boolean): PageRoute =
+        maxOf(if (schemeAvailable) PageRoute.SCHEME else PageRoute.LOOPBACK, provenRoute)
+
+    /**
+     * Deliver the page over [next] and arm the watchdog that will promote past it. Called once per rung, from
+     * the constructor and from [promote] — which only ever moves forward — so no rung is delivered twice and
+     * the ladder cannot loop. EDT-only.
+     */
+    private fun deliver(b: JBCefBrowser, page: Page, next: PageRoute) {
+        route = next
+        // The notice is terminal: it carries no script, so it can never announce ready and must not be waited on.
+        if (next != PageRoute.NOTICE) armReadyWatchdog(b)
+        when (next) {
+            PageRoute.SCHEME -> b.loadURL(PAGE_URL)
+            PageRoute.LOOPBACK -> serveOverLoopback(b, page)
+            PageRoute.INLINE -> b.loadHTML(page.html)
+            PageRoute.NOTICE -> loopback?.let { b.loadHTML(RemoteDevNotice.html(it.port)) }
+        }
+    }
+
+    /** Arms the single promotion shot for the rung just delivered. EDT-only. */
     private fun armReadyWatchdog(b: JBCefBrowser) {
-        if (webReady || reloadedOnce) return
+        if (webReady) return
         readyWatchdog.cancelAllRequests()
-        readyWatchdog.addRequest({
-            if (!webReady && !reloadedOnce) {
-                reloadedOnce = true
-                ready = false
-                log.warn("JCEF chat did not become ready after load — reloading via loadHTML (first-open self-heal)")
-                page?.let { b.loadHTML(it.html) }
+        readyWatchdog.addRequest({ if (!webReady) promote(b) }, READY_WATCHDOG_MS)
+    }
+
+    /**
+     * Move to the next rung, or stop when there is none. Every outcome is logged, including the last one: a
+     * silent ladder is indistinguishable from a feature nobody wired up, which is the failure this exists to
+     * end. The port and the page bytes stay out of the log — only the rung names go in. EDT-only.
+     */
+    private fun promote(b: JBCefBrowser) {
+        val current = route ?: return
+        val assembled = page ?: return
+        val next = nextPageRoute(current, loopbackBound = loopback != null)
+        if (next == null) {
+            log.warn("Claude Code chat did not come up over $current and there is no route left to try")
+            return
+        }
+        ready = false
+        log.warn("Claude Code chat did not come up over $current — delivering it over $next instead")
+        remember(next)
+        deliver(b, assembled, next)
+    }
+
+    /**
+     * Records a rung as proven for the rest of the IDE run, so later browsers start there.
+     *
+     * Only [PageRoute.LOOPBACK] is worth remembering, and the cap is deliberate: the rungs past it describe a
+     * forward the user has not opened yet, and remembering one would stop every later tab from trying the socket
+     * again once they do open it — turning a temporary condition into a permanent one.
+     */
+    private fun remember(reached: PageRoute) {
+        if (reached == PageRoute.LOOPBACK) provenRoute = PageRoute.LOOPBACK
+    }
+
+    /**
+     * Bind the loopback rung off the EDT and, back on it, point the browser at the URL the bind produced. A bind
+     * that lands after teardown, or after the watchdog has already moved on, closes its own socket instead of
+     * leaking it.
+     */
+    private fun serveOverLoopback(b: JBCefBrowser, page: Page) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val server = LoopbackPageServer.start(page.html, page.headers)
+            runOnEdt {
+                if (disposed || route != PageRoute.LOOPBACK) {
+                    server?.stop()
+                    return@runOnEdt
+                }
+                if (server == null) {
+                    log.warn("Claude Code could not bind a loopback port for the chat page")
+                    promote(b)
+                } else {
+                    loopback = server
+                    b.loadURL(server.url)
+                }
             }
-        }, READY_WATCHDOG_MS)
+        }
     }
 
     private fun installNavigationGuards(b: JBCefBrowser) {
@@ -336,6 +531,7 @@ class JcefHost(
             "app-session-cards.js",
             "app-session-mcp.js",
             "app-session-workloads.js",
+            "app-session-git.js",
             "app-session.js",
             "app-tabs-base.js",
             "app-tabs-guard.js",
@@ -384,12 +580,23 @@ class JcefHost(
             "composer.css",
             "permissions.css",
             "dashboard.css",
+            // After the dashboard, never before it: the Git view is a dashboard view, so its rules extend
+            // `.dash-card` and friends and must be able to win over them at equal specificity.
+            "git.css",
             "boot.css",
             "tabs.css",
         )
 
-        /** How long to wait after load-end for the web app's `ready` before the self-heal reload kicks in. */
+        /** How long a rung gets to produce a live web app before the ladder promotes past it. */
         private const val READY_WATCHDOG_MS = 2500
+
+        /**
+         * The lowest rung any browser may start on, for the rest of this IDE run. Application-wide on purpose:
+         * the condition it records — a scheme handler the browser cannot reach — belongs to the IDE, not to one
+         * chat tab, so the second tab of a remote session must not pay the watchdog out again to learn it.
+         */
+        @Volatile
+        private var provenRoute: PageRoute = PageRoute.SCHEME
 
         /** Every response our scheme handler serves comes from memory and always succeeds — hence a fixed 200. */
         private const val HTTP_OK = 200

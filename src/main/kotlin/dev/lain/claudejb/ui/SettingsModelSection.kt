@@ -1,10 +1,12 @@
 package dev.lain.claudejb.ui
 
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.util.ui.FormBuilder
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
+import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.ui.jcef.JcefModelLabels
 import javax.swing.DefaultComboBoxModel
@@ -31,6 +33,20 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
     private val partialCheck = JBCheckBox("Stream partial messages (live token streaming)")
     private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
     private val reduceMotionCheck = JBCheckBox("Reduce motion (flatten chat animations)")
+
+    /**
+     * How long a finished agent or task stays listed. Live work is never hidden by it, whatever it is set to.
+     *
+     * The values and their order come from [WorkloadWindow]; restating them here would be a second list to
+     * keep in step with the rule that actually applies the window.
+     */
+    private val workloadWindowCombo = JComboBox(WorkloadWindow.WINDOW_MINUTES.toTypedArray()).apply {
+        renderer = object : SimpleListCellRenderer<Int>() {
+            override fun customize(list: JList<out Int>, value: Int?, index: Int, selected: Boolean, focused: Boolean) {
+                text = value?.let { WorkloadWindow.label(it) }.orEmpty()
+            }
+        }
+    }
 
     /** Snapshot of the current session's model list, consulted by [modelRenderer] to pretty-print values. */
     private var currentModels: List<ModelInfo> = emptyList()
@@ -85,6 +101,7 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
             .addComponent(partialCheck)
             .addComponent(restoreChatsCheck)
             .addComponent(reduceMotionCheck)
+            .addLabeledComponent("Keep finished workloads listed for:", workloadWindowCombo)
     }
 
     override fun reset(s: ClaudeSettings.State) {
@@ -98,6 +115,10 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         partialCheck.isSelected = s.includePartialMessages
         restoreChatsCheck.isSelected = s.restoreOpenChatsOnStartup
         reduceMotionCheck.isSelected = s.reduceMotion
+        // A value the list does not offer (an older document, a hand-edited one) falls back to the default
+        // rather than leaving the combo on whatever happened to be first.
+        workloadWindowCombo.selectedItem =
+            s.workloadWindowMinutes.takeIf { it in WorkloadWindow.WINDOW_MINUTES } ?: WorkloadWindow.DEFAULT_MINUTES
     }
 
     override fun apply(s: ClaudeSettings.State) {
@@ -108,7 +129,12 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         s.includePartialMessages = partialCheck.isSelected
         s.restoreOpenChatsOnStartup = restoreChatsCheck.isSelected
         s.reduceMotion = reduceMotionCheck.isSelected
+        s.workloadWindowMinutes = workloadWindowMinutes()
     }
+
+    /** The selected window, defaulting when the combo has no selection (it always does, but null is a type). */
+    private fun workloadWindowMinutes(): Int =
+        (workloadWindowCombo.selectedItem as? Int) ?: WorkloadWindow.DEFAULT_MINUTES
 
     override fun changedFields(s: ClaudeSettings.State): List<Boolean> = listOf(
         modelText() != s.model,
@@ -118,6 +144,7 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         partialCheck.isSelected != s.includePartialMessages,
         restoreChatsCheck.isSelected != s.restoreOpenChatsOnStartup,
         reduceMotionCheck.isSelected != s.reduceMotion,
+        workloadWindowMinutes() != s.workloadWindowMinutes,
     )
 
     override fun dispose() {

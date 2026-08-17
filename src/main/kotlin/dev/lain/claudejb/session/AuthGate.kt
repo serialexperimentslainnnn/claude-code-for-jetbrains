@@ -12,15 +12,39 @@ import dev.lain.claudejb.settings.resolveEnv
 import java.io.File
 
 /**
+ * What is known about this session's identity, as opposed to what could be found out by asking the binary.
+ *
+ * The third case is the one that matters and it is not a shrug: on a machine where the binary keeps its
+ * credentials in an OS store rather than a file, only [AuthGate.hasCredential]'s probe can decide between the
+ * other two, and that probe spawns a process. A caller that cannot afford to wait is told so instead of being
+ * handed a "no" it would draw a sign-in card from — the answer would be wrong for exactly the users who are
+ * already signed in.
+ */
+enum class Credential {
+    /** An identity is held, or is one renewal away from live: a session may launch on it. */
+    HELD,
+
+    /** There is no identity: the sign-in card is the correct screen. */
+    NONE,
+
+    /** Not answerable without spawning the binary. Neither launch nor ask; let a pooled caller resolve it. */
+    UNKNOWN,
+}
+
+/**
  * Who this session runs as: whether we hold an identity at all, whose it is, and keeping it alive.
  *
  * Separate from [ClaudeSession] because none of it is a turn — it is answered before a process exists and
- * re-answered while none is running. The session asks three questions ([hasCredential], [renew], [probe])
- * and is told the answer; the harvesting, the throttles and the order in which the binary is interrogated
- * live here.
+ * re-answered while none is running. The session asks three questions — do we hold an identity
+ * ([heldCredential] / [hasCredential]), can the one we hold be brought back to life ([renew]), and who is it
+ * ([probe]) — and is told the answer; the harvesting, the throttles and the order in which the binary is
+ * interrogated live here.
  *
- * Everything here except [hasCredential] blocks: it spawns the binary. [hasCredential] is the one the EDT
- * is allowed to ask, which is why it deliberately neither harvests nor renews.
+ * **[heldCredential] and [canRenewCredential] are the only two the EDT may ask**: they read the safe, the
+ * settings and the clock, and start no process on any path — which is why [heldCredential] answers
+ * [Credential.UNKNOWN] instead of building a launch env that would source the user's shell. Everything else
+ * here can spawn a process and is pooled-thread only, [hasCredential] included: it is the same question,
+ * with the two undecidable branches actually resolved.
  */
 class AuthGate(
     private val project: Project,
@@ -97,8 +121,8 @@ class AuthGate(
     }
 
     /**
-     * Whether this session has an identity to run as — checked BEFORE spawning anything, since that is a
-     * question about what we hold, not about what the binary can do.
+     * Whether this session has an identity to run as — checked BEFORE a session is launched, since that is a
+     * question about what we hold, not about what a running binary can do.
      *
      * The identity is exclusively: the vaulted subscription login, an API key in its provider slot, or a
      * credential the user wrote by hand into the Settings environment. Nothing held → logged out by
@@ -109,20 +133,65 @@ class AuthGate(
      * Answering "signed out" here instead is what made every reboot end at the sign-in card.
      *
      * Deliberately does NOT harvest — see [absorbExistingLoginOnce] — and deliberately does not RENEW either:
-     * this runs on the EDT from `start`, and renewal spawns a process.
+     * renewal spawns a process and this is asked at launch time.
+     *
+     * Blocking: [Credential.UNKNOWN] is resolved by [binaryHoldsOwnLogin], which spawns the binary. Pooled
+     * thread only. The EDT asks [heldCredential] and acts on the third answer instead.
      */
-    fun hasCredential(settings: ClaudeSettings): Boolean {
-        if (CredentialsVault.hasUsableToken()) return true
-        if (CredentialsVault.canRenew()) return true
-        if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return true
-        if (settings.getProviderApiKey(settings.provider).isNotBlank()) return true
-        val explicit = settings.resolveEnv()
-        if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return true
-        // An explicit Log out outranks the binary's own login: otherwise clearing our safe changes nothing
-        // the user can see, because the binary still holds one and the session starts straight back up.
-        if (settings.state.signedOut) return false
-        return binaryHoldsOwnLogin(settings)
+    fun hasCredential(settings: ClaudeSettings): Boolean = when (heldCredential(settings)) {
+        Credential.HELD -> true
+        Credential.NONE -> false
+        Credential.UNKNOWN -> binaryHoldsOwnLogin(settings)
     }
+
+    /**
+     * The same question as [hasCredential], answered from what is already known — the safe, the settings and
+     * the last probe result — and never by starting a process. Safe from the EDT.
+     *
+     * Every branch but the last decides outright, so an identity we hold ourselves is a `HELD` with no process
+     * and no wait. What cannot be decided that way is [Credential.UNKNOWN], never `NONE`: the branch that would
+     * settle it is "does the BINARY hold its own login?", and on a machine where it keeps credentials in an OS
+     * store rather than a file (see [binaryHoldsOwnLogin]) EVERY signed-in user falls through to exactly that
+     * branch. Reading a cache miss as "signed out" would therefore raise the sign-in card at the users who are
+     * fine, for as long as it takes a pooled caller to answer.
+     *
+     * A configured source script is the second thing that cannot be settled here, for the same reason and with
+     * the same answer: the credential it defines is real and counts, and finding out what it defines means
+     * running the user's shell.
+     */
+    fun heldCredential(settings: ClaudeSettings): Credential {
+        if (CredentialsVault.hasUsableToken()) return Credential.HELD
+        if (CredentialsVault.canRenew()) return Credential.HELD
+        if (SecretStore.get(SecretStore.OAUTH_TOKEN) != null) return Credential.HELD
+        if (settings.getProviderApiKey(settings.provider).isNotBlank()) return Credential.HELD
+        // Building the launch env SOURCES that script — `$SHELL -lc '. script && env'`, seconds of it. With
+        // none configured the map costs nothing, so ask it; with one, defer rather than decide, because a
+        // credential the script exports is an identity and calling it "none" here is the sign-in card raised
+        // at a user who has one. [hasCredential] asks the whole question off the EDT.
+        if (settings.state.sourceScript.isNotBlank()) return Credential.UNKNOWN
+        val explicit = settings.resolveEnv()
+        if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return Credential.HELD
+        // An explicit Log out outranks the binary's own login: otherwise clearing our safe changes nothing
+        // the user can see, because the binary still holds one and the session starts straight back up. It
+        // does not outrank anything above it — those identities are configured deliberately and are not what
+        // Log out clears.
+        if (settings.state.signedOut) return Credential.NONE
+        val probed = cachedBinaryLogin() ?: return Credential.UNKNOWN
+        return if (probed) Credential.HELD else Credential.NONE
+    }
+
+    /**
+     * Whether the vaulted login could be brought back to life without the user — the fact
+     * [LoginDetection.resolve] needs to tell an access-token expiry that heals itself from one that ended the
+     * identity. The same question [hasCredential] already counts as an identity, asked on its own so a failure
+     * text can be answered without re-deriving the whole gate.
+     *
+     * Reads the safe and the clock, nothing else: no process, no network, no renewal — so it is safe from the
+     * EDT, where a failed turn is surfaced. [CredentialsVault.canRenew] also answers false throughout the
+     * cooldown a failed renewal arms, which is the honest answer here too: nothing is going to renew that
+     * credential in the next few minutes.
+     */
+    fun canRenewCredential(): Boolean = CredentialsVault.canRenew()
 
     /**
      * Last resort: does the BINARY hold a login of its own?
@@ -141,8 +210,8 @@ class AuthGate(
      * Throttled hard ([OWN_LOGIN_TTL_MS]): this spawns a process, and the caller polls every few seconds.
      */
     private fun binaryHoldsOwnLogin(settings: ClaudeSettings): Boolean {
+        cachedBinaryLogin()?.let { return it }
         val now = System.currentTimeMillis()
-        ownLoginCheckedAt.takeIf { now - it < OWN_LOGIN_TTL_MS }?.let { return binaryOwnLogin }
         val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return false
         // The RAW settings env, deliberately: overlaying our own credentials would be asking the binary
         // whether IT is signed in while handing it ours.
@@ -151,6 +220,15 @@ class AuthGate(
         ownLoginCheckedAt = now
         return binaryOwnLogin
     }
+
+    /**
+     * The last [binaryHoldsOwnLogin] answer while it is still inside [OWN_LOGIN_TTL_MS], or null when there is
+     * none fresh enough to trust. Null is what makes [heldCredential] answer [Credential.UNKNOWN], and the
+     * throttle is what makes a fresh answer free to both of them — the boot poll asks every few seconds and
+     * the probe costs a process spawn.
+     */
+    private fun cachedBinaryLogin(): Boolean? =
+        binaryOwnLogin.takeIf { System.currentTimeMillis() - ownLoginCheckedAt < OWN_LOGIN_TTL_MS }
 
     /**
      * Brings the vaulted subscription login back to life when its access token has expired, BEFORE the launch

@@ -1,0 +1,236 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   GIT VIEW — repository header, action bar, and the single-rail history
+   ════════════════════════════════════════════════════════════════════════════
+   Drawn by app-session-git.js, inside the dashboard's own `.dash-card` grid — this part EXTENDS dashboard.css
+   and repeats none of it, which is why it is concatenated after it (see JcefHost.CSS_PARTS).
+
+   Every class here is prefixed `git-`. The view lives in the same document as the transcript, the composer
+   and the tab bar, so an unprefixed `.head` or `.node` would be a collision waiting for whoever adds the
+   next rule to that word. */
+
+/* ── header: what repository this is ──────────────────────────────────────── */
+/* The identity on one side, the way back to the chat on the other, and both wrap rather than crush: the tool
+   window is often narrow, and a branch name has no length limit. */
+.git-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.git-id {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-width: 0;
+}
+.git-repo {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* The branch is the fact people look for first, so it is the one chip with the accent border. 1.4.11 asks for
+   3:1 on a control's boundary; mixing towards --text rather than lightening the border is what gets it there
+   over the card surface. */
+.git-branch {
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--text) 20%);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.git-sha {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* The explicit way out, in words. `.btn` already carries the shape; only the target floor is added here, so a
+   narrow layout can never shrink it below the 24x24 CSS px of WCAG 2.2 SC 2.5.8. */
+.git-chat-toggle {
+  flex: 0 0 auto;
+  min-height: 28px;
+  min-width: 24px;
+}
+
+/* Said in a full sentence, not as an empty rail: "no repository" is a state, and a blank card reads as a
+   failure to load rather than as an answer. */
+.git-empty {
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ── action bar: grouped exactly as the payload groups it ─────────────────── */
+.git-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.git-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+/* Same treatment as `.dash-title`, one step quieter: it labels a row inside an already titled card. */
+.git-group-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.git-group-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* A real <button> wearing `.btn`. The floor here is 24x24 CSS px (SC 2.5.8) even before the padding, so a
+   long group in a narrow tool window can wrap but never shrink under the pointer. */
+.git-action {
+  min-height: 28px;
+  min-width: 24px;
+  gap: 8px;
+}
+.git-action-label {
+  overflow-wrap: anywhere;
+}
+
+/* ── status chip ──────────────────────────────────────────────────────────────
+   The chip carries the WORD the host sent (`running` / `completed` / `failed`), never a colour alone — 1.4.1
+   forbids colour as the only carrier, and under forced colours the hue is replaced by the system anyway. The
+   page paints whatever word it is given; `.other` is what an unrecognised one lands on, so a new state from
+   the host still renders as a legible chip instead of as unstyled text. */
+.git-status {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--dim) 70%, var(--text) 30%);
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  text-transform: lowercase;
+}
+.git-status.running {
+  border-color: color-mix(in srgb, var(--info) 75%, var(--text) 15%);
+  color: var(--info);
+}
+.git-status.completed {
+  border-color: color-mix(in srgb, var(--success) 75%, var(--text) 15%);
+  color: var(--success);
+}
+.git-status.failed {
+  border-color: color-mix(in srgb, var(--danger) 75%, var(--text) 15%);
+  color: var(--danger);
+}
+.git-status.other {
+  border-color: color-mix(in srgb, var(--dim) 70%, var(--text) 30%);
+  color: var(--dim);
+}
+
+/* ── history: ONE vertical rail ───────────────────────────────────────────────
+   A single lane, deliberately. The payload carries no parent hashes, so any fork or merge drawn here would be
+   invented — and an invented topology is worse than none in a review surface, because nothing on screen tells
+   a drawn branch from a real one.
+
+   The rail is the container's ::before, inset at both ends so it starts at the first dot and stops at the
+   last: a line running past the final commit implies history the view does not have. */
+.git-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-left: 4px;
+}
+.git-rail::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: color-mix(in srgb, var(--border) 60%, var(--text) 25%);
+}
+.git-node {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+/* The dot sits ON the rail, and its ring is the card colour so the line appears to pass behind it rather than
+   through it. `flex: 0 0 auto` keeps it round when the subject next to it wraps. */
+.git-dot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: var(--dim);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+/* Uncommitted work is not a commit and must not read as one: a hollow dot in the accent, the same way every
+   other "in progress" state in this UI is drawn. */
+.git-wip .git-dot {
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.git-commit .git-dot {
+  background: color-mix(in srgb, var(--text) 55%, var(--border));
+}
+.git-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.git-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.git-hash {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* The subject wraps rather than ellipsising: a commit message truncated at the tool window's width is exactly
+   the half that stops being useful, and there is vertical room here. */
+.git-subject {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.git-meta {
+  color: var(--dim);
+  font-size: 11px;
+}
+/* The working copy's files. A plain list, monospaced because these are paths, and indented under the subject
+   rather than beside it — the column would collapse in a narrow tool window. */
+.git-files {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.git-file {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

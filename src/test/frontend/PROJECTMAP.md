@@ -27,6 +27,7 @@ quietly tests something else.
 | `accessibility.test.js` | Accessibility conformance (WCAG 2.2 AA). |
 | `boot.test.js` | The boot screen: it must appear while the binary launches, and — more importantly — must always come down. |
 | `bridge-contract.test.js` | Kotlin↔JS bridge contract. |
+| `bridge-inbound.test.js` | Kotlin↔JS bridge contract, the OTHER two directions. |
 | `composer.test.js` | Composer send/stop button (app-composer.js). |
 | `css-contract.test.js` | JS↔CSS class contract. |
 | `dashboard-views.test.js` | The dashboard's two views and the rows that link to a tab. |

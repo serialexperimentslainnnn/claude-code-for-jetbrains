@@ -31,16 +31,23 @@
     // ONE invariant, and everything else follows from it: **the chat is reachable only while the `claude`
     // process is running.** Install -> sign in -> loading -> plugin, in that order, and any step backwards
     // (the process exits, is restarted, the credential goes away) returns to the matching screen rather
-    // than leaving a chat on screen that has nothing behind it.
+    // than leaving a chat on screen that has nothing behind it. Exactly ONE screen at a time: `#boot` hosts
+    // the install card and the spinner, the sign-in card is its own layer, and the spinner stands down while
+    // that card is up or it would simply cover it (z-index 60 over 55).
     //
-    // This used to be `starting || binaryMissing`, so every OTHER not-running state — signed out, a dead
-    // process, a launch that failed — fell through to the chat UI, which then rendered its first frame with
-    // no session behind it and stayed half-empty.
-    // Exactly ONE screen at a time, in the order the flow runs: install -> sign in -> loading -> chat.
-    // `#boot` hosts the install card and the spinner; the sign-in card is its own layer, so the spinner
-    // must stand down while it is up or it would simply cover it (z-index 60 over 55).
-    var missing = !s.running && !!s.binaryMissing;
-    var awaitingAuth = !s.running && !missing && (!!s.needsLogin || CX.authForced);
+    // Three conditions, each with its own criterion, and the three negations are NOT interchangeable — folding
+    // them into one for symmetry loses a screen.
+    //
+    // `binaryMissing` alone: the install card has no regard for the process. A binary can vanish under a live
+    // session, and the host pushes the flag before it stops that session, so the page is sent both at once —
+    // and this card is the only control that repairs it.
+    var missing = !!s.binaryMissing;
+    // The same predicate the card renders from, so the two screens cannot disagree about which is up. It is
+    // the one that suppresses while `starting`.
+    var awaitingAuth = CX.authWanted(s);
+    // `!running`, deliberately not narrowed to `starting`: a launch that failed and a session that died are
+    // both not-starting and both belong on this screen, so narrowing it would hand them the chat with nothing
+    // behind it. This is the screen that owns the startup window — the one the other two stand down for.
     var booting = !s.running;
     var showBoot = missing || (booting && !awaitingAuth);
     boot.hidden = !showBoot;

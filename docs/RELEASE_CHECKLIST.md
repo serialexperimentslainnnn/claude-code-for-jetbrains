@@ -39,41 +39,73 @@ Coverage is gated **per package**, not globally, because the risk in this codeba
 would either set the bar low enough that the guard could rot unnoticed, or high enough that the only way to
 meet it is writing tests against Swing and JCEF that assert nothing anyone cares about.
 
-Thresholds are set slightly **below** what each package measures today — a gate that catches regression, not a
-target that invites test-padding. Line coverage measured 2026-08-05:
+Every bound sits slightly **below** what is measured — a gate that catches regression, not a target that
+invites test-padding. **This table is the only place the measured figures live**; `build.gradle.kts` carries
+the bounds and the exclusion list, and points here rather than repeating a number that would then have two
+homes and no way to notice they had diverged. The two must agree, and keeping them agreeing is part of
+releasing.
 
-| package | line % | gated |
-|---|---|---|
-| `permission/` | 98.1 | ✅ |
-| `protocol/` | 87.3 | ✅ |
-| `settings/` | 86.1 | ✅ |
-| `diff/` | 72.8 | ✅ |
-| `session/` | 67.3 | ✅ |
-| `context/`, `process/` | 42.1 / 37.9 | ❌ excluded — known gap |
-| `ui/`, `ui/jcef/` | 24.6 / 31.2 | ❌ excluded — covered elsewhere |
-| `actions/` | 0.0 | ❌ excluded — one delegate call each |
+Regenerate the figures rather than trusting the ones below — a measurement ages in silence and nothing here can
+notice when it has. `./gradlew cleanTest test koverXmlReport` writes `build/reports/kover/report.xml`; the
+`<counter type="LINE">` and `<counter type="BRANCH">` elements under each `<package>` are the per-package rows,
+and the ones at the root of the document are the **all gated code** row. Measured 2026-08-14:
+
+| package | line % | branch % | gated |
+|---|---|---|---|
+| `permission/` | 98.1 | 74.5 | ✅ |
+| `protocol/` | 88.9 | 27.5 | ✅ |
+| `git/` | 100.0 | 100.0 | ✅ — **`GitCommitInfo` only**; the other four classes are excluded by name |
+| `settings/` | 79.0 | 57.3 | ✅ |
+| `diff/` | 72.0 | 64.7 | ✅ |
+| `session/` | 70.7 | 48.6 | ✅ |
+| **all gated code** | **76.99** | **43.63** | — the aggregate the second rule bounds |
+| `context/`, `process/` | — | — | ❌ excluded — known gap |
+| `ui/`, `ui/jcef/` | — | — | ❌ excluded — covered elsewhere |
+| `actions/` | — | — | ❌ excluded — one delegate call each |
+| `util/` | — | — | ❌ excluded — one line, and it needs a live platform to run |
+
+The excluded rows carry no percentage on purpose. `reports.filters.excludes` removes those classes from the
+**report**, not merely from the calculation, so they are absent from `report.xml` altogether and there is no
+measured figure to quote. An estimate in this table would defeat the only reason it exists.
+
+`git/` is gated and easy to miss: the exclusion names four classes, not the package, so `GitCommitInfo` — the
+pure half, and the only place a bug there would be silent — stays inside the gate and is subject to the floor
+like any other package.
 
 **Excluded, and why it is stated rather than gated at a token value.** `ui/` needs a live IDE and a live
 Chromium; it is covered by a different layer — the vitest suite, which drives the *real shipped JS* out of
-`src/main/resources/jcef/`, plus the mandatory manual pass in §Smoke test below. `context/` and `process/` wrap the OS (system clipboard, process
-spawn, shell environment) and most of what is uncovered there cannot execute on a CI box. That is a **known
-gap**, listed so nobody mistakes it for coverage; the pure parts of both — `ClipboardCli` and
-`ImageAttachments` in `context/` (`ClipboardCliTest`, `ImageAttachmentsTest`), and `EnvScriptLoader.parse` in
-`process/` — *are* tested. Gating any of these at 20% would dress the same fact up as a passing check.
+`src/main/resources/jcef/`, plus the mandatory manual pass in §Smoke test below. `context/` and `process/` wrap
+the OS (system clipboard, process spawn, shell environment) and most of what is uncovered there cannot execute
+on a CI box. That is a **known gap**, listed so nobody mistakes it for coverage; the pure parts of both —
+`ClipboardCli` and `ImageAttachments` in `context/` (`ClipboardCliTest`, `ImageAttachmentsTest`), and
+`EnvScriptLoader.parse` in `process/` — *are* tested. Gating any of these at 20% would dress the same fact up
+as a passing check. `build.gradle.kts`'s kover exclusion carries the same list as the ❌ rows above; the two
+must agree.
 
-(This paragraph used to name `AttachmentEncoder`, which was deleted in 5.5.0 with the last of the Swing
-composer it served. `build.gradle.kts`'s kover exclusion carries the same list; the two must agree.)
+**What `koverVerify` actually enforces.** Four bounds, and these are the numbers in the build:
 
-**Known limitation.** `KoverVerifyRule` has no per-rule filter — re-checked at **0.9.9**, the version the
-build uses — so the exact per-package numbers
-above are not individually expressible in the build. What `koverVerify` enforces is a **floor applied to every
-gated package** plus an **aggregate** — both real gates (the floor catches one package collapsing, the
-aggregate catches death by a thousand cuts), but looser than the table. If a future Kover adds per-rule
-filters, tighten `build.gradle.kts` to match this table.
+| rule | scope | line | branch |
+|---|---|---|---|
+| `every gated package holds its floor` | each package on its own | ≥ 65 | ≥ 20 |
+| `gated code as a whole` | the aggregate | ≥ 75 | ≥ 40 |
 
-> Historical note: until 5.0.0 a comment in `build.gradle.kts` claimed a "≥90% target … documented in
-> `docs/RELEASE_CHECKLIST.md`". This file had never said that, and the real figure was 53%. The number was
-> never measured and the requirement it cited did not exist.
+**Known limitation, and it is larger than it looks.** `KoverVerifyRule` has no per-rule filter — re-checked at
+**0.9.9**, the version the build resolves, against the plugin's own DSL sources; nor can a report variant stand
+in for one, since a variant is scoped by source set rather than by package. So a threshold per package cannot
+be expressed at all, and the per-package figures in the table above are **recorded, not enforced**. Read the
+consequences rather than the shape:
+
+- **A floor is fixed by the weakest package.** On lines that is `session/`; on branches it is `protocol/`, far
+  below everything else, which is why the branch floor is 20 while `permission/` measures 74.5. The branch
+  floor detects a collapse, not a regression, and it says nothing whatsoever about `permission/` holding its
+  own number.
+- **The aggregate cannot cover for that.** `permission/` holds about a twentieth of the gated branch mass, so
+  it could lose half its branch coverage and the aggregate would still clear 40.
+- **The line aggregate has little headroom**: 76.99 against a bound of 75. A change that lands a large, lightly
+  tested package can turn this red on its own, and that is the bound to look at first when it does.
+
+If a future Kover adds per-rule filters, tighten `build.gradle.kts` so the per-package figures above become
+gates instead of records.
 
 ## Documentation
 

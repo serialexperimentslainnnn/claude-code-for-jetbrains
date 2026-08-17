@@ -4,7 +4,7 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStoreTestAccess
+import dev.lain.claudejb.settings.SettingsStore
 import dev.lain.claudejb.settings.parseEnv
 import dev.lain.claudejb.settings.sensitivePolicy
 import kotlinx.serialization.json.JsonObject
@@ -20,19 +20,27 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
      *
      * The fixture's PasswordSafe belongs to an Application the platform reuses for the whole run, so without
      * [SecretStore.storeOverride] one document is shared by every test class in the JVM and a method here can
-     * read what a different class wrote. The [SettingsStoreTestAccess.load] is the other half: `readFailed`
+     * read what a different class wrote. The [SettingsStore.load] is the other half: `readFailed`
      * lives on an `object` and would otherwise carry a previous test's veto into the saves below.
      */
     override fun setUp() {
         super.setUp()
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStoreTestAccess.load()
+        SettingsStore.load()
         // The light-fixture project service is reused across methods; restore the defaults under test.
         settings.replaceState(ClaudeSettings.State())
     }
 
+    /**
+     * The store outlives this method unless the queued writes have run against it.
+     *
+     * [ClaudeSettings.update] persists on a background queue, so dropping [SecretStore.storeOverride] while a
+     * write is still in flight would let it land in whatever store the NEXT test installs. Draining first is
+     * also what makes every assertion below deterministic without a single sleep: the queue is FIFO.
+     */
     override fun tearDown() {
         try {
+            ClaudeSettings.awaitWrites()
             SecretStore.storeOverride = null
         } finally {
             super.tearDown()
@@ -105,6 +113,99 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     /** The mutation and the write are one operation: a remembered tool must survive a restart. */
     fun `test remembering a tool persists`() {
         settings.alwaysAllow.remember("Write")
-        assertTrue("Write" in SettingsStoreTestAccess.load().alwaysAllowTools)
+        ClaudeSettings.awaitWrites()
+        assertTrue("Write" in SettingsStore.load().alwaysAllowTools)
+    }
+
+    /**
+     * REGRESSION: a setting changed in one IDE is not lost when another IDE changes a different one.
+     *
+     * The safe is application-wide, so two IDEs open on this machine share ONE settings document, while each
+     * holds its own in-memory copy that is loaded once and never invalidated. A save built from that copy
+     * carries the copy's value for every field the other IDE has changed since, and replaces them — with two
+     * IDEs open, whoever writes last wins the whole document. [ClaudeSettings.update] therefore re-reads the
+     * stored document and applies the delta to THAT, which narrows what any one mutation can overwrite to the
+     * field it actually touches.
+     *
+     * The other IDE is simulated by writing straight to the store, which is exactly what it is from this
+     * process's point of view: a document that changed underneath it, with nothing to notify anyone.
+     */
+    fun `test an update does not overwrite what another IDE stored`() {
+        settings.update { it.model = "chosen-in-this-ide" }
+        ClaudeSettings.awaitWrites()
+
+        // The other IDE: it reads the shared document, changes a field of its own, writes it back.
+        val elsewhere = SettingsStore.load().apply { effort = "low" }
+        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+
+        // This IDE changes a third field. Its in-memory copy has never seen `effort`.
+        settings.update { it.permissionMode = "plan" }
+        ClaudeSettings.awaitWrites()
+
+        val stored = SettingsStore.load()
+        assertEquals("this IDE's own earlier change was lost", "chosen-in-this-ide", stored.model)
+        assertEquals("the other IDE's change was overwritten", "low", stored.effort)
+        assertEquals("plan", stored.permissionMode)
+    }
+
+    /**
+     * Mutations raised concurrently on ONE JVM all reach the store.
+     *
+     * The same read-modify-write that fixes two IDEs would create a new race inside one: two mutations reading
+     * the same document and writing it back one after the other lose the first. The write queue is a single
+     * thread and every entry point of [dev.lain.claudejb.settings.SettingsStore] holds its monitor, so a
+     * mutation always reads a document that already contains every mutation before it.
+     *
+     * The assertion is on the STORED document deliberately. Each block here is `+=` — a read-modify-write in
+     * its own right — so the in-memory copy the threads share can genuinely lose an append; what must not lose
+     * one is the safe, because that is the configuration that comes back tomorrow. Real call sites assign
+     * absolute values and do not have even that.
+     */
+    fun `test mutations raised from several threads all reach the store`() {
+        // First read on this thread, so the threads below only ever mutate an already-loaded document.
+        assertNotNull(settings.state)
+        val threads = (1..8).map { n -> Thread { settings.update { it.envVars += "K$n=v$n\n" } } }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        ClaudeSettings.awaitWrites()
+
+        val stored = SettingsStore.load()
+        (1..8).forEach { n -> assertTrue("K$n=v$n was lost", "K$n=v$n" in stored.envVars) }
+    }
+
+    /**
+     * A read that FAILED abandons the write; it never writes a half-reconstructed document.
+     *
+     * Reading is now part of every write, which makes a transient safe far more dangerous than it was:
+     * `load` falls back to defaults when it cannot reach the store, and applying a delta to those defaults
+     * produces a complete, plausible document that is not the user's configuration. A dropped mutation is
+     * recoverable by making it again; a wiped configuration is not.
+     *
+     * The accepted cost, stated rather than hidden: the in-memory copy still takes the change, so this session
+     * runs with a setting the safe refused, and the next restart reads the old one back. That is the right way
+     * round — the alternative is a value that reverts under the user mid-session — and it is why the refusal is
+     * logged.
+     */
+    fun `test a failed read abandons the write instead of replacing the configuration`() {
+        val backing = mutableMapOf<String, String>()
+        SecretStore.storeOverride = backing
+        settings.update { it.model = "the-real-configuration" }
+        ClaudeSettings.awaitWrites()
+        val before = backing.toMap()
+        assertTrue("nothing was stored, so the test would prove nothing", before.isNotEmpty())
+
+        SecretStore.storeOverride = UnreadableStore(backing)
+        settings.update { it.model = "must-not-land" }
+        ClaudeSettings.awaitWrites()
+        SecretStore.storeOverride = backing
+
+        assertEquals("a failed read must produce no write at all", before, backing.toMap())
+        assertEquals("the-real-configuration", SettingsStore.load().model)
+    }
+
+    /** A store whose reads throw — a locked keyring, as the plugin experiences it. Writes still work. */
+    private class UnreadableStore(backing: MutableMap<String, String>) :
+        MutableMap<String, String> by backing {
+        override fun get(key: String): String? = error("the credential store cannot be read")
     }
 }

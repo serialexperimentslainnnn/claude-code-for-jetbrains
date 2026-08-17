@@ -86,6 +86,17 @@ class PermissionBroker(
         { _, _ -> SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
     /** A call was refused by the sensitive-data guard — surface it in the transcript, with the guard's reason. */
     private val onSensitiveDenied: (toolName: String, reason: String?) -> Unit = { _, _ -> },
+    /**
+     * True when this session must put **every** call to the user, whatever the permission mode says and whatever
+     * they have marked "Always allow" — the Git integration's chat, whose turns the plugin itself starts
+     * ([ClaudeSession.gitIntegration]).
+     *
+     * A button that makes the agent write to the user's repository is the plugin acting, not the user typing, so
+     * it does not get to inherit a permission the user granted for their own work. Note what this does NOT do:
+     * it only ever turns an auto-approval into a card. A guard `DENY` stays a `DENY`, and nothing here can allow
+     * something that would otherwise have been asked about.
+     */
+    private val forceAsk: () -> Boolean = { false },
 ) {
 
     /**
@@ -149,6 +160,10 @@ class PermissionBroker(
 
     /** Auto-approves when the mode (or "Always allow") says so AND the write is contained. True when approved. */
     private fun tryAutoApprove(requestId: String, request: CanUseToolRequest): Boolean {
+        // Before the mode AND before "Always allow" — both of them are auto-approvals, and checking this after
+        // either one would leave exactly the hole it exists to close (a remembered tool is approved by
+        // `isRemembered` even when the mode says no).
+        if (forceAsk()) return false
         val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
         // A reviewable write is only ever eligible when its target is confined to the project root. See
         // [autoAllow] / [isWithinRoot] for the rationale (blast-radius containment of acceptEdits/bypass).

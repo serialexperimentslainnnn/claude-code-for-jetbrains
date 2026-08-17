@@ -1,6 +1,8 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.session.AgentStatus
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.WorkloadWindow
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
@@ -8,8 +10,42 @@ import kotlinx.serialization.json.put
 /**
  * What is RUNNING, for the dashboard: the agent tree, the background tasks, and the Workloads diagram that
  * draws both across every open chat. Part of [JcefSessionData]'s payload; see there for the whole shape.
+ *
+ * The retention window is applied here, and [visible] is the one place a session is measured against it — the
+ * tab bar draws the same two sets, and a second copy of that mapping is how the two views would come to
+ * disagree about which finished workload is still listed.
  */
 internal object JcefWorkloadData {
+
+    /**
+     * What [session] shows under a window of [windowMinutes], as of [nowMillis].
+     *
+     * The clock is a parameter all the way down: one push resolves it once, so everything painted together
+     * ages by the same instant instead of each card reading its own. The owner link is what ties a background
+     * task to an agent, so it is resolved here and handed to the rule as that task's parent — which is what
+     * keeps a visible task's owner in the payload it refers to.
+     */
+    fun visible(session: ClaudeSession, windowMinutes: Int, nowMillis: Long): WorkloadWindow.Visible =
+        WorkloadWindow.visible(
+            agents = session.runningAgents.nodes.values.map {
+                WorkloadWindow.Entry(
+                    id = it.agentId,
+                    parentId = it.parentAgentId,
+                    running = it.status == AgentStatus.RUNNING,
+                    completedAtMillis = it.completedAtMillis,
+                )
+            },
+            tasks = session.backgroundTaskRegistry.all.map {
+                WorkloadWindow.Entry(
+                    id = it.taskId,
+                    parentId = session.ownerAgentOfTask(it.taskId),
+                    running = it.running,
+                    completedAtMillis = it.completedAtMillis,
+                )
+            },
+            windowMinutes = windowMinutes,
+            nowMillis = nowMillis,
+        )
 
     /**
      * The agent tree for the Agents / Subagents windows:
@@ -32,21 +68,25 @@ internal object JcefWorkloadData {
      * the chat, its agents and its tasks twice over. Keyed by session identity, first tab wins (the chat's
      * own tab comes before anything pinned out of it).
      */
-    fun workloadsJson(workloads: List<JcefSessionData.Workload>) = buildJsonArray {
-        workloads.distinctBy { it.session }.forEach { w ->
-            addJsonObject {
-                put("chatId", w.chatId)
-                put("title", w.title)
-                put("selected", w.selected)
-                put("tree", agentTreeJson(w.session))
-                put("tasks", backgroundTasksJson(w.session))
+    fun workloadsJson(workloads: List<JcefSessionData.Workload>, windowMinutes: Int, nowMillis: Long) =
+        buildJsonArray {
+            workloads.distinctBy { it.session }.forEach { w ->
+                val shown = visible(w.session, windowMinutes, nowMillis)
+                addJsonObject {
+                    put("chatId", w.chatId)
+                    put("title", w.title)
+                    put("selected", w.selected)
+                    put("tree", agentTreeJson(w.session, shown))
+                    put("tasks", backgroundTasksJson(w.session, shown))
+                }
             }
         }
-    }
 
-    fun agentTreeJson(session: ClaudeSession) = buildJsonArray {
+    fun agentTreeJson(session: ClaudeSession, shown: WorkloadWindow.Visible) = buildJsonArray {
         val nodes = session.runningAgents.nodes
-        nodes.values.forEach { node ->
+        // The breadcrumb is read off the FULL map while the rows are the windowed ones: the chain is where an
+        // agent came from, which the window does not change, and the map is the only thing that knows it.
+        nodes.values.filter { it.agentId in shown.agents }.forEach { node ->
             addJsonObject {
                 put("agentId", node.agentId)
                 put("label", node.meta.label())
@@ -55,7 +95,7 @@ internal object JcefWorkloadData {
                 put("depth", node.depth)
                 put("parent", node.parentAgentId)
                 put("chain", ownershipChain(session.title, node.agentId, nodes))
-                put("running", node.status == dev.lain.claudejb.session.AgentStatus.RUNNING)
+                put("running", node.status == AgentStatus.RUNNING)
             }
         }
     }
@@ -97,14 +137,14 @@ internal object JcefWorkloadData {
      * `background_tasks_changed` LEVEL signal, so it always reflects the *current* set — it can't wedge on a
      * missed edge the way the subagent list can, and it is deliberately not correlated with it.
      */
-    fun backgroundTasksJson(session: ClaudeSession) = buildJsonArray {
+    fun backgroundTasksJson(session: ClaudeSession, shown: WorkloadWindow.Visible) = buildJsonArray {
         val nodes = session.runningAgents.nodes
         // The plugin's own record rather than the binary's live set, and for one reason: that set is a LEVEL
         // signal, so a task that finished simply stops being listed — its row vanished from this window the
         // instant it ended, taking its output with it. The registry keeps finished tasks, marked as such, and
         // already excludes agents (to the binary a running agent IS a background task, which is how this
         // window used to duplicate the Agents one).
-        session.backgroundTaskRegistry.all.forEach { task ->
+        session.backgroundTaskRegistry.all.filter { it.taskId in shown.tasks }.forEach { task ->
             // ONE owner-resolution rule, owned by the session, so this window and the tab rows cannot
             // disagree about who launched a task. Unresolvable means unclaimed: the row says the chat and
             // stops there, because an invented chain is worse than an honest gap.

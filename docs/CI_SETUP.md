@@ -36,8 +36,8 @@ This environment is where every credential that can reach a user lives — the M
 parts of the JetBrains upload key, and the CI artifact signing key with its passphrase — which means they
 exist for **no other job** in the repository.
 
-**There is deliberately no required reviewer**, and this section used to say the opposite. The environment
-carries one protection rule: the deployment-branch policy below. So a merge into `main` that bumps the
+**There is deliberately no required reviewer.** The environment carries one protection rule: the
+deployment-branch policy below. So a merge into `main` that bumps the
 version **publishes unattended** — the human act is opening and merging the pull request, and nothing after
 it (the rulesets require no approval; see [`BRANCHING.md`](BRANCHING.md)). On a
 single-maintainer repository an approval prompt is the same person clicking twice; it reads as a control and

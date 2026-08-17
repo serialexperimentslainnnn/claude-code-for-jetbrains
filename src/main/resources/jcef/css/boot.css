@@ -1,6 +1,13 @@
 /* ════════════════════════════════════════════════════════════════════════════
-   REDUCED MOTION
-   ════════════════════════════════════════════════════════════════════════════ */
+   THE WAITING SCREENS — loading, "Claude Code was not found", sign-in
+   ════════════════════════════════════════════════════════════════════════════
+   The three screens that stand in front of a conversation which cannot happen yet. Each is a ROW of the
+   transcript, never a panel over the app — see the boot screen below for what that buys.
+
+   Two blocks here are about the whole page rather than those screens: the narrow-width tightening
+   immediately below, and the `body.reduced-motion` block that closes the file. The second is `!important`
+   on a universal selector, so its position in `JcefHost.CSS_PARTS` decides nothing — it reaches every rule
+   of every part. */
 /* responsive: tight panels (the tool window can be narrow) look professional, not cramped */
 @media (max-width: 600px) {
   #conversation {
@@ -35,7 +42,8 @@
      not "idle" — but a start that takes 100 ms does not deserve a panel: `both` holds it at opacity 0 for
      the delay, so a fast start never draws it and a slow one still says "wait" immediately after. The wait
      itself is unchanged; only whether it is worth showing. */
-  animation: fade 0.14s var(--ease) 0.35s both;
+  --wait-grace: 0.35s;
+  animation: fade 0.14s var(--ease) var(--wait-grace) both;
 }
 /* The empty state and a waiting screen are two answers to the same question, so only one shows. */
 #conversation:has(#boot:not([hidden])) #empty,
@@ -50,14 +58,50 @@
   text-align: center;
   padding: 0 24px;
 }
+/* ── the sequence ───────────────────────────────────────────────────────────
+   The rows of a waiting screen arrive one beat apart instead of the whole panel landing at once, so the eye
+   is led down it in reading order: the mark, then what is happening, then what is being waited for or asked.
+
+   `--wait-grace` is inherited from the screen itself, which is what keeps every beat behind the loading
+   screen's grace while letting the sign-in card start on its first frame. `--wait-beat` is the row's place in
+   the order; a row that does not set one is the first.
+
+   Staggered by CLASS, never by `:nth-child()`. All five `.auth-step` containers are in the markup at once and
+   all but one carry `hidden`, so counting position would hand the error step five beats for being sixth in a
+   list of which exactly one is ever displayed. And `animation-delay` is a longhand AFTER the shorthand
+   deliberately: the shorthand resets it, so the two lines have to be in that order. */
+.boot-inner > *,
+.auth-inner > * {
+  --wait-in: 0.2s;
+  --wait-step: 0.07s;
+  animation: fade var(--wait-in) var(--ease) both;
+  animation-delay: calc(var(--wait-grace) + var(--wait-beat, 0) * var(--wait-step));
+}
+.boot-title,
+.auth-title {
+  --wait-beat: 1;
+}
+.boot-sub,
+.auth-step {
+  --wait-beat: 2;
+}
+#boot-missing {
+  --wait-beat: 3;
+}
 /* The Claude starburst, same glyph as the empty state — a character, not an asset, because the CSP forbids
    url() and every external resource. Breathes gently so the screen is alive without a spinner competing with
-   the dots for attention. */
+   the dots for attention.
+
+   Two animations, and both have to be named here: `animation` is a shorthand, so declaring the breathing
+   alone would drop the entrance every other row gets. It takes the first beat, and starts breathing only once
+   that entrance has finished — otherwise the fade and the breath fight over the same opacity. */
 .boot-mark {
   font-size: 30px;
   line-height: 1;
   color: var(--accent);
-  animation: bootBreathe 2.2s ease-in-out infinite;
+  animation:
+    fade var(--wait-in) var(--ease) var(--wait-grace) both,
+    bootBreathe 2.2s ease-in-out calc(var(--wait-grace) + var(--wait-in)) infinite;
 }
 @keyframes bootBreathe {
   0%,
@@ -223,6 +267,11 @@ body.reduced-motion .boot-dots::after {
   align-items: center;
   justify-content: center;
   padding: clamp(24px, 10vh, 70px) 0;
+  /* No grace, unlike the loading screen. That one is hidden for a third of a second because a start which
+     takes 100 ms does not deserve a panel; this card is not a wait but the control that repairs the session,
+     and it is raised only once the host has decided it is needed. Its rows still arrive in sequence — they
+     just start on the first frame. */
+  --wait-grace: 0s;
 }
 .auth-inner {
   display: flex;
@@ -298,13 +347,22 @@ body.reduced-motion .boot-dots::after {
    nothing, which is what proved it was not the user's preference being honoured.
 
    So the authority moves to the host, which CAN answer: [JcefTheme] reads the IDE's own animation preference
-   and sends `reducedMotion`. That also makes the behaviour testable and keeps WCAG 2.3.3 intact — motion is
-   still reduced when the user asks for it, just asked of something that knows. */
+   and sends `reducedMotion`. That also makes the behaviour testable and keeps the preference honoured —
+   motion is still reduced when the user asks for it, just asked of something that knows.
+
+   A DELAY IS NOT A DURATION, and that is why both are zeroed here. A `both`-fill animation holds its element
+   at the from-state for the whole of its delay, so flattening only the duration leaves a staggered entrance
+   running: each row is blank for as long as the stagger says, then snaps in. The sequence survives, only
+   faster and uglier. Reducing motion has to flatten WHEN a row arrives as well as how long it takes to get
+   there — which is also what stops the loading screen sitting blank through its grace before appearing at
+   once. */
 body.reduced-motion *,
 body.reduced-motion *::before,
 body.reduced-motion *::after {
+  animation-delay: 0s !important;
   animation-duration: 0.001ms !important;
   animation-iteration-count: 1 !important;
+  transition-delay: 0s !important;
   transition-duration: 0.001ms !important;
   scroll-behavior: auto !important;
 }

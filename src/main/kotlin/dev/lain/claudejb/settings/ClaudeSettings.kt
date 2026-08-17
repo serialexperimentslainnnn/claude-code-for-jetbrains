@@ -2,11 +2,15 @@ package dev.lain.claudejb.settings
 
 import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.generateServiceName
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.intellij.util.concurrency.AppExecutorUtil
 import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.WorkloadWindow
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -100,6 +104,16 @@ class ClaudeSettings(internal val project: Project? = null) {
          */
         @JvmField var reduceMotion: Boolean = false
 
+        /**
+         * How long a finished workload stays listed, in minutes: an agent or task that completed longer ago
+         * than this is dropped from the Workloads view and from the chat tab tree.
+         *
+         * The meaningful values are [WorkloadWindow.WINDOW_MINUTES], [WorkloadWindow.ALL] among them meaning
+         * no window at all. Live work is never hidden by this, whatever it is set to — the window only ever
+         * decides how long something that has already finished remains worth showing.
+         */
+        @JvmField var workloadWindowMinutes: Int = WorkloadWindow.DEFAULT_MINUTES
+
         /** Enable the binary's file checkpointing so the native rewind (rollback to a turn) works. Default on. */
         @JvmField var enableFileCheckpointing: Boolean = true
 
@@ -154,6 +168,12 @@ class ClaudeSettings(internal val project: Project? = null) {
     val restoreOpenChatsOnStartup: Boolean get() = state.restoreOpenChatsOnStartup
 
     val reduceMotion: Boolean get() = state.reduceMotion
+
+    /** The workload visibility window; a value outside [WorkloadWindow.WINDOW_MINUTES] reads as the default. */
+    val workloadWindowMinutes: Int
+        get() = state.workloadWindowMinutes.takeIf { it in WorkloadWindow.WINDOW_MINUTES }
+            ?: WorkloadWindow.DEFAULT_MINUTES
+
     val enableFileCheckpointing: Boolean get() = state.enableFileCheckpointing
 
     /**
@@ -281,10 +301,7 @@ class ClaudeSettings(internal val project: Project? = null) {
      * the hard way.
      */
     @org.jetbrains.annotations.TestOnly
-    @Synchronized
-    fun replaceState(s: State) {
-        loaded = s
-    }
+    fun replaceState(s: State) = replace(s)
 
     /**
      * Mutates the settings and persists them, in one call.
@@ -294,14 +311,63 @@ class ClaudeSettings(internal val project: Project? = null) {
      * survive a restart — and six such sites already existed the moment the persistence changed. Making the
      * mutation and the write one operation removes that failure mode instead of relying on everyone
      * remembering.
+     *
+     * **[block] is applied TWICE and that is the design, not an oversight.** Once here, to the in-memory copy,
+     * so the caller and every reader of [state] see the change on the next line; and once inside
+     * [SettingsStore.mutate], to the document freshly read back from the safe, which is what actually gets
+     * written. The safe is application-wide — two IDEs open on this machine share one document — so a save
+     * built from this process's copy carries that copy's value for every field the OTHER process has changed
+     * since, and replaces them. Re-reading first narrows the blast radius of a save to the fields [block]
+     * touches. The block must therefore be a DELTA (`it.x = value`), never a wholesale rebuild of the state,
+     * and it must be free of side effects outside the state it is handed.
+     *
+     * **Off the EDT**, on one serial queue: a safe read can reach the OS keychain over D-Bus, and the platform
+     * treats that as a slow operation. Serial rather than pooled because two concurrent read-modify-writes are
+     * exactly the race being fixed, one process further down.
      */
     fun update(block: (State) -> Unit) {
         block(state)
-        save()
+        writes.execute { SettingsStore.mutate(block) }
     }
 
-    /** Persists the current settings. Prefer [update]; this is for the settings form, which edits in bulk. */
+    /**
+     * Persists the current settings **whole**, synchronously. Prefer [update].
+     *
+     * For the settings form, which edits in bulk and must win: when the user presses OK, what is on that page
+     * is the configuration, including over anything another IDE wrote while the page was open. Synchronous for
+     * the same reason — the write is durable by the time the dialog closes, and the user asked for it.
+     */
     fun save() = SettingsStore.save(state)
+
+    /**
+     * Re-reads the stored settings, then calls [onReloaded] on the EDT.
+     *
+     * The in-memory copy is loaded once per service and nothing invalidates it, so another IDE's change is
+     * invisible here until something asks. The settings page is where that matters — it is the one surface
+     * that shows every field and then saves them all back — so it asks when it opens, and the answer arrives
+     * asynchronously because the read belongs off the EDT.
+     *
+     * Ordered behind whatever [update] has already queued, so the page can never show a value this process has
+     * changed but not yet written. A failed read leaves the in-memory copy alone (see
+     * [SettingsStore.loadOrNull]) and still calls back, so the page draws what the plugin is actually using.
+     */
+    fun reload(onReloaded: () -> Unit) {
+        writes.execute {
+            val fresh = SettingsStore.loadOrNull()
+            // Nullable on purpose, the same way `SecretStore.inert` reads it: this runs on a pool thread, so
+            // the IDE can be on its way down by the time the answer is ready, and there is then no page left
+            // to draw it on.
+            ApplicationManager.getApplication()?.invokeLater({
+                if (fresh != null) replace(fresh)
+                onReloaded()
+            }, ModalityState.any())
+        }
+    }
+
+    @Synchronized
+    private fun replace(s: State) {
+        loaded = s
+    }
 
     // NB no explicit `getState()`: the `state` property already generates one with that exact JVM
     // signature, so declaring both is a platform clash. Callers that used `getState()` keep working —
@@ -346,6 +412,28 @@ class ClaudeSettings(internal val project: Project? = null) {
     companion object {
         /** UI-test harness hook (set only by `runIdeForUiTests`; unset in shipped IDEs). */
         private const val FAKE_CLAUDE_PROP = "claudejb.fakeClaude"
+
+        /**
+         * The one thread every settings write and every refresh goes through.
+         *
+         * **Application-wide, not per service**, which is the point: [ClaudeSettings] is a PROJECT service, so
+         * two open projects are two instances of it — and one document in the safe. A queue per instance would
+         * leave the two projects of a single IDE racing each other on the very document this serialisation
+         * exists to protect. It is backed by the shared application pool, so it owns no thread of its own and
+         * has nothing to shut down.
+         */
+        private val writes = AppExecutorUtil.createBoundedApplicationPoolExecutor("Claude Code settings", 1)
+
+        /**
+         * Blocks until every queued settings write has run.
+         *
+         * For tests, so persistence can be asserted without a sleep: the queue is FIFO, so a task submitted
+         * after the mutations under test runs after all of them.
+         */
+        @org.jetbrains.annotations.TestOnly
+        fun awaitWrites() {
+            writes.submit(Runnable { }).get()
+        }
 
         fun getInstance(project: Project): ClaudeSettings = project.service()
     }

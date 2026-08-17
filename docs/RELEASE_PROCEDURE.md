@@ -30,7 +30,7 @@ removed rather than kept as a second pipeline that could also publish.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | **pull requests only** into `develop` or `main` (plus manual dispatch) | JVM tests + coverage, static analysis, frontend tests, dependency audit, plugin verifier, artifact assertions, and the release-door bot-PR check |
+| `ci.yml` | **pull requests only** into `develop` or `main`, plus a nightly schedule and manual dispatch | JVM tests + coverage, static analysis (detekt, Spotless, ESLint, Prettier, the project map), frontend tests, dependency audit, plugin verifier, artifact assertions, the release-door bot-PR check — and, on the schedule and the dispatch only, the UI end-to-end suite |
 | `codeql.yml` | push/PR to `develop`/`main`; weekly | SAST over `java-kotlin` and `javascript-typescript`, `security-extended` queries |
 | `release.yml` | **push to `main`** (primary); a `vX.Y.Z` tag (escape hatch) | Guard → verify → tag, build, sign, publish, GitHub Release — all in one gated job |
 | `drift.yml` | weekly; manual | `checkDrift` against the current CLI and SDK; files an issue on real drift |
@@ -124,14 +124,18 @@ but it means merging or closing those PRs is a release step, not an afterthought
 
 ```bash
 JAVA_HOME=~/.jdks/jbr-21.0.11 \
-  ./gradlew test koverVerify detekt spotlessCheck verifyPlugin buildPlugin
+  ./gradlew test koverVerify detekt spotlessCheck checkProjectMap verifyPlugin buildPlugin
 npm ci && npm test && npm run lint && npm run format:check
+npm audit --omit=dev --audit-level=low
 ```
 
-Everything CI runs, run locally first. All tests must pass, and `verifyPlugin`
-must report **Compatible** across the declared range — the floor (253) through
-the newest IDEA **and PyCharm** EAP/RC — with no internal-API, override-only or
-**deprecated** API usage, all four of which are failure levels in the build.
+Everything CI runs, run locally first — including `checkProjectMap` (the
+distributed map is a gate, not documentation) and the audit of the *distributed*
+scope, which is the one that blocks. All tests must pass, and `verifyPlugin`
+must report **Compatible** across the declared range — the floor,
+`253.29346.138`, through the newest IDEA **and PyCharm** EAP/RC — with no
+internal-API, override-only or **deprecated** API usage, all four of which are
+failure levels in the build.
 `buildPlugin` produces `build/distributions/claude-code-native-X.Y.Z.zip`.
 
 Offline, or on a network that cannot pull 1.6 GB of IDE:
@@ -204,11 +208,11 @@ cannot wait, close the PR, land the change, re-run the full battery, and open a 
 
 ### 7. Do NOT tag anything
 
-**The workflow cuts the tag. You do not.** This section used to say
-`git tag -s vX.Y.Z && git push origin vX.Y.Z`, and following it is actively
-harmful: a hand-cut tag reaches the `marketplace` environment on the escape-hatch
-trigger, skipping the merge into `main` that the whole review model rests on, and
-a tag that beats the workflow to the name makes the automated release path stop
+**The workflow cuts the tag. You do not.** Running
+`git tag -s vX.Y.Z && git push origin vX.Y.Z` yourself is actively harmful: a
+hand-cut tag reaches the `marketplace` environment on the escape-hatch trigger,
+skipping the merge into `main` that the whole review model rests on, and a tag
+that beats the workflow to the name makes the automated release path stop
 with *"already released"* on a version nobody published. Published tags are
 immutable ([ADR 0001 §3](adr/0001-release-process.md)), so that mistake is not
 undoable — the only exit is burning the version number and cutting the next

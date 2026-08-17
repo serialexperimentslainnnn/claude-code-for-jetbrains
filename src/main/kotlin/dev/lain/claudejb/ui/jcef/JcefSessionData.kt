@@ -34,6 +34,8 @@ import kotlinx.serialization.json.put
  *               per-component token tally is decoded from an `apiUsage` block when present and the USD figure
  *               from a cost field;
  *  - account  ← [JcefAccountData], off [ClaudeSession.account] and the `auth status` probe;
+ *  - git      ← [JcefGitData], off a snapshot the caller collects off the EDT (branch, HEAD, uncommitted files,
+ *    recent commits) plus the applicable entries of the Git action catalogue;
  *  - agentTree← [JcefWorkloadData], off [ClaudeSession.runningAgents] (the binary's own per-agent sidecars:
  *    parentage, depth and the model-written label, so the Agents/Subagents windows draw a tree rather than a
  *    flat task list);
@@ -70,31 +72,42 @@ object JcefSessionData {
      * with a fraction of the truth. The per-chat view is the tab bar's own popup. Empty when the caller has
      * no strip to ask (a panel outside the tab strip), in which case the frontend falls back to this
      * session's own `agentTree`/`backgroundTasks` and draws it under a single root.
+     *
+     * [windowMinutes] and [nowMillis] are the retention window and the instant to measure it from. Both are
+     * passed in rather than read here, and the clock especially: one push resolves it once and every chat in
+     * that push is aged by the same instant, so two cards in one paint cannot disagree about what time it is.
      */
     fun sessionJson(
         session: ClaudeSession,
+        windowMinutes: Int,
+        nowMillis: Long,
         usage: UsageReport? = null,
         workloads: List<Workload> = emptyList(),
         plan: dev.lain.claudejb.session.PlanInfo? = null,
+        git: JcefGitData.Snapshot? = null,
     ): String {
+        val shown = JcefWorkloadData.visible(session, windowMinutes, nowMillis)
         val obj = buildJsonObject {
             put("usage", JcefUsageData.usageJson(session, usage) ?: JsonNull)
             // The plan-mode plan, when the session has one. Like every card here it is null-or-absent rather
             // than empty, so the page omits it instead of drawing a heading over nothing.
             put("plan", JcefPlanData.planJson(plan) ?: JsonNull)
+            // The Git view. Same rule as every card here: null until someone has collected a snapshot off the
+            // EDT, and `available:false` once it is known there is no Git — the page omits the view either way.
+            put("git", JcefGitData.gitJson(git) ?: JsonNull)
             put("context", JcefCostData.contextJson(session) ?: JsonNull)
             put("cost", JcefCostData.costJson(session) ?: JsonNull)
             put("account", JcefAccountData.accountJson(session) ?: JsonNull)
             // NB no `subagents` key any more. It was the edge-derived task list, and the Agents / Subagents
             // windows replaced it with the real tree (`agentTree`) — two lists of the same thing, built from
             // different sources, is how they end up disagreeing on screen.
-            put("backgroundTasks", JcefWorkloadData.backgroundTasksJson(session))
+            put("backgroundTasks", JcefWorkloadData.backgroundTasksJson(session, shown))
             // The tree behind the Agents / Subagents windows: every agent with the chain it hangs off, so a
             // row can say "Chat |_ Agent A |_ Agent B" and link straight to that tab.
-            put("agentTree", JcefWorkloadData.agentTreeJson(session))
+            put("agentTree", JcefWorkloadData.agentTreeJson(session, shown))
             // Every chat's tree, for the Workloads diagram. Kept ALONGSIDE the two keys above rather than
             // replacing them: they are this session's own data, which other cards read.
-            put("workloads", JcefWorkloadData.workloadsJson(workloads))
+            put("workloads", JcefWorkloadData.workloadsJson(workloads, windowMinutes, nowMillis))
             // Always emit a friendly model label (even on a default session where session.model is null)
             // and the known working dir, so the Session card is never empty — the prior nulls made the
             // whole dashboard collapse to "No session data yet" on a fresh/idle session.

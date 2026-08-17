@@ -109,14 +109,34 @@ Use **Close All Diffs** in the Claude Code tool window's title bar, or close
 them individually. Diffs opened by the plugin are real editor tabs, not modal
 windows, so they stay until you close them.
 
+## How do I undo something Claude changed?
+
+Three different questions, three different answers, and picking the wrong one is
+why this entry exists:
+
+- **One edit** — press **Restore** on that tool card in the transcript. It asks
+  Claude Code to rewind the files of that turn, and falls back to reverting the
+  file from the snapshot the plugin captured before the write.
+- **Everything a long run touched** — ⚙ ▸ **Review This Session's Changes…**
+  opens the whole session as one diff against the state it started from. It is a
+  review, not an undo: you read it, then decide.
+- **A commit** — the **Git** button in the title bar. See
+  [`../README.md`](../README.md).
+
+There is no "roll back everything" button, deliberately: between Claude's edits
+are your own, and reverting the lot would take yours with it. With a repository,
+the IDE's Local Changes does that job and gives you a way back.
+
 ## Which IDE versions does it run in?
 
-**2025.3 and newer.** The chat UI is the IDE's embedded browser, and from build
-262 the platform ships that browser as a separate bundled plugin the plugin has
-to declare a dependency on — a module id that does not exist before 2025.3. So
-declaring it (which is what makes the plugin work on 2026.2 at all) costs 2025.1
-and 2025.2. On those, stay on **5.1.1**. There is no browser-less mode to fall
-back to.
+**Build `253.29346.138` — IDEA 2025.3.1 — and newer.** The floor is a build, not a
+version line: the chat UI is the IDE's embedded browser, and the platform serves
+its classes through a module id the plugin must declare a dependency on. That id
+is missing from 2025.1, from 2025.2 and from the first 2025.3 (`253.28294.334`)
+alike, and it arrives in 2025.3.1 — so declaring it, which is what makes the
+plugin work on 2026.2 at all, costs all three. On those, stay on **5.1.1**. There
+is no browser-less mode to fall back to. Help ▸ About prints the build number you
+have.
 
 ## Why does each agent get its own tab now?
 

@@ -4,6 +4,7 @@ import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EntryDTO
 import dev.lain.claudejb.session.TranscriptEntry
 import dev.lain.claudejb.session.TranscriptModel
+import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
 import javax.swing.Timer
 
@@ -87,11 +88,20 @@ internal class ChatTranscriptView(
                 // highlighted for a transcript that is no longer on screen.
                 exec("window.cc.clearAgentSelection && window.cc.clearAgentSelection()")
                 fullResync()
+                // `cc.clear()` above took the trimmed-rows notice with it, and a resend only carries rows that
+                // still exist — so the count has to be re-asserted or the page silently claims nothing was
+                // dropped. An empty id list is a pure notice update.
+                trimNotice(emptyList(), session.transcript.trimmedCount)
             }
 
             is Shown.Agent -> pushEntries(session.runningAgents.nodes[next.id]?.entries.orEmpty())
 
-            is Shown.Task -> pushEntries(BackgroundTaskView.entries(session, next.id), expanded = true)
+            is Shown.Task -> {
+                // Tell the BAR too, or the view is painted with no pill for it: the click reads as having
+                // done nothing, and there is then no pill to click to get back to the chat.
+                exec("window.cc.revealTaskTab && window.cc.revealTaskTab(" + JcefBridge.jsString(next.id) + ")")
+                pushEntries(BackgroundTaskView.entries(session, next.id), expanded = true)
+            }
         }
     }
 
@@ -170,6 +180,27 @@ internal class ChatTranscriptView(
         dirty.clear()
         structural = false
         exec("window.cc.clear && window.cc.clear()")
+    }
+
+    /**
+     * The oldest rows left the model. Two things have to happen, in this order and in this one EDT call:
+     *
+     *  - drop them from [dirty], or the next tick would push a row that no longer exists and the page would
+     *    upsert it straight back in;
+     *  - tell the page, so it removes those nodes and shows how many rows the cap has dropped in total.
+     *
+     * The second half only matters while the CHAT is on screen: an agent's or a task's view does not paint the
+     * chat's rows, so there is nothing there to remove. Pruning [dirty] is unconditional.
+     */
+    override fun onTrimmed(removedIds: List<Long>, totalTrimmed: Int) {
+        dirty.removeAll(removedIds.toSet())
+        if (shown == Shown.Chat) trimNotice(removedIds, totalTrimmed)
+    }
+
+    /** `cc.trimRows`: removes [removedIds] from the page and states the cumulative [totalTrimmed]. */
+    private fun trimNotice(removedIds: List<Long>, totalTrimmed: Int) {
+        val ids = removedIds.joinToString(",")
+        exec("window.cc.trimRows && window.cc.trimRows({ids:[$ids],total:$totalTrimmed})")
     }
 
     private fun ensureTimer() {

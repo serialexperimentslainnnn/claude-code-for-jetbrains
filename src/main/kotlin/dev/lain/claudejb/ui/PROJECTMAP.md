@@ -21,8 +21,8 @@ the Settings page is a platform `Configurable`.
 
 | File | What it decides |
 |---|---|
-| `ClaudeToolWindowFactory.kt` | The tool window, the title-bar buttons and the ⚙ menu. Resolved per project. |
-| `ChatTabsPanel.kt` | The `CardLayout` that holds each chat's panel. |
+| `ClaudeToolWindowFactory.kt` | The tool window, the title-bar buttons and the ⚙ menu. Resolved per project. `activePanel(project)` is the only door onto the chat on screen for callers outside this package. |
+| `ChatTabsPanel.kt` | The `CardLayout` that holds each chat's panel. A **pinned** tab is a second panel over an existing chat's session (`ChatTab.isPinnedView`): closing it must not dispose the session, and closing the chat closes its pinned views first. |
 | `TabSessionCommands.kt` | Restore, rename, fork, reopen — and `gitChat()`, the find-or-create of the Git tab. |
 
 **The chat panel and its collaborators**

@@ -63,6 +63,18 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
          */
         var pinnedAgent: String? = null
         var pinnedTask: String? = null
+
+        /**
+         * True when this tab is a second VIEW of a chat, not a chat of its own.
+         *
+         * A pinned tab holds another `JcefChatPanel` over the SAME [ClaudeSession] (see [pin]), so everything
+         * that used to be safe while one panel meant one session has to ask this first — closing it must not
+         * dispose the session, or closing an agent's tab kills the chat that spawned it.
+         */
+        val isPinnedView: Boolean get() = pinnedAgent != null || pinnedTask != null
+
+        /** The session this tab draws, chat or pinned view; null for a tab that is not a chat panel. */
+        val session: ClaudeSession? get() = (component as? JcefChatPanel)?.session
     }
 
     private val cards = CardLayout()
@@ -170,9 +182,21 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         tabs.firstOrNull { it.id == id }?.let { close(it) }
     }
 
-    /** Closes [tab]: removes it, fires the close callback and disposes whatever it carried. */
+    /**
+     * Closes [tab]: removes it, fires the close callback and disposes whatever it carried.
+     *
+     * Closing a CHAT takes its pinned views with it, first: they are second panels over that chat's session
+     * ([ChatTab.isPinnedView]), so leaving them behind leaves tabs painting a transcript whose session the
+     * close is about to dispose. They cannot cascade further — a pinned view is never pinned to.
+     */
     fun close(tab: ChatTab) {
         if (!tabs.remove(tab)) return
+        if (!tab.isPinnedView) {
+            val session = tab.session
+            if (session != null) {
+                tabs.filter { it.isPinnedView && it.session === session }.forEach { close(it) }
+            }
+        }
         onClosed(tab)
         content.remove(tab.component)
         tab.disposer?.let { Disposer.dispose(it) }

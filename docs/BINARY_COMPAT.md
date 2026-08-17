@@ -11,9 +11,9 @@ This document records both, and what to do when either moves.
 
 | | Value | Where it is declared |
 |---|---|---|
-| Protocol baseline | `claude` **2.1.226** / SDK **0.3.227** | `scripts/drift-baseline.properties` |
-| IDE range | **253 → 263.\*** (2025.3 → the 2026.3 branch) | `build.gradle.kts` → `ideaVersion` |
-| Compiled against | IDEA `253.28294.334` — the floor itself | `build.gradle.kts` → `intellijIdea("253.28294.334") { useInstaller = false }` |
+| Protocol baseline | `claude` **2.1.226** / SDK **0.3.231** | `scripts/drift-baseline.properties` |
+| IDE range | **253.29346.138 → 263.\*** (2025.3.**1** → the 2026.3 branch) | `build.gradle.kts` → `ideaVersion` |
+| Compiled against | IDEA `253.29346.138` — the floor itself | `build.gradle.kts` → `intellijIdea("253.29346.138") { useInstaller = false }` |
 | Verified against | the recommended range **plus** the newest IDEA **and PyCharm** EAP/RC | `pluginVerification.ides` |
 
 **There is no enforced minimum binary version.** The plugin does not probe for one and would not refuse an
@@ -21,15 +21,21 @@ older `claude`; the baseline above is the version the protocol layer was last *r
 a different claim. An older binary is simply untested — it will typically work, because everything the plugin
 sends is long-established, and it will silently omit whatever it does not implement.
 
-**The IDE floor is 253 because of JCEF, not because of an API tidy-up.** Since build 262 the platform ships
-the embedded browser as a bundled plugin (`com.intellij.modules.jcef`) instead of as part of the platform
-itself, so a plugin that does not declare that dependency gets no `com.intellij.ui.jcef.*` in its
-classloader — and since 4.0.0 the entire UI *is* that browser. The module id does not exist at all on
-251/252, so declaring it (which 5.5.0 must) costs 2025.1 and 2025.2. There is no browser-less mode to
-degrade to. `JcefDependencyContractTest` is the gate: it fails if the descriptor stops declaring the
-dependency, declares it as optional, or drops the floor below 253. `verifyPlugin` does **not** catch this —
-it resolves against the whole IDE distribution rather than against the plugin's classloader, and it reported
-*Compatible* on 262 throughout the release that was dead there.
+**The IDE floor is JCEF, not an API tidy-up — and it is a BUILD, not a branch.** The entire UI *is* the
+embedded browser, so `plugin.xml` declares `com.intellij.modules.jcef` as a mandatory dependency; without it
+the classloader hands the plugin no `com.intellij.ui.jcef.*` and every chat dies in `JcefHost.<init>`. That
+module id is absent from 2025.1 and 2025.2 altogether, and it is still absent from the first 2025.3
+(`253.28294.334`) — it arrives in **`253.29346.138` (2025.3.1)**, which is therefore the floor and is written
+as that full build number everywhere it is declared. A `sinceBuild` of the bare branch `253` would offer the
+plugin to `253.28294.334`, where the platform refuses to load it (`has dependency on
+'com.intellij.modules.jcef' which is not installed`). The dependency cannot be softened either: an optional
+dependency that cannot be satisfied is skipped, which trades a clean refusal for a `NoClassDefFoundError`.
+
+`JcefDependencyContractTest` is the gate. It fails if the sources use JCEF and the descriptor stops declaring
+it, if the declaration becomes optional, if `sinceBuild` is a branch rather than a full build number, or if
+it is below `253.29346.138`. `verifyPlugin` does **not** catch any of it — it resolves against the whole IDE
+distribution rather than against the plugin's classloader, which is where the failure lives, so it can report
+*Compatible* on an IDE the plugin cannot start on.
 
 ## Protocol version history
 
@@ -38,7 +44,7 @@ and `ProtocolSurface` covered the surface both the SDK types and a live probe ex
 
 | Plugin version | `claude` binary | SDK ref | Notes |
 |---|---|---|---|
-| 5.5.0 | 2.1.226 | 0.3.227 | Current. Surface unchanged; the release's protocol work was reading the subagent sidecars the binary already writes. |
+| 5.5.0 | 2.1.226 | 0.3.231 | Current. Surface unchanged; the release's protocol work was reading the subagent sidecars the binary already writes. |
 | 5.0.0 | 2.1.222 | 0.3.222 | `checkDrift` green across the move of the SDK to `devDependencies`; surface unchanged. |
 | 4.3.3 | 2.1.220 | 0.3.220 | Surface unchanged. |
 | 4.2.0 | 2.1.204 | 0.3.204 | Five new kinds reconciled, `background_tasks_changed` and `control_request_progress` among them. |

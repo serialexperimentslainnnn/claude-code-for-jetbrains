@@ -3,6 +3,8 @@ package dev.lain.claudejb.ui
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import dev.lain.claudejb.diff.DiffPresenter
@@ -51,18 +53,34 @@ internal class SessionDiffAction(private val project: Project, private val tabs:
         }
     }
 
+    /**
+     * Reads the working tree OFF the EDT, then presents on it.
+     *
+     * `SessionQueries.ask` hands its reply back on the EDT, so the obvious place to put this work is also
+     * the one place it must not go: the binary caps the diff at 50 files, and reading fifty files —
+     * canonicalising each path through the containment gate on the way — is a visible freeze of the whole
+     * IDE, not a pause. Same shape as [GitContextActions]: gather on a pooled thread, present on the EDT.
+     */
     private fun present(diff: WorkspaceDiff) {
-        // Reading the working tree is IO, so it happens here rather than inside the pure reconstruction —
-        // which takes a reader precisely so it can be tested without a filesystem.
         val root = project.basePath
-        val sides = WorkspaceDiffReview.sides(diff) { path ->
-            val absolute = if (File(path).isAbsolute) path else root?.let { "$it/$path" }
-            // The same containment gate as every other file this plugin opens: a path the diff names must
-            // still be inside the project before anything is read from it.
-            absolute
-                ?.takeIf { DiffPresenter.isWithinRoot(it, root) }
-                ?.let { runCatching { File(it).readText() }.getOrNull() }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val sides = WorkspaceDiffReview.sides(diff) { path ->
+                val absolute = if (File(path).isAbsolute) path else root?.let { "$it/$path" }
+                // The same containment gate as every other file this plugin opens: a path the diff names
+                // must still be inside the project before anything is read from it.
+                absolute
+                    ?.takeIf { DiffPresenter.isWithinRoot(it, root) }
+                    ?.let { runCatching { File(it).readText() }.getOrNull() }
+            }
+            ApplicationManager.getApplication().invokeLater(
+                { if (!project.isDisposed) open(diff, sides) },
+                ModalityState.any(),
+            )
         }
+    }
+
+    /** EDT: the dialog and the diff tabs. Everything blocking already happened in [present]. */
+    private fun open(diff: WorkspaceDiff, sides: List<WorkspaceDiffReview.Side>) {
         if (sides.isEmpty()) {
             info(NOTHING)
             return

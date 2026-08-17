@@ -162,8 +162,9 @@ describe("transcript — a file tool's plain output is a highlighted, copyable c
 // ── command output as a copyable code block ──────────────────────────────────────────────────────────────
 // meta is a space-separated tag set for TOOL_OUTPUT (see ClaudeSession.kt): "command", "error", or "command
 // error" together — a failing command's stderr is still command output you want to copy. Covers Bash,
-// PowerShell, and any MCP tool that executes something (the backend decides via SensitiveGuard.isCommandCall,
-// which looks at the INPUT shape, not the tool name — the frontend only ever sees the resulting meta tag).
+// PowerShell, and any MCP tool that executes something. The backend decides in TranscriptModel.isCommandCall,
+// which is true when ToolInputScanner.commandText found a command in the tool's INPUT — the shape, not the
+// tool name; the frontend only ever sees the resulting meta tag.
 describe('transcript — command output renders as a copyable code block', () => {
   it("a Bash tool's output gets the code-head + Copy chrome, like a markdown fence", () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -476,5 +477,269 @@ describe('transcript — tool state class on FIRST render', () => {
     const card = win.document.querySelector('.tool');
     expect(card.classList.contains('done')).toBe(true);
     expect(card.classList.contains('loading')).toBe(false);
+  });
+});
+
+// The page half of the transcript memory cap. `TranscriptModel` drops the OLDEST rows past MAX_ENTRIES and
+// calls `window.cc.trimRows({ids:[…], total:N})` through `ChatTranscriptView.trimNotice`, where `total` is the
+// CUMULATIVE count over the life of the transcript, not the size of this batch.
+//
+// The two edge cases below are the whole reason the contract is shaped this way, and each has a caller:
+//   - `ids: []` is `ChatTranscriptView` on (re)attach, restating the count after `cc.clear()` took the notice
+//     away — it must refresh the notice and remove NOTHING (neither "remove everything" nor a no-op);
+//   - `total: 0` means the transcript has never been trimmed, so the row is absent, not present and empty.
+describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
+  const three = () => [
+    row(101, 0, 'USER', 'first'),
+    row(102, 1, 'ASSISTANT', 'second'),
+    row(103, 2, 'USER', 'third'),
+  ];
+
+  it('removes exactly the named rows and states the cumulative total', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101, 102], total: 2 });
+
+    const bodies = [...win.document.querySelectorAll('#conversation .msg .body')];
+    expect(bodies.map((b) => b.textContent)).toEqual(['third']);
+    const notice = win.document.querySelector('.trim-notice');
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('an EMPTY id list refreshes the notice and removes nothing', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [], total: 40 });
+
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('40 earlier rows were dropped');
+  });
+
+  it('a total of 0 means NO notice at all — absent, not present and empty', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [], total: 0 });
+
+    expect(win.document.querySelector('.trim-notice')).toBeNull();
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+  });
+
+  it('a later trim UPDATES the one notice instead of appending a second', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+    const first = win.document.querySelector('.trim-notice');
+    win.cc.trimRows({ ids: [102], total: 2 });
+
+    expect(win.document.querySelectorAll('.trim-notice').length).toBe(1);
+    expect(win.document.querySelector('.trim-notice')).toBe(first); // the same node, rewritten
+    expect(first.textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('a total of 1 reads as one row, not "1 rows"', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('1 earlier row was dropped');
+  });
+
+  it('the notice sits at the HEAD of the transcript — it stands for what came before', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+    // A row pushed afterwards must not land above it.
+    win.cc.batch([row(104, 3, 'USER', 'fourth')]);
+
+    const first = win.document.querySelector('#conversation > .trim-notice, #conversation > .msg');
+    expect(first.classList.contains('trim-notice')).toBe(true);
+  });
+
+  // 4.1.3 Status Messages: the rows vanish without focus ever moving, so a screen-reader user gets no signal
+  // unless the page says so. It goes through the SHARED live region declared in shell.html — never a second
+  // one — and it is announced ONCE, when the notice appears: past the cap nearly every added row trims one,
+  // and a live region rewritten that often talks over itself and gets switched off.
+  it('announces the first trim through the shared live region, and does not re-announce on every later trim', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+
+    const region = win.document.getElementById('a11y-status');
+    expect(region.textContent).toContain('1 earlier row was dropped');
+
+    win.cc.trimRows({ ids: [102], total: 2 });
+    expect(region.textContent).toContain('1 earlier row was dropped'); // unchanged; only the row updates
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('an id the page never had is harmless', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [999], total: 1 });
+
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+    expect(win.document.querySelector('.trim-notice')).not.toBeNull();
+  });
+});
+
+// What the auto-follow ASKS FOR, which is the only part of it this harness can see.
+//
+// jsdom lays nothing out and scrolls nothing: `Element.prototype` carries no scrollTo/scrollBy/scrollIntoView
+// at all, and scrollTop/scrollLeft are plain properties with none of the CSSOM semantics. So the effect of a
+// scroll is unobservable here BY CONSTRUCTION, and asserting a position would be asserting on the assignment
+// the test itself made. What IS observable, and is exactly the thing that was wrong, is the argument the call
+// carries: `#conversation` declares `scroll-behavior: smooth`, and both a bare `scrollTop` assignment and a
+// `behavior: 'auto'` scroll take their behaviour from that declaration — so the case deliberately routed away
+// from smooth animated anyway. Naming the behaviour at the call site is the fix, and it is what is pinned.
+describe('transcript — the auto-follow names its scroll behaviour', () => {
+  // Geometry and the frame callback, both of which jsdom lacks. `distance` = scrollHeight - scrollTop -
+  // clientHeight, which is what the module branches on; the frame callback is made synchronous so the scroll
+  // happens inside the call instead of a frame later.
+  const armed = (distance) => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    const c = win.document.getElementById('conversation');
+    Object.defineProperty(c, 'scrollHeight', { value: distance, configurable: true });
+    Object.defineProperty(c, 'clientHeight', { value: 0, configurable: true });
+    c.scrollTop = 0;
+    win.requestAnimationFrame = (fn) => {
+      fn();
+      return 0;
+    };
+    const asked = [];
+    c.scrollTo = (opts) => asked.push(opts);
+    return { win, c, asked };
+  };
+
+  const NEAR = 40; // inside NEAR_BOTTOM (80): the transcript is following without being told to
+  const FAR = 1200; // past SMOOTH_SCROLL_MAX_PX (400): the jump at the end of a restore
+
+  it('a small step glides — the one case that is meant to animate', () => {
+    const { win, asked } = armed(NEAR);
+    win.cc.batch([row(900, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('smooth');
+  });
+
+  it('a long jump asks for INSTANT, and does not leave the answer to the stylesheet', () => {
+    // The defect. This branch exists to jump — a fixed-duration animation over a long distance is a crawl the
+    // user waits out, and re-issuing one every streaming delta re-aims it so it never arrives. It used to be
+    // written `c.scrollTop = c.scrollHeight`, which inherits `scroll-behavior: smooth` from #conversation and
+    // therefore did the exact opposite of what it says. 'auto' would not fix it: 'auto' IS "ask the CSS".
+    const { win, asked } = armed(FAR);
+    win.CC.emit('follow', true); // past NEAR_BOTTOM, so follow is what keeps it sticking
+    asked.length = 0;
+    win.cc.batch([row(901, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('instant');
+    expect(asked[0].behavior).not.toBe('auto');
+  });
+
+  it('reduced motion makes even the small step instant', () => {
+    // WCAG 2.3.3. The preference is host-driven (`CC.reducedMotion`, set by cc.theme) because JCEF renders
+    // off-screen and the media query answers "reduce" for everyone. Before the fix this case was the sharpest
+    // one: switching motion OFF routed the scroll to the branch that animated.
+    const { win, asked } = armed(NEAR);
+    win.cc.theme({ reducedMotion: true });
+    asked.length = 0;
+    win.cc.batch([row(902, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('instant');
+  });
+
+  it('and it still scrolls where scrollTo does not exist', () => {
+    // The capability guard is not decoration: jsdom is that environment, so this is the path the rest of the
+    // suite runs on. Removing the guard would throw here rather than fail an assertion.
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    const c = win.document.getElementById('conversation');
+    expect(typeof c.scrollTo).toBe('undefined');
+    Object.defineProperty(c, 'scrollHeight', { value: NEAR, configurable: true });
+    win.requestAnimationFrame = (fn) => {
+      fn();
+      return 0;
+    };
+    win.cc.batch([row(903, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(c.scrollTop).toBe(NEAR);
+  });
+});
+
+// The find bar: where it is allowed to be, and the three things it does that have each been broken once.
+//
+// ORDER MATTERS HERE, and it is the harness rather than the product: every `loadFrontend` re-evaluates the
+// modules into the SAME window, so each load leaves another `document` keydown listener behind, holding its
+// own (now detached) find bar. Escape is answered by the FIRST of them that has an open bar, and that handler
+// stops the event dead — so a test that leaves a bar open swallows the Escape of every test after it. The
+// Escape case therefore runs before the two that open one. In the page there is exactly one instance.
+describe('transcript — the find bar', () => {
+  const openFind = (win) =>
+    win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }));
+  const bar = (win) => win.document.querySelector('.find-bar');
+
+  it('Escape closes it without interrupting the running turn', () => {
+    // The composer's Escape handler sits on its textarea and sends `interrupt`. The find bar's own handler is
+    // on `document` in the CAPTURE phase and stops the event there, which is what keeps closing a find bar
+    // from also killing the turn — and it is the reason this survives the bar moving in the DOM at all.
+    const win = loadFrontend(['app-transcript.js', 'app-composer.js'], { vendor: false });
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    win.cc.state({ turnActive: true });
+    openFind(win);
+    expect(bar(win).hidden).toBe(false);
+
+    const input = win.document.querySelector('.composer-card textarea, #composer textarea');
+    expect(input).not.toBeNull();
+    input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    expect(bar(win).hidden).toBe(true);
+    expect(sent.filter((m) => m.type === 'interrupt')).toEqual([]);
+  });
+
+  it('is mounted in the work area, so it cannot cover the tab row', () => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    openFind(win);
+    const found = bar(win);
+    expect(found).not.toBeNull();
+    expect(found.hidden).toBe(false);
+    // On the BODY it was positioned against the viewport, and in a narrow tool window it spanned the whole
+    // width at the top — over the tabs. Focus that lands on something covered is WCAG 2.2 SC 2.4.11, and the
+    // fix is structural rather than a z-index kept out of their way: `#work` does not contain `#tabsbar`, so
+    // a bar inside it cannot reach the tabs whatever the stylesheet later says.
+    expect(found.parentElement.id).toBe('work');
+    expect(win.document.getElementById('work').contains(win.document.getElementById('tabsbar'))).toBe(false);
+  });
+
+  it('Enter and Shift+Enter walk the matches, and bring the active one into view', () => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    win.cc.batch([row(910, 0, 'ASSISTANT', 'needle one'), row(911, 1, 'ASSISTANT', 'needle two')]);
+    openFind(win);
+
+    // jsdom has no scrollIntoView at all and the module guards for it, so the stub is what makes "it went to
+    // the hit" observable — the counter alone would pass with the scroll deleted.
+    const into = [];
+    win.Element.prototype.scrollIntoView = function (opts) {
+      into.push([this.textContent, opts.block]);
+    };
+    try {
+      const input = bar(win).querySelector('.find-input');
+      input.value = 'needle';
+      input.dispatchEvent(new win.Event('input', { bubbles: true }));
+
+      const count = () => bar(win).querySelector('.find-count').textContent;
+      expect(count()).toBe('1 / 2');
+      expect(into.length).toBe(1); // a fresh query goes to the first hit
+
+      input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(count()).toBe('2 / 2');
+      input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+      expect(count()).toBe('1 / 2');
+      expect(into.length).toBe(3);
+      expect(into[2]).toEqual(['needle', 'center']);
+    } finally {
+      delete win.Element.prototype.scrollIntoView;
+    }
   });
 });

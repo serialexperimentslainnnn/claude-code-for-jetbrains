@@ -13,6 +13,13 @@ package dev.lain.claudejb.session
  *  - a message boundary (a new `message_start`, or a *top-level* tool call) resets both live pointers so the
  *    next delta starts a new entry instead of growing a finished paragraph.
  *
+ * **Trimming:** the model is bounded and drops its OLDEST rows past [TranscriptModel.MAX_ENTRIES], which can
+ * take an entry a live pointer here still points at. Appending to such an entry writes text nowhere the page
+ * will ever see — no row, no error. So a pointer whose entry is [TranscriptEntry.trimmed] counts as **no live
+ * block**: it is dropped and the next delta starts a fresh entry, which is the only outcome that keeps the
+ * text on screen. Trimming is a memory bound and never data loss — the binary's own session file on disk
+ * holds the whole conversation.
+ *
  * **Threading:** every method assumes it is already on the EDT (the session marshals protocol events there
  * before calling in). It does not marshal threads itself — mirroring the previous inline behaviour.
  *
@@ -29,10 +36,13 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
     // "Thought process" fold out of order, after the answer). Reset on every message boundary.
     private var settledThinking: TranscriptEntry? = null
 
+    /** A pointer only counts while its entry is still in the model: a trimmed entry is no live block. */
+    private fun live(entry: TranscriptEntry?): TranscriptEntry? = entry?.takeUnless { it.trimmed }
+
     /** Appends a top-level assistant text delta, starting a new entry if none is live. Ends any live thinking. */
     fun appendAssistant(delta: String) {
         liveThinking = null // close the growing thinking block, but keep settledThinking for finalize-replace
-        val entry = liveAssistant
+        val entry = live(liveAssistant)
         if (entry == null) {
             liveAssistant = transcript.add(Speaker.ASSISTANT, delta)
         } else {
@@ -42,7 +52,7 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
 
     /** Replaces the live assistant entry with its finalized text (or adds one), then closes the block. */
     fun finalizeAssistant(full: String) {
-        val entry = liveAssistant
+        val entry = live(liveAssistant)
         if (entry != null) transcript.replaceText(entry, full) else transcript.add(Speaker.ASSISTANT, full)
         liveAssistant = null
     }
@@ -55,7 +65,7 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
      * delta is a harmless no-op append.
      */
     fun appendThinking(delta: String) {
-        val entry = liveThinking
+        val entry = live(liveThinking)
         if (entry == null) {
             if (delta.isBlank()) return // nothing to show — don't open an empty fold
             liveThinking = transcript.add(Speaker.THINKING, delta)
@@ -71,7 +81,7 @@ class TranscriptReconciler(private val transcript: TranscriptModel) {
      * block would be appended as a SECOND, out-of-order "Thought process" after the answer.
      */
     fun finalizeThinking(full: String) {
-        val entry = liveThinking ?: settledThinking
+        val entry = live(liveThinking) ?: live(settledThinking)
         when {
             // Redacted thinking (Opus 4.8+) finalizes as an EMPTY block. Never open a fold for it, and never blank
             // out a fold that already streamed real reasoning text — keep what the user was shown.

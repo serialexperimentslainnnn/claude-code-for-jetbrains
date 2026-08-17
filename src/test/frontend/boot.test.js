@@ -3,7 +3,7 @@
 // It covers the whole tab and blocks input, so a stuck boot screen is a worse failure than the empty composer
 // it exists to hide. These pin the three-state logic (running / starting / neither) and the fact that it is
 // driven outside the composer's ensureBuilt() gate.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('boot screen', () => {
   let win;
@@ -51,11 +51,10 @@ describe('boot screen', () => {
     expect(boot().hidden).toBe(false);
   });
 
-  it('the waiting screens are transcript content, never overlays', () => {
-    // They used to be `position: absolute; inset: 0`, and covered whatever they were laid over: first the
-    // chat tabs (so you could not switch chats while one started), then the composer — and a binary that
-    // comes up in a fraction of a second painted a full-window panel and removed it, which reads as the
-    // whole plugin flashing. As rows of the transcript none of that is possible.
+  it('the waiting screens live inside the transcript, so they can only ever cover the transcript', () => {
+    // They paint above the transcript's content, which is what a waiting screen is for. What bounds them is
+    // the nesting: as children of #conversation they cannot reach the chat tab bar or the composer, so a chat
+    // can be switched while another starts and the composer stays usable while the binary comes up.
     const conv = win.document.getElementById('conversation');
     expect(conv.contains(boot())).toBe(true);
     expect(conv.contains(win.document.getElementById('auth-card'))).toBe(true);
@@ -65,18 +64,26 @@ describe('boot screen', () => {
   });
 
   it('the sign-in screen replaces the spinner instead of being covered by it', () => {
-    // #boot is z-index 60 and the auth card 55, so "both up" means the user stares at a spinner while the
-    // card they need is underneath it. Exactly one screen at a time.
+    // Exactly one screen up at a time, decided here rather than by stacking: neither #boot nor #auth-card
+    // carries a z-index any more (they are rows of #conversation, not layers over it), so "both up" would put
+    // two screens in the flow with nothing to say which one the user is meant to answer. Needing to sign in
+    // means the spinner has nothing to wait for, so it is the spinner that goes.
     win.cc.state({ starting: false, running: false, needsLogin: true });
     expect(boot().hidden).toBe(true);
     expect(win.document.getElementById('auth-card').hidden).toBe(false);
   });
 
-  it('the sign-in card comes down once the session is running', () => {
-    win.cc.state({ starting: false, running: false, needsLogin: true });
-    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+  it('the sign-in card outranks a live session — the spinner is what startup suppresses', () => {
+    // The gate is `starting`, not `running`. A session with a live process whose credential expired needs the
+    // card more than anything else on screen: it is the only control that repairs it, and the chat behind it
+    // can no longer take a turn. What startup suppresses is the FLASH, so the spinner owns that window alone.
     win.cc.state({ starting: false, running: true, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+    expect(boot().hidden).toBe(true);
+
+    win.cc.state({ starting: true, running: false, needsLogin: true });
     expect(win.document.getElementById('auth-card').hidden).toBe(true);
+    expect(boot().hidden).toBe(false);
   });
 
   it('distinguishes resuming from a cold start', () => {
@@ -223,6 +230,19 @@ describe('missing-binary card', () => {
     expect(card().querySelectorAll('.boot-install').length).toBe(1);
   });
 
+  it('is honoured with a live process — the binary can vanish under a running session', () => {
+    // The host discovers a vanished binary while a session is up, pushes `binaryMissing` and stops that
+    // session as a separate hop, so the page really is sent both at once. Gating this card on `!running`
+    // suppressed the only control that repairs it for exactly as long as that window lasts.
+    win.cc.state({ starting: false, running: true, binaryMissing: true });
+    expect(win.document.getElementById('boot').hidden).toBe(false);
+    expect(card().hidden).toBe(false);
+    // And it outranks the sign-in card: signing in is meaningless without a binary.
+    win.cc.state({ starting: false, running: true, binaryMissing: true, needsLogin: true });
+    expect(card().hidden).toBe(false);
+    expect(win.document.getElementById('auth-card').hidden).toBe(true);
+  });
+
   it('the card comes down when the binary appears', () => {
     missing();
     win.cc.state({ starting: true, running: false, binaryMissing: false });
@@ -243,17 +263,17 @@ describe('sign-in card', () => {
   const card = () => win.document.getElementById('auth-card');
   const step = (name) => card().querySelector('.auth-step[data-step="' + name + '"]');
 
-  it('appears on needsLogin and on cc.showAuth, and the install card wins over it', () => {
+  it('is a function of the pushed state alone — needsLogin raises it, the install card wins over it', () => {
     expect(card().hidden).toBe(true);
     win.cc.state({ running: false, needsLogin: true });
     expect(card().hidden).toBe(false);
     win.cc.state({ running: false, needsLogin: true, binaryMissing: true });
     expect(card().hidden).toBe(true); // signing in is meaningless without a binary
-    // showAuth() is the post-install nudge, and it lands on a tab with no session yet — a running session
-    // means the sign-in it would ask for has already happened.
+    // No "raise it anyway" door: with the state saying we are signed in, the card stays down. The host's
+    // boot watcher re-derives needsLogin every few seconds, so a credential that disappears raises it there.
     win.cc.state({ running: false, needsLogin: false });
-    win.cc.showAuth();
-    expect(card().hidden).toBe(false);
+    expect(card().hidden).toBe(true);
+    expect(win.cc.showAuth).toBeUndefined();
   });
 
   it('subscription click moves to waiting and asks the host to start the flow', () => {
@@ -369,5 +389,104 @@ describe('sign-in card', () => {
     win.cc.state({ running: false, needsLogin: true });
     win.cc.state({ running: true, needsLogin: false });
     expect(card().hidden).toBe(true);
+  });
+});
+
+// How a waiting screen ARRIVES, and what reducing motion has to do to it.
+//
+// Both screens assemble row by row instead of the whole panel landing at once. That is a sequence, and a
+// sequence is the one shape a reduced-motion reset gets wrong when it only flattens durations: a delay is not
+// a duration, so the rows still take their turn — each one blank for its beat, then a snap.
+//
+// These read the stylesheet as text on purpose. jsdom applies no stylesheet, has no layout and no animation
+// clock, so an assertion that claimed to watch the entrance play would be watching nothing; the declarations
+// are what is real here. What jsdom CAN observe — the class the host toggles, and the absence of any inline
+// style scripting the entrance — is asserted against the live DOM.
+describe('waiting screens — the sequenced entrance', () => {
+  let win;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js'], { vendor: false });
+  });
+
+  const boot = () => win.document.getElementById('boot');
+  const authCard = () => win.document.getElementById('auth-card');
+  const sheet = () => readCss();
+
+  it('stages each row against the screen it belongs to, not against a fixed clock', () => {
+    // A row's delay is its screen's grace plus its place in the order, so ONE rule serves a screen that waits
+    // before it draws and one that does not. `animation-delay` is a longhand after the shorthand because the
+    // shorthand resets it; swapping the two lines silently drops every beat.
+    expect(sheet()).toMatch(/\.boot-inner > \*,\s*\.auth-inner > \*/);
+    expect(sheet()).toContain(
+      'animation-delay: calc(var(--wait-grace) + var(--wait-beat, 0) * var(--wait-step))'
+    );
+  });
+
+  it('the loading screen keeps its grace; the sign-in card has none', () => {
+    // A start that takes 100 ms still never paints a panel. The sign-in card is not a wait — it is the
+    // control that repairs the session, raised only once the host has decided it is needed, so it starts
+    // on its first frame.
+    expect(sheet()).toMatch(/#boot\s*\{[^}]*--wait-grace:\s*0\.35s/);
+    expect(sheet()).toMatch(/#auth-card\s*\{[^}]*--wait-grace:\s*0s/);
+  });
+
+  it('every sign-in step shares one beat, because position would lie about which one is showing', () => {
+    // All five `.auth-step` containers are in the markup at once and all but one carry `hidden`. Staggering
+    // by position would hand the error step five beats for being sixth in a list of which exactly one is
+    // ever displayed — so the beat is declared on the class, and nothing here counts children.
+    expect(sheet()).toMatch(/\.boot-sub,\s*\.auth-step\s*\{\s*--wait-beat:\s*2;/);
+    expect(sheet()).not.toMatch(/\.auth-step:nth-/);
+    expect(sheet()).not.toMatch(/\.(boot|auth)-inner > :nth-child/);
+  });
+
+  it('the mark keeps its entrance AND its breathing', () => {
+    // `animation` is a shorthand, so one rule owns both: naming only the breath drops the entrance every
+    // other row gets, and naming only the entrance leaves the screen still.
+    const from = sheet().indexOf('.boot-mark {');
+    const rule = sheet().slice(from, sheet().indexOf('}', from));
+    expect(rule).toContain('fade var(--wait-in) var(--ease) var(--wait-grace) both');
+    expect(rule).toContain('bootBreathe');
+  });
+
+  it('reducing motion zeroes the DELAY, not merely the duration', () => {
+    // The hole: a `both`-fill animation holds its element at the from-state for the whole of its delay.
+    // Flatten only the duration and the sequence survives — every row waits out its beat invisible, then
+    // appears instantly, and the loading screen sits blank through its grace first. Comments are stripped
+    // so this reads the rules rather than the prose that explains them.
+    const rules = sheet().replace(/\/\*[\s\S]*?\*\//g, '');
+    const from = rules.indexOf('body.reduced-motion *,');
+    const block = rules.slice(from, rules.indexOf('}', from));
+    expect(block).toContain('animation-delay: 0s !important');
+    expect(block).toContain('transition-delay: 0s !important');
+    expect(block).toContain('animation-duration: 0.001ms !important');
+  });
+
+  it('the entrance is declarative, so a screen that comes back replays it with no script', () => {
+    // The replay mechanism is the `hidden` attribute: `display: none !important` leaves the element with no
+    // box, and an element with no box has no running animations, so restoring it starts them fresh. Nothing
+    // may script that instead — an inline animation is invisible to the stylesheet, and therefore to the
+    // reduced-motion reset that is supposed to be able to flatten it.
+    expect(sheet()).toMatch(/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+
+    win.cc.state({ starting: false, running: true });
+    expect(boot().hidden).toBe(true);
+    win.cc.state({ starting: true, running: false });
+    expect(boot().hidden).toBe(false);
+
+    expect(boot().getAttribute('style')).toBeNull();
+    expect(win.document.querySelector('.boot-mark').getAttribute('style')).toBeNull();
+  });
+
+  it('the host decides, and the class it sets sits above both screens', () => {
+    // Reduced motion is never read from the browser here: JCEF renders off-screen and the media query answers
+    // for nobody. The host pushes it, and it lands on <body> — which has to be an ancestor of both waiting
+    // screens, or the reset that flattens their sequence never reaches them.
+    win.cc.theme({ reducedMotion: true });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(true);
+    expect(win.document.body.contains(boot())).toBe(true);
+    expect(win.document.body.contains(authCard())).toBe(true);
+
+    win.cc.theme({ reducedMotion: false });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(false);
   });
 });

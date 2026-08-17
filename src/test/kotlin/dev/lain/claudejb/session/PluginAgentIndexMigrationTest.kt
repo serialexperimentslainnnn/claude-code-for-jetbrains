@@ -54,9 +54,11 @@ class PluginAgentIndexMigrationTest {
         val index = PluginAgentIndex()
         assertEquals(listOf("a6798878f17f074e4"), index.admittedAgents("s1"))
         assertEquals(listOf("a6798878f17f074e4"), index.openAgents("s1"))
-        // Asked in either shape, the answer is the same — nothing downstream has to know two spellings.
-        assertTrue(index.isAdmitted("s1", "a6798878f17f074e4"))
-        assertTrue(index.isAdmitted("s1", "agent-a6798878f17f074e4"))
+        // Stored bare, whichever spelling went in: the admission gate compares against this list after
+        // normalising with AgentMeta.bareAgentId, so nothing downstream has to know two spellings.
+        val admitted = index.admittedAgents("s1")
+        assertTrue(AgentMeta.bareAgentId("a6798878f17f074e4") in admitted)
+        assertTrue(AgentMeta.bareAgentId("agent-a6798878f17f074e4") in admitted)
     }
 
     @Test

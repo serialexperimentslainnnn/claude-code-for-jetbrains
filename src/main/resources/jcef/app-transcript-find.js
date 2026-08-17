@@ -241,7 +241,15 @@
       }
     });
 
-    var host = document.body || conversationEl() || document.documentElement;
+    // The WORK AREA, not the body. Mounted on the body the bar is positioned against the viewport, and in a
+    // narrow tool window a bar that spans it covers the tab row outright — so tabbing to a chat focused
+    // something nobody could see (WCAG 2.2 SC 2.4.11, Focus Not Obscured). Inside `#work` it cannot reach the
+    // tabs at all, because `#work` does not contain them; that is a guarantee of the structure rather than a
+    // z-index kept out of their way by hand. It is also what its `top` is now measured from — the rule lives
+    // in `css/dashboard.css` (`.find-bar`), and inside `#work` that offset starts below the tab row instead of
+    // at the edge of the window. The body stays as the way out if the work area is ever absent — a find bar
+    // somewhere is better than none.
+    var host = document.getElementById('work') || document.body || conversationEl();
     if (host) {
       host.appendChild(findBar);
     }

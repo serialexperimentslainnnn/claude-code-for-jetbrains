@@ -164,9 +164,16 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         if (session.rateLimits.isNotEmpty()) feed.requestUsage()
         // A plan is written BY a turn, so a turn ending is the only moment one can have appeared or changed.
         // Read-only on the binary's side, and the feed redraws only when the answer actually differs.
-        if (!session.turnActive && running) feed.requestPlan()
-        // The not-found card is up → the onboarding watcher looks for the binary appearing (an install
-        // finishing) and starts the session without further clicks.
+        // …and the Git view is read back on the same edge, for the same reason: a turn is when the working
+        // tree moves, so the branch, the change list and the log can only have changed here. Overlapping
+        // requests collapse inside [GitIntegration], so this costs one `git log` per turn edge.
+        if (!session.turnActive && running) {
+            feed.requestPlan()
+            pushGit()
+        }
+        // Which screen the tab owes the user is decided by the state this method just pushed (`binaryMissing`,
+        // `needsLogin`), and the onboarding watcher re-derives that state on its own clock. All this edge is
+        // for is announcing an install WE launched, once the binary turns up.
         onboarding.onStateChanged()
     }
 
@@ -228,11 +235,34 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         )
     }
 
-    /** Push the session-dashboard data (context categories, cost, account, subagents) to the web view. */
+    /**
+     * Re-reads the repository and re-pushes the dashboard once the answer is in.
+     *
+     * The collection is what forces the two steps: `GitHistoryService.recentCommits` spawns `git log` and
+     * REFUSES to run on the EDT — it logs and hands back an empty list rather than freezing the IDE — so the
+     * read happens on a pooled thread and [pushSession] runs back on the EDT with the result.
+     * [GitIntegration.refresh] owns both hops and collapses overlapping requests, which is what makes it safe
+     * to call this on every turn edge.
+     */
+    internal fun pushGit() = GitIntegration.getInstance(project).refresh(::pushSession)
+
+    /** Push the session-dashboard data (context categories, cost, account, Git, subagents) to the web view. */
     internal fun pushSession() {
         // Every open chat's tree, asked of the strip that owns them — Workloads is about what is running,
         // and that spans the tabs. Null strip (a panel outside one) degrades to this session alone.
-        val json = JcefSessionData.sessionJson(session, feed.usage, chatStrip()?.workloads().orEmpty(), feed.plan)
+        val json = JcefSessionData.sessionJson(
+            session,
+            // The retention window and the instant to measure it from, read ONCE for the whole push: every
+            // chat the diagram draws is then aged by the same instant rather than by its own.
+            windowMinutes = ClaudeSettings.getInstance(project).workloadWindowMinutes,
+            nowMillis = System.currentTimeMillis(),
+            usage = feed.usage,
+            workloads = chatStrip()?.workloads().orEmpty(),
+            plan = feed.plan,
+            // Whatever was last collected — null until the first [pushGit], which omits the view rather than
+            // drawing an empty repository over one that simply has not been read yet.
+            git = GitIntegration.getInstance(project).snapshot(),
+        )
         // The host→web half of the data-flow trace: this is EXACTLY what the dashboard receives. An empty
         // panel with a full CC-TRACE control reply means the loss is between the session cache and here.
         LOG.debug("CC-TRACE pushSession ${json.take(TRACE_MAX)}")

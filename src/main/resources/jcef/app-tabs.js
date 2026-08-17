@@ -103,6 +103,17 @@
     });
   }
 
+  /** Which chat is on screen — the one the row centres on, and only when it CHANGES (see `render`). */
+  function selectedChatId() {
+    for (var i = 0; i < T.state.chats.length; i++) {
+      if (T.state.chats[i] && T.state.chats[i].selected) return T.state.chats[i].id;
+    }
+    return null;
+  }
+
+  /** The chat the row was last aimed at. Null until the first draw, which is why the first draw centres. */
+  var centredOn = null;
+
   function render() {
     var host = T.bar();
     if (!host) return;
@@ -129,6 +140,12 @@
       rows = h('div', { class: 'tab-rows' });
       host.insertBefore(rows, host.firstChild);
     }
+    // Where the reader had the row, read BEFORE it is thrown away. The capsule is rebuilt from nothing on
+    // every repaint — several times a turn — and a new element starts at offset zero, so a row dragged or
+    // wheeled to its far end snapped back to the left while an agent event landed. There is no scrollbar to
+    // aim at, so the offset is the only record of where the reader was.
+    var priorCapsule = rows.querySelector('.tab-capsule');
+    var priorScroll = priorCapsule ? priorCapsule.scrollLeft : 0;
     while (rows.firstChild) rows.removeChild(rows.firstChild);
     host = rows;
 
@@ -164,14 +181,27 @@
       T.dragToScroll(capsule);
       T.keepFocusVisible(capsule);
       host.appendChild(h('div', { class: 'tab-row' }, capsule));
+      // Put it back before the frame is painted, and INSTANTLY: `.tab-capsule` declares
+      // `scroll-behavior: smooth`, so a bare assignment would glide the row from zero to here on every
+      // repaint — the snap replaced by a slide is not the fix.
+      if (priorScroll) T.scrollLeftTo(capsule, priorScroll);
       // The selected tab is CENTRED, after the row is in the document (it has no width before that).
       // Centring rather than "bring it barely into view" is what makes a long row usable without a
       // scrollbar: whichever chat you pick lands in the middle, so its neighbours on both sides are one
       // click away and the row moves under you as you work. Dragging covers the rest.
-      requestAnimationFrame(function () {
-        var open = capsule.querySelector('.pill.selected');
-        if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'center' });
-      });
+      //
+      // On a CHANGE of selection, and on the first draw — never on every repaint. Centring the selected tab
+      // again on a push that merely renamed a chat or moved an agent's status undid the drag that had just
+      // been restored above, which is the same yank by another route: the row cannot be read while a turn is
+      // running if every event re-aims it at the tab you are not looking at.
+      var openChat = selectedChatId();
+      if (openChat !== centredOn) {
+        centredOn = openChat;
+        requestAnimationFrame(function () {
+          var open = capsule.querySelector('.pill.selected');
+          if (open && open.scrollIntoView) open.scrollIntoView({ block: 'nearest', inline: 'center' });
+        });
+      }
     }
 
     // 2. The open subtab — ONE row, and only while something other than the chat is on screen. At rest the
@@ -226,6 +256,19 @@
   c.revealAgentTab = function (agentId) {
     if (!agentId) return;
     T.selected = { kind: 'agent', id: agentId };
+    render();
+  };
+
+  /**
+   * The host revealed a background TASK. Its own hook, because a task is not an agent: it has no transcript
+   * and no node in the tree, so `revealAgentTab` cannot stand in for it.
+   *
+   * Without this the task's view was painted and the bar was never told, so no pill appeared for it — the
+   * click looked like it had done nothing, and there was no pill to click to get back out again.
+   */
+  c.revealTaskTab = function (taskId) {
+    if (!taskId) return;
+    T.selected = { kind: 'task', id: taskId };
     render();
   };
 

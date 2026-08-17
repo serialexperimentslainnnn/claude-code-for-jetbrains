@@ -1,5 +1,6 @@
 package dev.lain.claudejb.session
 
+import org.jetbrains.annotations.TestOnly
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Who produced a transcript entry; drives styling in the chat panel. */
@@ -63,18 +64,50 @@ class TranscriptEntry(
      */
     var toolTitle: String? = null
         internal set
+
+    /**
+     * True once this entry has been dropped by [TranscriptModel]'s memory cap. Read by
+     * [TranscriptReconciler], which holds pointers to the entry deltas are still growing: appending to an
+     * entry that is no longer in the model would silently lose the text.
+     */
+    var trimmed: Boolean = false
+        internal set
 }
 
 /**
  * Observable list of [TranscriptEntry]. All mutation and notification happens on the EDT (the session
  * marshals events there), so listeners — the Swing chat panel — can update components directly.
+ *
+ * The list is bounded: past [MAX_ENTRIES] the OLDEST rows are dropped and listeners are told how many went,
+ * so the UI can say so. Only the head is ever dropped — the tail carries the live streaming block and is
+ * where the user is looking.
  */
 class TranscriptModel {
+
+    companion object {
+        /**
+         * Most rows kept in memory. Derived from measurement, not taste: the longest real session recorded on
+         * this machine reached ~5 000 rows and 4.4 MB of transcript text, at a mean of ~870 chars per row. 2 000
+         * rows is ~1.7 MB of text here and roughly three times that in the web view, which holds the same text as
+         * DOM, as raw-text cache and as row record — so this is the point where the page stops being the dominant
+         * cost while still keeping far more scrollback than a session's recent work needs.
+         *
+         * Trimming is a MEMORY bound, never data loss: the binary's own session file on disk keeps the whole
+         * conversation, and "Open Previous Session…" reads it back in full.
+         */
+        const val MAX_ENTRIES = 2000
+    }
 
     interface Listener {
         fun onAdded(entry: TranscriptEntry, index: Int) {}
         fun onUpdated(entry: TranscriptEntry) {}
         fun onCleared() {}
+
+        /**
+         * The oldest rows were dropped to stay under [MAX_ENTRIES]. [removedIds] are the entry ids that just
+         * went; [totalTrimmed] is the cumulative count since this model was created or last cleared.
+         */
+        fun onTrimmed(removedIds: List<Long>, totalTrimmed: Int) {}
     }
 
     private val backing = ArrayList<TranscriptEntry>()
@@ -87,10 +120,20 @@ class TranscriptModel {
 
     val entries: List<TranscriptEntry> get() = backing
 
+    /** How many rows the memory cap has dropped since this model was created or last [clear]ed. */
+    var trimmedCount: Int = 0
+        private set
+
     fun addListener(listener: Listener) = listeners.add(listener)
     fun removeListener(listener: Listener) = listeners.remove(listener)
 
-    /** The Agent tool_use id that [toolUseId] nests under, or null if it is top-level. */
+    /**
+     * The Agent tool_use id that [toolUseId] nests under, or null if it is top-level.
+     *
+     * The observation seam for [parentOf], which is production state — the nesting itself is used internally
+     * ([isDescendantOf]) and the map is pruned at the cap. Nothing renders from this.
+     */
+    @TestOnly
     fun parentToolOf(toolUseId: String): String? = parentOf[toolUseId]
 
     fun add(
@@ -108,12 +151,43 @@ class TranscriptModel {
         )
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry
-            if (parentToolUseId != null) parentOf[toolUseId] = parentToolUseId
+            // Both maps describe the SAME row, so both are rewritten together. A replayed call can come back
+            // with a different shape — nested under an Agent the first time, top-level the second — and a
+            // parent left over from the previous row would keep nesting the id: parentToolOf would name an
+            // Agent this row does not belong to, and insertionIndexFor would place later rows inside it.
+            if (parentToolUseId != null) parentOf[toolUseId] = parentToolUseId else parentOf.remove(toolUseId)
         }
         val index = insertionIndexFor(parentToolUseId)
         backing.add(index, entry)
         listeners.forEach { it.onAdded(entry, index) }
+        trimToCap()
         return entry
+    }
+
+    /**
+     * Drops rows from the head until the list is within [MAX_ENTRIES], marks each dropped entry
+     * [TranscriptEntry.trimmed] and notifies once for the whole pass. Nothing is fired when nothing was dropped.
+     *
+     * Also prunes [byToolUseId] and [parentOf] of the dropped calls — those maps live as long as the session, so
+     * leaving them to grow would move the leak rather than close it. A mapping is only removed when it still
+     * points at the entry being dropped: a resume/fork replay can re-emit a `tool_use_id`, and the map then holds
+     * a NEWER live row that must keep resolving.
+     */
+    private fun trimToCap() {
+        if (backing.size <= MAX_ENTRIES) return
+        val removedIds = ArrayList<Long>(backing.size - MAX_ENTRIES)
+        while (backing.size > MAX_ENTRIES) {
+            val removed = backing.removeAt(0)
+            removed.trimmed = true
+            removedIds += removed.id
+            val toolUseId = removed.toolUseId
+            if (toolUseId != null && byToolUseId[toolUseId] === removed) {
+                byToolUseId.remove(toolUseId)
+                parentOf.remove(toolUseId)
+            }
+        }
+        trimmedCount += removedIds.size
+        listeners.forEach { it.onTrimmed(removedIds, trimmedCount) }
     }
 
     /**
@@ -142,6 +216,7 @@ class TranscriptModel {
         val entry = TranscriptEntry(nextId++, Speaker.TOOL_OUTPUT, text, meta, toolUseId, parent)
         backing.add(insertAt, entry)
         listeners.forEach { it.onAdded(entry, insertAt) }
+        trimToCap()
         return entry
     }
 
@@ -218,6 +293,7 @@ class TranscriptModel {
         backing.clear()
         byToolUseId.clear()
         parentOf.clear()
+        trimmedCount = 0
         listeners.forEach { it.onCleared() }
     }
 }

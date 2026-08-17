@@ -1,7 +1,7 @@
 # Branching & release model
 
-This repo follows a lightweight **GitFlow**. Two long-lived branches, short-lived topic branches, and tags
-drive releases.
+This repo follows a lightweight **GitFlow**. Two long-lived branches and short-lived topic branches; the
+merge into `main` is what releases, and the tag is cut by the workflow rather than by a person.
 
 ## Long-lived branches
 
@@ -10,8 +10,9 @@ drive releases.
 | `main`     | **Release branch.** Only ever holds released, tagged commits. Every commit is a release. |
 | `develop`  | **Integration branch.** Default target for PRs; the next release accumulates here.        |
 
-`main` is updated by merging `develop` (or a `release/*`/`hotfix/*` branch) when cutting a release, then
-tagging. Day-to-day work never targets `main` directly.
+`main` is updated by merging `develop` (or a `release/*`/`hotfix/*` branch) when cutting a release; the push
+that merge creates is what triggers the release workflow, which tags it. Day-to-day work never targets `main`
+directly, and nobody tags by hand.
 
 ## Short-lived branches
 
@@ -64,22 +65,19 @@ The cost is stated rather than glossed: **no signature on a release asserts that
 Anyone verifying a release should read `git verify-tag` as *"this workflow cut this from main"*, not as
 *"a human signed off"*.
 
-> **What that claim rests on, checked rather than assumed (2026-08-11).** It was written as two gates: the
-> reviewed pull request into `main`, and a required reviewer on the `marketplace` environment. **There is one
-> gate.** The environment's only protection rule is its deployment-branch policy (`main` and `v*.*.*`);
-> `gh api repos/…/environments/marketplace` lists no `required_reviewers`, and `scripts/bootstrap-ci.sh` sets
-> `reviewers: []` on purpose. Publication is therefore **unattended** — the merge is the last human act.
-> That is defensible on a single-maintainer repository, where an approval is the same person clicking twice;
-> what is not defensible is leaving a gate everyone believes exists. Adding one back is
-> [`CI_SETUP.md`](CI_SETUP.md) §1, and belongs with a second maintainer.
+> **There is exactly one gate, and it is the pull request into `main`.** The `marketplace` environment's
+> only protection rule is its deployment-branch policy (`main` and `v*.*.*`): it lists no
+> `required_reviewers`, and `scripts/bootstrap-ci.sh` sets `reviewers: []` on purpose, so **publication is
+> unattended** and the merge is the last human act. Check it rather than take it on trust —
+> `gh api repos/OWNER/REPO/environments/marketplace`. That is defensible on a single-maintainer repository,
+> where an approval is the same person clicking twice; what would not be defensible is a gate everyone
+> believes exists. Adding one is [`CI_SETUP.md`](CI_SETUP.md) §1, and belongs with a second maintainer.
 
 ## Cleaning up obsolete branches
 
-The four stale branches this section used to list (`feature/compatibility`, `feature/use-recognized-libraries`,
-`fix/security-issues`, `test/MCPSkills`) are **gone from `origin`** — checked, not assumed. Nothing is pending.
-
-The standing rule is the general one: a topic branch is deleted when its PR merges, and the check is one
-command.
+A topic branch is deleted when its pull request merges. Listing branches here would go stale the week after
+it was written, so the standing rule is the command instead — anything it prints has already been integrated
+and can go.
 
 ```sh
 git fetch --prune
@@ -106,7 +104,7 @@ admin. What they enforce:
 | Status checks | JVM tests, Static analysis, Frontend tests, Dependency audit, Plugin verifier, Build plugin, both CodeQL analyses, **No bot PRs pending on develop** | JVM tests, Frontend tests, both CodeQL analyses |
 | Branch must be up to date | **yes** (strict) | no |
 | Signed commits | required | required |
-| Merge method | **merge commit — the only one enabled** | **merge commit — the only one enabled** |
+| Merge method | **merge commit, and nothing else** | merge commit or squash |
 | Force push / deletion | blocked | blocked |
 | Admin bypass | **none** | **none** |
 
@@ -117,14 +115,14 @@ failure can land *on* `develop` and is fixed by a follow-up commit rather than b
 
 Four deliberate choices worth stating:
 
-- **Merge commit is the ONLY method enabled on this repository**, and squash and rebase are switched off at
-  the repository level rather than merely discouraged here. This is a *signing* decision, not a taste in
-  history shape. Every commit in this project is signed by a hardware-backed key, and both of the other
-  methods **rewrite commits**: GitHub creates new SHAs and new committer information, which invalidates those
-  signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits required" would
-  still pass — the commits are signed, just no longer *by the author*, which is the entire property the rule
-  exists to give. Leaving the buttons enabled meant one wrong click could quietly destroy that provenance, so
-  the buttons are gone.
+- **On `main`, the merge commit is the only method the ruleset allows**, and this is a *signing* decision
+  rather than a taste in history shape. Every commit in this project is signed by a hardware-backed key, and
+  both of the other methods **rewrite commits**: GitHub creates new SHAs and new committer information, which
+  invalidates those signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits
+  required" would still pass — the commits are signed, just no longer *by the author*, which is the entire
+  property the rule exists to give. `main` is the branch that publishes, so it is the branch where one wrong
+  button could destroy that provenance on the way out; `develop` also allows squash, where a topic branch's
+  scratch commits are worth collapsing and nothing is being released. Rebase is allowed on neither.
 
   The cost, stated plainly: the merge node itself is created and signed by GitHub, because the alternative is
   merging locally and pushing, which the pull-request requirement blocks — and relaxing *that* to save one
@@ -141,11 +139,10 @@ Four deliberate choices worth stating:
   status check green. A human approval is a real control when a second human exists; requiring one that
   cannot exist is theatre that bolts the door from the inside. **Raise it to 1 — and re-enable
   `require_code_owner_review` and `require_last_push_approval` — the day someone else has write access.**
-- **No bypass actors, including admins.** The previous version of this document kept an admin bypass "so a
-  maintainer can land an urgent hotfix when a structural check would otherwise block the merge". The
-  structural check it referred to — capped GitHub Actions — never existed. A bypass exists to be used at the
-  worst possible moment, under time pressure, on the change least likely to have been reviewed. The hotfix
-  path goes through `main` like everything else.
+- **No bypass actors, including admins** — `bypass_actors` is empty in both rulesets and stays empty. A
+  bypass is only ever reached for at the worst possible moment: under time pressure, on the change least
+  likely to have been reviewed. The hotfix path goes through a pull request into `main` like everything
+  else.
 - **The UI test suite (`uiTest`) is advisory and must NOT become a required check.** It needs a display, it
   is slower, and a flaky required check teaches people to re-run until green.
 

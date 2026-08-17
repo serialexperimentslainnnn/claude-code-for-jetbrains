@@ -1,18 +1,30 @@
 /* ════════════════════════════════════════════════════════════════════════════
-   FIND BAR — fixed, top-centre search overlay  (Sprint 2)
-   ════════════════════════════════════════════════════════════════════════════ */
+   FIND BAR — a layer of the work area, hanging under the tab bar
+   ════════════════════════════════════════════════════════════════════════════
+   `absolute`, not `fixed`, and that is the whole change: the bar is mounted inside #work
+   (app-transcript-find.js), so `top: 12px` means 12px below the TAB BAR instead of 12px below the top of the
+   window — which is where the tabs are. In a narrow tool window the bar is nearly as wide as the row, so a
+   chat tab focused while the search was open could be hidden completely: WCAG 2.2 SC 2.4.11 (Focus Not
+   Obscured), which is not satisfied by "at this width they happen not to overlap". Contained in the stacking
+   context #work opens (base.css) there is no longer a number to keep in step with anything — the bar CANNOT
+   reach the tabs, at any width.
+
+   4 is the top of that context — above the transcript, above a panel over it, above the dock and above the
+   palette, because the search has to stay readable over whichever of them is up. Below the popups mounted on
+   `document.body`, which are always the newer thing on screen. */
 .find-bar {
-  position: fixed;
+  position: absolute;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 120;
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 8px 6px 12px;
-  /* Stay within a narrow tool window instead of spilling off-screen. */
-  max-width: calc(100vw - 24px);
+  /* Bounded by the work area rather than by the viewport — same intent as the old `100vw`, measured against
+     the box it is now inside, so it cannot spill out of a narrow tool window. */
+  max-width: calc(100% - 24px);
   box-sizing: border-box;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -159,17 +171,28 @@
   fill: currentColor;
 }
 
-/* the panel overlays the conversation; the dock (composer) stays visible below */
-/* The dashboard is a flex item that fills the conversation area (which is hidden while it's open) — NOT an
-   absolute overlay. The old `position: absolute; inset: 0` had no positioned ancestor, so it resolved against the
-   viewport and covered the composer/dock too. As a flex sibling between #conversation and #dock it naturally
-   stops at the dock. */
+/* A CONTAINED LAYER over the conversation area, never a full-window overlay and never a replacement for the
+   transcript. It shares the first cell of #work's grid with #conversation (base.css) and is stacked on top of
+   it, so the transcript stays laid out underneath and keeps its scroll position — a scroll container that
+   stops being displayed loses its scrollTop, and coming back from the dashboard then lands at the top of a
+   long conversation. What the cell does NOT contain is what makes the rest safe: the dock is the row below,
+   so the composer can never be covered, and the tab bar is not inside #work at all.
+
+   Opaque, because what is underneath is still painted: a translucent panel would show the transcript through
+   its own text. And the transcript underneath is `inert` while this is up (app-session.js): painted, so it
+   keeps its offset, but out of reach of the pointer, of Tab and of a screen reader — a focusable link under
+   an opaque panel is WCAG 2.2 SC 2.4.11.
+
+   `1` is one step over the transcript and no more, inside the stacking context #work opens (base.css). A
+   second layer over the transcript should REUSE it rather than climb past it: the next step up is the
+   dock's, and a panel that outranks the composer is the bug this whole arrangement exists to prevent. */
 .dashboard {
-  flex: 1 1 auto;
+  grid-area: 1 / 1;
+  z-index: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  background: var(--bg);
   padding: 22px clamp(16px, 5vw, 40px) 30px;
   animation: fade 0.2s var(--ease);
 }

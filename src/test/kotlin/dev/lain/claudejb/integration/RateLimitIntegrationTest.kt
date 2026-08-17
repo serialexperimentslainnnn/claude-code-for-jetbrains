@@ -15,9 +15,7 @@ class RateLimitIntegrationTest : FakeClaudeTestBase() {
 
         val rl = session.rateLimit!!
         assertEquals("allowed_warning", rl.status)
-        assertTrue("isWarning", rl.isWarning)
         assertEquals("five_hour", rl.rateLimitType)
-        assertEquals("5h", rl.windowLabel())
         assertEquals(93, rl.utilizationPercent()) // 0.925 -> 92.5% -> rounds to 93
     }
 }

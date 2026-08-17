@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui
 
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -61,20 +62,50 @@ class JcefDependencyContractTest {
     }
 
     /**
-     * The floor moves with it. `com.intellij.modules.jcef` does not exist before 253 — verified in the IDE
-     * distributions: on 251/252 `JBCefApp` ships inside `lib/app-client.jar` and nothing declares the module,
-     * while 253 and 261 declare `<module value="com.intellij.modules.jcef"/>` in `product-backend.jar`. A
-     * `sinceBuild` below 253 with this dependency declared is a plugin that refuses to load at all.
+     * The floor moves with it — **and a branch number is not a floor.**
+     *
+     * This assertion used to read `sinceBuild >= 253`, on the belief that the whole 253 branch declares the
+     * module. It does not, and the ten days in between are the entire bug: `com.intellij.modules.jcef` is
+     * absent from **2025.3 (253.28294.334)** — its `product-backend.jar` carries 38 `com.intellij.modules.*`
+     * aliases and none is that one — and present in **2025.3.1 (253.29346.138)**, which carries 39, the extra
+     * one being exactly `jcef`. With the dependency declared mandatory, a plugin offered to 253.28294.334 is
+     * one the IDE refuses to load: same failure as 5.1.1 on 2026.2, at the other end of the range.
+     *
+     * So the check is on the FULL build number, and a bare `"253"` now fails on purpose: it is precisely the
+     * value that promises the build this does not work on.
      */
     @Test
     fun `sinceBuild is not lower than the first build that has the JCEF module`() {
         val build = File("build.gradle.kts").readText()
-        val since = Regex("""sinceBuild\s*=\s*"(\d+)"""").find(build)?.groupValues?.get(1)?.toInt()
-        assertTrue(since != null && since >= FIRST_BUILD_WITH_JCEF_MODULE, "sinceBuild=$since is below 253")
+        // The first `sinceBuild` in the file is the DECLARED one (inside `ideaVersion`); the later one belongs
+        // to the verifier's IDE `select`, which is a different claim — which EAP/RC builds to download.
+        val since = Regex("""sinceBuild\s*=\s*"([^"]+)"""").find(build)?.groupValues?.get(1)
+        assertNotNull(since, "No sinceBuild found in build.gradle.kts")
+        assertTrue(
+            since!!.count { it == '.' } >= 2,
+            "sinceBuild=\"$since\" is a branch, not a build. `253` includes 253.28294.334, where " +
+                "com.intellij.modules.jcef does not exist and the plugin cannot load. Pin the full number.",
+        )
+        assertTrue(
+            atLeast(since, FIRST_BUILD_WITH_JCEF_MODULE),
+            "sinceBuild=\"$since\" is below $FIRST_BUILD_WITH_JCEF_MODULE, the first build that ships " +
+                "com.intellij.modules.jcef. Below it the IDE refuses to load this plugin outright.",
+        )
+    }
+
+    /** True when build number [actual] is greater than or equal to [floor], compared component by component. */
+    private fun atLeast(actual: String, floor: String): Boolean {
+        val a = actual.split('.').mapNotNull { it.toIntOrNull() }
+        val f = floor.split('.').mapNotNull { it.toIntOrNull() }
+        for (i in f.indices) {
+            val left = a.getOrNull(i) ?: return false
+            if (left != f[i]) return left > f[i]
+        }
+        return true
     }
 
     private companion object {
-        /** 2025.3 — the first branch whose platform declares the `com.intellij.modules.jcef` module. */
-        const val FIRST_BUILD_WITH_JCEF_MODULE = 253
+        /** IntelliJ IDEA **2025.3.1** — the first build whose platform declares `com.intellij.modules.jcef`. */
+        const val FIRST_BUILD_WITH_JCEF_MODULE = "253.29346.138"
     }
 }

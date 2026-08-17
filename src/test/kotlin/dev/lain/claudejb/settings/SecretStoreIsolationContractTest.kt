@@ -35,7 +35,7 @@ import java.io.File
 class SecretStoreIsolationContractTest {
 
     /** Anything that reaches the credential store, directly or through the settings document behind it. */
-    private val touchesTheStore = listOf("SecretStore.", "SettingsStoreTestAccess.", "setProviderApiKey(")
+    private val touchesTheStore = listOf("SecretStore.", "SettingsStore.", "setProviderApiKey(")
 
     private val installsAStore = Regex("""SecretStore\.storeOverride\s*=\s*mutableMapOf""")
     private val releasesTheStore = Regex("""SecretStore\.storeOverride\s*=\s*null""")

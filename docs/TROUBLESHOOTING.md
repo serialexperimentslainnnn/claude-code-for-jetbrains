@@ -152,14 +152,15 @@ window's title bar, or the standard close shortcut on each one.
 The whole chat UI is the IDE's embedded browser (JCEF), so without it there is nothing to
 show.
 
-- **On 2025.1 or 2025.2**: this plugin no longer runs there at all. From build 262 the
-  platform ships JCEF as a separate bundled plugin (`com.intellij.modules.jcef`), and a
-  plugin that does not declare a dependency on it gets no browser classes; that module id
-  does not exist before 2025.3, so declaring it raised the minimum IDE. **Stay on 5.1.1** on
-  those versions.
-- **On 2025.3 or newer**: check that the IDE's embedded browser is available — Help ▸ Find
-  Action ▸ *Registry*, key `ide.browser.jcef.enabled`. Some stripped or remote-development
-  setups ship without it.
+- **Below build `253.29346.138` (IDEA 2025.3.1)**: this plugin does not run there at all, and
+  that includes the first 2025.3 (`253.28294.334`) as well as 2025.1 and 2025.2. The platform
+  serves the browser classes through a module id (`com.intellij.modules.jcef`) that a plugin
+  must declare a dependency on, and that id does not exist in any of those builds — so the
+  dependency is mandatory where it can be satisfied and unsatisfiable before it. Update the
+  IDE, or **stay on 5.1.1** on those versions. Your build number is in Help ▸ About.
+- **On `253.29346.138` or newer**: check that the IDE's embedded browser is available — Help ▸
+  Find Action ▸ *Registry*, key `ide.browser.jcef.enabled`. Some stripped or
+  remote-development setups ship without it.
 - The stack trace names `JcefHost.<init>`; anything else with the same symptom belongs in an
   issue, with the log.
 

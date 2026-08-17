@@ -556,12 +556,17 @@
 /* ════════════════════════════════════════════════════════════════════════════
    SLASH PALETTE
    ════════════════════════════════════════════════════════════════════════════ */
+/* A layer of the WORK AREA, not of the page: #palette is a child of #work, which is a stacking context
+   (base.css), so this number is read against its siblings there and nowhere else — 3, i.e. above the dock
+   it floats over, and no longer the 100 it carried when every layer in the page competed in one flat root.
+   Above the dock because it hangs over the composer; below the body-mounted menus, which is right — a menu
+   opened after it is the newer thing. */
 #palette {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 100;
+  z-index: 3;
   display: flex;
   justify-content: center;
   padding: 0 clamp(16px, 5vw, 40px) 72px;
@@ -583,25 +588,10 @@
   overflow-y: auto;
   animation: pop 0.16s var(--ease);
 }
-.palette-input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--border);
-  outline: none;
-  background: var(--surface2);
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 13px;
-  padding: 8px 11px;
-  border-radius: var(--radius-sm);
-  margin-bottom: 6px;
-}
-.attach-search:focus,
-.palette-input:focus {
+/* No search field here, deliberately: the composer's own textarea is the palette's text box, so the query
+   stays where it was typed and where it will be sent from. The list below is the whole overlay. */
+.attach-search:focus {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-.palette-input::placeholder {
-  color: var(--dim);
 }
 .palette-empty {
   color: var(--dim);

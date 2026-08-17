@@ -33,8 +33,21 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Threading: written from the EDT, read from the UI and from the pooled scan; concurrent for the same reason
  * [TaskTracker]'s map is.
+ *
+ * Time is a parameter ([now]) and this is the only clock in the file: the completion instant is sealed here,
+ * at the moment a task stops running, so that whoever reads it later — a view, a retention window — reads what
+ * was observed rather than when it happened to be asked.
+ *
+ * @param now the wall clock, in epoch milliseconds, that stamps [Task.completedAtMillis].
+ * @param runStartedAtMillis the instant this run of the plugin began ([WorkloadWindow.RUN_STARTED_AT]) — the
+ *   stamp a task rebuilt from a previous run's transcript gets, since nobody here watched it end. ONE value
+ *   for the whole run: a reading per task would make tasks that came back together expire at different
+ *   moments, for no reason a user could name.
  */
-class BackgroundTaskRegistry {
+class BackgroundTaskRegistry(
+    private val now: () -> Long = System::currentTimeMillis,
+    private val runStartedAtMillis: Long = WorkloadWindow.RUN_STARTED_AT,
+) {
 
     /** One background task. [running] comes from the level signal: present means live, absent means done. */
     data class Task(
@@ -57,6 +70,16 @@ class BackgroundTaskRegistry {
          * is exactly what the user sees as "finished" on something plainly still running.
          */
         val seenLive: Boolean = false,
+        /**
+         * The instant [running] went false, in epoch milliseconds; `null` while the task is still live.
+         *
+         * Every finished task carries one. When the ending was observed here it is the instant it was
+         * observed; when the task is rebuilt from a previous run's transcript it is
+         * [WorkloadWindow.RUN_STARTED_AT], the instant this run first saw it. That is what keeps one
+         * retention rule over every task: what came back from disk is shown on reopening and ages out like
+         * everything else, instead of forming a second class the window can never reach.
+         */
+        val completedAtMillis: Long? = null,
     ) {
         fun label(): String =
             description.ifBlank { command?.lineSequence()?.firstOrNull().orEmpty() }
@@ -96,6 +119,10 @@ class BackgroundTaskRegistry {
                 // backgrounded commands the launching result's prose is the only output there is.
                 output = r.output.ifBlank { r.notes }.takeLast(MAX_OUTPUT),
                 command = r.command,
+                // Rebuilt from a previous run's transcript: it ended before this process existed, so the
+                // honest stamp is the moment this run picked it up, and from there it ages out like any
+                // other finished task.
+                completedAtMillis = runStartedAtMillis,
             )
             changed = true
         }
@@ -117,6 +144,9 @@ class BackgroundTaskRegistry {
                 taskType = info.taskType.ifBlank { previous.taskType },
                 running = true,
                 seenLive = true,
+                // Live work has not completed. A task listed again after being settled drops its instant so
+                // that the ending which eventually comes seals a true one instead of an old one.
+                completedAtMillis = null,
             )
             if (next != previous) {
                 tasks[id] = next
@@ -129,7 +159,7 @@ class BackgroundTaskRegistry {
             // next level signal — which may only ever carry agents — turned it green while it was still
             // writing output. What ends such a task is its own `task_notification` ([settle]).
             if (task.running && task.seenLive && id !in liveIds) {
-                tasks[id] = task.copy(running = false)
+                tasks[id] = task.copy(running = false, completedAtMillis = task.completedAtMillis ?: now())
                 changed = true
             }
         }
@@ -141,12 +171,15 @@ class BackgroundTaskRegistry {
      *
      * The authoritative ending for a task the level signal never listed — see [observeLevel]. An unknown or
      * non-terminal status leaves it alone: only an ending ends it, the same rule the agent tabs follow.
+     *
+     * The instant is sealed here and only if the task has none, so a repeated notification cannot rejuvenate
+     * a task that stopped minutes ago.
      */
     fun settle(taskId: String, status: String?): Boolean {
         if (status !in TERMINAL_STATUSES) return false
         val previous = tasks[taskId] ?: return false
         if (!previous.running) return false
-        tasks[taskId] = previous.copy(running = false)
+        tasks[taskId] = previous.copy(running = false, completedAtMillis = previous.completedAtMillis ?: now())
         return true
     }
 
