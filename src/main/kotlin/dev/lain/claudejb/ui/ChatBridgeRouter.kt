@@ -4,14 +4,17 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.options.ShowSettingsUtil
 import dev.lain.claudejb.context.FilePickerHelper
 import dev.lain.claudejb.context.ImageAttachments
 import dev.lain.claudejb.diff.DiffPresenter
-import dev.lain.claudejb.session.ChatSessionManager
+import dev.lain.claudejb.diff.OpenedDiffsService
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.ui.jcef.JcefBridge
+import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
 import java.awt.datatransfer.StringSelection
 
@@ -48,10 +51,19 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
     }
 
     private fun onPrompting(m: JcefBridge.Msg.Prompting) = when (m) {
-        is JcefBridge.Msg.Send -> dispatchSend(m.text)
-        JcefBridge.Msg.Interrupt -> session.interrupt()
+        // The composer serves whichever conversation is on screen: this chat, or the one embedded in the Git
+        // view. A Git-scoped turn skips `dispatchSend`'s suggestion/attachment bookkeeping deliberately —
+        // that state belongs to this panel's composer and its own session, not to a turn about the repository.
+        is JcefBridge.Msg.Send ->
+            if (m.scope == JcefBridge.SCOPE_GIT) panel.gitChat.send(m.text) else dispatchSend(m.text)
+
+        is JcefBridge.Msg.Interrupt ->
+            if (m.scope == JcefBridge.SCOPE_GIT) panel.gitChat.interrupt() else session.interrupt()
+
         JcefBridge.Msg.CycleMode -> session.cyclePermissionMode()
+
         is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
+
         is JcefBridge.Msg.Copy -> CopyPasteManager.getInstance().setContents(StringSelection(m.text))
     }
 
@@ -71,17 +83,67 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
 
         is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
+
+        is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
+
+        JcefBridge.Msg.OpenSettings ->
+            ShowSettingsUtil.getInstance().showSettingsDialog(panel.project, ClaudeSettingsConfigurable::class.java)
+    }
+
+    /**
+     * One switch of the composer's ⚙ menu.
+     *
+     * Three things this does that a two-line handler would not, and each is a rule this repo learned the hard
+     * way. The key is checked against the closed set ([JcefSettingsMenu.apply]) and an unknown one is LOGGED
+     * rather than dropped in silence — five of these switches are the deterministic guard's own rules, so a
+     * key that stops matching after a rename is a security control that quietly cannot be reached. The write
+     * goes through `update {}`, never a bare `state.x = y`, which is a change that silently does not survive
+     * a restart. And the menu is re-pushed to EVERY chat: these settings are global, so leaving the other
+     * pages showing the old state would make the same switch read differently depending on which tab you
+     * opened it from.
+     */
+    private fun onSettingsToggle(m: JcefBridge.Msg.SettingsToggle) {
+        var known = false
+        ClaudeSettings.getInstance(panel.project).update { known = JcefSettingsMenu.apply(it, m.key, m.on) }
+        if (!known) {
+            logger.warn("The chat's settings menu asked for a switch this build does not have: ${m.key}")
+            return
+        }
+        JcefChatPanel.pushSettingsMenuToAll()
     }
 
     private fun onRequestCard(m: JcefBridge.Msg.RequestCard) = when (m) {
         // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
         is JcefBridge.Msg.ResolvePermission -> onResolvePermission(m)
 
-        is JcefBridge.Msg.ResolveQuestion -> session.resolveQuestion(m.id, m.answers)
+        is JcefBridge.Msg.ResolveQuestion -> cardSession(m.scope).resolveQuestion(m.id, m.answers)
 
-        is JcefBridge.Msg.ResolveElicitation -> session.resolveElicitation(m.id, m.action, m.content)
+        is JcefBridge.Msg.ResolveElicitation ->
+            cardSession(m.scope).resolveElicitation(m.id, m.action, m.content)
 
         is JcefBridge.Msg.AlwaysAllow -> onAlwaysAllow(m)
+    }
+
+    /**
+     * The conversation a request card belongs to.
+     *
+     * Two of them reach this page: the chat it was built for, and the one embedded in the Git view, whose
+     * cards are drawn by the same renderer into a container of its own. The card says which
+     * ([JcefBridge.SCOPE_GIT]) rather than the host matching the request id against both and answering
+     * whichever recognises it — on a collision that approves a `git` command in the wrong conversation, and
+     * nothing on screen would say so.
+     */
+    private fun cardSession(scope: String): ClaudeSession =
+        if (scope == JcefBridge.SCOPE_GIT) panel.gitChat.session() else session
+
+    /** Runs [block] against the chat strip, and logs [what] instead of doing nothing when there is none. */
+    private fun withStrip(what: String, block: (ChatTabsPanel) -> Unit) {
+        val strip = panel.chatStrip()
+        if (strip == null) {
+            logger.warn("Claude Code: no chat strip to $what — the press was dropped")
+            return
+        }
+        block(strip)
     }
 
     /**
@@ -95,27 +157,65 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
      * The flag has to be read BEFORE resolving: resolving removes the card.
      */
     private fun onResolvePermission(m: JcefBridge.Msg.ResolvePermission) {
-        val wasPlan = session.pendingPermissions().firstOrNull { it.requestId == m.id }?.isPlan == true
-        session.resolvePermission(m.id, m.allow)
+        val target = cardSession(m.scope)
+        val wasPlan = target.pendingPermissions().firstOrNull { it.requestId == m.id }?.isPlan == true
+        target.resolvePermission(m.id, m.allow)
         // Only on approval: a rejected plan is not the session's plan, and the file the binary holds is
-        // whatever it was before.
-        if (wasPlan && m.allow) panel.feed.requestPlan()
+        // whatever it was before. And only for THIS panel's session — the dashboard's Plan card is fed from
+        // it, so re-reading it after approving a plan in the Git conversation would ask the wrong process.
+        if (wasPlan && m.allow && target === session) panel.feed.requestPlan()
     }
 
     /**
      * A button on the Git view. The runtime is [GitIntegration]; this is the one line that reaches it.
      *
-     * The chat a prompted action talks in is resolved rather than assumed: the view is drawn in the Git chat's
-     * own tab ([ClaudeSession.gitIntegration]), so this panel's session is normally already it — but asking the
-     * manager first means the prompt lands in the one Git chat there is even if the view is ever shown
-     * elsewhere, instead of in whichever conversation the user was having.
+     * **The chat a prompted action talks in is the Git conversation, never this panel's session.** The view
+     * is drawn in ANY chat's dashboard, and this once resolved the target as "the existing Git chat, or else
+     * the session showing the view": with no Git chat open — the common case, since nothing opened one on its
+     * own — *Commit with Claude* wrote its whole turn into the conversation the user was having, which is the
+     * single thing the separate conversation exists to prevent. [GitChatFeed.session] finds or creates it,
+     * and starts it silently: no tab, so no full-window boot screen for a chat nobody asked to look at.
      *
-     * `pushGit` on the way out: the repository has just moved, and the branch, the change list and the button's
-     * own state are all read back from it.
+     * **And the view goes to it.** Pressing a prompted action used to produce nothing visible at all — the
+     * turn ran somewhere else, and the only sign was the tab badging itself eventually. The conversation is
+     * one of this view's two destinations now, so switching to it IS the feedback: the prompt is on screen as
+     * a row the moment it is sent, and the permission card that gates the command appears under it.
+     *
+     * `pushGit` on the way out: the repository has just moved, and the branch, the change list and the
+     * button's own state are all read back from it.
+     *
+     * The hash rides straight through, unread: which entries act on a commit and whether the value is even a
+     * commit hash are [GitActionCatalog]'s to say, and a second opinion formed here is one that can disagree
+     * with the catalogue the button was drawn from.
      */
     private fun onGitAction(m: JcefBridge.Msg.GitAction) {
-        val chat = { ChatSessionManager.getInstance(panel.project).gitChat() ?: session }
-        GitIntegration.getInstance(panel.project).perform(m.id, chat) { panel.pushGit() }
+        val chat = { panel.gitChat.session() }
+        GitIntegration.getInstance(panel.project).perform(m.id, m.hash, chat) { panel.pushGit() }
+        // Only the prompted ones. `init` spawns `git` itself, the IDE ones open the platform's own dialog and
+        // the two reads answer in place — sending the user to a conversation that was never asked anything
+        // would be a destination change with nothing at the destination.
+        if (GitActionCatalog.byId(m.id)?.kind == GitActionCatalog.Kind.PROMPT) panel.gitChat.show()
+    }
+
+    /**
+     * The Workloads view's retention control: how long finished work stays listed.
+     *
+     * **The value is checked against the rule's own list rather than trusted**, for the reason the diagram
+     * exists at all: a window nobody offered would be stored, applied, and then measured against a choice the
+     * user never made — and the only symptom is that the view shows the wrong things, which is exactly the
+     * kind of wrong that never gets reported as a bug.
+     *
+     * Written through `update {}`, never `state.x = y`: a bare assignment is a change that silently does not
+     * survive a restart. Every open chat is re-pushed afterwards, because the window is global and the
+     * diagram spans them — refreshing only this panel would leave the others drawing the old one.
+     */
+    private fun onSetWorkloadWindow(minutes: Int) {
+        if (minutes !in WorkloadWindow.WINDOW_MINUTES) {
+            logger.warn("Workloads view asked for a window this build does not offer: $minutes")
+            return
+        }
+        ClaudeSettings.getInstance(panel.project).update { it.workloadWindowMinutes = minutes }
+        JcefChatPanel.pushSessionToAll()
     }
 
     private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {
@@ -123,15 +223,16 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         // Resolve THE card the button lives on (by requestId), not just the first pending card with that
         // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
         // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
-        val pending = session.pendingPermissions()
+        val chat = cardSession(m.scope)
+        val pending = chat.pendingPermissions()
         val target = pending.firstOrNull { it.requestId == m.id }
             ?: pending.firstOrNull { it.toolName == m.tool }
-        target?.let { session.resolvePermission(it.requestId, true) }
+        target?.let { chat.resolvePermission(it.requestId, true) }
     }
 
     private fun onDiffs(m: JcefBridge.Msg.Diffs) = when (m) {
         is JcefBridge.Msg.ViewDiff -> {
-            session.pendingPermissions().firstOrNull { it.requestId == m.id }
+            cardSession(m.scope).pendingPermissions().firstOrNull { it.requestId == m.id }
                 ?.let { DiffPresenter.openDiff(panel.project, it.toolName, it.input) }
             Unit
         }
@@ -217,7 +318,30 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         is JcefBridge.Msg.StopTask -> session.queries.stopTask(m.taskId)
 
+        is JcefBridge.Msg.SetWorkloadWindow -> onSetWorkloadWindow(m.minutes)
+
         is JcefBridge.Msg.GitAction -> onGitAction(m)
+
+        // The three buttons on the composer's action row that need the host (app-composer-actions.js). They
+        // were Swing `AnAction`s in the tool window's title bar and reach exactly the same code; *Stop* and
+        // *Log out* are not here because they already had a message ([Interrupt], [Logout]) and reuse it.
+        //
+        // None of them is about THIS session, which is why none of them goes through `session`: a new tab, the
+        // editor's diff tabs and the Git chat are all owned by the tool window, and the only door onto it from
+        // inside a chat is [ClaudeToolWindowFactory]'s companion.
+        JcefBridge.Msg.NewChat -> ClaudeToolWindowFactory.newChat(panel.project)
+
+        JcefBridge.Msg.CloseAllDiffs -> {
+            OpenedDiffsService.getInstance(panel.project).closeAll()
+            // The count the button greys itself out on rides in the state payload, and closing the tabs is not
+            // a session event — nothing else would push one. Without this the button stays lit over an editor
+            // with no diffs left in it until the next turn happens to move the session.
+            panel.pushMetaState()
+        }
+
+        JcefBridge.Msg.OpenGitView -> ClaudeToolWindowFactory.showGitView(panel.project)
+
+        // …and its sibling: the same tab, but landing on the CONVERSATION rather than on the repository view.
 
         // Everything the tab bar and the two onboarding cards send lives in its own collaborator — see
         // [onNavigation] and OnboardingController. Both report whether the message was theirs, and every
@@ -254,10 +378,13 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             // transcript was on screen it did nothing — and that is precisely the state a user wants out of.
             is JcefBridge.Msg.ShowChatTranscript -> panel.transcript.showTranscript(null)
 
-            // The tab bar lives in the page, so its clicks arrive here like any other web→host message.
-            is JcefBridge.Msg.SelectChat -> panel.chatStrip()?.selectById(m.chatId)
+            // The tab bar lives in the page, so its clicks arrive here like any other web→host message. Both
+            // of these SAY SO when the strip cannot be resolved, rather than being an elegant no-op: a `?.` in
+            // front of the only thing a button does is a button that appears broken and leaves no trace, and
+            // the close button spent a day in exactly that state.
+            is JcefBridge.Msg.SelectChat -> withStrip("select chat ${m.chatId}") { it.selectById(m.chatId) }
 
-            is JcefBridge.Msg.CloseChat -> panel.chatStrip()?.closeById(m.chatId)
+            is JcefBridge.Msg.CloseChat -> withStrip("close chat ${m.chatId}") { it.closeById(m.chatId) }
 
             // No id means the chat's own transcript: that is how the breadcrumb's first segment goes back, and
             // `Shown.Agent("")` would be a transcript for an agent that does not exist — an empty page.
@@ -277,6 +404,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         JcefBridge.Msg.Ready -> {
             panel.host.markWebReady() // the web app is alive — cancel the first-open self-heal watchdog
             panel.pushTheme()
+            panel.pushSettingsMenu()
             panel.pushMetaState()
             panel.pushPermissions()
             tray.push()
@@ -301,7 +429,16 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         // INFO, not WARN. It fires once per chat tab opened, so WARN would put a warning in idea.log for a
         // healthy session — and a log that cries wolf is one nobody reads when it finally matters. INFO is the
         // IDE's default level, so it is still there when someone needs to read it back.
-        is JcefBridge.Msg.Diagnostics -> logger.info("JCEF diagnostics: ${m.report}")
+        // WARN for a throw, INFO for the environment report. The report fires once per chat tab opened, so
+        // warning on it would put a warning in idea.log for a healthy session — and a log that cries wolf is
+        // one nobody reads when it finally matters. An uncaught error is the opposite: it is the only trace
+        // there is, because the CEF console goes nowhere and a broken module fails silently on screen.
+        is JcefBridge.Msg.Diagnostics ->
+            if (m.report.startsWith("uncaught ")) {
+                logger.warn("Claude Code chat page: ${m.report}")
+            } else {
+                logger.info("JCEF diagnostics: ${m.report}")
+            }
 
         is JcefBridge.Msg.Unknown -> {} // total dispatch, ignore
     }

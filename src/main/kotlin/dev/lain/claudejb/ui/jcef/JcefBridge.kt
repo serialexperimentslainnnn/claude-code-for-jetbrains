@@ -32,6 +32,20 @@ object JcefBridge {
     }
 
     /**
+     * The scope naming the conversation embedded in the Git view, when a request card belongs to it.
+     *
+     * Two sessions draw permission cards into the same page now: the chat this browser was built for, and
+     * the Git one ([Msg.GitChatSend]). They share ONE renderer — a card is where a `git push` is shown before
+     * it runs, so a second implementation would be a second place for that to be displayed wrongly — so the
+     * card carries which session answers it instead of the host inferring. Inferring would mean matching the
+     * request id against both and resolving whichever answered first, which on a collision approves a
+     * command in the wrong conversation with nothing on screen to say so.
+     *
+     * An absent scope is the panel's own session, so nothing about the ordinary path changed.
+     */
+    const val SCOPE_GIT = "git"
+
+    /**
      * A typed message from the web frontend. [Unknown] keeps the dispatcher total without throwing.
      *
      * Grouped into sub-interfaces for the same reason [dev.lain.claudejb.protocol.ClaudeEvent] is: the panel
@@ -62,8 +76,19 @@ object JcefBridge {
         /** Web-app lifecycle and anything the host does not act on. */
         sealed interface Lifecycle : Msg
 
-        data class Send(val text: String) : Prompting
-        object Interrupt : Prompting
+        /**
+         * A turn from the composer — and [scope] says which conversation it is for.
+         *
+         * There is ONE composer and there are two conversations it can be talking to: this chat, and the one
+         * embedded in the Git view while that view is showing it. Tagging the turn is what let the Git chat
+         * be a real chat without a second text box inside the panel — which is what it had for an hour, and
+         * it was a second thing to style, to keep in sync and to get subtly wrong.
+         *
+         * Empty is this panel's own session. See [SCOPE_GIT].
+         */
+        data class Send(val text: String, val scope: String = "") : Prompting
+
+        data class Interrupt(val scope: String = "") : Prompting
         object CycleMode : Prompting
         data class RemoveQueued(val index: Int) : Prompting
         data class Copy(val text: String) : Prompting
@@ -87,12 +112,38 @@ object JcefBridge {
         data class ChangeVibe(val on: Boolean) : Settings
         data class ChangeProvider(val id: String) : Settings
 
-        data class ResolvePermission(val id: String, val allow: Boolean) : RequestCard
-        data class ResolveQuestion(val id: String, val answers: Map<String, String>) : RequestCard
-        data class ResolveElicitation(val id: String, val action: String, val content: JsonObject?) : RequestCard
-        data class AlwaysAllow(val tool: String, val id: String) : RequestCard
+        /**
+         * One switch of the composer's ⚙ menu — the settings worth flipping without leaving the chat.
+         *
+         * [key] is a CLOSED set, checked against [JcefSettingsMenu.apply]'s `when` and dropped when this
+         * build does not know it. Five of the nine are the deterministic guard's own rules, so this is a
+         * browser message that can relax a security control: it may only ever downgrade a refusal to a card
+         * the user still has to answer, never to silent approval, and the `when` is what makes an unrecognised
+         * key a case rather than an assignment.
+         */
+        data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
-        data class ViewDiff(val id: String) : Diffs
+        /** The last row of that menu: the real Settings page, for everything the popup deliberately omits. */
+        object OpenSettings : Settings
+
+        /** [scope] names the conversation this card belongs to; empty is the panel's own. See [SCOPE_GIT]. */
+        data class ResolvePermission(val id: String, val allow: Boolean, val scope: String = "") : RequestCard
+        data class ResolveQuestion(
+            val id: String,
+            val answers: Map<String, String>,
+            val scope: String = "",
+        ) : RequestCard
+
+        data class ResolveElicitation(
+            val id: String,
+            val action: String,
+            val content: JsonObject?,
+            val scope: String = "",
+        ) : RequestCard
+
+        data class AlwaysAllow(val tool: String, val id: String, val scope: String = "") : RequestCard
+
+        data class ViewDiff(val id: String, val scope: String = "") : Diffs
         data class ViewDiffByTool(val toolUseId: String) : Diffs
         data class RevertEdit(val toolUseId: String) : Diffs
         data class Open(val url: String) : Diffs
@@ -120,14 +171,50 @@ object JcefBridge {
         data class StopTask(val taskId: String) : SessionControl
 
         /**
-         * A button on the Git view: run the catalogue action with this [id].
+         * The Workloads view's retention control: keep finished work listed for [minutes], `0` meaning all of
+         * it for this session.
          *
-         * The id is ALL the page sends, and it is deliberately the only thing it can send. Which command that
-         * becomes, whether it is even a command, and what it runs against are decided host-side by
-         * [dev.lain.claudejb.ui.GitActionCatalog] — so an id this build does not know is dropped rather than
-         * carried any further, and nothing off the wire ever reaches an argument vector.
+         * The value is CLOSED even though it is a number: the host checks it against
+         * [dev.lain.claudejb.session.WorkloadWindow.WINDOW_MINUTES] and ignores anything else, so the offered
+         * set and the applied set stay one set. A window this build does not know would otherwise be stored
+         * and then measured against nothing anybody chose, which fails silently — the diagram simply shows
+         * the wrong things.
          */
-        data class GitAction(val id: String) : SessionControl
+        data class SetWorkloadWindow(val minutes: Int) : SessionControl
+
+        /**
+         * A button on the Git view: run the catalogue action with this [id], against this [hash].
+         *
+         * **ONE message for both bars.** The action bar's buttons and the per-commit buttons of the history
+         * rail are the same catalogue with the same executor; a second message type for the second bar
+         * (`gitCommitAction`) meant the page could send something the host had no parser for, which is a
+         * button that silently does nothing.
+         *
+         * [hash] is empty for every entry that does not act on a commit, and the host ignores it there —
+         * `GitActionCatalog.GitAction.takesCommit` decides, not the presence of a value on the wire.
+         *
+         * The id is CLOSED and the hash is not, and that is the whole trust story of this message. An id this
+         * build does not know is dropped by looking it up in [dev.lain.claudejb.ui.GitActionCatalog]; a hash
+         * cannot be checked that way — the point of it is to be a value never seen before — so it is checked
+         * for the SHAPE of a Git object name (`GitActionCatalog.isCommitHash`) before it can reach a prompt.
+         * Nothing off this wire ever reaches an argument vector.
+         */
+        data class GitAction(val id: String, val hash: String = "") : SessionControl
+
+        /**
+         * The chat's own action buttons, which live on the composer rather than in the tool window's title
+         * bar (`app-composer-actions.js`).
+         *
+         * Three messages and not six: *Stop* and *Log out* already had one ([Interrupt], [Logout]) and reuse
+         * it, and *Commands* needs none at all — the palette is the page's own, and the round trip that used
+         * to open it existed only because the button was outside the browser.
+         */
+        object NewChat : SessionControl
+
+        object CloseAllDiffs : SessionControl
+
+        /** Go to the Git view, opening its chat if this project does not have one yet. */
+        object OpenGitView : SessionControl
 
         /**
          * Go to an agent's tab: sent by the Agent/Task card in the transcript and by the dashboard lists.
@@ -250,8 +337,8 @@ object JcefBridge {
      * `bridge-inbound.test.js`, which is now the gate for that.
      */
     private fun parseComposer(type: String, f: Fields): Msg? = when (type) {
-        "send" -> Msg.Send(f.text("text"))
-        "interrupt" -> Msg.Interrupt
+        "send" -> Msg.Send(f.text("text"), f.text("scope"))
+        "interrupt" -> Msg.Interrupt(f.text("scope"))
         "cycleMode" -> Msg.CycleMode
         "ready" -> Msg.Ready
         "diag" -> Msg.Diagnostics(f.text("report"))
@@ -267,19 +354,34 @@ object JcefBridge {
         "changeThinking" -> Msg.ChangeThinking(f.bool("on"))
         "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
         "changeProvider" -> Msg.ChangeProvider(f.text("id"))
+        "settingsToggle" -> Msg.SettingsToggle(f.text("key"), f.bool("on"))
+        "openSettings" -> Msg.OpenSettings
         else -> null
     }
 
     private fun parseRequestCards(type: String, f: Fields): Msg? = when (type) {
-        "resolvePermission" -> Msg.ResolvePermission(f.text("id"), f.bool("allow"))
-        "resolveQuestion" -> Msg.ResolveQuestion(f.text("id"), f.json("answers").orEmptyAnswers())
-        "resolveElicitation" -> Msg.ResolveElicitation(f.text("id"), f.text("action"), f.json("content"))
-        "alwaysAllow" -> Msg.AlwaysAllow(f.text("tool"), f.text("id"))
+        "resolvePermission" -> Msg.ResolvePermission(f.text("id"), f.bool("allow"), f.text("scope"))
+
+        "resolveQuestion" -> Msg.ResolveQuestion(
+            f.text("id"),
+            f.json("answers").orEmptyAnswers(),
+            f.text("scope"),
+        )
+
+        "resolveElicitation" -> Msg.ResolveElicitation(
+            f.text("id"),
+            f.text("action"),
+            f.json("content"),
+            f.text("scope"),
+        )
+
+        "alwaysAllow" -> Msg.AlwaysAllow(f.text("tool"), f.text("id"), f.text("scope"))
+
         else -> null
     }
 
     private fun parseDiffs(type: String, f: Fields): Msg? = when (type) {
-        "viewDiff" -> Msg.ViewDiff(f.text("id"))
+        "viewDiff" -> Msg.ViewDiff(f.text("id"), f.text("scope"))
 
         "viewDiffByTool" -> Msg.ViewDiffByTool(f.text("toolUseId"))
 
@@ -317,7 +419,9 @@ object JcefBridge {
 
         "stopTask" -> Msg.StopTask(f.text("taskId"))
 
-        "gitAction" -> Msg.GitAction(f.text("id"))
+        // -1, not 0: 0 is `WorkloadWindow.ALL`, a real choice. A missing value must not read as "show
+        // everything for ever" — it reads as no choice at all, and the router drops it.
+        "setWorkloadWindow" -> Msg.SetWorkloadWindow(f.int("minutes", -1))
 
         // The "Claude Code was not found" boot card.
         "installClaude" -> Msg.InstallClaude(f.text("method"))
@@ -326,7 +430,28 @@ object JcefBridge {
 
         "recheckBinary" -> Msg.RecheckBinary
 
-        else -> parseTabControls(type, f) ?: parseAuthControls(type, f)
+        else -> parseGitControls(type, f) ?: parseTabControls(type, f) ?: parseAuthControls(type, f)
+    }
+
+    /**
+     * The Git view and the composer's action row (app-session-git.js / app-composer-actions.js).
+     *
+     * Split out for complexity, like [parseTabControls] — but the grouping is a real one: every message here
+     * is answered by `GitIntegration` or by the tool window's own commands, and none of them touches the
+     * session the page belongs to.
+     */
+    private fun parseGitControls(type: String, f: Fields): Msg? = when (type) {
+        // `hash` is absent for every button that is not drawn on a commit row; `text` gives "" there, which is
+        // exactly what the host treats as "no commit", so an omitted field and an empty one mean one thing.
+        "gitAction" -> Msg.GitAction(f.text("id"), f.text("hash"))
+
+        "openGitView" -> Msg.OpenGitView
+
+        "newChat" -> Msg.NewChat
+
+        "closeAllDiffs" -> Msg.CloseAllDiffs
+
+        else -> null
     }
 
     /** The tab bar and the Workloads view (app-tabs.js / app-session.js). Split out for complexity only. */

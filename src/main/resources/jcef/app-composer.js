@@ -161,7 +161,19 @@
     // Plan limits, one bar per window, on their own row under the readout — see renderUsageBars().
     var usageBars = h('div', { class: 'usage-bars', attrs: { hidden: 'hidden' } });
 
-    var card = h('div', { class: 'composer-card' }, inputRow, bar);
+    // The dashboard's view pills and the chat's own action buttons, as ONE bar INSIDE the prompt card, in the
+    // same shape as the model/mode bar under it — see app-composer-actions.js for why they are not in the
+    // tool window's title bar. Inside the card, because these are controls OF this chat: outside it they read
+    // as a toolbar the chat happens to sit under.
+    var controls = CX.buildActionRows();
+
+    // Controls FIRST: the row sits at the top of the card, above the box you type in. Below the textarea it
+    // was a second strip stacked on the model/mode bar — two rows of controls under the text and none over it.
+    var card = h('div', { class: 'composer-card' }, controls, inputRow, bar);
+    // The palette belongs to the card, anchored to its top edge (see the shell). As a row of the dock it sat
+    // above the plan-limit meters — a whole block away from the box it is completing.
+    var palette = document.getElementById('palette');
+    if (palette) card.appendChild(palette);
 
     mount.appendChild(ghost);
     mount.appendChild(queue);
@@ -226,7 +238,7 @@
         // in an idle composer would fire a pointless interrupt request.
         if (CX.lastState && CX.lastState.turnActive && !CX.lastState.interrupting) {
           e.preventDefault();
-          send({ type: 'interrupt' });
+          sendInterrupt();
         }
         return;
       }
@@ -271,10 +283,16 @@
       return; // interrupt already in flight; the button is showing "Interrupting…"
     }
     if (CX.lastState && CX.lastState.turnActive) {
-      send({ type: 'interrupt' });
+      sendInterrupt();
     } else {
       doSend();
     }
+  }
+
+  /** Stops the turn of whichever conversation the composer is talking to — see [doSend]. */
+  function sendInterrupt() {
+    var git = typeof CC.gitChatActive === 'function' && CC.gitChatActive();
+    send(git ? { type: 'interrupt', scope: 'git' } : { type: 'interrupt' });
   }
 
   function doSend() {
@@ -286,7 +304,12 @@
       // nothing typed; if turn active the button still interrupts, handled by onSendClick
       return;
     }
-    send({ type: 'send', text: text });
+    // ONE composer, whichever conversation is on screen. While the Git view is showing its chat, the turn is
+    // tagged for that session — the same `scope` a request card's answer carries, routed by the same line
+    // host-side. A second text box inside the view was the alternative, and it was a second thing to style,
+    // to keep in sync and to get subtly wrong.
+    var git = typeof CC.gitChatActive === 'function' && CC.gitChatActive();
+    send(git ? { type: 'send', text: text, scope: 'git' } : { type: 'send', text: text });
     els.input.value = '';
     ghostText = '';
     renderGhost();
@@ -399,6 +422,7 @@
     if (!s) return;
     announceTurnState(s);
     CX.renderAuth(s);
+    CX.renderActions(s);
     renderSendMode(s);
     CX.renderPills(s);
     renderQueue(s.queue);
