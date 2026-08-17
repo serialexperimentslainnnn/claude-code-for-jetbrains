@@ -421,6 +421,7 @@ class SensitiveGuardTest {
         val defaults = SensitiveGuard.Policy()
         assertTrue(defaults.enforceCredentials)
         assertTrue(defaults.enforceDangerousCommands)
+        assertTrue(defaults.enforceTempDirs)
         assertTrue(defaults.enforceForeignOtherUserHome)
         assertTrue(defaults.enforceForeignNetworkMounts)
         assertTrue(defaults.enforceForeignWslMounts)
@@ -479,6 +480,117 @@ class SensitiveGuardTest {
         val downgradedReason = SensitiveGuard.reason(read("/home/bob/x"), relaxed)!!
         assertTrue(downgradedReason.contains("Settings"))
         assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
+    }
+
+    // ── rule 4: the system temporary directory ───────────────────────────────────────────────────────────
+    // The weakest of the four claims and the widest surface: it says nothing about the path being sensitive,
+    // only that staging work where nobody reviews it is worth one glance. That makes the NEGATIVES the
+    // load-bearing half — every string leaf of every tool input reaches this rule, so a segment boundary it
+    // gets wrong is an ordinary edit turned into a card, and an ordinary card turned into a switched-off rule.
+
+    @Test
+    fun `an action on the temp directory asks the agent and denies a third party`() {
+        assertEquals(Verdict.ASK, v("Write", read("/tmp/stage.sh")))
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/claude-1000/proj/sess/tasks/t1.output")))
+        assertEquals(Verdict.ASK, v("Read", read("/var/tmp/held-across-reboots")))
+        assertEquals(Verdict.DENY, v("mcp__fs__write", read("/tmp/stage.sh")))
+    }
+
+    @Test
+    fun `the macOS and Windows spellings of the same directory are the same rule`() {
+        listOf(
+            "/private/tmp/x",
+            "/private/var/tmp/x",
+            "/var/folders/qz/8bd1t7hd0/T/tmp.9kL2", // macOS' $TMPDIR — where mktemp actually writes there
+            "C:/Windows/Temp/x",
+            "/mnt/c/Windows/Temp/x", // machine-wide, natively and as WSL surfaces it
+            "C:/Users/me/AppData/Local/Temp/x", // %TEMP%, by structure — the variable itself is not read
+        ).forEach { assertEquals(Verdict.ASK, v("Read", read(it)), it) }
+    }
+
+    @Test
+    fun `padding and traversal do not spell their way out of the rule`() {
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/./././notes.txt")))
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/../tmp/notes.txt")))
+        assertEquals(Verdict.ASK, v("Read", read("/home/me/../../tmp/notes.txt")))
+        val padded = "/tmp" + "/.".repeat(300) + "/notes.txt"
+        assertTrue(padded.length > 512, "the fixture must actually exceed the cap, it is ${padded.length} long")
+        assertEquals(Verdict.ASK, v("Read", read(padded)))
+    }
+
+    @Test
+    fun `a temp path inside a command is judged too — there the path really does live in the text`() {
+        assertEquals(Verdict.ASK, v("Bash", bash("cp notes.md /tmp/stage/notes.md")))
+        assertEquals(Verdict.ASK, v("Bash", bash("chmod +x /tmp/run.sh && /tmp/run.sh")))
+        assertEquals(Verdict.ASK, v("Bash", bash("cd /tmp && ls")))
+    }
+
+    @Test
+    fun `a segment boundary is the rule — tmpfoo and a tmp folder of your own are not the system temp`() {
+        assertEquals(Verdict.ALLOW, v("Read", read("/tmpfoo/x")))
+        assertEquals(Verdict.ALLOW, v("Read", read("/var/tmpfoo/x")))
+        // `/home/<someone-else>/tmp` IS denied, but as foreign territory — a different rule, proving nothing
+        // about this one. The case that has to stay allowed is the user's own `~/tmp`.
+        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/tmp/x")))
+        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/tmp/build.log")))
+        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/src/temp/Foo.kt")))
+        assertEquals(Verdict.ALLOW, v("Bash", bash("./gradlew test --project-cache-dir tmp/cache")))
+    }
+
+    @Test
+    fun `an Edit that merely MENTIONS the temp directory in its text is not an action on it`() {
+        // The same provenance rule as the foreign-path case above, and the same bug class it exists to stop:
+        // documentation legitimately quotes the path a background task writes to.
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/README.md")
+            put("old_string", "output goes to /tmp/claude-1000/x/tasks/t1.output")
+            put("new_string", "output goes to /tmp/claude-1000/x/tasks/t1.output (tail it with Read)")
+        }
+        assertEquals(Verdict.ALLOW, v("Edit", input))
+    }
+
+    @Test
+    fun `a project opened from under the temp directory is still the user's own surface`() {
+        val scratch = policy.copy(projectRoot = "/tmp/scratch/proj")
+        assertEquals(Verdict.ALLOW, v("Read", read("/tmp/scratch/proj/src/Foo.kt"), scratch))
+        assertEquals(Verdict.ALLOW, v("Write", read("/tmp/scratch/proj/build/out.txt"), scratch))
+        // …and ONLY the project's own subtree: the rest of the temp directory is guarded exactly as before.
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/scratch/elsewhere.txt"), scratch))
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/other/x"), scratch))
+    }
+
+    @Test
+    fun `disabling the temp-directory rule downgrades DENY to ASK for an untrusted caller, never to ALLOW`() {
+        assertEquals(Verdict.DENY, v("mcp__x__y", read("/tmp/stage.sh")))
+        val relaxed = policy.copy(enforceTempDirs = false)
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("/tmp/stage.sh"), relaxed))
+        assertEquals(Verdict.ASK, v("Read", read("/tmp/stage.sh"), relaxed))
+        // Detection ran regardless of the toggle, so the reason still names the switch that downgraded it.
+        val downgraded = SensitiveGuard.reason(read("/tmp/stage.sh"), relaxed)!!
+        assertTrue(downgraded.contains("Settings"))
+        assertTrue(downgraded.contains("downgraded", ignoreCase = true))
+    }
+
+    @Test
+    fun `temp-directory detection, by segment`() {
+        assertTrue(TempDirs.isTemp("/tmp"))
+        assertTrue(TempDirs.isTemp("/tmp/x"))
+        assertTrue(TempDirs.isTemp("/var/tmp"))
+        assertTrue(TempDirs.isTemp("/private/tmp/x"))
+        assertTrue(TempDirs.isTemp("/private/var/tmp/x"))
+        assertTrue(TempDirs.isTemp("/var/folders/qz/8bd/T/tmp.9kL2"))
+        assertTrue(TempDirs.isTemp("C:/Windows/Temp/x"))
+        assertTrue(TempDirs.isTemp("/mnt/c/Windows/Temp/x"))
+        assertTrue(TempDirs.isTemp("C:/Users/me/AppData/Local/Temp/x"))
+        assertTrue(TempDirs.isTemp("/tmp/../tmp/x")) // folded before it is judged
+        assertFalse(TempDirs.isTemp("/tmpfoo"))
+        assertFalse(TempDirs.isTemp("/tmpfoo/x"))
+        assertFalse(TempDirs.isTemp("/var/tmpfoo/x"))
+        assertFalse(TempDirs.isTemp("/var/foldersfoo/x"))
+        assertFalse(TempDirs.isTemp("/home/me/tmp/x"))
+        assertFalse(TempDirs.isTemp("tmp/x")) // relative: anchored at the project root before it gets here
+        assertFalse(TempDirs.isTemp("temp"))
+        assertFalse(TempDirs.isTemp(""))
     }
 }
 

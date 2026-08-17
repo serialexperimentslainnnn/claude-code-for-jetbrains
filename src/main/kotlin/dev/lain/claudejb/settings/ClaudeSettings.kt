@@ -138,6 +138,12 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var securityBlockDangerousCommands: Boolean = true
 
+        /**
+         * Rule 4 — an action on the system temporary directory (`permission/TempDirs.kt`). The open project
+         * is exempt even when it sits under one, so this is only ever about `/tmp` outside the project.
+         */
+        @JvmField var securityBlockTempDirs: Boolean = true
+
         @JvmField var securityBlockForeignOtherUserHome: Boolean = true
 
         @JvmField var securityBlockForeignNetworkMounts: Boolean = true

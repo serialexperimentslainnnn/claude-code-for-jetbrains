@@ -43,6 +43,7 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
         pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
         enforceCredentials = state.securityBlockCredentials,
         enforceDangerousCommands = state.securityBlockDangerousCommands,
+        enforceTempDirs = state.securityBlockTempDirs,
         enforceForeignOtherUserHome = state.securityBlockForeignOtherUserHome,
         enforceForeignNetworkMounts = state.securityBlockForeignNetworkMounts,
         enforceForeignWslMounts = state.securityBlockForeignWslMounts,
