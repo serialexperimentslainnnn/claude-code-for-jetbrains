@@ -389,6 +389,8 @@ class ClaudeSession(
         }
         val apply = {
             for ((isThinking, text) in runs) {
+                // No parent id: [bufferStream] admits only main-run deltas, and a run is a concatenation of
+                // several frames anyway, so there is no single id left to carry by the time we get here.
                 if (isThinking) reconciler.appendThinking(text) else reconciler.appendAssistant(text)
             }
             if (usage != null) tokens.onLiveUsage(usage[0], usage[1], usage[2], usage[3])
@@ -1758,21 +1760,40 @@ class ClaudeSession(
         }
     }
 
-    /** Buffers a streaming delta on the reader thread; [flushDeltas] lands them on the EDT in one batch. */
-    private fun bufferStream(event: ClaudeEvent.Stream) = when (event) {
-        // Only the MAIN conversation streams into this transcript. A subagent streams through the same
-        // channel, told apart solely by `parent_tool_use_id`, and its finalized blocks are already filtered
-        // out downstream — so without this the streamed halves of a dozen agents piled up here, interleaved,
-        // and were then never replaced by a finalize that had been dropped. Their text lives in their own
-        // tab, read from the binary's per-agent transcript.
-        is ClaudeEvent.TextDelta ->
-            if (event.parentToolUseId == null) bufferDelta(isThinking = false, text = event.text) else Unit
+    /**
+     * Buffers a streaming delta on the reader thread; [flushDeltas] lands them on the EDT in one batch.
+     *
+     * Only the MAIN conversation streams into this transcript — the same rule the finalized blocks are
+     * filtered by ([TranscriptReconciler.belongsHere]), asked of the same predicate so the two halves cannot
+     * drift apart the way they did when each spelled out its own `== null`.
+     *
+     * Filtered HERE and not only in the reconciler because the buffer coalesces consecutive same-type deltas
+     * into one run: a foreign delta admitted this far would be concatenated into the main run's
+     * StringBuilder, and by flush time there would be no seam left to drop it at.
+     *
+     * NB what actually keeps a subagent's deltas out is the binary, not this check: it emits every
+     * `stream_event` frame with a hard-coded `parent_tool_use_id: null`, and it never turns a subagent's
+     * partial messages into one — only its assembled `assistant`/`user` messages are forwarded, and those DO
+     * carry the id. The check stays because it is the correct rule and costs a comparison, but it must not be
+     * read as the thing that stops the interleaving; the finalized-block branches are.
+     */
+    private fun bufferStream(event: ClaudeEvent.Stream) {
+        // A statement `when` over a sealed type is still checked for exhaustiveness, so a new Stream event
+        // remains a compile error here rather than a silently dropped frame.
+        when (event) {
+            is ClaudeEvent.TextDelta ->
+                if (TranscriptReconciler.belongsHere(event.parentToolUseId)) {
+                    bufferDelta(isThinking = false, text = event.text)
+                }
 
-        is ClaudeEvent.ThinkingDelta ->
-            if (event.parentToolUseId == null) bufferDelta(isThinking = true, text = event.text) else Unit
+            is ClaudeEvent.ThinkingDelta ->
+                if (TranscriptReconciler.belongsHere(event.parentToolUseId)) {
+                    bufferDelta(isThinking = true, text = event.text)
+                }
 
-        is ClaudeEvent.LiveUsage ->
-            bufferUsage(event.inputTokens, event.cacheCreationTokens, event.cacheReadTokens, event.outputTokens)
+            is ClaudeEvent.LiveUsage ->
+                bufferUsage(event.inputTokens, event.cacheCreationTokens, event.cacheReadTokens, event.outputTokens)
+        }
     }
 
     /** The conversation proper: session start, assistant output, tool calls, end of turn. */
@@ -1787,12 +1808,16 @@ class ClaudeSession(
             is ClaudeEvent.Result -> onTurnResult(event)
 
             // A subagent's reasoning belongs to ITS tab, for exactly the reason its text does — see the
-            // AssistantText branch below. It was the one block that still landed here, because the parser
-            // read `parent_tool_use_id` and dropped it on the thinking branch alone: a session running a
-            // dozen agents filled the main transcript with interleaved "Thought process" rows nobody could
-            // follow, while the text those same agents produced was correctly filtered out.
+            // AssistantText branch below. This is the frame that carries the label (unlike a `stream_event`,
+            // which the binary always emits with `parent_tool_use_id: null`), so this branch is where the
+            // separation is actually made: a session running a dozen agents otherwise fills the main
+            // transcript with interleaved "Thought process" rows nobody can follow.
+            //
+            // The id is PASSED rather than branched on: dropping it before the reconciler is reached would
+            // leave the rule restated at every call site, and the one that forgets it is silent — a row in
+            // the wrong transcript looks like the model rambling, not like a bug.
             is ClaudeEvent.AssistantThinking -> edt {
-                if (event.parentToolUseId == null) reconciler.finalizeThinking(event.text)
+                reconciler.finalizeThinking(event.text, event.parentToolUseId)
             }
 
             is ClaudeEvent.MessageStart -> edt {
@@ -1814,7 +1839,7 @@ class ClaudeSession(
                 // unreadable: consecutive blocks from different agents, interleaved, with no way to follow
                 // any single one. The agent's own transcript is read from the binary's file by AgentRegistry,
                 // so nothing is lost by dropping it — and the Agent card links to that tab.
-                if (event.parentToolUseId == null) reconciler.finalizeAssistant(event.text)
+                reconciler.finalizeAssistant(event.text, event.parentToolUseId)
             }
         }
     }
