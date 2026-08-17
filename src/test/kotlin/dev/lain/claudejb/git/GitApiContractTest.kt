@@ -23,8 +23,9 @@ import java.lang.reflect.Method
  * **The deprecation half is a real gate, not decoration.** This repository's standing rule is "never ship a
  * deprecated or scheduled-for-removal API"; `verifyPlugin` enforces it across the declared IDE range with
  * `DEPRECATED_API_USAGES` in its failure levels. That check runs against DOWNLOADED IDEs and takes minutes. This
- * one runs against the build classpath in milliseconds and fails the moment JetBrains deprecates one of these
- * twelve members — which is when the migration is cheap, not when the release is being cut.
+ * one runs against the build classpath in milliseconds and fails the moment JetBrains deprecates any member the
+ * package calls — which is when the migration is cheap, not when the release is being cut. (How many that is, is
+ * whatever the assertions below add up to. A count written into this sentence goes stale on the next one.)
  *
  * Reflection rather than a direct call because these are *existence* assertions: a compile-time call proves the
  * symbol exists on the compile classpath and nothing about the shape we depend on (parameter list, return type),
@@ -57,6 +58,37 @@ class GitApiContractTest {
         assertTrue(String::class.java.isAssignableFrom(repository.getMethod("getCurrentRevision").assertNotDeprecated().returnType))
     }
 
+    @Test
+    fun `a GitRepository still answers the tracking and remote questions the topology is built from`() {
+        val repository = load("git4idea.repo.GitRepository")
+        val trackInfo = repository.getMethod("getBranchTrackInfo", String::class.java).assertNotDeprecated()
+        assertTrue(load("git4idea.repo.GitBranchTrackInfo").isAssignableFrom(trackInfo.returnType))
+        assertTrue(Collection::class.java.isAssignableFrom(repository.getMethod("getRemotes").assertNotDeprecated().returnType))
+    }
+
+    @Test
+    fun `the upstream branch is still named for local operations, which is the ref git rev-list is given`() {
+        // `origin/main`, not `main`: the remote-operations name is what you push, the local one is what you can
+        // put either side of `..`. Handing `git rev-list` the wrong one asks about a branch that does not exist
+        // locally, and the platform answers null — an ahead/behind that is silently always unknown.
+        val remoteBranch = load("git4idea.GitRemoteBranch")
+        assertTrue(String::class.java.isAssignableFrom(remoteBranch.getMethod("getNameForLocalOperations").assertNotDeprecated().returnType))
+        val track = load("git4idea.repo.GitBranchTrackInfo")
+        assertTrue(remoteBranch.isAssignableFrom(track.getMethod("getRemoteBranch").assertNotDeprecated().returnType))
+    }
+
+    @Test
+    fun `a GitRemote is still a name plus its urls, and still knows what origin is called`() {
+        val remote = load("git4idea.repo.GitRemote")
+        assertTrue(String::class.java.isAssignableFrom(remote.getMethod("getName").assertNotDeprecated().returnType))
+        assertTrue(String::class.java.isAssignableFrom(remote.getMethod("getFirstUrl").assertNotDeprecated().returnType))
+        // The field's EXISTENCE, not its value: GitGateway reads the constant precisely so that whatever Git calls
+        // the conventional remote is what the plugin looks for. Reading it here would also initialize the class,
+        // which [load] deliberately does not do.
+        val origin = remote.getField("ORIGIN")
+        assertTrue(String::class.java == origin.type, "GitRemote.ORIGIN must still be the remote's conventional name")
+    }
+
     // ── git4idea: the log ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -67,6 +99,29 @@ class GitApiContractTest {
             .getMethod("history", Project::class.java, VirtualFile::class.java, Array<String>::class.java)
             .assertNotDeprecated()
         assertTrue(List::class.java.isAssignableFrom(method.returnType), "history() must return a List of commits")
+    }
+
+    @Test
+    fun `GitHistoryUtils still counts commits between two refs, and still returns that count as text`() {
+        // The String return is the contract, not an accident: the platform catches the VcsException and returns
+        // null, so "the command failed" and "the answer is 0" arrive as two different values only because one of
+        // them is not a number. A signature change to int would collapse them.
+        val method = load("git4idea.history.GitHistoryUtils")
+            .getMethod("getNumberOfCommitsBetween", load("git4idea.repo.GitRepository"), String::class.java, String::class.java)
+            .assertNotDeprecated()
+        assertTrue(String::class.java.isAssignableFrom(method.returnType), "getNumberOfCommitsBetween must return text")
+    }
+
+    @Test
+    fun `GitHistoryUtils still resolves the merge base of two refs`() {
+        // The String-String overload, deliberately: the other one takes a GitRebaseParams.RebaseUpstream, which
+        // lives in git4idea.branch — the package this integration is not allowed to import.
+        val method = load("git4idea.history.GitHistoryUtils")
+            .getMethod("getMergeBase", Project::class.java, VirtualFile::class.java, String::class.java, String::class.java)
+            .assertNotDeprecated()
+        val revision = load("git4idea.GitRevisionNumber")
+        assertTrue(revision.isAssignableFrom(method.returnType), "getMergeBase must still return a GitRevisionNumber")
+        assertTrue(String::class.java.isAssignableFrom(revision.getMethod("asString").assertNotDeprecated().returnType))
     }
 
     @Test
@@ -94,6 +149,51 @@ class GitApiContractTest {
         val user = load("com.intellij.vcs.log.VcsUser")
         user.getMethod("getName").assertNotDeprecated()
         user.getMethod("getEmail").assertNotDeprecated()
+    }
+
+    @Test
+    fun `a commit still carries its parents, which is the only thing that makes a graph drawable`() {
+        // `getParents()` is declared on `GraphCommit`, which `GitCommit` reaches through TimedVcsCommit — a
+        // PUBLIC interface of the VCS-log API, deliberately: the cheap-looking alternatives on the Git side are
+        // internal, and an internal API is a publication risk here, not a lint (see getAffectedPaths above).
+        // Its absence would not fail loudly: every commit would arrive parentless, the branch map would decide
+        // there is no topology to draw, and it would simply stop appearing with nothing anywhere saying why.
+        val graphCommit = load("com.intellij.vcs.log.graph.GraphCommit")
+        val parents = graphCommit.getMethod("getParents").assertNotDeprecated()
+        assertTrue(List::class.java.isAssignableFrom(parents.returnType), "getParents must return a List of ids")
+        assertTrue(
+            graphCommit.isAssignableFrom(load("git4idea.GitCommit")),
+            "GitCommit must remain a GraphCommit — the parent hashes GitGateway reads come from there.",
+        )
+        // The id type is what makes those parents hashes rather than integers: the graph API is generic.
+        assertTrue(load("com.intellij.vcs.log.TimedVcsCommit").isAssignableFrom(load("git4idea.GitCommit")))
+    }
+
+    @Test
+    fun `a GitRepository still hands over its branches, each with the commit it points at`() {
+        // The refs are the other half of the branch map: parents give the shape, refs give the names. Both are
+        // read from the in-memory repository model, so neither spawns `git`.
+        val repository = load("git4idea.repo.GitRepository")
+        val collection = load("git4idea.branch.GitBranchesCollection")
+        assertTrue(collection.isAssignableFrom(repository.getMethod("getBranches").assertNotDeprecated().returnType))
+        assertTrue(Collection::class.java.isAssignableFrom(collection.getMethod("getLocalBranches").assertNotDeprecated().returnType))
+        assertTrue(Collection::class.java.isAssignableFrom(collection.getMethod("getRemoteBranches").assertNotDeprecated().returnType))
+        // getHash takes the ABSTRACT GitBranch, so one call site serves both collections. A narrowing to the two
+        // concrete types would compile here and stop compiling in GitGateway.
+        val hash = collection.getMethod("getHash", load("git4idea.GitBranch")).assertNotDeprecated()
+        assertTrue(load("com.intellij.vcs.log.Hash").isAssignableFrom(hash.returnType))
+    }
+
+    @Test
+    fun `a branch still names itself locally, which is the spelling the map puts on a chip`() {
+        // `main` and `origin/main` — the names that resolve on THIS machine. `getNameForRemoteOperations` is the
+        // other spelling (`main`, for a remote branch) and putting it on a chip would draw two different refs
+        // under one name.
+        val reference = load("git4idea.GitReference")
+        assertTrue(String::class.java.isAssignableFrom(reference.getMethod("getName").assertNotDeprecated().returnType))
+        assertTrue(reference.isAssignableFrom(load("git4idea.GitBranch")))
+        assertTrue(load("git4idea.GitBranch").isAssignableFrom(load("git4idea.GitLocalBranch")))
+        assertTrue(load("git4idea.GitBranch").isAssignableFrom(load("git4idea.GitRemoteBranch")))
     }
 
     @Test

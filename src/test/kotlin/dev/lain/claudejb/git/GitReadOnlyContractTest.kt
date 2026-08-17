@@ -16,9 +16,10 @@ import java.io.File
  *    the IDE's actions, not ours.
  *
  * A comment saying so ages badly; a *test* saying so fails the build. The mechanism is an **allowlist**, not a
- * denylist: the only `git4idea` imports permitted in this package are the four read-only ones below, so adding a
- * write path is not something that can happen by accident during a refactor — it takes editing this list, in a
- * diff a reviewer reads.
+ * denylist: the only `git4idea` imports permitted in this package are the read-only ones enumerated in
+ * [READ_ONLY_GIT_API], so adding a write path is not something that can happen by accident during a refactor — it
+ * takes editing that list, in a diff a reviewer reads. (The list is the count. A number written here goes stale on
+ * the next entry and is then quoted as if it had not.)
  *
  * The second contract here is the **degradation** one. `git4idea` may be entirely absent from this plugin's
  * classloader (the dependency is optional), and a class's supertypes and annotations are resolved EAGERLY at
@@ -105,14 +106,45 @@ class GitReadOnlyContractTest {
         val GIT4IDEA_REFERENCE = Regex("""\bgit4idea\.[A-Za-z]""")
 
         /**
-         * The complete set of Git4Idea API this plugin may touch. All four are pure readers: the repository
-         * registry, one repository, and the `git log` reader plus the commit it returns. Nothing here can change
-         * a ref, a worktree or a remote.
+         * The complete set of Git4Idea API this plugin may touch. Every entry is a pure reader — a registry, a
+         * value, or a query that prints and returns:
+         *  - `GitRepositoryManager` / `GitRepository` — the registry and one repository;
+         *  - `GitHistoryUtils` — the readers of `git log`, `git rev-list --count` and `git merge-base`. All three
+         *    print to stdout and change nothing: no ref moves, the index is untouched, and none of them contacts
+         *    a remote, which is also why the ahead/behind counts answer "since the last fetch" and this package
+         *    may not make them fresher;
+         *  - `GitCommit` / `GitRevisionNumber` — the values those readers return;
+         *  - `GitBranchTrackInfo` — the local branch, the branch it tracks and the remote, as three fields. It is
+         *    what `branch.<name>.remote` and `.merge` already say in the config; reading it establishes nothing
+         *    and setting an upstream is not on its surface at all;
+         *  - `GitRemote` — a name, its URLs and its refspecs, again straight out of the parsed config. It is on
+         *    this list for its `ORIGIN` constant as much as its fields: the remote's conventional name belongs to
+         *    Git, and hardcoding the string here is how the plugin ends up disagreeing with the IDE about which
+         *    remote is which;
+         *  - `GitRepositoryChangeListener` — the notification interface the IDE calls when a repository moves,
+         *    which is handed a repository and returns nothing, so it can observe a checkout but never cause one;
+         *  - `GitBranchesCollection` — **the one entry from `git4idea.branch`, admitted deliberately.** That
+         *    package is where the branch-manipulation machinery lives, which is exactly why it is worth being
+         *    explicit about what this is and is not: the class is a VALUE, three maps handed over by
+         *    `GitRepository.getBranches()` (local branch to hash, remote branch to hash, recent checkouts) plus
+         *    lookups over them. Its whole public surface is getters and finders; it declares no mutator, so
+         *    there is nothing on it that could move a ref even by accident. It is read for one reason nothing
+         *    else can supply: a commit's parents give the SHAPE of the history, and only a ref says which of
+         *    those lines is `main` and which one `HEAD` is on. `GitBrancher` — the actual write surface of that
+         *    package, the thing that checks out, creates and deletes — remains in [FORBIDDEN_SYMBOLS], so
+         *    admitting the value type does not admit the package.
+         *
+         * Nothing here can change a ref, a worktree or a remote.
          */
         val READ_ONLY_GIT_API = setOf(
             "git4idea.GitCommit",
+            "git4idea.GitRevisionNumber",
+            "git4idea.branch.GitBranchesCollection",
             "git4idea.history.GitHistoryUtils",
+            "git4idea.repo.GitBranchTrackInfo",
+            "git4idea.repo.GitRemote",
             "git4idea.repo.GitRepository",
+            "git4idea.repo.GitRepositoryChangeListener",
             "git4idea.repo.GitRepositoryManager",
         )
 

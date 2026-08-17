@@ -12,6 +12,13 @@ package dev.lain.claudejb.git
  * sit above the project directory, and silently dropping the files outside it would misreport what a commit did.
  * Callers that intend to *open* one of these must still resolve it and check containment
  * (`DiffPresenter.isWithinRoot`) — see [GitLogNavigator].
+ *
+ * [parents] is what makes a *graph* drawable instead of a list. It is empty on a root commit and it has more than
+ * one entry on a merge, and both of those are the point: without it the only honest drawing is a single rail,
+ * because a fork or a merge inferred from ordering alone is invented — and an invented topology in a Git view is
+ * worse than none, since nothing on screen tells a drawn branch from a real one. It defaults to empty so that
+ * "nobody read the parents" stays representable and the branch map simply does not appear, rather than appearing
+ * with every commit drawn as a root.
  */
 data class GitCommitInfo(
     val hash: String,
@@ -20,6 +27,7 @@ data class GitCommitInfo(
     val authorEmail: String,
     val authoredAtMillis: Long,
     val changedPaths: List<String>,
+    val parents: List<String> = emptyList(),
 ) {
 
     /** The abbreviated hash, as the Git Log and `git log --oneline` show it. */
