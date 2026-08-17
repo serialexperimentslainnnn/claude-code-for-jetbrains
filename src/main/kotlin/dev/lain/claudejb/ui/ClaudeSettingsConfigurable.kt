@@ -1,11 +1,13 @@
 package dev.lain.claudejb.ui
 
+import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
+import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
@@ -27,6 +29,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val modelSection = SettingsModelSection { session }
     private val securitySection = SettingsSecuritySection()
     private val providerSection = SettingsProviderSection(settings)
+    private val forgeSection = SettingsForgeSection { if (project.isDisposed) null else project.service<GitHistoryService>() }
     private val executableSection = SettingsExecutableSection()
     private val toolsSection = SettingsToolsSection(settings)
     private val mcpSection = SettingsMcpSection()
@@ -37,6 +40,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         modelSection,
         securitySection,
         providerSection,
+        forgeSection,
         executableSection,
         toolsSection,
         mcpSection,
