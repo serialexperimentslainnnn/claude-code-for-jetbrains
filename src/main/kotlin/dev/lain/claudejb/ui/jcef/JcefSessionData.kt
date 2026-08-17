@@ -108,6 +108,11 @@ object JcefSessionData {
             // Every chat's tree, for the Workloads diagram. Kept ALONGSIDE the two keys above rather than
             // replacing them: they are this session's own data, which other cards read.
             put("workloads", JcefWorkloadData.workloadsJson(workloads, windowMinutes, nowMillis))
+            // …and the window everything above was filtered with, plus the set of windows on offer. The
+            // diagram cannot be read without it: with everything aged out, "nothing finished recently" and
+            // "nothing ever ran" look identical, and the only way to tell them apart was a trip to Settings.
+            // The OPTIONS travel with it so the control offers exactly the values `WorkloadWindow` applies.
+            put("workloadWindow", JcefWorkloadData.windowJson(windowMinutes))
             // Always emit a friendly model label (even on a default session where session.model is null)
             // and the known working dir, so the Session card is never empty — the prior nulls made the
             // whole dashboard collapse to "No session data yet" on a fresh/idle session.

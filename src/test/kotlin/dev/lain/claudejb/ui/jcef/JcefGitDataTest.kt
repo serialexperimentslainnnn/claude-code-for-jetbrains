@@ -1,6 +1,8 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.git.GitCommitInfo
+import dev.lain.claudejb.git.GitRefInfo
+import dev.lain.claudejb.git.GitRefKind
 import dev.lain.claudejb.session.AgentStatus
 import dev.lain.claudejb.ui.GitActionCatalog
 import kotlinx.serialization.json.JsonNull
@@ -36,9 +38,26 @@ class JcefGitDataTest {
         changedPaths = listOf("src/a.kt", "src/b.kt", "README.md"),
     )
 
+    /** The other shape a commit comes in: two parents, mainline first. */
+    private val merge = GitCommitInfo(
+        hash = "89abcdef89abcdef89abcdef89abcdef89abcdef",
+        subject = "Merge branch 'feature/git'",
+        authorName = "Lain",
+        authorEmail = "lain@example.invalid",
+        authoredAtMillis = 1_200_000L,
+        changedPaths = listOf("src/a.kt"),
+        parents = listOf(commit.hash, OTHER_PARENT),
+    )
+
+    private val twoRefs = listOf(
+        GitRefInfo("main", GitRefKind.LOCAL, commit.hash, current = true),
+        GitRefInfo("origin/main", GitRefKind.REMOTE, commit.hash, current = false),
+    )
+
     private fun populated(
         changes: List<String> = listOf("src/a.kt"),
         commits: List<GitCommitInfo> = listOf(commit),
+        refs: List<GitRefInfo> = emptyList(),
         changedFileOpen: Boolean = false,
         actionStates: Map<String, JcefGitData.ActionState> = emptyMap(),
     ) = JcefGitData.Snapshot(
@@ -46,6 +65,7 @@ class JcefGitDataTest {
         repo = JcefGitData.Repo(present = true, branch = "feature/git", head = "0123456", root = "/home/u/proj"),
         changes = changes,
         commits = commits,
+        refs = refs,
         changedFileOpen = changedFileOpen,
         actionStates = actionStates,
     )
@@ -61,7 +81,12 @@ class JcefGitDataTest {
     fun `payload carries availability, repo, changes, commits and actions`() {
         val git = JcefGitData.gitJson(populated(), nowMillis = 1_500_000L)!!
 
-        assertEquals(setOf("available", "repo", "changes", "commits", "actions"), git.keys)
+        // `pullRequests` and `lastRun` are ABSENT rather than null: the forge is not configured in this
+        // fixture, and "we never asked" is a different claim from "there are none" — see JcefGitData.
+        assertEquals(
+            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
+            git.keys,
+        )
         assertTrue(git["available"]!!.jsonPrimitive.boolean)
 
         val repo = git["repo"]!!.jsonObject
@@ -78,7 +103,7 @@ class JcefGitDataTest {
         val git = JcefGitData.gitJson(populated(), nowMillis = 1_500_000L)!!
         val c = git["commits"]!!.jsonArray.single().jsonObject
 
-        assertEquals(setOf("hash", "short", "subject", "author", "ageMillis", "files"), c.keys)
+        assertEquals(setOf("hash", "short", "subject", "author", "ageMillis", "files", "parents"), c.keys)
         assertEquals(commit.hash, c["hash"]!!.jsonPrimitive.content)
         assertEquals("0123456", c["short"]!!.jsonPrimitive.content)
         assertEquals("Add the Git view", c["subject"]!!.jsonPrimitive.content)
@@ -93,6 +118,62 @@ class JcefGitDataTest {
         val c = git["commits"]!!.jsonArray.single().jsonObject
 
         assertEquals(0L, c["ageMillis"]!!.jsonPrimitive.long)
+    }
+
+    // ── the branch map's two halves: parents and refs ────────────────────────────────────────────────────
+
+    @Test
+    fun `a commit carries its parents as full hashes, in commit order`() {
+        // Order is the contract, not an accident: the FIRST parent is the mainline and the rest are what was
+        // merged in, which is what the map's lane assignment keys off. Full hashes because the page joins a
+        // commit to its parent by matching them, and seven characters are unique only until they are not.
+        val git = JcefGitData.gitJson(populated(commits = listOf(merge, commit)), nowMillis = 0L)!!
+        val parents = git["commits"]!!.jsonArray.first().jsonObject["parents"]!!.jsonArray
+
+        assertEquals(listOf(commit.hash, OTHER_PARENT), parents.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `a root commit reports an empty parent list, which is a fact and not an omission`() {
+        val git = JcefGitData.gitJson(populated(), nowMillis = 0L)!!
+        val parents = git["commits"]!!.jsonArray.single().jsonObject["parents"]!!.jsonArray
+
+        assertTrue(parents.isEmpty())
+    }
+
+    @Test
+    fun `a ref names itself, its kind, its commit and whether HEAD is on it`() {
+        val git = JcefGitData.gitJson(populated(refs = twoRefs), nowMillis = 0L)!!
+        val emitted = git["refs"]!!.jsonArray.map { it.jsonObject }
+
+        assertEquals(setOf("name", "kind", "hash", "short", "current"), emitted.first().keys)
+        assertEquals(listOf("main", "origin/main"), emitted.map { it["name"]!!.jsonPrimitive.content })
+        // Lowercase on the wire because that is what the page keys its styling off — the same rule `kind`
+        // follows on an action.
+        assertEquals(listOf("local", "remote"), emitted.map { it["kind"]!!.jsonPrimitive.content })
+        assertEquals("0123456", emitted.first()["short"]!!.jsonPrimitive.content)
+        assertEquals(listOf(true, false), emitted.map { it["current"]!!.jsonPrimitive.boolean })
+    }
+
+    @Test
+    fun `a detached HEAD travels as its own kind, not as a branch that does not exist`() {
+        val detached = JcefGitData.Snapshot(
+            available = true,
+            repo = JcefGitData.Repo(present = true),
+            refs = listOf(GitRefInfo("HEAD", GitRefKind.HEAD, commit.hash, current = true)),
+        )
+        val emitted = JcefGitData.gitJson(detached, nowMillis = 0L)!!["refs"]!!.jsonArray.single().jsonObject
+
+        assertEquals("head", emitted["kind"]!!.jsonPrimitive.content)
+        assertTrue(emitted["current"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test
+    fun `refs are emitted even when empty, so the page tells a clean answer from an absent one`() {
+        val git = JcefGitData.gitJson(populated(), nowMillis = 0L)!!
+
+        assertNotNull(git["refs"])
+        assertTrue(git["refs"]!!.jsonArray.isEmpty())
     }
 
     @Test
@@ -135,7 +216,12 @@ class JcefGitDataTest {
         assertNotNull(git["commits"])
         assertTrue(git["changes"]!!.jsonArray.isEmpty())
         assertTrue(git["commits"]!!.jsonArray.isEmpty())
-        assertEquals(setOf("available", "repo", "changes", "commits", "actions"), git.keys)
+        // `pullRequests` and `lastRun` are ABSENT rather than null: the forge is not configured in this
+        // fixture, and "we never asked" is a different claim from "there are none" — see JcefGitData.
+        assertEquals(
+            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
+            git.keys,
+        )
     }
 
     // ── actions: the catalogue decides, this builder only serializes ─────────────────────────────────────
@@ -240,5 +326,11 @@ class JcefGitDataTest {
         assertEquals(setOf("running", "completed", "failed", "stopped"), vocabulary)
         assertTrue(vocabulary.containsAll(emitted))
         assertEquals(setOf("running", "completed", "failed"), emitted)
+    }
+
+    private companion object {
+
+        /** The second parent of the merge fixture — the branch that was merged in, never the mainline. */
+        const val OTHER_PARENT = "fedcba9876543210fedcba9876543210fedcba98"
     }
 }

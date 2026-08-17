@@ -47,23 +47,12 @@ internal object GitPromptedActions {
         RevertFileAction(project, gitChat),
     )
 
-    /**
-     * The integration's front door, in the tool window's title bar: **open the Git chat**.
-     *
-     * It exists because the entries above did not: they are gear-menu items that hide themselves, so the one
-     * that matters on a project with no repository — *Initialize* — was three clicks deep in a menu you had to
-     * already suspect it was in. A feature nobody can find is the same as a feature that is not there, which is
-     * a mistake this plugin has made before.
-     *
-     * Unlike everything else here it is **always visible** while the Git plugin is enabled, repository or not:
-     * the state in which the integration is least discoverable and most useful is exactly the empty one.
-     *
-     * And opening it on a project with no repository **asks to create one straight away**, because that is the
-     * only thing the integration can do there — offering a chat that can do nothing until you think to ask is
-     * the same dead end in a nicer place. Only when the chat is being *opened*, though: coming back to a
-     * conversation you already have is not a new request, so it is not re-asked.
-     */
-    fun toolbarAction(project: Project, gitChat: () -> ClaudeSession): AnAction = OpenGitChatAction(project, gitChat)
+    // NB the integration's front door is no longer an `AnAction` here. It was a title-bar button, and the
+    // title bar is gone: it is the Git icon on the composer's action row (`app-composer-actions.js`), which
+    // reaches the chat through `ClaudeToolWindowFactory.gitChat`. The reason it exists at all is unchanged —
+    // the gear entries below hide themselves, so on a project with no repository the one entry that matters
+    // was three clicks deep in a menu you had to already suspect, and a feature nobody can find is a feature
+    // that is not there.
 
     // ── what gets asked (pure: this is what the tests pin) ─────────────────────────────────────────────────────
 
@@ -119,6 +108,74 @@ internal object GitPromptedActions {
     }
 
     /**
+     * Put the tree back the way commit [hash] left it — **on a branch of its own**, which is the whole request
+     * and not a precaution added to it.
+     *
+     * Creating a branch *at* that commit is the one shape of "go back" that destroys nothing: no commit stops
+     * existing, the branch the user was on still points exactly where it did, and `git switch -` is the way
+     * back. The alternatives a model will reach for otherwise are the two that lose work — `git reset --hard`
+     * moves the current branch and drops every commit after this one, and a `git restore` of the whole tree
+     * quietly overwrites uncommitted work — so both are named in the prohibitions rather than left out of the
+     * instruction and hoped against.
+     *
+     * The branch name is derived here rather than left to the model: a fixed name is what lets the prohibition
+     * say *that* branch and no other, and it is what makes a name collision something to stop on instead of
+     * something to work around by inventing a second one.
+     *
+     * Null for a [hash] that is not a Git object name ([GitActionCatalog.isCommitHash]) — the value comes off
+     * the browser wire, and a prompt is built from it only once it cannot be anything but a hash.
+     */
+    fun revertToCommitOnNewBranchPrompt(hash: String): String? {
+        if (!GitActionCatalog.isCommitHash(hash)) return null
+        val branch = revertBranchName(hash)
+        return "Take this repository back to commit `$hash`, on a NEW branch called `$branch`.\n\n" +
+            "Create that branch at that commit and switch to it: `git switch --create $branch $hash` (or " +
+            "`git checkout -b $branch $hash` on an older Git).\n\n" +
+            "The branch I am on now must not move. Do not run `git reset`, do not rebase, amend, merge or " +
+            "cherry-pick, do not force anything, do not push, and do not create, rename or delete any branch " +
+            "other than `$branch`. Do not stash, commit or discard my uncommitted changes — if the switch is " +
+            "refused because of them, stop and tell me rather than clearing the way. If `$branch` already " +
+            "exists, stop and tell me; do not reuse it and do not overwrite it. Tell me which branch I am on " +
+            "when you are done."
+    }
+
+    /**
+     * Undo one commit by recording another — the additive revert, on the branch the user is on.
+     *
+     * This one *does* touch the current branch, and that is what `git revert` is: it appends a commit rather
+     * than rewriting anything, so nothing is lost and the undo is itself in the history. The prohibitions are
+     * therefore aimed at the ways the same sentence could be carried out destructively — a `reset` back to the
+     * parent, an interactive rebase dropping the commit, an amend — each of which changes commits that already
+     * exist and any of which a capable agent might reasonably prefer as "cleaner".
+     *
+     * A conflict is left standing on purpose. Resolving it means choosing a side on the user's behalf, in a
+     * turn they asked for a one-command revert; the way out is named in the answer so a half-finished revert is
+     * not a state they are stranded in.
+     *
+     * Null for a [hash] that is not a Git object name, for the reason [revertToCommitOnNewBranchPrompt] gives.
+     */
+    fun revertCommitPrompt(hash: String): String? {
+        if (!GitActionCatalog.isCommitHash(hash)) return null
+        return "Revert commit `$hash` in this repository, keeping the history: run `git revert --no-edit $hash`, " +
+            "which records a NEW commit undoing that one.\n\n" +
+            "That one commit, and no other. Do not run `git reset`, do not rebase, amend or force anything, do " +
+            "not push, and do not create, switch or delete any branch. Do not stash or discard my uncommitted " +
+            "changes — if `git revert` refuses because the working tree is dirty, stop and tell me. If it stops " +
+            "on a conflict, leave the repository exactly as it is and tell me, naming `git revert --abort` as " +
+            "the way back; do not resolve the conflict yourself and do not take one side wholesale."
+    }
+
+    /**
+     * The branch a *revert to this commit* creates: `revert-to-<short hash>`.
+     *
+     * Abbreviated through [GitCommitInfo.shortHash] rather than with a second `take(…)` here, so the plugin has
+     * one rule for how long a short hash is. Safe as a ref name by construction — the caller has already
+     * established that the hash is hexadecimal, and hex contains none of the characters `git check-ref-format`
+     * rejects.
+     */
+    private fun revertBranchName(hash: String): String = "revert-to-${GitCommitInfo.shortHash(hash)}"
+
+    /**
      * One repository path, rendered so that it can only ever *be* a path: one line, no control characters, no
      * backticks.
      *
@@ -147,28 +204,6 @@ internal object GitPromptedActions {
         ch != '`' && !Character.isISOControl(ch) && Character.getType(ch) !in SEPARATOR_CATEGORIES
 
     // ── the entries ───────────────────────────────────────────────────────────────────────────────────────────
-
-    /** [toolbarAction]'s implementation — see its KDoc for why it is always visible and why it auto-asks. */
-    private class OpenGitChatAction(private val project: Project, private val gitChat: () -> ClaudeSession) :
-        AnAction("Git", "Open the Git chat — Claude runs the Git commands, you approve each one", AllIcons.Vcs.Branch) {
-
-        override fun update(e: AnActionEvent) {
-            // Deliberately NOT gated on there being a repository: an empty project is where this is worth most.
-            e.presentation.isVisible = !project.isDisposed && GitAvailability.isGitPluginEnabled()
-        }
-
-        override fun actionPerformed(e: AnActionEvent) {
-            if (project.isDisposed) return
-            // Opening the tab is all this does. What to offer there — including *Initialize repository* on a
-            // project that is not a repository yet — is the Git view's own business, drawn from
-            // `GitActionCatalog` and pushed with the rest of the payload. Sending a prompt from here as well
-            // would put a turn in the transcript for a button the user has not pressed.
-            gitChat()
-        }
-
-        /** BGT: the plugin registry is in-memory state, and the repository read happens in `actionPerformed`. */
-        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
-    }
 
     /** Offered while the working tree has something to record. */
     private class CommitChangesAction(project: Project, gitChat: () -> ClaudeSession) :

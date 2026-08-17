@@ -11,7 +11,7 @@ function openDashboard(win) {
 describe('dashboard — MCP servers card', () => {
   let win;
   beforeEach(() => {
-    win = loadFrontend(['app-session.js']);
+    win = loadFrontend(['app-session.js', 'app-composer.js']);
     win.cc.mcp({
       servers: [
         { name: 'jetbrains-mcp-server', status: 'connected' },
@@ -69,7 +69,7 @@ describe('dashboard — wide cards', () => {
   // Session view's only row-based card is MCP. These assertions were updated rather than deleted: the
   // separation is the feature, and a test still expecting Subagents here would be asserting the old bug.
   it('the Session view keeps only its own row-based card wide', () => {
-    const win = loadFrontend(['app-session.js']);
+    const win = loadFrontend(['app-session.js', 'app-composer.js']);
     win.cc.session({
       agentTree: [
         {
@@ -96,7 +96,7 @@ describe('dashboard — wide cards', () => {
   });
 
   it('the Workloads view renders background tasks, with a Stop control', () => {
-    const win = loadFrontend(['app-session.js']);
+    const win = loadFrontend(['app-session.js', 'app-composer.js']);
     win.cc.session({ backgroundTasks: [{ id: 'b1', desc: 'indexing', type: 'agent' }] });
     openDashboard(win);
     // One view now: agents, their subagents and their tasks are one tree, not three windows onto it.
@@ -119,7 +119,7 @@ describe('dashboard — wide cards', () => {
 describe('dashboard — a layer over the transcript, not a swap for it', () => {
   let win;
   beforeEach(() => {
-    win = loadFrontend(['app-session.js']);
+    win = loadFrontend(['app-session.js', 'app-composer.js']);
     win.cc.session({});
   });
 
@@ -140,24 +140,37 @@ describe('dashboard — a layer over the transcript, not a swap for it', () => {
     expect(conversation().hasAttribute('inert')).toBe(false);
   });
 
-  it('sits in the conversation area — beside #conversation, and outside the dock and the tab bar', () => {
+  it('sits in the chat area — beside #conversation, and outside the dock and the tab bar', () => {
     const panel = openDashboard(win);
-    expect(panel.parentElement.id).toBe('work');
+    // `#tabview` is the group that belongs to the open chat: its transcript, the three waiting screens, and
+    // this. Being inside it is what makes the panel a layer over the transcript and nothing else — and it is
+    // also the unit that would be swapped if two chats ever shared one browser.
+    expect(panel.parentElement.id).toBe('tabview');
     expect(panel.previousElementSibling.id).toBe('conversation');
     expect(win.document.getElementById('dock').contains(panel)).toBe(false);
-    // The tab bar is not even inside the work area, so nothing placed in that area can reach it.
+    // The dock is shared by every chat, so it is OUTSIDE the group; the tab bar is not even inside the work
+    // area, so nothing placed in that area can reach it.
     const work = win.document.getElementById('work');
+    const view = win.document.getElementById('tabview');
+    expect(work.contains(view)).toBe(true);
+    expect(view.contains(win.document.getElementById('dock'))).toBe(false);
     expect(work.contains(win.document.getElementById('tabsbar'))).toBe(false);
     expect(work.contains(win.document.getElementById('dock'))).toBe(true);
   });
 
   it('keeps the panel where the reader left it across a rebuild', () => {
     const panel = openDashboard(win);
+    // The panel is the scroll container; the GRID inside it is what gets rebuilt. That split is deliberate —
+    // the Git view's embedded conversation is a sibling of the grid and holds a caret, so emptying their
+    // shared parent on every push would take it with them (app-session.js).
+    const grid = panel.querySelector('.dash-inner');
+    expect(grid).toBeTruthy();
+
     // jsdom has no layout, so `scrollTop` there is an inert property: it survives having its content emptied,
     // which is the one thing the browser does NOT do — a scroll container with nothing left in it has nowhere
     // to be, and the offset is gone. An accessor that keeps the value would therefore pass with the restore
-    // deleted (it did), so the loss is modelled: emptying the panel drops the offset, exactly as it does on
-    // screen. What is asserted is that the code read the offset before the rebuild and wrote it back after.
+    // deleted (it did), so the loss is modelled: emptying the grid drops the panel's offset, exactly as it
+    // does on screen. What is asserted is that the code read the offset before the rebuild and wrote it back.
     let offset = 0;
     Object.defineProperty(panel, 'scrollTop', {
       configurable: true,
@@ -166,17 +179,19 @@ describe('dashboard — a layer over the transcript, not a swap for it', () => {
         offset = v;
       },
     });
-    const removeChild = panel.removeChild.bind(panel);
-    panel.removeChild = (node) => {
+    const removeChild = grid.removeChild.bind(grid);
+    grid.removeChild = (node) => {
       const gone = removeChild(node);
-      if (!panel.firstChild) offset = 0;
+      if (!grid.firstChild) offset = 0;
       return gone;
     };
     panel.scrollTop = 240;
 
-    const before = panel.firstChild;
-    win.cc.session({}); // the host pushes several of these a turn, and each one rebuilds the panel
-    expect(panel.firstChild).not.toBe(before);
+    const before = grid.firstChild;
+    win.cc.session({}); // the host pushes several of these a turn, and each one rebuilds the grid
+    expect(grid.firstChild).not.toBe(before);
+    // …and the grid itself is NOT rebuilt: it is the persistent node the chat pane sits beside.
+    expect(panel.querySelector('.dash-inner')).toBe(grid);
     expect(panel.scrollTop).toBe(240);
   });
 });

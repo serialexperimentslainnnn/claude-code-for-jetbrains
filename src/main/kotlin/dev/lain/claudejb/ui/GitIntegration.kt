@@ -2,6 +2,7 @@ package dev.lain.claudejb.ui
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
+import com.intellij.ide.DataManager
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUiKind
@@ -13,19 +14,29 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.ProjectLevelVcsManager
 import com.intellij.openapi.vcs.VcsDirectoryMapping
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.context.EditorContextProvider
+import dev.lain.claudejb.forge.ForgeAnswer
+import dev.lain.claudejb.forge.ForgeProbe
+import dev.lain.claudejb.forge.ForgeProvider
+import dev.lain.claudejb.forge.ForgeRepo
+import dev.lain.claudejb.forge.ForgeService
+import dev.lain.claudejb.forge.ForgeTokens
 import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitHistoryService
+import dev.lain.claudejb.git.GitLogNavigator
+import dev.lain.claudejb.git.GitRemoteProvider
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
 import dev.lain.claudejb.ui.jcef.JcefGitData
+import java.awt.datatransfer.StringSelection
 import java.io.File
 
 /**
@@ -34,20 +45,21 @@ import java.io.File
  * One per project, because a project has one working tree and one Git chat — the state of "Commit with Claude"
  * is not a property of whichever tab happens to be on screen.
  *
- * **Three kinds of action, three different executors** ([GitActionCatalog.Kind]), and the split is the whole
+ * **Four kinds of action, four different executors** ([GitActionCatalog.Kind]), and the split is the whole
  * design: the plugin itself runs only the one command that has nothing to decide, the agent runs the ones whose
- * value is in *why* the change was made, and the IDE runs the ones it already does better than a chat card
- * could. Which kind an id is comes from [GitActionCatalog] and is never restated here.
+ * value is in *why* the change was made, the IDE runs the ones it already does better than a chat card could,
+ * and the host answers the pure reads with no process and no turn at all. Which kind an id is comes from
+ * [GitActionCatalog] and is never restated here.
  *
  * **This file lives in `ui/`, not in `git/`, deliberately.** `GitReadOnlyContractTest` forbids
  * [GeneralCommandLine] inside `dev.lain.claudejb.git`, and that contract must stay true: the read-only package
  * is what guarantees the branch, the log and the change list can never become a write path. The one command the
  * plugin does run therefore lives outside it, in plain sight, with its argv fixed in this file.
  *
- * **Nothing the page sends reaches a command line.** The inbound message carries an id and nothing else; the id
- * is looked up in the catalogue and an unknown one is dropped. Every argv below is a literal, the working
- * directory is the project's own base path, and no shell is involved — so there is no string for a caller to
- * inject into.
+ * **Nothing the page sends reaches a command line.** The inbound message carries an id and a commit hash; the
+ * id is looked up in the catalogue and an unknown one is dropped, and the hash is refused unless it has the
+ * shape of a Git object name (see [perform]). Every argv below is a literal, the working directory is the
+ * project's own base path, and no shell is involved — so there is no string for a caller to inject into.
  *
  * **Threading.** [refresh] and [perform] are EDT entry points (the browser bridge delivers there, and reading
  * which file is in the editor is an EDT-only question). Everything that spawns a process — `git log` behind
@@ -104,26 +116,47 @@ internal class GitIntegration(private val project: Project) {
     }
 
     /**
-     * Runs the catalogue action [id] asked for by the Git view.
+     * Runs the catalogue action [id] asked for by the Git view, against commit [hash] when it needs one.
      *
      * [chat] is how a prompted action reaches the Git conversation — it opens or selects that tab, so it is
      * called only for the kind that needs it. [onChanged] is fired whenever an action's state moves, which for
      * a prompted action is twice: when it starts, and when the turn it started settles.
+     *
+     * **Two values arrive from the browser and they are checked by two different mechanisms**, because they are
+     * two different kinds of value. [id] is closed: it is looked up in the catalogue and an id this build does
+     * not know is dropped. [hash] is open by definition — the whole point of a commit hash is to be a value
+     * never seen before — so it is checked for the SHAPE of a Git object name, HERE, before anything can be
+     * built from it. Checking it at the boundary is what makes the refusal VISIBLE: a builder that rejects the
+     * value returns null, which every caller already treats as "the repository moved under the view", so a
+     * hostile value and a stale button would report the same thing and neither would name what happened.
+     *
+     * A hash is only looked at when the entry says it takes one (`takesCommit`). For every other entry the
+     * value is ignored outright, so a page that sends one cannot make it reach a prompt with no commit in it.
      */
-    fun perform(id: String, chat: () -> ClaudeSession, onChanged: () -> Unit) {
+    fun perform(id: String, hash: String, chat: () -> ClaudeSession, onChanged: () -> Unit) {
         // The page is a trust boundary: an id this build does not know is dropped, never passed along.
         val action = GitActionCatalog.byId(id) ?: run {
             LOG.warn("Git view asked for an unknown action id: $id")
             return
         }
+        if (action.takesCommit && !GitActionCatalog.isCommitHash(hash)) {
+            // Not a warning about the user: nothing on the page can produce this. It is either a stale view
+            // whose payload predates the commit list, or something sending its own messages — and in the
+            // second case the value is exactly the one that must not reach a prompt naming git commands.
+            LOG.warn("Git view asked for '$id' with a value that is not a commit hash; refusing")
+            settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
+            return
+        }
         when (action.kind) {
             GitActionCatalog.Kind.DIRECT -> runDirect(action, onChanged)
 
-            GitActionCatalog.Kind.PROMPT -> runPrompt(action, chat, onChanged)
+            GitActionCatalog.Kind.PROMPT -> runPrompt(action, hash, chat, onChanged)
 
             // Deliberately stateless: an IDE action opens a dialog and the answer is the user's, not ours.
             // Painting a "running" pill over a dialog nobody has answered yet would be a state we invented.
-            GitActionCatalog.Kind.IDE -> invokeIde(action)
+            GitActionCatalog.Kind.IDE -> invokeIde(action, onChanged)
+
+            GitActionCatalog.Kind.HOST -> runHost(action, hash, onChanged)
         }
     }
 
@@ -144,19 +177,76 @@ internal class GitIntegration(private val project: Project) {
             return JcefGitData.Snapshot(available = true, actionStates = states.toMap())
         }
         val changes = history.workingTreeChanges()
+        val branch = history.currentBranch()
+        val forge = forgeRepo(history)
         return JcefGitData.Snapshot(
             available = true,
             repo = JcefGitData.Repo(
                 present = true,
-                branch = history.currentBranch(),
+                branch = branch,
                 head = history.headRevision(),
                 root = root,
             ),
             changes = changes,
             commits = history.recentCommits(),
+            // The branch map's other half. Read here rather than on the page because only the IDE knows which
+            // refs exist: the commits carry their parents, which is the shape, and these say which line is
+            // `main` and which one HEAD is on. Costs no process — it is the ref state already in memory.
+            refs = history.refs(),
             changedFileOpen = relativeChangedFile(root, changes, openFilePath) != null,
             actionStates = states.toMap(),
+            topology = history.branchTopology(),
+            pullRequests = forge.drawable(branch) { repo, on -> ForgeService.openPullRequests(repo, on) },
+            lastRun = forge.drawable(branch) { repo, on -> ForgeService.lastRun(repo, on) },
         )
+    }
+
+    /**
+     * The repository as the forge knows it, or null when there is nothing to ask or nobody to ask.
+     *
+     * Three things have to line up and each absence is ordinary rather than an error: a remote to read
+     * ([GitHistoryService.primaryRemote] — `origin`, else `upstream`, else the only one), an owner and a name
+     * in it, and a token stored for that host.
+     *
+     * **The token is required BEFORE the provider is known, and that ordering is deliberate.** A host whose
+     * name does not identify the forge is settled by asking its API ([ForgeProbe]) — a network request to a
+     * server named by whatever repository happens to be open. Requiring the token first makes that request
+     * something the user opted into by storing a credential for that host, rather than something the plugin
+     * does to every remote it sees. It is also the only state in which the answer could be used.
+     */
+    private fun forgeRepo(history: GitHistoryService): ForgeRepo? {
+        val remote = history.primaryRemote() ?: return null
+        val host = remote.host ?: return null
+        val owner = remote.owner ?: return null
+        val name = remote.repo ?: return null
+        val token = ForgeTokens.get(host) ?: return null
+        val provider = when (remote.provider) {
+            GitRemoteProvider.GITHUB -> ForgeProvider.GITHUB
+
+            GitRemoteProvider.GITLAB -> ForgeProvider.GITLAB
+
+            // The URL says nothing, which is the normal shape of a self-hosted instance. Ask the host.
+            GitRemoteProvider.OTHER -> ForgeProbe.detect(host, token) ?: return null
+        }
+        return ForgeRepo(provider, host, owner, name)
+    }
+
+    /**
+     * Runs [ask] and reduces its answer to "what the card should draw", where **null means draw no card**.
+     *
+     * [ForgeAnswer.Silent] is deliberately flattened to null here and nowhere earlier: the reasons matter to
+     * `idea.log` and to nothing else, and the UI's only correct reaction to any of them is to show nothing.
+     * A card that appears to say "no token" is a card asking to be configured for a feature the user has not
+     * asked for. What must NOT be flattened with it is [ForgeAnswer.Known] of an empty list — "this branch
+     * has no open pull request" is an answer, and it is worth a row.
+     */
+    private fun <T> ForgeRepo?.drawable(branch: String?, ask: (ForgeRepo, String) -> ForgeAnswer<T>): T? {
+        val repo = this ?: return null
+        val on = branch?.takeIf { it.isNotBlank() } ?: return null
+        return when (val answer = ask(repo, on)) {
+            is ForgeAnswer.Known -> answer.value
+            is ForgeAnswer.Silent -> null
+        }
     }
 
     /**
@@ -282,8 +372,13 @@ internal class GitIntegration(private val project: Project) {
      * ones the tests pin. A second copy of a prompt whose prohibitions are the safety margin is how the button
      * and the menu come to ask for different things.
      */
-    private fun runPrompt(action: GitActionCatalog.GitAction, chat: () -> ClaudeSession, onChanged: () -> Unit) {
-        val text = promptFor(action)
+    private fun runPrompt(
+        action: GitActionCatalog.GitAction,
+        hash: String,
+        chat: () -> ClaudeSession,
+        onChanged: () -> Unit,
+    ) {
+        val text = promptFor(action, hash)
         if (text == null) {
             // The state moved under the view between drawing the button and pressing it (nothing left to commit,
             // the editor moved on). Failing loudly beats sending a prompt that names nothing.
@@ -298,7 +393,15 @@ internal class GitIntegration(private val project: Project) {
         session.send(text)
     }
 
-    private fun promptFor(action: GitActionCatalog.GitAction): String? {
+    /**
+     * The prompt text for a prompted entry, or null when the repository can no longer answer for it.
+     *
+     * The two commit entries re-check the hash inside their own builders rather than trusting [perform]'s
+     * check. That is not the same rule enforced twice: those builders are public and pinned by
+     * `GitPromptedActionsTest`, so they own the guarantee that a prompt they return can only ever name an
+     * object name, whoever called them.
+     */
+    private fun promptFor(action: GitActionCatalog.GitAction, hash: String): String? {
         val history = project.service<GitHistoryService>()
         val root = history.primaryRepositoryRoot() ?: return null
         return when (action.id) {
@@ -307,11 +410,43 @@ internal class GitIntegration(private val project: Project) {
             REVERT_FILE -> relativeChangedFile(root, history.workingTreeChanges(), EditorContextProvider.currentFilePath(project))
                 ?.let(GitPromptedActions::revertFilePrompt)
 
+            COMMIT_REVERT_TO_BRANCH -> GitPromptedActions.revertToCommitOnNewBranchPrompt(hash)
+
+            COMMIT_REVERT -> GitPromptedActions.revertCommitPrompt(hash)
+
             else -> {
                 LOG.warn("No prompt is wired for Git action '${action.id}'")
                 null
             }
         }
+    }
+
+    // ── HOST: the plugin answers it itself, running no `git` and asking no agent ──────────────────────────────
+
+    /**
+     * The two reads of the history rail: show the commit, or put its hash on the clipboard.
+     *
+     * Neither spawns a process and neither costs a turn (see [GitActionCatalog.Kind] for why they are not
+     * `DIRECT` and not `PROMPT`). [hash] has already been established as an object name by [perform]; nothing
+     * here re-derives it, and nothing here writes to the repository.
+     */
+    private fun runHost(action: GitActionCatalog.GitAction, hash: String, onChanged: () -> Unit) {
+        val done = when (action.id) {
+            // The FULL hash the row carried, not the abbreviation on screen: what a user pastes into a command
+            // has to resolve without depending on how unique seven characters happen to be in this repository.
+            COMMIT_COPY_HASH -> {
+                CopyPasteManager.getInstance().setContents(StringSelection(hash))
+                true
+            }
+
+            COMMIT_DIFF -> GitLogNavigator.showCommit(project, hash)
+
+            else -> {
+                LOG.warn("No host action is wired for Git action '${action.id}'")
+                false
+            }
+        }
+        settle(action.id, if (done) JcefGitData.ActionState.COMPLETED else JcefGitData.ActionState.FAILED, onChanged)
     }
 
     /**
@@ -350,31 +485,67 @@ internal class GitIntegration(private val project: Project) {
     // ── IDE: the platform's own action, by id ─────────────────────────────────────────────────────────────────
 
     /**
-     * Invokes the platform action the catalogue names, in this project's context.
+     * Invokes the platform action the catalogue names, in the context of the tool window it was pressed from.
+     *
+     * **The data context is the whole of this function, and getting it wrong made every one of these buttons
+     * do nothing.** It used to be `SimpleDataContext.getProjectContext(project)`, which carries exactly one
+     * key. A platform action resolves its target from the context it is handed — the repository, the selected
+     * files, the component a popup will hang off — and when it cannot find one it disables itself in its
+     * `update`. `DataManager.getDataContext(component)` is what the platform gives its own menus: the project,
+     * the component, and every key the tool window's providers contribute.
+     *
+     * **The update must be RUN, and `performAction` does not run it.** Read on 253: `performAction` only
+     * *reads* `event.presentation.isEnabled` and returns `ignored("action is disabled")` — so with a
+     * presentation nobody has populated, every one of these buttons is decided by a default rather than by the
+     * action. Populating it is therefore load-bearing, and it goes through **`ActionUtil.updateAction`**, never
+     * `AnAction.update` directly: that method is `@ApiStatus.OverrideOnly` — a thing to implement, not to call
+     * — and `OVERRIDE_ONLY_API_USAGES` is in `verifyPlugin`'s `failureLevel`, so calling it fails the build.
+     * It is invisible to `IdeActionApiContractTest`, which asserts by reflection and cannot see a CLASS-retained
+     * annotation; the verifier is the only gate that catches it.
+     *
+     * **A refusal is reported, not swallowed.** If the action is still disabled with a real context, that is
+     * the IDE saying no (no repository, indexing, nothing selected) and the button says FAILED rather than
+     * looking broken — silence is the failure mode this whole function is a fix for.
      *
      * `ActionUtil.performAction` and **not** `ActionUtil.invokeAction`: all three `invokeAction` overloads are
      * `@Deprecated` on the platform this plugin compiles against, and this repository does not ship deprecated
      * API — `verifyPlugin` fails the build on `DEPRECATED_API_USAGES`. `IdeActionApiContractTest` pins that
      * choice against the build classpath so the next deprecation is caught in milliseconds instead of at release
-     * time.
+     * time. `performDumbAwareUpdate` and `lastUpdateAndCheckDumb` are the same trap in the other direction:
+     * both are deprecated on 253, so either would trade this failure for that one.
      *
      * An id the running IDE does not have is skipped rather than thrown on: the Git plugin can be disabled, and
      * an action id is JetBrains' to rename.
      */
-    private fun invokeIde(action: GitActionCatalog.GitAction) {
+    private fun invokeIde(action: GitActionCatalog.GitAction, onChanged: () -> Unit) {
         val actionId = action.ideActionId ?: return
         val target = ActionManager.getInstance().getAction(actionId) ?: run {
             LOG.warn("This IDE has no action '$actionId'; the Git view's '${action.id}' button does nothing")
+            settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
             return
+        }
+        val component = ClaudeToolWindowFactory.contextComponent(project)
+        val context = if (component != null) {
+            DataManager.getInstance().getDataContext(component)
+        } else {
+            SimpleDataContext.getProjectContext(project)
         }
         val event = AnActionEvent.createEvent(
             target,
-            SimpleDataContext.getProjectContext(project),
+            context,
             null,
             ActionPlaces.TOOLWINDOW_CONTENT,
-            ActionUiKind.NONE,
+            // TOOLBAR, not NONE: it IS a button, and the ui kind is what a popup-based action reads to decide
+            // how to present itself.
+            ActionUiKind.TOOLBAR,
             null,
         )
+        ActionUtil.updateAction(target, event)
+        if (!event.presentation.isEnabled || !event.presentation.isVisible) {
+            LOG.warn("The IDE refused '$actionId' in this context (enabled=${event.presentation.isEnabled})")
+            settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
+            return
+        }
         ActionUtil.performAction(target, event)
     }
 
@@ -397,6 +568,12 @@ internal class GitIntegration(private val project: Project) {
         const val INIT = "init"
         const val COMMIT = "commit"
         const val REVERT_FILE = "revertFile"
+
+        /** The history rail's entries — the four that carry a commit hash. */
+        const val COMMIT_DIFF = "commitDiff"
+        const val COMMIT_COPY_HASH = "commitCopyHash"
+        const val COMMIT_REVERT_TO_BRANCH = "commitRevertToBranch"
+        const val COMMIT_REVERT = "commitRevert"
 
         /** The VCS's registered name — see [registerRepository] for why it is a string and not a class. */
         private const val GIT_VCS_NAME = "Git"
