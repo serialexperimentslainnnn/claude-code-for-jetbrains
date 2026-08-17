@@ -1,4 +1,4 @@
-L#!/usr/bin/env bash
+#!/usr/bin/env bash
 # One-shot CI/CD bootstrap: creates the deployment environment, sets its seven secrets, and (optionally)
 # applies the branch protections. Automates everything that can be automated and asks you only for what
 # you actually hold: the Marketplace token, and the JetBrains signing key if you still have it.
