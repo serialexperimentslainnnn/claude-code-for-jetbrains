@@ -154,6 +154,13 @@ tasks {
     // drift out of sync with the files they describe: one source of truth at the repository root, packaged at
     // build time. `THIRD-PARTY-NOTICES.md` is surfaced to the user by the About dialog (see InfoDialogs).
     processResources {
+        // The distributed map is written FOR this repository and lands in the artifact by accident: the one
+        // under `src/main/resources/jcef/` is a resource like any other, so it shipped inside the plugin jar —
+        // 20 KB of internal design notes and source paths handed to every user, for nothing. Excluded by
+        // pattern rather than by path, because the next directory to get a map will be a `resources` one again
+        // and nobody will think of this file. Nothing reads it at runtime: `JcefHost` names every script and
+        // stylesheet it loads explicitly (`appNames`, `CSS_PARTS`) and globs no resource directory.
+        exclude("**/PROJECTMAP.md")
         from(rootProject.file("THIRD-PARTY-NOTICES.md")) { into("META-INF") }
         from(rootProject.file("LICENSE")) { into("META-INF") }
         from(rootProject.file("LICENSES")) { into("META-INF/licenses") }
@@ -213,24 +220,13 @@ tasks {
         testLogging { showStandardStreams = true }
     }
 
-    // The distributed PROJECTMAP.md index, checked against the sources it claims to index. WIRED INTO
-    // `check` (unlike `checkDrift` above), because it needs no network, no binary and no IDE — it reads the
-    // working tree and nothing else.
+    // NB there is deliberately NO `checkProjectMap` task, and the `PROJECTMAP.md` files are not gated.
     //
-    // Each map is two documents in one file: prose a person wrote, and — between the `MAP:GENERATED`
-    // markers — an index derived from the code. Only the derived half is compared here, and that split is
-    // what makes the gate possible at all: a hand-written line number is fiction after the next edit, so a
-    // map maintained by hand can only be checked by reading it, which nobody does. A stale map is worse
-    // than no map, because everybody believes it and nobody re-checks it.
-    //
-    //   python3 scripts/gen-projectmap.py            # regenerate every block after moving anything
-    //   ./gradlew checkProjectMap                    # or `./gradlew check`, which includes it
-    val checkProjectMap by registering(Exec::class) {
-        description = "Verify each PROJECTMAP.md's generated block still matches the sources it indexes."
-        group = "verification"
-        workingDir = rootProject.projectDir
-        commandLine("python3", "scripts/gen-projectmap.py", "--check")
-    }
+    // They are an orientation index for AI-assisted sessions — a local tooling convention, not part of the
+    // product: nothing in them reaches the artifact, and `processResources` excludes them from it. Gating the
+    // build on them made the one check whose failure can never be a defect in the plugin, and imposed a
+    // Python script on anyone who clones the repository and edits a file. Regenerate with
+    // `python3 scripts/gen-projectmap.py` when you want them current.
 
     // Convenience alias: run only the heavy IntelliJ-fixture packages (headless + fake-claude integration).
     val integrationTest by registering {
@@ -296,9 +292,6 @@ tasks {
     //      task is pulled in as a dependency of `koverXmlReport`/`koverVerify` whether or not `check` wants
     //      it, so staying out of `check` alone leaves the coverage tasks unable to run anywhere the IDE is
     //      not already up.
-    check {
-        dependsOn(checkProjectMap)
-    }
 }
 
 // ---------------------------------------------------------------------------

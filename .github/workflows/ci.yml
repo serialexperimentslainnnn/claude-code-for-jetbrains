@@ -204,17 +204,11 @@ jobs:
       - name: Prettier
         run: npm run format:check
 
-      # The distributed PROJECTMAP.md index, regenerated from the sources and compared. Only the half
-      # between the `MAP:GENERATED` markers is derived; the prose around it is hand-written and untouched.
-      # A map that has drifted is worse than no map — nobody re-checks it and everybody believes it — so it
-      # is gated rather than trusted, exactly like the attribution claims in `Build plugin`.
-      #
-      # A plain `run:`, with no action to pin: `python3` is installed EXPLICITLY in the image (see
-      # .github/ci-image/jvm-test.Dockerfile — `bin/fake-claude`, the integration suite's stand-in binary,
-      # needs it), and the script is standard library only. Same command a developer runs locally, which is
-      # also what `./gradlew checkProjectMap` invokes.
-      - name: Project map
-        run: python3 scripts/gen-projectmap.py --check
+      # NB the PROJECTMAP.md index is deliberately NOT checked here. It is an orientation index for
+      # AI-assisted sessions — a local convention, excluded from the artifact — so a stale one cannot affect
+      # anybody who installs the plugin, and gating on it made the only CI failure that is never a defect in
+      # the product. It also made every contributor's build depend on running a Python script after editing a
+      # file. Regenerate it when you want it current: `python3 scripts/gen-projectmap.py`.
 
       - name: Upload analysis reports
         if: always()
@@ -501,6 +495,37 @@ jobs:
           count=$(unzip -l "$zip" | grep -c node_modules || true)
           echo "node_modules entries in $zip: $count"
           [ "$count" -eq 0 ] || { echo "::error::npm code leaked into the distributed artifact"; exit 1; }
+
+      # What the plugin jar may contain, as an ALLOWLIST — because the leak this replaces was not a name
+      # anyone would have thought to ban.
+      #
+      # `src/main/resources/jcef/PROJECTMAP.md` is a map written for this repository, and to Gradle it is a
+      # resource like any other: it rode into the jar in every published release, 20 KB of internal design
+      # notes and source paths handed to users. `processResources` excludes it by pattern now, but banning
+      # that one name would only catch the file we already know about — the next accidental doc, scratch
+      # fixture or generated report under `resources/` would ship exactly the same way and just as silently.
+      #
+      # So the assertion is inverted: four families are runtime content (our classes, the plugin's own
+      # descriptors and licences, the tool-window icons, and the inlined web app), and anything else is a
+      # mistake until someone adds it here deliberately. A new legitimate family costs one line; a leak costs
+      # a red build instead of a release.
+      - name: Assert the plugin jar carries only what it should
+        run: |
+          zip=$(ls build/distributions/*.zip)
+          unzip -o -q "$zip" -d /tmp/artifact
+          jar=$(ls /tmp/artifact/*/lib/claude-code-native-*.jar | grep -v searchableOptions)
+          # -1 lists entry names alone; directory entries end in `/` and carry nothing.
+          unzip -Z -1 "$jar" | grep -v '/$' \
+            | grep -vE '^dev/lain/claudejb/.*\.class$' \
+            | grep -vE '^META-INF/' \
+            | grep -vE '^icons/[^/]+\.svg$' \
+            | grep -vE '^jcef/([^/]+\.(js|html)|css/[^/]+\.css)$' > /tmp/unexpected.txt || true
+          if [ -s /tmp/unexpected.txt ]; then
+            echo "::error::unexpected entries in the plugin jar — either they must not ship, or add their family to this allowlist"
+            cat /tmp/unexpected.txt
+            exit 1
+          fi
+          echo "plugin jar contents are within the declared allowlist"
 
       # Likewise for attribution: the licences of the bundled web libraries must travel INSIDE the jar,
       # because that is where the redistribution obligation actually lands.
