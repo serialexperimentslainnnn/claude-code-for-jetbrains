@@ -106,14 +106,29 @@
   function wireAuthCard() {
     if (authWired) return;
     authWired = true;
-    // Under the native-Wayland toolkit CEF's clipboard is isolated from the system one, so a plain
-    // paste into these fields yields nothing. Route it through the host, which reads the real
-    // clipboard — cc.insertText then lands it in whichever field has focus.
+    // PASTE INTO THESE TWO FIELDS IS A FALLBACK, NOT A MODE — ask the browser, and ask the host only when
+    // the browser came back empty-handed.
+    //
+    // It used to be gated on `CX.hostClipboard`, a flag the host sets only under the native Wayland toolkit,
+    // and that gate is a guess about the environment rather than a fact about this paste. It was wrong in
+    // Remote Development, where the flag is false and the browser's clipboard is still not the user's: the
+    // page is rendered on the BACKEND and streamed to the thin client, so the clipboard CEF can see belongs
+    // to the remote machine and the token the user copied is on their laptop. Pasting into the sign-in card
+    // — the one screen you cannot get past without pasting — simply did nothing.
+    //
+    // Reading the event instead of the environment covers all three cases with no detection at all: X11
+    // hands us the text and we let the browser do its job, Wayland and Remote Development hand us nothing
+    // and we ask the host. There is deliberately no check for WHICH of those it is: `AppMode.isRemoteDevHost`
+    // is internal API (this plugin has had a release blocked over one) and the per-client alternative is
+    // experimental, so a gate built on either would be a stability risk taken for information this does not
+    // need.
     ['auth-key', 'auth-code'].forEach(function (id) {
       var el = document.getElementById(id);
       if (!el) return;
       el.addEventListener('paste', function (e) {
-        if (!CX.hostClipboard) return;
+        var clip = e.clipboardData;
+        var text = clip && typeof clip.getData === 'function' ? clip.getData('text') : '';
+        if (text) return; // the browser has it; its own default insert is the right thing
         e.preventDefault();
         CC.send({ type: 'pasteClipboard' });
       });

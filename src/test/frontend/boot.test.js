@@ -51,23 +51,36 @@ describe('boot screen', () => {
     expect(boot().hidden).toBe(false);
   });
 
-  it('the waiting screens live inside the transcript, so they can only ever cover the transcript', () => {
-    // They paint above the transcript's content, which is what a waiting screen is for. What bounds them is
-    // the nesting: as children of #conversation they cannot reach the chat tab bar or the composer, so a chat
-    // can be switched while another starts and the composer stays usable while the binary comes up.
+  it('the waiting screens belong to the CHAT — grouped with the transcript, beside it and not inside it', () => {
+    // Three bounds, and each one is a bug that happened.
+    //
+    // OUTSIDE #conversation, because that element's children belong to `cc.clear()`, which deletes them (see
+    // below). INSIDE #tabview, because that group is what a chat's context IS — its transcript and the three
+    // screens that stand in for it — and grouping them is what makes "switch chat" a question with one
+    // answer. And #tabview is inside #work, which is what stops any of them reaching the tab bar or the
+    // composer: as `inset: 0` panels over #app they covered both, so a chat could not be switched while
+    // another started.
     const conv = win.document.getElementById('conversation');
-    expect(conv.contains(boot())).toBe(true);
-    expect(conv.contains(win.document.getElementById('auth-card'))).toBe(true);
-    // And the things they must never contain, or they would be covering them again.
-    expect(conv.contains(win.document.getElementById('dock'))).toBe(false);
-    expect(conv.contains(win.document.getElementById('tabsbar'))).toBe(false);
+    const view = win.document.getElementById('tabview');
+    const work = win.document.getElementById('work');
+    expect(conv.parentNode).toBe(view);
+    for (const screen of [boot(), win.document.getElementById('auth-card')]) {
+      expect(screen.parentNode).toBe(view);
+      expect(conv.contains(screen)).toBe(false);
+    }
+    // …and what is NOT the chat's stays out of the group: the dock is shared by every chat and is a row of
+    // its own, and the tab bar is outside #work altogether.
+    const dock = win.document.getElementById('dock');
+    expect(view.contains(dock)).toBe(false);
+    expect(work.contains(dock)).toBe(true);
+    expect(work.contains(win.document.getElementById('tabsbar'))).toBe(false);
   });
 
   it('the sign-in screen replaces the spinner instead of being covered by it', () => {
-    // Exactly one screen up at a time, decided here rather than by stacking: neither #boot nor #auth-card
-    // carries a z-index any more (they are rows of #conversation, not layers over it), so "both up" would put
-    // two screens in the flow with nothing to say which one the user is meant to answer. Needing to sign in
-    // means the spinner has nothing to wait for, so it is the spinner that goes.
+    // Exactly one screen up at a time, decided here rather than by stacking. The two share a z-index, which
+    // says where they sit relative to the TRANSCRIPT and nothing about each other — "both up" would be two
+    // screens in one cell with nothing to say which one the user is meant to answer. Needing to sign in means
+    // the spinner has nothing to wait for, so it is the spinner that goes.
     win.cc.state({ starting: false, running: false, needsLogin: true });
     expect(boot().hidden).toBe(true);
     expect(win.document.getElementById('auth-card').hidden).toBe(false);
@@ -106,6 +119,55 @@ describe('boot screen', () => {
     const region = win.document.getElementById('a11y-status');
     win.cc.state({ starting: true, running: false });
     expect(region.textContent).toContain('Loading Claude Code');
+  });
+
+  it('takes the transcript out of reach while it covers it, and gives it back', () => {
+    // An opaque layer over content that keeps its links and buttons focusable is WCAG 2.2 SC 2.4.11 (Focus
+    // Not Obscured). Declared through CC.coverTranscript because the dashboard covers the same element.
+    const conv = win.document.getElementById('conversation');
+    win.cc.state({ starting: true, running: false });
+    expect(conv.hasAttribute('inert')).toBe(true);
+
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(conv.hasAttribute('inert')).toBe(true); // the sign-in card covers it just the same
+
+    win.cc.state({ starting: false, running: true });
+    expect(conv.hasAttribute('inert')).toBe(false);
+  });
+});
+
+// The regression that put this file's structural test where it is. The waiting screens were rows INSIDE
+// #conversation, and `cc.clear()` — which runs on every switch between a chat, an agent and a task, and on
+// every session stop — removes that element's children. So the first clear deleted all three screens from the
+// document, permanently, and nothing said so: `renderBoot` looks its element up and returns when it is
+// absent. A tab that later lost its binary, its login or its process showed no screen at all, and the only
+// thing that appeared to fix it was opening a new chat, i.e. a page that had not cleared yet.
+describe('waiting screens vs. the transcript lifecycle', () => {
+  let win;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js', 'app-transcript.js'], { vendor: false });
+  });
+
+  it('survives cc.clear() and still renders afterwards', () => {
+    win.cc.state({ starting: false, running: true });
+    expect(win.document.getElementById('boot').hidden).toBe(true);
+
+    win.cc.clear();
+
+    expect(win.document.getElementById('boot')).toBeTruthy();
+    expect(win.document.getElementById('auth-card')).toBeTruthy();
+    win.cc.state({ starting: false, running: false });
+    expect(win.document.getElementById('boot').hidden).toBe(false);
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+  });
+
+  it('clearing an emptied transcript leaves only its own idle state behind', () => {
+    // #empty is `cc.clear()`'s own idle state and the ONE child it is allowed to keep. A second survivor
+    // means something is being stored in an element that does not own it — which is the bug above.
+    win.cc.clear();
+    const kept = Array.from(win.document.getElementById('conversation').children).map((el) => el.id);
+    expect(kept).toEqual(['empty']);
   });
 });
 

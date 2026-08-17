@@ -1,8 +1,10 @@
 /* ════════════════════════════════════════════════════════════════════════════
    THE WAITING SCREENS — loading, "Claude Code was not found", sign-in
    ════════════════════════════════════════════════════════════════════════════
-   The three screens that stand in front of a conversation which cannot happen yet. Each is a ROW of the
-   transcript, never a panel over the app — see the boot screen below for what that buys.
+   The three screens that stand in front of a conversation which cannot happen yet. Each is a LAYER OVER THE
+   TRANSCRIPT — a sibling of #conversation sharing the first cell of #work's grid — never a panel over the
+   app and never a row inside the transcript. See the boot screen below for what that buys and what each of
+   the two rejected shapes cost.
 
    Two blocks here are about the whole page rather than those screens: the narrow-width tightening
    immediately below, and the `body.reduced-motion` block that closes the file. The second is `!important`
@@ -25,30 +27,48 @@
 /* ════════════════════════════════════════════════════════════════════════════
    BOOT SCREEN — shown while the `claude` binary launches
    ════════════════════════════════════════════════════════════════════════════
-   CONTENT OF THE TRANSCRIPT, not an overlay on top of it. It used to be `position: absolute; inset: 0`,
-   which meant it covered whatever it was laid over: first the chat tabs (so you could not switch chats while
-   one was starting), then — once that was fixed — the composer, and it painted a full-window panel that
-   vanished again whenever the binary started quickly, which reads as the whole plugin flashing. A row cannot
-   cover anything it does not own, so all three of those go away by construction rather than by tuning.
+   A LAYER OVER THE TRANSCRIPT, and the shape is the same one `.dashboard` uses (dashboard.css): the same
+   grid cell as #conversation, one step over it, opaque. It has been the other two shapes and both were
+   wrong in a way worth keeping written down.
+
+   `position: absolute; inset: 0` over #app covered whatever it was laid over — first the chat tabs (so you
+   could not switch chats while one was starting), then, once that was fixed, the composer. Moving it INSIDE
+   #conversation fixed that by construction and broke something quieter: `cc.clear()` owns that element's
+   children and empties it on every transcript switch and every session stop, so the first clear removed all
+   three screens from the document for good. Nothing threw — `renderBoot` looks the element up and returns
+   when it is absent — so a tab that later lost its binary, its login or its process simply showed no screen
+   at all, and only a newly opened chat (a fresh page) still had one.
+
+   As a sibling of #conversation both go away at once: the layer covers exactly the transcript, and the
+   transcript's own lifecycle cannot reach it.
 
    The composer stays usable: a prompt typed while the binary starts is queued and sent when it is ready
    (`ClaudeSession.send` starts the process and enqueues; `pump` writes once there is a session). */
 #boot {
+  grid-area: 1 / 1;
+  /* Same rank as the dashboard, deliberately: a second layer over the transcript reuses that step rather
+     than climbing past it, because the next number up is the dock's and a screen that outranks the composer
+     is the failure this whole arrangement exists to prevent. Which of the two paints when both are up is
+     document order, and it comes out right: app-session.js inserts the dashboard directly after
+     #conversation, i.e. BEFORE these, so a waiting screen covers the panel and not the other way round. */
+  z-index: 1;
+  min-height: 0;
+  /* Opaque, or the transcript reads through the screen's own text; and scrollable, because the install card
+     is taller than a narrow tool window. `safe center` is the pair to that scroll: plain centring pushes
+     overflow out of BOTH ends of the box, and the top one cannot be scrolled back to. */
+  background: var(--bg);
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
-  padding: clamp(24px, 12vh, 90px) 0;
+  padding: clamp(24px, 12vh, 90px) clamp(16px, 5vw, 40px);
   /* A short grace before it draws. The screen is visible by default — the honest initial state is "waiting",
      not "idle" — but a start that takes 100 ms does not deserve a panel: `both` holds it at opacity 0 for
      the delay, so a fast start never draws it and a slow one still says "wait" immediately after. The wait
      itself is unchanged; only whether it is worth showing. */
   --wait-grace: 0.35s;
   animation: fade 0.14s var(--ease) var(--wait-grace) both;
-}
-/* The empty state and a waiting screen are two answers to the same question, so only one shows. */
-#conversation:has(#boot:not([hidden])) #empty,
-#conversation:has(#auth-card:not([hidden])) #empty {
-  display: none;
 }
 .boot-inner {
   display: flex;
@@ -259,14 +279,21 @@ body.reduced-motion .boot-dots::after {
 }
 
 /* ── sign-in card ───────────────────────────────────────────────────────────── */
-/* A row of the transcript, like the boot screen and for the same reasons. The two are still mutually
-   exclusive — no binary beats no login — but that is decided by the host (`cc.state`), which shows exactly
-   one, rather than by stacking one over the other and trusting a z-index. */
+/* A layer over the transcript, like the boot screen and for the same reasons — see it for why this is a
+   sibling of #conversation and not a row inside it. The z-index the two share says where they sit relative
+   to the TRANSCRIPT, and nothing about each other: which of them is up is still decided by the host
+   (`cc.state`), which raises exactly one — no binary beats no login — rather than by stacking. */
 #auth-card {
+  grid-area: 1 / 1;
+  z-index: 1;
+  min-height: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
-  padding: clamp(24px, 10vh, 70px) 0;
+  padding: clamp(24px, 10vh, 70px) clamp(16px, 5vw, 40px);
   /* No grace, unlike the loading screen. That one is hidden for a third of a second because a start which
      takes 100 ms does not deserve a panel; this card is not a wait but the control that repairs the session,
      and it is raised only once the host has decided it is needed. Its rows still arrive in sequence — they

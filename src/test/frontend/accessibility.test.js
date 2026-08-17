@@ -74,15 +74,23 @@ describe('a11y — visible focus (WCAG 2.4.7 / 1.4.11, Level AA)', () => {
     expect(css()).toMatch(/@media \(forced-colors: active\)/);
   });
 
-  it('nothing in the tab bar is laid over the tabs (SC 2.4.11 Focus Not Obscured)', () => {
-    // The dashboard's view switcher sits in the tab bar. As an absolutely-positioned overlay it covered the
-    // last chat tab: tab to it and the focused control is underneath the buttons — focused and invisible,
-    // which is exactly what 2.4.11 forbids. Both are flex ITEMS, so overlap is impossible by construction
-    // rather than by keeping a `padding-right` in sync with the width of the words.
+  it('the view switcher is laid over nothing at all (SC 2.4.11 Focus Not Obscured)', () => {
+    // Its history is the whole of this test. As an absolutely-positioned corner stack it covered the
+    // transcript's text and, with a few chats open, the last chat tab — tab to it and the focused control is
+    // underneath the buttons, focused and invisible, which is exactly what 2.4.11 forbids. It became a flex
+    // ITEM of the tab bar, which fixed the overlap and tied it to a bar the page hides whenever the chat list
+    // arrives empty. It is a bar INSIDE the prompt card now, sharing a row with the chat's action icons: in
+    // the flow, in a container that is never hidden, and not in the tab bar at all — so there is nothing left
+    // for it to cover, by construction rather than by a number kept in step with something else.
     const sheet = css();
-    const rule = sheet.slice(sheet.indexOf('.dash-toggles'), sheet.indexOf('.dash-toggle {'));
+    const rule = sheet.slice(
+      sheet.indexOf('.composer-controls {'),
+      sheet.indexOf('.composer-views .dash-toggles')
+    );
     expect(rule).not.toMatch(/position:\s*(absolute|fixed)/);
-    expect(rule).toMatch(/flex:\s*0 0 auto/);
+    expect(rule).toMatch(/display:\s*flex/);
+    // And the tab bar no longer styles it, because it is no longer in it.
+    expect(sheet).not.toMatch(/\.tab-row[^{]*\{[^}]*padding-right/);
   });
 
   it('the visually-hidden helper keeps the node in the accessibility tree', () => {
