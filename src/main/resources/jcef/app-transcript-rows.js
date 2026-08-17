@@ -137,8 +137,12 @@
         return buildThinking();
       case 'MEMORY':
         return buildMemory(entry.meta);
+      // The ONE builder that is handed the whole entry rather than a field of it. A tool card carries things
+      // that are fixed for the life of the row and have no later hook in this family — the message the call
+      // sends — and this is where that family sees the entry at all (`updateRow` re-applies only what can
+      // change). Everything else about the card is applied afterwards, by state.
       case 'TOOL':
-        return TX.buildTool();
+        return TX.buildTool(entry);
       case 'TOOL_OUTPUT':
         return buildToolOutputStandalone();
       case 'ERROR':

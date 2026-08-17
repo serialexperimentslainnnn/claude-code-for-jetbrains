@@ -30,6 +30,11 @@ data class EntryDTO(
     /** For a command-executing tool: the raw command, so a restored card renders the same copyable code block a
      *  live one does (see [dev.lain.claudejb.permission.ToolInputScanner.commandText]). Null on every other row. */
     val commandText: String? = null,
+    /** For a call that SENDS text: that text, so a restored card carries it too (see
+     *  [dev.lain.claudejb.permission.ToolInputScanner.messageText]). Read here as well as live, deliberately:
+     *  a field the live parser fills and this one does not is a row that changes when you restore it or open
+     *  an agent's tab, which is exactly the asymmetry behind the duplicated-thinking bug. */
+    val messageText: String? = null,
     /**
      * A tool call that has no result yet — it was still in flight when this transcript was read.
      *
@@ -277,6 +282,7 @@ object SessionTranscriptReader {
                         // Same command extraction as a LIVE call, so a reloaded transcript renders the current
                         // copyable code block instead of falling back to the old plain-text card.
                         commandText = ToolInputScanner.commandText(input),
+                        messageText = ToolInputScanner.messageText(input),
                     )
                 }
             }

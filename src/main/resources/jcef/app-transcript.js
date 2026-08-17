@@ -114,6 +114,8 @@
   TX.conversationEl = conversationEl;
   TX.rows = rows;
   TX.toolCards = toolCards;
+  // The row engine, reusable by anything that paints a conversation into a container of its own. Assigned
+  // after the two functions are declared (below), not here.
 
   // ---- autoscroll / follow -----------------------------------------------
   var followFlag = false;
@@ -197,14 +199,27 @@
 
   // ---- upsert -------------------------------------------------------------
 
-  function createRow(entry) {
+  /**
+   * Builds the DOM for one entry — the ONLY place a transcript row is made.
+   *
+   * [cards] is the tool-card registry the row registers itself in, and it is a parameter rather than this
+   * module's map for one reason: the Git view embeds a SECOND conversation (`app-session-gitchat.js`) whose
+   * rows must be built by this function and tracked by a registry of its own. Two sessions' `tool_use_id`s
+   * share no namespace, so one map would let a Bash output from the Git chat land in the main transcript's
+   * card. Everything else about a row — its markup, its icon, its command block — is identical, which is
+   * exactly why this is a parameter and not a second copy of the builder.
+   */
+  function createRow(entry, cards) {
+    if (!cards) {
+      cards = toolCards;
+    }
     var rec = TX.builderFor(entry.speaker, entry);
     rec.speaker = entry.speaker;
     rec.toolUseId = entry.toolUseId || null;
     if (entry.speaker === 'TOOL' && entry.toolUseId) {
       rec.outNode = rec.el.__outNode || rec.el.querySelector('.tool-out');
       rec.el.__toolUseId = entry.toolUseId;
-      toolCards.set(entry.toolUseId, rec.el);
+      cards.set(entry.toolUseId, rec.el);
       // A tool card starts collapsed and toggles on click. An Agent/Task card is the exception: since 5.5.0
       // the agent's work lives in its own tab, so the card LINKS there instead of expanding onto nothing.
       if (entry.meta === 'Task' || entry.meta === 'Agent') {
@@ -237,7 +252,14 @@
     return rec;
   }
 
-  function updateRow(rec, entry) {
+  /**
+   * Refreshes an existing row from a newer entry. [links] false skips jump-to-code resolution.
+   *
+   * The Git view's embedded conversation passes false: link resolution is an async round-trip to the host
+   * that answers by looking the row up in THIS module's registry, which the Git pane's rows are not in — so
+   * every settled assistant row there would cost a request whose reply lands nowhere.
+   */
+  function updateRow(rec, entry, links) {
     // refresh body text (tool name for TOOL). A file tool renders its path as a jump-to-code link.
     if (rec.speaker === 'TOOL' && entry.title) {
       // A label the host worked out AFTER the row existed: an Agent card starts life saying "Agent" and
@@ -254,7 +276,7 @@
       setBody(rec, entry.text);
       // Model prose/code spans: ask the host to confirm which paths/symbols are real, then link those. Only for
       // settled assistant rows — doing it per streaming delta would spam the host and fight the re-render.
-      if (rec.speaker === 'ASSISTANT' && entry.state !== 'RUNNING') {
+      if (links !== false && rec.speaker === 'ASSISTANT' && entry.state !== 'RUNNING') {
         TX.requestLinks(rec, entry);
       }
     }
@@ -276,6 +298,9 @@
       rec.el.__label.textContent = title;
     }
   }
+
+  TX.createRow = createRow;
+  TX.updateRow = updateRow;
 
   function upsert(entry) {
     if (entry == null || entry.id == null) {
@@ -417,12 +442,23 @@
   };
 
   // ---- public: cc.clear ---------------------------------------------------
+
+  /**
+   * Empties the transcript. Called on every switch between a chat, an agent and a task, and on every session
+   * stop — so #conversation's children belong to THIS function, and anything put inside that element is
+   * deleted the first time a transcript changes.
+   *
+   * That is not a caveat, it is the reason the waiting screens are siblings of #conversation and not rows of
+   * it: as rows they were wiped by the first clear and every later render found no element and returned
+   * silently (see boot.css). #empty survives because it is this function's own idle state, and it is the only
+   * exception there should ever be — a second one is a symptom that something is being stored in the wrong
+   * element.
+   */
   cc.clear = function () {
     rows.clear();
     toolCards.clear();
     var c = conversationEl();
     if (c) {
-      // remove everything except a persistent #empty if it lives inside
       var kids = Array.prototype.slice.call(c.children);
       for (var i = 0; i < kids.length; i++) {
         if (kids[i].id === 'empty') {

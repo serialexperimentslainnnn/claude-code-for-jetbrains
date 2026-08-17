@@ -1352,6 +1352,7 @@ class ClaudeSession(
                     // Without this a restored command card fell back to the pre-4.3.2 plain-text rendering:
                     // no code block, nothing to copy. Restore must produce the SAME row a live turn does.
                     commandText = dto.commandText,
+                    messageText = dto.messageText,
                     // …and the same STATE. The default is FINISHED, which drew every restored card green:
                     // a call still in flight looked done, and one that had failed looked fine. The reader
                     // works both out by pairing each `tool_use` with its `tool_result` (see EntryDTO).
@@ -1893,6 +1894,9 @@ class ClaudeSession(
             // whether to render it as a copyable code block too. Covers Bash, PowerShell, and any MCP
             // tool that executes a command (detected by input shape, not tool name).
             commandText = ToolInputScanner.commandText(event.input),
+            // …and the text it SENDS, when it sends one. Same reasoning, same place: a card that shows only
+            // the reply tells you the call worked and never tells you what was said.
+            messageText = ToolInputScanner.messageText(event.input),
         )
         // Capture the pre-write snapshot HERE (on tool_use, before the binary writes) rather than only at
         // can_use_tool approval — so the inline diff + "View diff" work in EVERY permission mode, including

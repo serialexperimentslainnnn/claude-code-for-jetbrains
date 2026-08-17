@@ -53,6 +53,42 @@ object ToolInputScanner {
         RegexOption.IGNORE_CASE,
     )
 
+    /**
+     * Keys whose value is the text this call SENDS — a message to another agent, a prompt, a question.
+     *
+     * A UI concern, and it lives here for the same reason [commandText] does: which key of a tool input holds
+     * which KIND of thing is a provenance decision, and a second list of keys kept in the page would be a
+     * second answer that drifts from this one. The page paints what it is given and parses no tool input.
+     *
+     * Deliberately narrow, and the two exclusions are the point. **Never a [CONTENT_KEY]** — `content` and
+     * `new_string` are the payload of a `Write`, so a whole file would be drawn as "the message". And never
+     * `description`: [dev.lain.claudejb.session.ToolNaming] already puts a `Task`'s description in the card's
+     * own label, so admitting it here would print it twice. A key that is both a command and a message is a
+     * command, which the ordering in [messageText] enforces — the command already has a block of its own.
+     */
+    private val MESSAGE_KEY = Regex(
+        """^(message|msg|prompt|question|query|instruction|instructions)$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * The text [input] sends, for the transcript to show WITHOUT the card having to be expanded.
+     *
+     * A card that reads `{"success":true,…}` tells you the call worked and never tells you what was said. The
+     * result stays behind the collapse toggle; what the call carries does not — the same bargain the command
+     * block already strikes.
+     *
+     * Top level only: a message nested inside a structure is a field of some payload, not the thing this call
+     * is saying. `null` when the call sends no such text, which is most of them.
+     */
+    fun messageText(input: JsonObject): String? {
+        if (commandText(input) != null) return null
+        return input.entries.firstNotNullOfOrNull { (key, value) ->
+            if (!MESSAGE_KEY.matches(key)) return@firstNotNullOfOrNull null
+            (value as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+        }
+    }
+
     /** A URL, not a path. */
     private val URLISH = Regex("""^[a-z][a-z0-9+.\-]*://""", RegexOption.IGNORE_CASE)
 
