@@ -295,6 +295,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         workloadWindowMinutes = 60
         securityBlockCredentials = false
         securityBlockDangerousCommands = false
+        securityBlockTempDirs = false
         securityBlockForeignOtherUserHome = false
         securityBlockForeignNetworkMounts = false
         securityBlockForeignWslMounts = false
@@ -318,7 +319,8 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             "effort", "permissionMode", "thinkingTokens", "includePartialMessages",
             "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",
             // SettingsSecuritySection
-            "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockForeignOtherUserHome",
+            "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
+            "securityBlockForeignOtherUserHome",
             "securityBlockForeignNetworkMounts", "securityBlockForeignWslMounts",
             // SettingsProviderSection (the key itself is not a state field — it is in the password safe)
             "provider",

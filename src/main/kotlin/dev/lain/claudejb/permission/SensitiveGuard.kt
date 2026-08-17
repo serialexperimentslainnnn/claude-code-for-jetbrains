@@ -21,6 +21,7 @@ import kotlinx.serialization.json.JsonObject
  *  - [ForeignTerritory] — rule 2, another user's home, network/UNC mounts, foreign WSL drives.
  *  - [CommandRules] — rule 3, dangerous commands ([CommandRules.DANGEROUS_COMMANDS]) and the de-obfuscation applied
  *    before matching them.
+ *  - [TempDirs] — rule 4, the system temporary directory.
  *
  * ### 1. Credentials & key material — [CredentialPaths.SENSITIVE_GLOBS]
  * Matched **by shape, wherever the file sits**, never anchored to a specific home — see [CredentialPaths].
@@ -33,17 +34,26 @@ import kotlinx.serialization.json.JsonObject
  * Commands that dump a secret at rest, exfiltrate a file, pipe the network into a shell, or invoke recognised
  * offensive/LOLBIN tooling — see [CommandRules].
  *
+ * ### 4. The system temporary directory — [Category.TEMP_DIR]
+ * `/tmp` and its equivalents: the one world-writable place outside the project and outside every review
+ * surface, so it is where an agent stages what is not meant to be looked at. Unlike the three above it makes
+ * no claim that the path is *sensitive* — only that an action there is never silent. Matched by SEGMENT
+ * (`/tmpfoo` and `~/tmp` are not it), and exempt inside the open project like the other location rules — see
+ * [TempDirs] for both, and for why the plugin's own reading of a background task's output file is not
+ * affected by any of it while the agent's read of that same file is.
+ *
  * ### Verdict, by trust of the CALLER — an allowlist, not a blacklist
  * The caller is trusted **only if it is one of the agent's own tools** ([AGENT_TOOLS]). Everything else — every MCP
  * server, every Skill, anything unrecognised — is third-party, because a blacklist of "bad" prefixes is exactly the
  * thing an attacker names their way around. By default this is a **hard lock**:
- *  - a **trusted** tool that trips rule 1 or 3 → **ASK** (a card, every time, even under `bypassPermissions`): the
- *    user may authorise their own agent to read their own key, once, explicitly;
- *  - a **third-party** caller that trips rule 1 or 3 → **DENY**;
+ *  - a **trusted** tool that trips rule 1, 3 or 4 → **ASK** (a card, every time, even under `bypassPermissions`):
+ *    the user may authorise their own agent to read their own key, once, explicitly;
+ *  - a **third-party** caller that trips rule 1, 3 or 4 → **DENY**;
  *  - **anyone** who trips rule 2 (foreign territory) → **DENY**.
  *
  * ### Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security) — never a silent allow
- * Each rule — CREDENTIAL, DANGEROUS_COMMAND, and each of FOREIGN's three sub-rules ([ForeignReason]) — has its own
+ * Each rule — CREDENTIAL, DANGEROUS_COMMAND, TEMP_DIR, and each of FOREIGN's three sub-rules ([ForeignReason]) —
+ * has its own
  * `enforce*` field on [Policy], defaulting to `true` (reproducing the original hard lock exactly). Detection
  * ([classify]) runs **unconditionally**, regardless of these toggles — turning one off never skips recognising a
  * match. What it changes is [verdict]'s OUTCOME: a disabled rule's hit is **downgraded from DENY to ASK**, for every
@@ -87,7 +97,7 @@ object SensitiveGuard {
     enum class Verdict { ALLOW, ASK, DENY }
 
     /** Which surface a call tripped — decides severity ([verdict]) and the card's wording ([reason]). */
-    enum class Category { CREDENTIAL, FOREIGN, DANGEROUS_COMMAND }
+    enum class Category { CREDENTIAL, FOREIGN, DANGEROUS_COMMAND, TEMP_DIR }
 
     /** Which FOREIGN sub-rule tripped — lets [Policy]'s per-rule toggles govern FOREIGN at finer grain than the
      *  category as a whole (see the three `enforceForeign*` fields below). */
@@ -164,11 +174,17 @@ object SensitiveGuard {
          * original hard-lock behaviour exactly. Turning one **off never silently ALLOWs** a call that trips it —
          * detection ([classify]) always runs regardless; the toggle only downgrades the OUTCOME from the hard
          * block (DENY) to a permission card (ASK), for every caller, so disabling a rule is never quiet. A trusted
-         * agent tool that trips CREDENTIAL/DANGEROUS_COMMAND already gets a card either way — these toggles only
-         * ever change what an untrusted (MCP/Skill) caller gets: DENY when enforced, ASK when not.
+         * agent tool that trips CREDENTIAL/DANGEROUS_COMMAND/TEMP_DIR already gets a card either way — those
+         * toggles only ever change what an untrusted (MCP/Skill) caller gets: DENY when enforced, ASK when not.
          */
         val enforceCredentials: Boolean = true,
         val enforceDangerousCommands: Boolean = true,
+        /**
+         * Rule 4: an action on the system temporary directory ([TempDirs]). Off, every hit is a card instead
+         * of a block — the answer for a workflow that genuinely lives in the temp directory *outside* the open
+         * project (an out-of-tree build, a shared scratch area), which the project-root exemption cannot cover.
+         */
+        val enforceTempDirs: Boolean = true,
         /** Sub-rule of FOREIGN: another user's home directory, or `/root` when we aren't root. */
         val enforceForeignOtherUserHome: Boolean = true,
         /** Sub-rule of FOREIGN: a UNC path or a discovered network/removable mount ([guardedRoots]). */
@@ -229,6 +245,8 @@ object SensitiveGuard {
 
         Category.DANGEROUS_COMMAND -> policy.enforceDangerousCommands
 
+        Category.TEMP_DIR -> policy.enforceTempDirs
+
         Category.FOREIGN -> when (result.foreignReason) {
             ForeignReason.OTHER_USER_HOME -> policy.enforceForeignOtherUserHome
             ForeignReason.NETWORK_MOUNT -> policy.enforceForeignNetworkMounts
@@ -254,11 +272,12 @@ object SensitiveGuard {
     private data class Classification(val category: Category, val foreignReason: ForeignReason? = null, val text: String)
 
     /**
-     * Classification + human reason, or null. Order = severity: FOREIGN wins the wording.
+     * Classification + human reason, or null. Order = severity: FOREIGN wins the wording, TEMP_DIR loses it.
      *
      * The **project root is the sanctioned zone**: a file the user brought into their own repo is theirs, under
      * their responsibility, so a credential file *inside the project* is not blocked. Outside it, a credential is
-     * caught. FOREIGN territory is exempt inside the project too (you opened it on purpose). A dangerous **command**
+     * caught. FOREIGN territory is exempt inside the project too (you opened it on purpose), and so is the
+     * temporary directory when the project itself sits under one. A dangerous **command**
      * is location-independent — running `mimikatz` is dangerous whatever the working directory — so it is judged
      * regardless of the project boundary.
      *
@@ -288,6 +307,14 @@ object SensitiveGuard {
 
         CommandRules.dangerousCommand(input)?.let {
             return Classification(Category.DANGEROUS_COMMAND, text = "runs a command that can expose secrets: $it")
+        }
+
+        // LAST, because it is the weakest claim of the four: the other three say the path or the command is
+        // dangerous, this one only says the action is worth a glance. Anything that is also one of the above
+        // should be worded as that, so a `curl --upload-file /tmp/dump …` reads as exfiltration, not as a
+        // temp file. Judged on `outsideProject` for the same reason rules 1 and 2 are (see [TempDirs]).
+        TempDirs.tempHit(outsideProject)?.let {
+            return Classification(Category.TEMP_DIR, text = "acts on the system temporary directory: $it")
         }
 
         return null
