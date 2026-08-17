@@ -3,9 +3,12 @@ package dev.lain.claudejb.ui.jcef
 import dev.lain.claudejb.session.AgentStatus
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.WorkloadWindow
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
 /**
  * What is RUNNING, for the dashboard: the agent tree, the background tasks, and the Workloads diagram that
@@ -13,7 +16,9 @@ import kotlinx.serialization.json.put
  *
  * The retention window is applied here, and [visible] is the one place a session is measured against it — the
  * tab bar draws the same two sets, and a second copy of that mapping is how the two views would come to
- * disagree about which finished workload is still listed.
+ * disagree about which finished workload is still listed. [windowJson] is the other half of that: the window
+ * is also SENT, with the set of windows the rule will accept, so the view can change what it is judged by
+ * without the page holding an opinion about which values exist.
  */
 internal object JcefWorkloadData {
 
@@ -46,6 +51,36 @@ internal object JcefWorkloadData {
             windowMinutes = windowMinutes,
             nowMillis = nowMillis,
         )
+
+    /**
+     * The retention window itself, so the view can offer it: `{ minutes, options:[{ minutes, label }] }`.
+     *
+     * The choices are SENT, never spelled in the page, and that is the whole reason this exists. The page has
+     * no way to know which windows [WorkloadWindow.isVisible] can actually apply, so a list written there
+     * would eventually offer a value the rule does not know — and the failure is silent, because an unknown
+     * window is simply stored and then measured against nothing the user asked for. Emitting
+     * [WorkloadWindow.WINDOW_MINUTES] with [WorkloadWindow.label] makes the offered set and the applied set
+     * one set.
+     *
+     * [WorkloadWindow.ALL] rides in the list as an ordinary entry rather than as a flag: it IS a value of
+     * `minutes`, and giving the sentinel a separate shape would mean a branch on both sides of the bridge.
+     * NB it is worth `0`, which is falsy in JavaScript — the page compares it with `== null`, never with a
+     * truthiness test, or the sentinel becomes the one choice that cannot be shown or selected.
+     *
+     * [minutes] is echoed back so the control can show what is in force. It is the very value the rest of
+     * this payload was filtered with, so the diagram and the control that explains it cannot disagree.
+     */
+    fun windowJson(minutes: Int): JsonObject = buildJsonObject {
+        put("minutes", minutes)
+        putJsonArray("options") {
+            WorkloadWindow.WINDOW_MINUTES.forEach { option ->
+                addJsonObject {
+                    put("minutes", option)
+                    put("label", WorkloadWindow.label(option))
+                }
+            }
+        }
+    }
 
     /**
      * The agent tree for the Agents / Subagents windows:

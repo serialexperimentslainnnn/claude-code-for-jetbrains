@@ -1,18 +1,28 @@
-/* app-session-workloads.js — the Workloads diagram.
+/* app-session-workloads.js — the Workloads diagram, and the window it is drawn under.
  *
  * One subject: everything that is running, as ONE picture — every chat, its agents, their agents, and the
  * background tasks each of them started — plus the rule that every node in it is a place you can go.
  *
  * The drawing itself is not here: `CC.diagram`/`CC.panView` (app-core-diagram.js) own the layout, the edges
  * and the pan/zoom. This file owns the SHAPE — what hangs off what — and what a click on a node means.
+ *
+ * The retention window is the one setting this view CANNOT be read without: it decides which finished work is
+ * still listed, so a diagram that has aged everything out and a project that never ran anything look
+ * identical. The control for it therefore sits on the card, and — like every other choice on this page — the
+ * host sends both the options and the one in force; nothing here invents a value it could then ask the rule
+ * to apply.
  */
 (function () {
   'use strict';
 
   var CC = window.CC || (window.CC = {});
   var D = (CC.dash = CC.dash || {});
+  var h = D.h;
   var send = D.send;
   var card = D.card;
+
+  /** The `<select>`'s id, so its `<label>` can point at it. One dashboard per page, so one id is enough. */
+  var WINDOW_SELECT_ID = 'cc-workload-window';
 
   /**
    * Goes to that agent's tab AND leaves the dashboard.
@@ -49,6 +59,69 @@
   // curves drawn from those same coordinates.
 
   /**
+   * The retention-window control, or null when the host sent no options.
+   *
+   * NULL RATHER THAN AN EMPTY CONTROL, deliberately: a `<select>` with nothing in it is a dead affordance
+   * that looks live — the user opens it, finds nothing and has no way to tell whether the feature is broken
+   * or the list is genuinely empty. Absent says the one true thing, which is that this page was not told
+   * about any windows.
+   *
+   * A NATIVE `<select>` rather than the page's own popup-menu machinery, and the reasons are not stylistic.
+   * (1) Its popup is drawn by the browser OUTSIDE the document, so it cannot be clipped — the dashboard is a
+   * scroll container (`overflow-y: auto`), and a menu built as an absolutely-positioned div inside this card
+   * would be cut off by it or would have to escape to `document.body` and then be kept in position by hand.
+   * (2) Keyboard operation, type-ahead, Esc and the whole listbox role arrive with the element instead of
+   * being a set of ARIA attributes this file would have to keep correct. (3) The page's custom menus exist
+   * because their rows carry icons, descriptions and check marks; these rows are one plain word each, so the
+   * machinery would buy nothing and cost the accessibility it already has.
+   *
+   * The accessible name comes from a real `<label for=…>`, not from `aria-label`: the visible words and the
+   * spoken ones are then the same string by construction, and the label is a click target for the control.
+   */
+  function windowControl(spec) {
+    var options = spec && Array.isArray(spec.options) ? spec.options.filter(Boolean) : [];
+    if (!options.length) return null;
+    // `== null`, never a truthiness test: the "everything" window is worth 0, and `if (spec.minutes)` would
+    // drop exactly the choice that exists to hide nothing.
+    var current = spec.minutes == null ? null : Number(spec.minutes);
+
+    var select = h('select', {
+      class: 'wl-window-select',
+      attrs: { id: WINDOW_SELECT_ID },
+      on: {
+        change: function (ev) {
+          var minutes = Number(ev.target.value);
+          if (!isFinite(minutes)) return;
+          send({ type: 'setWorkloadWindow', minutes: minutes });
+        },
+      },
+    });
+    if (!select) return null;
+
+    options.forEach(function (option) {
+      var minutes = Number(option.minutes);
+      if (!isFinite(minutes)) return;
+      // The label is the host's word for that window, painted as sent — the same rule as every status on
+      // this page. A second copy of the wording here is how a menu comes to offer "15 min" for a rule that
+      // is actually applying something else.
+      var text = option.label != null ? String(option.label) : String(minutes);
+      select.appendChild(h('option', { text: text, attrs: { value: String(minutes) } }));
+    });
+    if (current != null) select.value = String(current);
+
+    return h(
+      'div',
+      { class: 'wl-window' },
+      h('label', {
+        class: 'wl-window-label',
+        attrs: { for: WINDOW_SELECT_ID },
+        text: 'Keep finished workloads listed for',
+      }),
+      select
+    );
+  }
+
+  /**
    * Everything running, as ONE diagram: every chat, its agents, their agents, and the tasks each started.
    *
    * It was three views — Agents, Subagents, Background tasks — and they were three views of the same tree:
@@ -62,7 +135,8 @@
    * be moved around rather than scrolled through two scrollbars.
    *
    * [payload] may carry `workloads` (every chat) or just this session's own `agentTree`/`backgroundTasks`;
-   * the second is drawn under a single root so the shape is the same either way.
+   * the second is drawn under a single root so the shape is the same either way. `workloadWindow` is the
+   * retention window the host filtered all of that with, plus the windows it will accept instead.
    */
   function buildWorkloadsCard(payload) {
     var chats =
@@ -78,14 +152,19 @@
             },
           ];
 
+    var control = windowControl(payload.workloadWindow);
     var roots = chats.map(chatNode).filter(function (n) {
       // A chat that started nothing is not a workload; drawing it would be a card saying "nothing here".
       return n.children.length > 0;
     });
-    if (!roots.length) return null;
 
-    var canvas = CC.diagram(roots);
-    if (!canvas) return null;
+    var canvas = roots.length ? CC.diagram(roots) : null;
+    // THE CONTROL OUTLIVES THE DIAGRAM, and that is the case it exists for. With a narrow window the view
+    // empties out as work finishes, and returning null here handed the panel over to the generic "nothing is
+    // running" card — which carries no control, so the one action that would bring the work back was missing
+    // at precisely the moment it was needed. With no control to draw there is nothing to keep the card for,
+    // and the generic empty state is the right answer again.
+    if (!canvas) return control ? card('Workloads', [control, emptyNote()], true, 'workloads') : null;
     // Keyed, so the dashboard's frequent rebuilds restore where you left the diagram instead of re-fitting.
     var view = CC.panView(canvas, 'Workloads diagram — drag to move, wheel to zoom', 'workloads');
     // The card is not in the document yet, so the viewport has no size: fit on the next frame, when it has.
@@ -96,7 +175,23 @@
         if (view.__fit) view.__fit();
       });
     });
-    return card('Workloads', [view], true, 'workloads');
+    return card('Workloads', [control, view], true, 'workloads');
+  }
+
+  /**
+   * What the card says when the window admits nothing.
+   *
+   * Deliberately a different sentence from the panel's own empty state, which means "no agents, no
+   * background tasks": here the window is on screen right beside it, so the honest statement is about the
+   * window rather than about the session — the work may well exist and simply be older than the choice made
+   * two lines above.
+   */
+  function emptyNote() {
+    return h(
+      'div',
+      { class: 'stat-row' },
+      h('span', { class: 'stat-label', text: 'Nothing to show in this window.' })
+    );
   }
 
   /** One chat, with everything it started underneath it. Every node is a destination. */

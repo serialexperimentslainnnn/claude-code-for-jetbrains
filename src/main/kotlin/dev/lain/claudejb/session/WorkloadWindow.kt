@@ -28,13 +28,18 @@ object WorkloadWindow {
     private const val MINUTES_PER_HOUR = 60
 
     /**
-     * How a window reads in a menu: `15 Minutes`, `2 Hours`, `All`.
+     * How a window reads in a menu: `15 Minutes`, `2 Hours`, `All in this session`.
      *
      * Beside [WINDOW_MINUTES] on purpose. The list and the words for it are one decision, and a settings page
      * holding its own copy of the wording is how a menu ends up offering a value this rule does not know.
+     *
+     * The sentinel is worded as `All in this session` rather than `All` because that is the honest promise:
+     * nothing here reaches beyond the run — a workload restored from a previous one is stamped [RUN_STARTED_AT]
+     * and a chat's registries are rebuilt per process — so a bare "All" would offer a history the view does not
+     * have.
      */
     fun label(minutes: Int): String = when {
-        minutes == ALL -> "All"
+        minutes == ALL -> "All in this session"
         minutes < MINUTES_PER_HOUR -> "$minutes Minutes"
         minutes == MINUTES_PER_HOUR -> "1 Hour"
         else -> "${minutes / MINUTES_PER_HOUR} Hours"

@@ -26,7 +26,7 @@ describe('dashboard views', () => {
   const nodes = () => Array.from(panel().querySelectorAll('.dg-card')).map((r) => r.textContent);
 
   beforeEach(() => {
-    win = loadFrontend(['app-session.js'], { vendor: false });
+    win = loadFrontend(['app-session.js', 'app-composer.js'], { vendor: false });
     win.cc.session({
       context: { used: 10, max: 100, pct: 10, categories: [] },
       agentTree: [
@@ -389,5 +389,112 @@ describe('dashboard views', () => {
     // Same class, same CSS animation (`toolRun`) as a running tool card in the transcript: one visual
     // language for one fact, instead of two ways of saying "this is still going".
     expect(running.classList.contains('running')).toBe(true);
+  });
+
+  /**
+   * The retention window, changeable from the view it governs.
+   *
+   * The window decides which finished work is still listed, so with it set narrow the diagram empties out and
+   * "everything aged out" is indistinguishable from "nothing ever ran". Until now the only way to widen it
+   * was Settings ▸ Claude Code ▸ Model, which is not where anyone looks when a picture goes blank.
+   *
+   * The host decides the words and the values; the page paints what it is sent. The fixture below therefore
+   * carries deliberately UNREAL labels: a test that hardcoded the product's wording would quietly become a
+   * second copy of `WorkloadWindow.label`, which is the exact duplication the payload exists to prevent —
+   * what belongs here is that eight options in, eight options out, in order.
+   */
+  describe('the retention window control', () => {
+    const MINUTES = [5, 10, 15, 30, 60, 120, 240, 0];
+    const OPTIONS = MINUTES.map((minutes) => ({ minutes, label: 'window-' + minutes }));
+
+    const control = () => panel().querySelector('.wl-window');
+    const select = () => panel().querySelector('.wl-window-select');
+    /** Pushes a payload with one running agent and the given window. Does not touch which view is open. */
+    const setWindow = (spec) => {
+      win.cc.session({
+        agentTree: [{ agentId: 'a', label: 'Docs', type: 'general-purpose', status: 'running' }],
+        backgroundTasks: [],
+        workloadWindow: spec,
+      });
+    };
+    const withWindow = (spec) => {
+      setWindow(spec);
+      openView('workloads');
+    };
+
+    it('offers every window the host sent, in the order it sent them', () => {
+      withWindow({ minutes: 15, options: OPTIONS });
+      const rendered = Array.from(select().options);
+      expect(rendered.map((o) => o.value)).toEqual(MINUTES.map(String));
+      expect(rendered.map((o) => o.textContent)).toEqual(OPTIONS.map((o) => o.label));
+    });
+
+    it('shows the window that is in force', () => {
+      withWindow({ minutes: 30, options: OPTIONS });
+      expect(select().value).toBe('30');
+    });
+
+    it('shows "all" when that is the window in force, because 0 is falsy', () => {
+      // The sentinel is worth 0, so any truthiness test on `minutes` — here or on the way in — silently
+      // leaves the control blank on the one setting that shows everything.
+      withWindow({ minutes: 0, options: OPTIONS });
+      expect(select().value).toBe('0');
+    });
+
+    it('has an accessible name from a real label, not from the words next to it', () => {
+      withWindow({ minutes: 15, options: OPTIONS });
+      const label = control().querySelector('.wl-window-label');
+      // A `<label for=…>` rather than `aria-label`: the visible words and the spoken ones are then one
+      // string, and the label is a click target. A `for` pointing at nothing is silent — it renders
+      // identically and names nothing.
+      expect(label.getAttribute('for')).toBe(select().getAttribute('id'));
+      expect(select().getAttribute('id')).toBeTruthy();
+    });
+
+    it('picking a window tells the host, in minutes', () => {
+      const sent = [];
+      win.__ccSend = (json) => sent.push(JSON.parse(json));
+      withWindow({ minutes: 15, options: OPTIONS });
+      const el = select();
+      el.value = '120';
+      el.dispatchEvent(new win.Event('change', { bubbles: true }));
+      expect(sent.pop()).toEqual({ type: 'setWorkloadWindow', minutes: 120 });
+    });
+
+    it('picking "all" sends 0 rather than nothing at all', () => {
+      const sent = [];
+      win.__ccSend = (json) => sent.push(JSON.parse(json));
+      withWindow({ minutes: 15, options: OPTIONS });
+      const el = select();
+      el.value = '0';
+      el.dispatchEvent(new win.Event('change', { bubbles: true }));
+      expect(sent.pop()).toEqual({ type: 'setWorkloadWindow', minutes: 0 });
+    });
+
+    it('renders no control at all when the host sent no options', () => {
+      // Absent, not empty. A `<select>` with nothing in it is a dead affordance that looks live: opened, it
+      // says nothing, and the user cannot tell a broken feature from an empty list.
+      withWindow(undefined);
+      expect(control()).toBeNull();
+      // A second push, with the view already open, so this is a re-render rather than a first paint: an
+      // options array that arrives empty is the same answer as one that never arrived.
+      setWindow({ minutes: 15, options: [] });
+      expect(control()).toBeNull();
+    });
+
+    it('survives the diagram: the control is still there when the window admits nothing', () => {
+      // THE CASE IT EXISTS FOR. With nothing to draw the view used to fall back to the panel's generic empty
+      // card, which carries no control — so the one action that brings the work back was missing exactly
+      // when the window had hidden it.
+      win.cc.session({
+        agentTree: [],
+        backgroundTasks: [],
+        workloadWindow: { minutes: 5, options: OPTIONS },
+      });
+      openView('workloads');
+      expect(titles()).toEqual(['Workloads']);
+      expect(select()).not.toBeNull();
+      expect(panel().querySelectorAll('.dg-card').length).toBe(0);
+    });
   });
 });
