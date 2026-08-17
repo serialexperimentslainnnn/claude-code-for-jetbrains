@@ -337,6 +337,9 @@ class JcefHost(
                     executeNow(b, inject)
                     runOnEdt {
                         ready = true
+                        // The document ARRIVED, so the rung did its job and the deadline it was under no
+                        // longer applies — see [armReadyWatchdog].
+                        relaxReadyWatchdog(b)
                         while (pending.isNotEmpty()) {
                             executeNow(b, pending.poll())
                         }
@@ -372,11 +375,39 @@ class JcefHost(
         }
     }
 
-    /** Arms the single promotion shot for the rung just delivered. EDT-only. */
+    /**
+     * Arms the promotion shot for the rung just delivered — the DELIVERY deadline. EDT-only.
+     *
+     * This clock is about the transport and nothing else: if the document has not arrived by now, this rung
+     * cannot deliver it and the next one is worth trying.
+     */
     private fun armReadyWatchdog(b: JBCefBrowser) {
         if (webReady) return
         readyWatchdog.cancelAllRequests()
         readyWatchdog.addRequest({ if (!webReady) promote(b) }, READY_WATCHDOG_MS)
+    }
+
+    /**
+     * The document arrived: re-arm the promotion far out, because what is left to wait for is not the rung.
+     *
+     * **This is the fix for "opening a chat reloads the whole plugin".** The ladder used to promote on a flat
+     * timer that knew nothing about whether the page had loaded, so a document that ARRIVED and was merely
+     * slow to run its scripts — a cold CEF browser parsing thirty-odd hash-pinned files, which is every new
+     * chat on a busy machine — got the whole page re-delivered over the next transport. The user watched the
+     * entire UI build itself twice, behind a boot screen that stayed up across both, and nothing was actually
+     * wrong. Delivering it again over a different socket cannot make scripts run faster; it restarts them.
+     *
+     * Not cancelled outright, and that is the one thing this must not do. There is a real failure that looks
+     * exactly like a slow page: the document loads while its SCRIPTS are blocked — a proxy or a policy
+     * rewriting the CSP header, say — and the rung that recovers from it is [PageRoute.INLINE], which carries
+     * the policy in the document's own meta tag instead. So arrival converts a delivery deadline into a much
+     * longer "these scripts are never going to run" one, which is a different claim and deserves its own
+     * patience. EDT-only.
+     */
+    private fun relaxReadyWatchdog(b: JBCefBrowser) {
+        if (webReady) return
+        readyWatchdog.cancelAllRequests()
+        readyWatchdog.addRequest({ if (!webReady) promote(b) }, SCRIPTS_WATCHDOG_MS)
     }
 
     /**
@@ -466,9 +497,26 @@ class JcefHost(
         )
     }
 
+    /**
+     * Runs [js] in the page — wrapped, because an exception in here is otherwise **completely silent**.
+     *
+     * `executeJavaScript` is a fire-and-forget evaluation: it is not a `<script>` element, so a throw inside
+     * it fires no `error` event on `window`, reaches no handler the page installed, and lands in a CEF
+     * console nothing reads. Every host→page call goes through here, so what that silence hides is any
+     * feature whose push dies halfway — and the symptom is not an error, it is a part of the UI that simply
+     * is not there. That is exactly how a tab bar went missing for an afternoon: the host pushed the chats,
+     * the page threw while drawing them, and every log, every test and every screenshot agreed that nothing
+     * had happened.
+     *
+     * The catch reports through the bridge the page already has, so it arrives in `idea.log` as a WARN
+     * (`ChatBridgeRouter`). It is guarded on `__ccSend` existing: before the bridge is injected there is
+     * nowhere to send, and a throw inside the catch would be worse than the one it is reporting.
+     */
     private fun executeNow(b: JBCefBrowser, js: String) {
         val url = b.cefBrowser.url ?: PAGE_URL
-        b.cefBrowser.executeJavaScript(js, url, 0)
+        val guarded = "try{" + js + "}catch(e){try{window.__ccSend&&window.__ccSend(JSON.stringify(" +
+            "{type:'diag',report:'uncaught exec: '+((e&&e.stack)||e)}))}catch(_){}}"
+        b.cefBrowser.executeJavaScript(guarded, url, 0)
     }
 
     private fun runOnEdt(block: () -> Unit) {
@@ -525,6 +573,8 @@ class JcefHost(
             "app-composer-palette.js",
             "app-composer-boot.js",
             "app-composer-auth.js",
+            "app-composer-actions.js",
+            "app-composer-settings.js",
             "app-composer.js",
             "app-permissions.js",
             "app-session-base.js",
@@ -532,6 +582,10 @@ class JcefHost(
             "app-session-mcp.js",
             "app-session-workloads.js",
             "app-session-git.js",
+            // After `app-session-git.js` (it heads itself with that file's strip builder) and after
+            // `app-permissions.js` (it draws its cards with that file's renderer), and before the spine,
+            // which asks it for the pane on its first visibility pass.
+            "app-session-gitchat.js",
             "app-session.js",
             "app-tabs-base.js",
             "app-tabs-guard.js",
@@ -544,6 +598,16 @@ class JcefHost(
         // Read each script once; the hash must be of the EXACT text between <script> and </script>.
         val contents = LinkedHashMap<String, String>()
         (libNames + appNames).forEach { name -> readResource(name)?.let { contents[name] = it } }
+
+        // **A declared module that does not resolve is a feature that silently is not there.** The page is a
+        // pile of independent <script> tags, so a missing one leaves the rest working: `window.cc.tabs` is
+        // never defined, the host's own `cc.tabs && cc.tabs(...)` guard skips, and the user sees a tool
+        // window with no tab bar and no error anywhere. Skipping it is still the right behaviour — half a
+        // page beats none — but doing it QUIETLY is not, and this was quiet for as long as it existed.
+        val absent = (libNames + appNames).filterNot { contents.containsKey(it) }
+        if (absent.isNotEmpty()) {
+            log.error("Claude Code chat page is missing declared scripts, so parts of the UI cannot exist: $absent")
+        }
 
         val hashes = contents.values.map { "'sha256-" + sha256Base64(it) + "'" }
         val scriptSrc = if (hashes.isEmpty()) "'none'" else hashes.joinToString(" ")
@@ -589,6 +653,18 @@ class JcefHost(
 
         /** How long a rung gets to produce a live web app before the ladder promotes past it. */
         private const val READY_WATCHDOG_MS = 2500
+
+        /**
+         * How long a page that ARRIVED gets to run its scripts before the ladder gives up on it.
+         *
+         * Long, deliberately. What it is waiting for is a cold CEF browser parsing and running thirty-odd
+         * hash-pinned files, and the cost of being wrong is not a slow tab — it is re-delivering the whole
+         * document over another transport, which the user sees as the entire UI building itself twice with
+         * the boot screen up across both. The only thing on the other side of this deadline is a page whose
+         * scripts are BLOCKED rather than slow, which is rare and does not get less rare by being caught
+         * sooner.
+         */
+        private const val SCRIPTS_WATCHDOG_MS = 20_000
 
         /**
          * The lowest rung any browser may start on, for the rest of this IDE run. Application-wide on purpose:

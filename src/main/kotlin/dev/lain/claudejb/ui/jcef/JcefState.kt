@@ -58,7 +58,17 @@ object JcefState {
     /** One window as the composer readout needs it; a Triple stopped being readable at four fields. */
     private data class CompactWindow(val key: String, val label: String, val pct: Double, val resetsAt: String?)
 
-    fun stateJson(session: ClaudeSession, usage: UsageReport? = null): String {
+    /**
+     * [openDiffs] is how many diff tabs the plugin has open right now
+     * ([dev.lain.claudejb.diff.OpenedDiffsService.openCount]), and it is passed IN rather than read here for
+     * the same reason [JcefGitData] takes a snapshot: this builder stays a pure function of its inputs, and
+     * the count belongs to a project service the session does not expose. It is a plain field read on a
+     * `CopyOnWriteArraySet`, so the caller pays nothing for asking on every push.
+     *
+     * The composer's *Close diffs* button greys itself out on it. A default of zero is therefore the safe
+     * direction — a button that says it has nothing to close, rather than one that closes nothing.
+     */
+    fun stateJson(session: ClaudeSession, usage: UsageReport? = null, openDiffs: Int = 0): String {
         val provider = session.provider
         val mode = session.permissionMode
         val effort = session.effort
@@ -132,6 +142,11 @@ object JcefState {
 
             put("tokensOut", session.sessionOutputTokens)
             put("costUsd", null as String?)
+
+            // Diff tabs THIS plugin opened — the enablement of the composer's Close-diffs button, and nothing
+            // else. Project-scoped rather than session-scoped on purpose: the button closes the editor's diff
+            // tabs, which no chat owns.
+            put("openDiffs", openDiffs)
         }
         return obj.toString()
     }

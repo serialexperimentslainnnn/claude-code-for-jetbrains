@@ -28,34 +28,51 @@
          first agent appears. Filled by app-tabs.js from the host's `cc.tabs` payload. -->
       <nav id="tabsbar" aria-label="Chats and agents" hidden></nav>
 
-      <!-- The work area: the transcript and the composer.
-         The three waiting screens — install, sign-in, loading — are CONTENT OF THE TRANSCRIPT, below. They
-         were overlays: `#boot` was `inset: 0` over the whole of `#app`, so a chat that was still starting
-         covered the chat tabs, and a binary that comes up in a fraction of a second painted a full-window
-         panel and removed it, which read as the plugin flashing. As transcript content they cannot cover
-         anything they do not own, and the composer stays usable — a prompt typed while the binary starts is
-         queued and sent when it is ready (see `ClaudeSession.send`).
+      <!-- The work area: what belongs to ONE chat, and the dock, which belongs to none.
 
-         WHERE A LAYER GOES, for whoever adds the next one: beside `#conversation`, as a child of `#work` —
-         the two share the first cell of its grid, so the layer covers exactly the transcript. Never a child
-         of `#app` and never `position: fixed` over the page: `#tabsbar` lives outside `#work` and the dock is
-         the row below, so the tabs and the composer are out of reach by construction rather than by an inset
-         that happens to stop in the right place. The stacking that backs that up is in base.css. -->
+         That split is the whole shape of this file, so it is worth stating as a rule rather than leaving it
+         to be inferred from the nesting. **A chat's context is its transcript and the three screens that
+         stand in for it** — install, sign-in, loading — and nothing else: they are what changes when you
+         switch chat, and they are grouped in `#tabview` for exactly that reason. Everything outside it is
+         one thing shared by every chat: `#tabsbar` above, `#dock` below (the meters, the palette, the
+         permission cards and the prompt box).
+
+         The composer stays usable while the binary starts: a prompt typed then is queued and sent once there
+         is a session (see `ClaudeSession.send`). -->
       <div id="work">
-        <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
-          <div id="empty" class="empty-state">
-            <div class="empty-mark">✶</div>
-            <div class="empty-title">Claude Code</div>
-            <div class="empty-sub">Ask Claude, or type / for commands.</div>
+        <!-- The chat's own area. Its four layers share ONE grid cell (`grid-area: 1 / 1`), so a screen covers
+           exactly the transcript and the transcript keeps its box — and therefore its scroll offset —
+           underneath instead of being replaced by one.
+
+           The waiting screens have been two other things and both failures are worth stating, because each
+           was a fix for the other. As `position: fixed`/`inset: 0` panels over `#app` they covered what they
+           did not own: first the chat tabs, then the composer. As ROWS INSIDE `#conversation` they were
+           content of the very element `cc.clear()` empties — and it empties it on every transcript switch and
+           every session stop — so the first clear DELETED all three from the document, and every later
+           `renderBoot`/`renderAuth` found no element and returned silently. The screens then only ever
+           appeared in a browser that had not cleared yet, i.e. in a freshly opened chat tab.
+
+           WHERE A LAYER GOES, for whoever adds the next one: here, beside `#conversation` — if it belongs to
+           the chat. Never a child of `#app`, never `position: fixed` over the page, and never inside a
+           container something else owns. If it belongs to the whole tool window it goes in `#dock` instead,
+           and that is now a question with an answer rather than a habit. The stacking is in base.css; the
+           screens' own rules are in boot.css. -->
+        <div id="tabview">
+          <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
+            <div id="empty" class="empty-state">
+              <div class="empty-mark">✶</div>
+              <div class="empty-title">Claude Code</div>
+              <div class="empty-sub">Ask Claude, or type / for commands.</div>
+            </div>
           </div>
 
           <!-- Boot screen, shown while the `claude` binary is launching.
-         Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
-         binary is launched FIRST and this page loads while it boots, so at load time the process is normally
-         not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
-         flashes a live-looking composer it cannot yet send anything with.
+           Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
+           binary is launched FIRST and this page loads while it boots, so at load time the process is normally
+           not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
+           flashes a live-looking composer it cannot yet send anything with.
 
-         role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
+           role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
           <div id="boot" role="status" aria-live="polite">
             <div class="boot-inner">
               <div class="boot-mark" aria-hidden="true">✶</div>
@@ -98,9 +115,9 @@
           </div>
 
           <!-- Sign-in card: raised whenever the plugin detects the binary is not authenticated (proactive
-         `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
-         session can lose its login too. Static markup for the same a11y reason as the boot screen; every
-         step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
+           `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
+           session can lose its login too. Static markup for the same a11y reason as the boot screen; every
+           step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
           <div id="auth-card" role="status" aria-live="polite" hidden>
             <div class="auth-inner">
               <div class="boot-mark" aria-hidden="true">✶</div>
@@ -199,14 +216,36 @@
               </div>
             </div>
           </div>
-          <!-- /#conversation — the waiting screens above are rows of it, not overlays on top of it. -->
         </div>
+        <!-- /#tabview -->
 
+        <!-- The dock: what sits under the transcript and above nothing.
+           `#palette` is the FIRST row of it, in the flow, and that placement is the fix for a bug rather than
+           a style: it used to be a `position: fixed` overlay held clear of the composer by
+           `padding-bottom: 72px` — a guess at a height that changes with every pill, queued prompt and
+           attachment chip, so the list covered the box you were typing in exactly when you had most in it. A
+           row above the composer cannot cover the composer at any height. -->
         <div id="dock">
+          <!-- The slash palette. app-composer.js moves it INTO the prompt card, where it is anchored to the
+             card's top edge and hangs over whatever is above — the meters are worth covering for as long as
+             you are choosing a command; the box you are typing in is not, which is why it hangs upwards. -->
+          <div id="palette" hidden></div>
+          <!-- ONE row above the prompt box: where you are on the left, what you can do to this chat on the
+             right. Two groups rather than one list, because they are two kinds of thing — a state and a set
+             of actions — but one line, because two stacked strips of controls over a text box is a wall.
+             Declared HERE, in the static shell, rather than created by the composer — because two families
+             need them and neither may assume the other has run. `#composer` is filled by app-composer.js on
+             the first state push, so a page that has had a session payload but no state yet would otherwise
+             have a dashboard whose view buttons exist and are attached to nothing.
+             app-composer.js MOVES the row to its final place (under the reset line, above the prompt box); if
+             it never runs it simply stays here, which is the same dock and still works. -->
+          <div id="controls" class="composer-controls">
+            <div id="views" class="composer-views"></div>
+            <div id="actions" class="composer-actions"></div>
+          </div>
           <div id="permissions"></div>
           <div id="composer"></div>
         </div>
-        <div id="palette" hidden></div>
       </div>
       <!-- /#work -->
     </div>

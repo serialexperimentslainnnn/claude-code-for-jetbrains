@@ -222,6 +222,30 @@
     el.textContent = text;
   };
 
+  /**
+   * Declare that [owner] is (or is no longer) covering the transcript with an opaque layer.
+   *
+   * A covered transcript stays laid out — it keeps its box and therefore its scroll offset, so leaving the
+   * layer returns the reader to the line they were on — which means it is still there underneath, with its
+   * links and buttons focusable and its text readable by a screen reader. `inert` is the other half: painted,
+   * out of reach. Focusable content under an opaque layer is WCAG 2.2 SC 2.4.11 (Focus Not Obscured).
+   *
+   * It takes an OWNER because there is more than one such layer — the dashboard and the waiting screens — and
+   * a boolean attribute with two independent writers is a bug waiting for the order in which they happen to
+   * fire: closing the dashboard would make a transcript reachable that the sign-in card is still covering.
+   * The attribute is set while the set is non-empty and cleared when it empties, so no caller has to know
+   * about the others.
+   */
+  var covering = {};
+  CC.coverTranscript = function (owner, covered) {
+    if (covered) covering[owner] = true;
+    else delete covering[owner];
+    var el = CC.els && CC.els.conversation;
+    if (!el) return;
+    if (Object.keys(covering).length) el.setAttribute('inert', '');
+    else el.removeAttribute('inert');
+  };
+
   // Null-safe placeholders so the host may call these before modules load.
   // Each owning module overwrites its own method(s).
   if (typeof cc.batch !== 'function') cc.batch = function () {};
@@ -339,6 +363,81 @@
   );
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Uncaught errors, reported to the host.
+  // ---------------------------------------------------------------------------
+  /**
+   * Sends anything this page throws to `idea.log`, because otherwise nothing does.
+   *
+   * The plugin's UI is a browser nobody can open the devtools on, and the CEF console goes nowhere — so an
+   * exception in one module was, until now, completely invisible from outside. That is not a theoretical
+   * gap: `#tabsbar` ships `hidden` and `app-tabs.js` clears that attribute at the END of its render, so a
+   * throw anywhere earlier produced a fully-built tab bar that was never shown, with no error on screen, no
+   * line in the log and no red test. The only symptom was a user asking where the tabs had gone.
+   *
+   * Rides the existing `diagnostics` message rather than adding one: the host already logs that, and the
+   * prefix is what makes it a WARN instead of the routine environment report (`ChatBridgeRouter`).
+   *
+   * Bounded, because a throw inside a render can repeat on every push and a log that floods is a log nobody
+   * reads. Deduplicated by message, and capped — after that the page stays silent, which is no worse than
+   * where this started.
+   */
+  var reported = Object.create(null);
+  var reportedCount = 0;
+  var MAX_REPORTED = 20;
+  function reportUncaught(what, error) {
+    var text = error && error.stack ? String(error.stack) : String(error);
+    var key = what + '|' + text.split('\n')[0];
+    if (reported[key] || reportedCount >= MAX_REPORTED) return;
+    reported[key] = true;
+    reportedCount++;
+    CC.send({ type: 'diagnostics', report: 'uncaught ' + what + ': ' + text });
+  }
+  window.addEventListener('error', function (ev) {
+    reportUncaught('error', ev.error || ev.message);
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    reportUncaught('rejection', ev.reason);
+  });
+  /**
+   * A script the policy refused to run — the one failure `error` does NOT fire for.
+   *
+   * The page is served under a CSP that pins every script by sha256, so a file whose hash does not match the
+   * header is BLOCKED: it never executes, it throws nothing, and the only trace is a console message in a
+   * browser with no devtools. What that looks like from outside is a feature that simply is not there —
+   * `window.cc.tabs` undefined, the host's `cc.tabs && cc.tabs(...)` guard skipping, no tab bar and no error
+   * anywhere. Reporting it is the difference between a five-minute answer and an afternoon of guessing.
+   */
+  window.addEventListener('securitypolicyviolation', function (ev) {
+    reportUncaught(
+      'csp',
+      ev.violatedDirective +
+        ' blocked ' +
+        (ev.blockedURI || 'inline') +
+        ' (' +
+        ev.sourceFile +
+        ':' +
+        ev.lineNumber +
+        ')'
+    );
+  });
+
+  /**
+   * What the page ended up with, reported once — the inventory the host cannot see.
+   *
+   * Each module is its own `<script>`, so one that fails to load or to run leaves the others working and the
+   * page half built. The host then calls `window.cc.<x> && window.cc.<x>(...)`, the guard skips, and nothing
+   * says so. This names the missing halves at startup instead.
+   */
+  CC.selfCheck = function () {
+    var expected = ['batch', 'clear', 'state', 'permissions', 'session', 'tabs', 'theme', 'settingsMenu'];
+    var missing = [];
+    for (var i = 0; i < expected.length; i++) {
+      if (typeof (window.cc || {})[expected[i]] !== 'function') missing.push('cc.' + expected[i]);
+    }
+    if (missing.length) CC.send({ type: 'diagnostics', report: 'uncaught missing: ' + missing.join(', ') });
+  };
+
   // Announce readiness once the page has loaded.
   // ---------------------------------------------------------------------------
   // Announce ready, but ONLY once the host has injected window.__ccSend (it does so on load-end). If the page
@@ -353,6 +452,9 @@
         // is the only window into what this browser actually resolves — see CC.diagnostics.
         try {
           CC.diagnostics();
+          // What the page ACTUALLY ended up with. A module that failed to load or to run leaves the others
+          // working, so the only symptom is a feature that is not there — see CC.selfCheck.
+          CC.selfCheck();
         } catch (e) {
           // Diagnostics must never be the reason the page fails to come up.
         }

@@ -2,6 +2,8 @@
    COMPOSER
    ════════════════════════════════════════════════════════════════════════════ */
 .composer-card {
+  /* The containing block for `#palette`, which is anchored to this card's top edge and hangs upwards. */
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -136,6 +138,117 @@
   flex: 0 0 auto;
 }
 
+/* ── the controls bar, INSIDE the prompt card ────────────────────────────────────
+   Where you are (the view pills) on the left, what you can do to this chat (the action icons) on the right —
+   see app-composer-actions.js for why neither is in the tool window's title bar any more.
+
+   **Inside the card and at the TOP of it**, above the box you type in. Two things follow from that and both
+   were wrong before: it is part of the chat rather than a strip floating over it — which is how the title
+   bar read, a toolbar the chat happens to sit under — and it does not stack a second row of controls under
+   the text, where the model/mode bar already is. Its divider therefore hangs BELOW it, the mirror of that
+   bar's, so the card still reads as one object with the text in the middle.
+
+   ONE row, not two. Where you are and what you can do are different kinds of thing and stay two groups, but
+   two stacked strips of controls around a text box is a wall — the ends of the line separate them instead. */
+.composer-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+}
+.composer-controls:empty {
+  display: none;
+}
+.composer-views {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* Pushed to the far end by the views' `flex: 1`, so the two groups keep their ends when the row wraps. */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-left: 8px;
+}
+.composer-views .dash-toggles {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+/* The same flat, divided shape as the model/mode pills below — one look for "a control on the composer",
+   rather than a second, heavier pill language two rows apart from the first. */
+.composer-views .dash-toggle + .dash-toggle {
+  border-left: 1px solid var(--border);
+}
+.composer-views .dash-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--dim);
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.composer-views .dash-toggle:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+/* The view you are in.
+   WCAG 1.4.1 forbids colour as the ONLY carrier of information, and "which of these five am I looking at" is
+   information — so the state is carried by the underline and the weight as well as the hue. It used to carry
+   a leading `●` too; three signals for one bit was an ornament, and two of them are non-colour, which is what
+   the criterion asks for. `aria-current` carries it programmatically (see `viewButton`). */
+.composer-views .dash-toggle.active {
+  color: var(--neon-orange);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--neon-orange);
+}
+/* Chat carries NO glyph of its own. It used to wear a `←` to read as "leave" rather than as a fifth view,
+   which earned its place when the switcher was a segmented control floating over the transcript. In the
+   card's own bar the five read as one row of destinations and the arrow was the only ornament in it — so
+   Chat is lit by the same bullet as the rest when it is where you are. */
+.composer-views .dash-toggle.dash-exit {
+  color: var(--text);
+}
+/* The ⚙ at the HEAD of the row (app-composer-settings.js) — before Chat, deliberately not beside the clip:
+   the clip acts on the message being written, this acts on the chat, which is what this row is.
+   It borrows `.bar-icon` for the glyph and overrides the two things that would make it read as belonging to
+   the action group at the other end: the 8px radius (this row is flat and full height) and the divider —
+   `.dash-toggle + .dash-toggle` above cannot reach across the `.dash-toggles` wrapper, so the hairline
+   between the gear and Chat has to be declared here.
+   The open state is drawn from `aria-expanded`, not from a class of its own: the fact is already
+   programmatic, and a second copy of it in a class list is a second thing that can fall out of step. */
+.composer-views .settings-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 0;
+  border-right: 1px solid var(--border);
+}
+.composer-views .settings-btn[aria-expanded='true'] {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+/* Same 26px as the controls row above it, and that is the point: the two bars frame the text box, so a
+   six-pixel difference in height between them reads as one of them being wrong rather than as two bars. */
 .composer-bar .pill,
 .composer-bar .attach-btn {
   display: inline-flex;
@@ -143,8 +256,8 @@
   gap: 6px;
   cursor: pointer;
   user-select: none;
-  height: 32px;
-  padding: 0 11px;
+  height: 26px;
+  padding: 0 9px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -237,6 +350,13 @@
 }
 
 /* ── popup menu (pills) ───────────────────────────────────────────────────── */
+/* ── the floating menus, at the IDE's own metrics ────────────────────────────────
+   These are popups inside an IDE, not on a web page, and until now they were built to web proportions:
+   pill-shaped rows with 7px radii, generous padding, an inset search box with its own border. Next to a
+   platform popup — flat rows the full width of the panel, a 1px separator, a tight line height — they read
+   as something from another application, which in a tool window is precisely what they are not.
+   Rows are FULL-BLEED (the padding lives on the row, not on the panel) so the hover highlight runs edge to
+   edge the way IntelliJ's does; the panel keeps a 4px band top and bottom and nothing on the sides. */
 .menu {
   position: absolute;
   z-index: 50;
@@ -246,7 +366,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
-  padding: 5px;
+  padding: 4px 0;
   margin: 0;
   max-height: 60vh;
   overflow-y: auto;
@@ -262,19 +382,23 @@
     transform: none;
   }
 }
+/* One row: 22px of content plus 2px either side, which is the platform's list metric. No radius — a rounded
+   highlight inside a square panel is the web idiom, and it is what made these read as not-the-IDE. */
 .menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  padding: 6px 10px;
-  border-radius: 7px;
+  padding: 3px 12px;
+  border-radius: 0;
   font-size: 12.5px;
+  line-height: 18px;
   color: var(--text);
   transition: background-color 0.12s;
 }
+/* Full-bleed, and in the selection colour rather than a panel tint: this is a list you are picking from. */
 .menu-item:hover {
-  background: var(--surface2);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .menu-item.selected {
   color: var(--accent);
@@ -318,23 +442,76 @@
   padding-left: 20px;
 }
 
+/* ── the ⚙ settings menu ──────────────────────────────────────────────────────
+   The same panel and the same rows as every other popup on this bar (`.menu`, `.menu-item`) — flat, dense,
+   full-bleed, the platform's list metric. What it adds is only what a menu of SWITCHES needs and a menu of
+   one choice does not: group headings, a separator, and rows that are real buttons. */
+.settings-menu {
+  min-width: 220px;
+}
+/* A row here is a `<button>` carrying `role="menuitemcheckbox"`, because the checked state has to be a
+   programmatic state and not a colour. A button brings its own width, alignment, font family, border and
+   background, and those four are RESET rather than restated: everything visual still comes from
+   `.menu-item`. In particular `color` and `font-size` are deliberately absent — declaring them here would
+   out-order `.menu-item` and, worse, flatten the `.menu-item.selected` accent that marks a switch as on. */
+.settings-item {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+.settings-section + .settings-section {
+  margin-top: 4px;
+}
+/* The group heading. Same shape as the attach menu's section labels, and for the same reason: it must read
+   as a label and never as one more row you could press. */
+.settings-group {
+  font-size: 10.5px;
+  color: var(--dim);
+  padding: 6px 12px 2px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+/* The rule before "Open Plugin Settings". A real `role="separator"` carries it, so the break the eye reads
+   is the break assistive technology is told about. */
+.menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+/* No settings yet: dim, non-interactive, and still an entry so menu navigation reaches it. A popup that
+   opens empty and explains nothing is the state this row exists to prevent. */
+.settings-empty {
+  color: var(--dim);
+  cursor: default;
+}
+.settings-empty:hover {
+  background: transparent;
+}
+
 /* rich attach menu (search + recent files), AI-Assistant style */
 .attach-menu {
   min-width: 290px;
   max-width: 380px;
   padding: 6px;
 }
+/* The speed search, as the platform draws one: a line at the head of the popup with a rule under it, not a
+   bordered box floating inside a padded panel. Same reasoning as `.menu-item` — the box was the single
+   most web-looking thing in the menu. */
 .attach-search {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--border);
-  background: var(--surface2);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
   color: var(--text);
   font-family: var(--font);
   font-size: 12.5px;
-  padding: 6px 9px;
-  border-radius: var(--radius-sm);
-  margin-bottom: 6px;
+  padding: 4px 12px 6px;
+  border-radius: 0;
+  margin-bottom: 4px;
   outline: none;
 }
 .attach-search::placeholder {
@@ -496,6 +673,14 @@
   font-size: 12px;
   color: var(--dim);
 }
+/* `hidden` is a user-agent rule, and ANY author declaration of `display` beats it whatever the specificity —
+   so the `display: grid` above quietly cancelled the `hidden` attribute the JS sets when there is nothing to
+   draw, leaving a strip of empty grid above the prompt box. jsdom has no layout, so the test that asserted
+   the attribute was set stayed green throughout. Anything that declares `display` and is also hidden by
+   script needs this line; it is not defensive, it is the other half of that declaration. */
+.usage-bars[hidden] {
+  display: none;
+}
 /* Two lines per window: the bar row, and the countdown under it. */
 .usage-bars .ub-item {
   display: flex;
@@ -556,35 +741,43 @@
 /* ════════════════════════════════════════════════════════════════════════════
    SLASH PALETTE
    ════════════════════════════════════════════════════════════════════════════ */
-/* A layer of the WORK AREA, not of the page: #palette is a child of #work, which is a stacking context
-   (base.css), so this number is read against its siblings there and nowhere else — 3, i.e. above the dock
-   it floats over, and no longer the 100 it carried when every layer in the page competed in one flat root.
-   Above the dock because it hangs over the composer; below the body-mounted menus, which is right — a menu
-   opened after it is the newer thing. */
+/* A ROW OF THE DOCK, directly above the composer — not a layer over it, and that is the whole rule.
+   It was `position: fixed` with `padding-bottom: 72px` holding it clear of a composer whose height is not
+   72px and never was: it grows with the pills, the queue, the attachment chips and the textarea itself, so
+   the list covered the box you were typing into exactly when you had the most in it. It also positioned
+   against the VIEWPORT rather than the tool window, which is the same mistake the find bar made.
+
+   In the flow it cannot cover anything: it opens above the composer, pushes the dock up, and the transcript
+   gives up the space. No z-index, no inset to keep in step with anything. */
+/* Anchored to the TOP EDGE of the prompt card, hanging upwards over the meters.
+   It was a row of the dock, which put it above the plan-limit bars — a block away from the box it completes.
+   In the flow it also pushed the card down as it opened, moving the text you were typing in under your
+   cursor. So: out of the flow, over what is above, never over what is below. */
 #palette {
-  position: fixed;
+  position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 3;
-  display: flex;
-  justify-content: center;
-  padding: 0 clamp(16px, 5vw, 40px) 72px;
-  pointer-events: none;
+  bottom: 100%;
+  margin-bottom: 6px;
+  /* One row's height, declared here because `.palette-box` caps itself in ROWS and cannot do that against a
+     height it would have to measure. It is `.palette-item`'s padding plus its line-height, and the three
+     change together. */
+  --palette-row: 27px;
 }
 #palette[hidden] {
   display: none;
 }
 .palette-box {
-  pointer-events: auto;
-  width: 100%;
-  max-width: var(--col);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 6px;
-  max-height: 46vh;
+  padding: 4px;
+  /* Bounded in ROWS, not in viewport height. `46vh` gave a half-window list on a tall IDE, and the number a
+     list of commands should be capped at is a number of lines you can scan — past ~9 you are reading, not
+     choosing, and the query is the better tool. Two lines' worth of slack over the 9 so a tenth row peeks
+     and the list is visibly scrollable. */
+  max-height: calc(9.5 * var(--palette-row));
   overflow-y: auto;
   animation: pop 0.16s var(--ease);
 }
@@ -595,7 +788,7 @@
 }
 .palette-empty {
   color: var(--dim);
-  padding: 8px 11px;
+  padding: 5px 10px;
   font-size: 12.5px;
 }
 .palette-item {
@@ -603,7 +796,8 @@
   align-items: baseline;
   gap: 10px;
   cursor: pointer;
-  padding: 8px 11px;
+  padding: 4px 10px;
+  line-height: 19px;
   border-radius: var(--radius-sm);
   transition: background 0.1s;
 }
@@ -613,6 +807,14 @@
 }
 .palette-item.active {
   box-shadow: inset 2px 0 0 var(--accent);
+}
+/* WHAT THE QUERY IS POINTING AT — and deliberately weaker than `.active`.
+   The two states are different claims. `.match` says "this is what your text most resembles"; `.active` says
+   "press Enter and you get this". Drawing the first like the second would promise a selection that Enter does
+   not honour, because until you press an arrow Enter sends what you typed. Hence a rule on the name alone: no
+   background, nothing that reads as a highlighted row, and no focus moved anywhere. */
+.palette-item.match:not(.active) .palette-name {
+  color: var(--accent);
 }
 .palette-name {
   font-family: var(--mono);

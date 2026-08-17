@@ -3,16 +3,21 @@ package dev.lain.claudejb.ui
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.context.Attachment
+import dev.lain.claudejb.diff.OpenedDiffsService
+import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.ui.jcef.JcefCardPayload
 import dev.lain.claudejb.ui.jcef.JcefHost
 import dev.lain.claudejb.ui.jcef.JcefSessionData
+import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefState
 import dev.lain.claudejb.ui.jcef.JcefTheme
 import java.awt.BorderLayout
@@ -90,6 +95,15 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     /** The tab bar this page draws — the chats, the agents under them, and what a click on one does. */
     internal val agentTabs = ChatAgentTabs(this)
 
+    /**
+     * The conversation embedded in the Git view — a SECOND session drawn into this same page.
+     *
+     * It has no tab of its own, deliberately: as one it sat in the row with the user's own conversations and
+     * its startup painted the full-window boot screen over whatever chat they were in. It is created on
+     * first use and started silently; a browser that never opens the Git view never pays for it.
+     */
+    internal val gitChat = GitChatFeed(this, host::exec)
+
     init {
         background = ChatTheme.BG
         // The page is the whole panel: the tab bar is part of it (app-tabs.js), not a Swing strip on top.
@@ -115,8 +129,18 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         lafConn.subscribe(LafManagerListener.TOPIC, LafManagerListener { pushTheme() })
         Disposer.register(this, lafConn)
 
+        // …and re-read the repository whenever the IDE's own Git plugin says one moved. Everything else that
+        // refreshes the Git view is a moment we happen to ask — the page loading, a turn ending, a button on
+        // the view — and switching branch is none of them, so the view went on naming the branch you had left
+        // until the next turn. git4idea publishes this from a background thread, hence the hop; overlapping
+        // requests collapse inside [GitIntegration], so several open chats reacting at once cost one read.
+        project.service<GitHistoryService>().onRepositoryChanged(this) {
+            ApplicationManager.getApplication().invokeLater({ if (!project.isDisposed) pushGit() }, ModalityState.any())
+        }
+
         // Seed the page. The host queues these until load-end, and `Ready` re-pushes everything for a late load.
         pushTheme()
+        pushSettingsMenu()
         pushMetaState()
         pushPermissions()
         tray.push()
@@ -219,20 +243,43 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         host.exec("window.cc.theme && window.cc.theme(" + JcefTheme.vars(reduceMotion) + ")")
     }
 
+    /** The composer's ⚙ menu: the switches worth flipping without leaving the chat, and their current state. */
+    internal fun pushSettingsMenu() {
+        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state)
+        host.exec("window.cc.settingsMenu && window.cc.settingsMenu({\"items\":$items})")
+    }
+
+    /**
+     * The composer's own state: the meta document, then the live one.
+     *
+     * The diff count is read HERE rather than defaulted, and that is the whole reason this method reaches
+     * outside the session: `openDiffs` is what the composer's *Close diffs* button greys itself out on, so a
+     * push that omitted it left the button permanently disabled — a control that exists, is drawn, and can
+     * never be pressed. Opening or closing a diff tab is not a session event, so nothing else would ever
+     * supply the number.
+     */
     internal fun pushMetaState() {
+        val openDiffs = OpenedDiffsService.getInstance(project).openCount()
         host.exec(
             "window.cc.meta && window.cc.meta(" + JcefState.metaJson(session) + ");" +
-                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage) + ")",
+                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage, openDiffs) + ")",
         )
     }
 
+    /**
+     * The request cards on screen — this chat's, plus the Git conversation's while it has any.
+     *
+     * ONE region for both, because the page has one and a second would be a second place to look for the
+     * thing that is blocking you. Which session answers a card rides on the card (`scope`), not on where it
+     * was drawn. This chat's come first: they are the ones the user is here for.
+     */
     internal fun pushPermissions() {
         val perms = session.pendingPermissions()
-        val diffByRequest = edits.diffsFor(perms)
-        host.exec(
-            "window.cc.permissions && window.cc.permissions(" +
-                JcefCardPayload.permissionsJson(perms, diffByRequest) + ")",
-        )
+        // This chat's first: they are the ones the user is here for. The Git conversation's follow, tagged,
+        // so answering one reaches the session that asked.
+        val groups = listOf(JcefCardPayload.Group(perms, diffByRequest = edits.diffsFor(perms))) +
+            gitChat.permissionGroup()
+        host.exec("window.cc.permissions && window.cc.permissions(" + JcefCardPayload.permissionsJson(groups) + ")")
     }
 
     /**
@@ -269,9 +316,23 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         host.exec("window.cc.session && window.cc.session($json)")
     }
 
-    /** The strip that owns the chats, found by walking up — it is this panel's container, not a dependency. */
+    /**
+     * The strip that owns the chats.
+     *
+     * Two ways of asking, and the second one is why the close button did nothing. Walking up the Swing
+     * hierarchy is the honest answer while this panel is IN it — it is a container, not a dependency — but a
+     * panel is constructed and wired before it is added to anything, and a PINNED view is a second panel over
+     * the same session that may be built the same way. Every render, every close and every selection that
+     * arrived in that window resolved to null and was dropped in silence: `panel.chatStrip()?.closeById(…)`
+     * is a no-op with a `?.` in front of it, which is the shape this repository has been bitten by before.
+     *
+     * So the tool window is asked when the walk comes up empty. There is exactly one strip per project and
+     * the factory holds it, so that answer is right whenever the walk's is — and right in the window where
+     * the walk has nothing to say.
+     */
     internal fun chatStrip(): ChatTabsPanel? =
-        javax.swing.SwingUtilities.getAncestorOfClass(ChatTabsPanel::class.java, this) as? ChatTabsPanel
+        (javax.swing.SwingUtilities.getAncestorOfClass(ChatTabsPanel::class.java, this) as? ChatTabsPanel)
+            ?: ClaudeToolWindowFactory.chatTabs(project)
 
     // ── Tool-window actions ──────────────────────────────────────────────────────────────────────────────
 
@@ -320,6 +381,10 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         onboarding.dispose()
         transcript.stop()
         feed.stop()
+        // Detaches this page's listeners from the Git conversation, and nothing else: that session belongs to
+        // the project, not to this panel — every chat's Git view is a window onto the same one, so disposing
+        // it here would kill it for the tabs still open on it.
+        gitChat.dispose()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }
 
@@ -333,6 +398,28 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         private val livePanels = java.util.concurrent.CopyOnWriteArrayList<JcefChatPanel>()
         fun broadcastTheme() {
             livePanels.forEach { it.pushTheme() }
+        }
+
+        /**
+         * Re-push the dashboard to every open chat.
+         *
+         * For the same reason as [broadcastTheme]: the retention window is a GLOBAL setting and the Workloads
+         * diagram spans every chat, so changing it from one tab and redrawing only that tab leaves the others
+         * showing a window nobody has any more.
+         */
+        fun pushSessionToAll() {
+            livePanels.forEach { it.pushSession() }
+        }
+
+        /**
+         * Re-push the composer's ⚙ menu to every open chat.
+         *
+         * Same rule as the two above, and the sharpest case of it: these switches are GLOBAL, five of them
+         * are the deterministic guard's rules, and a menu still showing "Block credential files" ticked in
+         * another tab after it was unticked here is a security control misreporting its own state.
+         */
+        fun pushSettingsMenuToAll() {
+            livePanels.forEach { it.pushSettingsMenu() }
         }
     }
 }
