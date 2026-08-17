@@ -29,40 +29,20 @@ import javax.swing.JList
 internal class TabSessionCommands(
     private val project: Project,
     private val tabs: ChatTabsPanel,
-    /** Starts a session's process, then adds a tab for it and wires it — see [ClaudeToolWindowFactory.openChat]. */
-    private val openChat: (ClaudeSession) -> Unit,
+    /**
+     * Starts a session's process, then adds a tab for it and wires it — see [ClaudeToolWindowFactory.openChat].
+     * The flag is whether to SELECT the new tab; the restore path opens several and selects one.
+     */
+    private val openTab: (ClaudeSession, Boolean) -> Unit,
 ) {
 
-    private fun activeSession(): ClaudeSession? = tabs.selectedChat?.session
+    /** Opening a chat and going to it — what every command here means by opening one. */
+    private fun openChat(session: ClaudeSession) = openTab(session, true)
 
-    /**
-     * The chat the Git integration talks in: found and brought to the front if it is already open, created and
-     * opened if it is not. Every prompted Git action goes through here, and none of them ever writes into the
-     * chat the user is working in — a turn of git plumbing in the middle of their conversation costs them
-     * context, money and a transcript they have to read past.
-     *
-     * It is a real chat, on purpose. You can answer it (*"squash those two"*, *"not that file"*) and it carries
-     * on from there, which is the whole point of prompting an agent instead of shelling out to `git`. What it is
-     * not is a chat like the others: its turns run with forced approval, and its title does not drift
-     * ([ClaudeSession.gitIntegration] owns both).
-     *
-     * **Not persisted.** After a restart it comes back as an ordinary chat — its conversation is real and worth
-     * keeping — and the next Git action opens a fresh one. Remembering which id it was would mean a new field in
-     * [SessionHistory] for a label.
-     *
-     * EDT: it may add a tab.
-     */
-    fun gitChat(): ClaudeSession {
-        val manager = ChatSessionManager.getInstance(project)
-        manager.gitChat()?.let { session ->
-            // Already open: select its tab so the answer lands somewhere the user is looking.
-            tabs.tabFor(session)?.let { tabs.select(it) }
-            return session
-        }
-        val session = manager.createGitChat()
-        openChat(session)
-        return session
-    }
+    /** A fresh conversation in a new tab, selected: the composer's *New chat* button and nothing else. */
+    fun newChat() = openChat(ChatSessionManager.getInstance(project).create())
+
+    private fun activeSession(): ClaudeSession? = tabs.selectedChat?.session
 
     /** A restorable tab: the binary session id, its resolved title and the transcript read back from the session file. */
     private data class RestoredSession(val id: String, val title: String?, val entries: List<EntryDTO>)
