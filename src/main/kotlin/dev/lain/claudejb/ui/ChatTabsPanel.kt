@@ -92,6 +92,20 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     /** The selected tab's chat panel, or null when the selected tab is not a chat (e.g. Diff History). */
     val selectedChat: JcefChatPanel? get() = selectedTab?.component as? JcefChatPanel
 
+    /**
+     * The tab-level commands — opening a chat, the Git chat, restore, fork — set by the factory, which is
+     * where they are constructed.
+     *
+     * It is held here because this panel is what a caller OUTSIDE the tool window can already reach
+     * ([ClaudeToolWindowFactory.tabsPanel]), and the composer's action buttons are exactly such a caller: they
+     * are drawn inside a chat, and asking that chat's own session to make a new tab is not something a session
+     * can do. Reaching them any other way means guessing at the shape of the tool window's content, which is
+     * the cast that silently returned null for a whole release.
+     *
+     * Null until the tool window's content is built; a caller with nothing here has no tabs to talk to either.
+     */
+    var commands: TabSessionCommands? = null
+
     init {
         add(content, BorderLayout.CENTER)
     }
@@ -183,11 +197,23 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     }
 
     /**
-     * Closes [tab]: removes it, fires the close callback and disposes whatever it carried.
+     * Closes [tab]: shows something else, removes it, fires the close callback and disposes what it carried.
      *
      * Closing a CHAT takes its pinned views with it, first: they are second panels over that chat's session
      * ([ChatTab.isPinnedView]), so leaving them behind leaves tabs painting a transcript whose session the
      * close is about to dispose. They cannot cascade further — a pinned view is never pinned to.
+     *
+     * **The ORDER of the three middle steps is the whole of this method, and getting it wrong is what made
+     * the close button do nothing at all.** Removing the card that is currently SHOWN makes `CardLayout` pick
+     * the next one itself and validate the container on the spot — which reshapes a `JBCefOsrComponent`, which
+     * schedules on an `Alarm`. Reached from a close that has already disposed a browser, that alarm is gone
+     * and the platform logs `Already disposed` — a Throwable, thrown out of `Container.remove`, so every line
+     * after it was skipped: no `pushChats`, so the pill stayed in the bar, so the button looked dead. The tab
+     * really had been closed; the only thing missing was every consequence of it.
+     *
+     * So: move the display to a survivor FIRST, while every component involved is still alive; only then
+     * remove the dead card, which is no longer the one on screen and therefore no longer something the layout
+     * has to make a decision about; and dispose last, once the container has settled.
      */
     fun close(tab: ChatTab) {
         if (!tabs.remove(tab)) return
@@ -198,17 +224,35 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
             }
         }
         onClosed(tab)
-        content.remove(tab.component)
-        tab.disposer?.let { Disposer.dispose(it) }
         if (selectedTab === tab) {
             selectedTab = null
-            // Never leave the area blank: show whatever is left.
+            // Never leave the area blank: show whatever is left, BEFORE the card goes.
             tabs.firstOrNull()?.let { select(it) } ?: pushChats()
         } else {
             pushChats()
         }
+        content.remove(tab.component)
+        tab.disposer?.let { Disposer.dispose(it) }
         content.revalidate()
         content.repaint()
+        replaceLastChat()
+    }
+
+    /**
+     * Closing the LAST chat opens a fresh one, so the tool window is never empty.
+     *
+     * "Never leave the area blank" above only ever meant "show another tab", and with none left it fell
+     * through to a `CardLayout` with no card: an empty grey panel, no chats, no composer, and no control
+     * anywhere to make one — the whole plugin looked broken, and the only way out was closing and reopening
+     * the tool window. Closing your last conversation is a reasonable thing to do; being left with nothing is
+     * not what it means.
+     *
+     * Only for real chats. A pinned view closing is a view closing, and the chat behind it is still open —
+     * counting them here would make the last VIEW of a chat conjure a second conversation.
+     */
+    private fun replaceLastChat() {
+        if (tabs.any { !it.isPinnedView }) return
+        commands?.newChat()
     }
 
     fun all(): List<ChatTab> = tabs.toList()
@@ -234,10 +278,25 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      * frame — or, if the switch is what changed the list, the wrong bar entirely.
      */
     private fun pushChats() {
-        val list = tabs.map {
-            JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention, it.pinnedAgent)
-        }
+        val list = chatList()
         tabs.forEach { (it.component as? JcefChatPanel)?.agentTabs?.setChats(list) }
+    }
+
+    /**
+     * The chat list as the bar draws it — **asked for, not remembered**.
+     *
+     * This is the strip, so this is the answer; every page that draws a tab bar gets it from here. It used to
+     * exist only as a push, with each panel caching the last one it received, and a cache is a second copy
+     * that can be empty when the original is not: a panel built before the first push, or one whose push was
+     * dropped, rendered a bar with no chats in it — for good, because nothing pushes again until the LIST
+     * changes, and on a project with one restored chat it never does. What that looks like is a tool window
+     * with no tabs at all, which is how it was reported.
+     *
+     * The push stays: it is what makes the OTHER pages repaint when this one changes something. What changed
+     * is that a page can also just ask, which is what it does when it comes up ([ChatAgentTabs.render]).
+     */
+    fun chatList(): List<JcefTabsData.Chat> = tabs.map {
+        JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention, it.pinnedAgent)
     }
 
     /**
