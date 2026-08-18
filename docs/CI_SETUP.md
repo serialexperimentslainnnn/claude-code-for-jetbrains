@@ -137,29 +137,30 @@ different places, and neither is written down anywhere in the script:
   cards are read and neither is assumed to be either CA — the card whose `F9` certificate is *self-issued*
   is the root, the other is the intermediate. No serial, no DN and no fingerprint is hardcoded, so a
   reissued PKI is picked up rather than contradicted.
-- **The CA private key is the PKI's own intermediate key**, read in place (`PKI_INTERMEDIATE_KEY`,
-  default `~/pki/matrix/private/intermediate.key`) and never copied, moved or rewritten — so there is no
-  second plaintext copy to shred and no window in which one exists. The two candidates that *look* like
-  better sources are both dead ends: `F9` is storage in this PKI and never a signer, and a PIV
-  certificate object has no private half; and `gpgsm` does not hold this key either — what its secret
-  listing shows under `CN=The Oracle Intermediate CA` is the **issuer** field of the PIV leaf
-  certificates it holds, not the CA itself.
+- **The CA private key never leaves the YubiKey.** `F9` holds key *and* certificate, so the signature is
+  produced **on the card** through PKCS#11 and the script never holds, copies or shreds a CA key. The
+  module is `libykcs11` (`yubico-piv-tool`), which is what exposes `F9` — OpenSC's module publishes only
+  the card-authentication slot — and it maps the attestation slot to **id 25 (`0x19`)`**. The PIN is read
+  once and handed over as `pin-source=file:…` in the temp dir, never as `pin-value`, because a URI is an
+  argument and arguments are world-readable in `/proc`.
 
-  Reading a key off disk is licensed by a check, not by trust: it must be the private half of the
-  certificate **the card just produced**, compared as public keys, or nothing is issued. That is what
-  stops a stale copy from a previous PKI issuing a certificate no root can verify.
+  Two dead ends, named so they are not rediscovered: `gpgsm` does **not** hold these CA keys — what its
+  secret listing shows under `CN=The Oracle Intermediate CA` is the **issuer** field of the PIV leaf
+  certificates it holds — and `~/pki/matrix/private/intermediate.key` is a **different, newer key** than
+  the one on the card, so signing with it would issue a certificate the root cannot verify.
 
-The PKI's own working directory is never written, and `build-matrix-pki.sh` is never run: the script asks
-the PKI for one leaf, it never creates, resets or reissues anything.
+`~/pki` is neither read nor written, and `build-matrix-pki.sh` is never run: the script asks the PKI for
+one leaf, it never creates, resets or reissues anything.
 
 ```sh
 ykman --device "$serial" piv certificates export f9 -      # per card; public read, no PIN, no touch
-openssl pkey -in "$int_key" -pubout | cmp - <(openssl x509 -in int.crt -noout -pubkey)   # or abort
+export PKCS11_PROVIDER_MODULE=/usr/lib64/libykcs11.so.2    # id 25 (0x19) is slot F9
 
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out leaf.key
 openssl req -new -key leaf.key -sha384 -out leaf.csr \
   -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key"
-openssl x509 -req -in leaf.csr -sha384 -CA int.crt -CAkey int.key \
+openssl x509 -req -provider pkcs11 -provider default -in leaf.csr -sha384 \
+  -CA int.crt -CAkey "pkcs11:serial=$card;id=%19;type=private;pin-source=file:$tmp/piv-pin" \
   -set_serial "0x$(openssl rand -hex 16)" -days 3650 -extfile leaf.ext -out leaf.crt
 cat leaf.crt int.crt > fullchain.crt
 openssl verify -CAfile root.crt -untrusted int.crt leaf.crt
@@ -181,6 +182,17 @@ Four details there are decisions rather than defaults:
 
 `PRIVATE_KEY` is stored **encrypted**, with `PRIVATE_KEY_PASSWORD` as the matching passphrase — a random
 32 bytes that is never displayed, because its only consumer is the CI job that reads it from the secret.
+
+A copy of the issued **leaf** (key + certificate + issuer, as PKCS#12) is imported into the local
+`gpgsm` store, software-held, no YubiKey involved. That is a deliberate exception to "no copy is kept",
+and the reason is the one thing a GitHub secret cannot do: it is write-only. Once the three secrets are
+set, nobody — including you — can read back what was uploaded, so without a local copy *"what
+certificate is CI signing with right now"* and *"did this artifact come from that certificate"* stop
+being answerable. It is a leaf, not a CA: losing it costs one re-run of this step, and the CAs that
+issued it never left their cards.
+
+Everything else the step touched — the exported card certificates, the PIN file, the CSR, the issued key
+and the chain — is shredded **at that point in the step**, not left to the exit trap.
 
 `CERTIFICATE_CHAIN` is **leaf then issuer**, with the root deliberately left out: a self-signed anchor in
 the chain adds nothing a verifier can use, since it either already trusts that root or must not be told
