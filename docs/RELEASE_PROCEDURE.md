@@ -60,9 +60,9 @@ environment's deployment-branch policy restricts it to `main` and `v*.*.*` tags.
 | Secret | What it is |
 |---|---|
 | `PUBLISH_TOKEN` | Marketplace API token (plugins.jetbrains.com → profile → **Tokens**) |
-| `PRIVATE_KEY` | RSA private key (`private.pem`) for the **JetBrains plugin signature** — this is X.509/RSA, *not* GPG |
+| `PRIVATE_KEY` | EC P-384 private key (`private.pem`) for the **JetBrains plugin signature** — this is X.509, *not* GPG |
 | `PRIVATE_KEY_PASSWORD` | passphrase for that key |
-| `CERTIFICATE_CHAIN` | the matching `chain.crt` |
+| `CERTIFICATE_CHAIN` | the matching `fullchain.crt` — a `codeSigning` leaf issued by the local PKI, plus its issuer |
 | `GPG_SIGNING_KEY` | armoured private key that signs the **release artifacts** (`.asc`) |
 | `GPG_SIGNING_PASSPHRASE` | its passphrase |
 

@@ -108,7 +108,7 @@ list, where any other user on the machine could have read it.
 
 ## Step 3 — The JetBrains plugin signing key
 
-This is an **X.509 / RSA** key. It is *not* GPG and it is unrelated to the key in step 4.
+This is an **X.509** key. It is *not* GPG and it is unrelated to the key in step 4.
 
 **What it actually is, because the name misleads.** The Marketplace **re-signs every plugin with
 JetBrains' own key** (AWS KMS) before serving it — *"the file will be signed twice: first by the plugin
@@ -117,13 +117,24 @@ Play's: the signature an end user's IDE verifies is JetBrains', not yours.
 
 Two consequences, both the opposite of what the name suggests:
 
-- **Rotating it is invisible to users.** There is no reason to treat it as precious, and no reason to keep
-  a copy on disk. The bootstrap script generates it, pushes it to GitHub, and forgets it.
-- **The only reason to reuse the existing one** is that a Marketplace profile can pin a public key, and
-  the first automated publish is the wrong moment to discover whether yours does. If you still have the
-  key 4.4.1 was signed with, reuse it; otherwise generate and be ready to update the profile.
+- **Rotating it is invisible to users** *and* to the Marketplace. There is no public key pinned to a
+  vendor profile to keep in step — that half of the design is still listed as "not available yet" in the
+  plugin-signing docs — so there is nothing to upload anywhere after a rotation, and no reason to keep a
+  copy on disk. The bootstrap script issues it, pushes it to GitHub, and forgets it.
+- **It still cannot be dropped.** An unsigned upload is accepted, and then every user who installs the
+  plugin gets a warning dialog. The trade is one software key in an environment secret against a dialog
+  in front of everyone.
 
-Reusing an existing key:
+**It is issued by the local PKI, not self-signed.** The certificate is a `codeSigning` leaf under *The
+Oracle Intermediate CA*, which chains to *The Architect Root CA* — the same trust chain the release
+signatures hang off, so the upload credential is not a stray anchor nobody can place.
+
+Where the CA material comes from is the load-bearing part: **`gpgsm`**, GnuPG's X.509 store, which holds
+both CA certificates and the intermediate's private half. The YubiKey PIV slots are not touched (`F9`
+is storage there, never a signer) and the PKI's own working directory is neither read nor written — this
+script asks the PKI for a leaf, it never creates, resets or reissues one.
+
+Reusing an existing key instead:
 
 ```sh
 gh secret set PRIVATE_KEY          --env marketplace --repo "$REPO" < private.pem
@@ -131,21 +142,45 @@ gh secret set CERTIFICATE_CHAIN    --env marketplace --repo "$REPO" < chain.crt
 gh secret set PRIVATE_KEY_PASSWORD --env marketplace --repo "$REPO"   # paste, Ctrl-D
 ```
 
-`PRIVATE_KEY` must be the **decrypted** key — the output of `openssl rsa`, not `openssl genpkey`. Handing
-over the encrypted one is the most common failure here and it surfaces as an opaque `signPlugin` error.
+An **encrypted** `PRIVATE_KEY` is fine — `signPlugin` takes the passphrase and decrypts it — but only if
+`PRIVATE_KEY_PASSWORD` is the passphrase for *that* file. A mismatch surfaces at publish time, in CI, as
+an opaque parse error.
 
-Generating a fresh one (what the bootstrap script does, in a temp dir it then shreds):
+What the bootstrap script does instead, in a temp dir it then shreds:
 
 ```sh
-openssl genpkey -aes-256-cbc -algorithm RSA -out enc.pem -pkeyopt rsa_keygen_bits:4096
-openssl rsa -in enc.pem -out private.pem
-openssl req -key private.pem -new -x509 -days 3650 \
-  -subj "/CN=Claude Code Native plugin upload key" -out chain.crt
+gpgsm --armor --export             "The Architect Root CA"     > root.crt   # first block
+gpgsm --armor --export             "The Oracle Intermediate CA" > int.crt   # first block
+gpgsm --armor --export-secret-key-p8 "The Oracle Intermediate CA" > int.key # shredded immediately after
+
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out leaf.key
+openssl req -new -key leaf.key -sha384 -out leaf.csr \
+  -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key"
+openssl x509 -req -in leaf.csr -sha384 -CA int.crt -CAkey int.key \
+  -set_serial "0x$(openssl rand -hex 16)" -days 3650 -extfile leaf.ext -out leaf.crt
+cat leaf.crt int.crt > fullchain.crt
+openssl verify -CAfile root.crt -untrusted int.crt leaf.crt
 ```
 
-Ten years rather than JetBrains' example one: an expiring upload key breaks publishing on a date nobody
-has in a calendar, and expiry protects nothing here, since the certificate is not a trust anchor for any
-user.
+Four details there are decisions rather than defaults:
+
+- **EC P-384 / SHA-384**, the shape this PKI issues in, and one `marketplace-zip-signer` supports
+  natively (`SignatureAlgorithm.ECDSA_WITH_SHA384`) — no RSA detour to keep a tool happy that does not
+  need one.
+- **`extendedKeyUsage = codeSigning`**, written here rather than borrowed: the PKI's own leaf profile is
+  `clientAuth,serverAuth`, i.e. a TLS certificate, which is the wrong claim for one that signs an
+  artifact.
+- **`openssl verify` runs before any secret is set.** `gpgsm` matches on the DN and a store can hold
+  more than one copy of a CA, so the export takes the first block and lets the verification catch a
+  wrong pick — loudly, and before anything is written. (If `gpgsm` ever answers *ambiguous*, pass a
+  fingerprint through `PKI_ROOT` / `PKI_INTERMEDIATE` rather than renaming anything in the store.)
+- **Ten years**, rather than JetBrains' example one or the PKI's own 1095 days: an expiring upload key
+  breaks publishing on a date nobody has in a calendar, and expiry protects nothing here, since the
+  certificate is not a trust anchor for any user.
+
+`CERTIFICATE_CHAIN` is **leaf then issuer**, with the root deliberately left out: a self-signed anchor in
+the chain adds nothing a verifier can use, since it either already trusts that root or must not be told
+to.
 
 ---
 
