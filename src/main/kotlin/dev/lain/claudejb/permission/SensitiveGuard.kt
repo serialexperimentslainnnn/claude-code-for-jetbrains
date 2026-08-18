@@ -205,12 +205,14 @@ object SensitiveGuard {
     private const val SETTINGS_PATH = "Settings ▸ Claude Code ▸ Security"
 
     /**
-     * A verdict together with the reason behind it — the form callers should use.
+     * A verdict together with the reason behind it — the ONLY form callers use.
      *
-     * Both are produced from ONE [classify] pass on purpose. Calling [verdict] and [reason] separately runs the
-     * classification twice, and classification is not cheap: [GuardPaths.expandWithResolved] canonicalises every
-     * path candidate on disk, under a timeout, precisely because a `stat()` on a dead network mount can block.
-     * Paying that twice to answer one question is waste the user experiences as latency on a permission card.
+     * Both are produced from ONE [classify] pass, and that is the reason this is the only entry point:
+     * classification is not cheap — [GuardPaths.expandWithResolved] canonicalises every path candidate on
+     * disk, under a timeout, precisely because a `stat()` on a dead network mount can block. A verdict-only
+     * and a reason-only function used to exist alongside this one, each running [classify] again on its own;
+     * neither had a production caller, and paying for classification twice to answer one question is waste
+     * the user experiences as latency on a permission card.
      */
     data class Decision(val verdict: Verdict, val reason: String?)
 
@@ -218,12 +220,6 @@ object SensitiveGuard {
     fun evaluate(toolName: String, input: JsonObject, policy: Policy): Decision {
         val result = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
         return Decision(verdictFor(toolName, result, policy), reasonFor(result, policy))
-    }
-
-    /** The verdict for a tool call. [Verdict.ALLOW] means "not our business" — the normal permission flow runs. */
-    fun verdict(toolName: String, input: JsonObject, policy: Policy): Verdict {
-        val result = classify(input, policy) ?: return Verdict.ALLOW
-        return verdictFor(toolName, result, policy)
     }
 
     private fun verdictFor(toolName: String, result: Classification, policy: Policy): Verdict {
@@ -255,12 +251,8 @@ object SensitiveGuard {
         }
     }
 
-    /** The one-line reason a call tripped the guard (for the card / transcript), or null. Always names where to
-     *  change this — see [SETTINGS_PATH] — whether the rule is enforced right now or already downgraded.
-     *  Prefer [evaluate] when the verdict is wanted too: this classifies again. */
-    fun reason(input: JsonObject, policy: Policy): String? =
-        classify(input, policy)?.let { reasonFor(it, policy) }
-
+    /** The one-line reason a call tripped the guard (for the card / transcript), from [evaluate]'s [Decision].
+     *  Always names where to change this — see [SETTINGS_PATH] — whether the rule is enforced or downgraded. */
     private fun reasonFor(result: Classification, policy: Policy): String =
         if (isEnforced(result, policy)) {
             "${result.text} — disable this in $SETTINGS_PATH"

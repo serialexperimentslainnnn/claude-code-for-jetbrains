@@ -50,7 +50,7 @@ class SensitiveGuardUncShapeTest {
 
     private fun read(path: String) = buildJsonObject { put("file_path", path) }
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
-    private fun v(tool: String, input: JsonObject) = SensitiveGuard.verdict(tool, input, policy)
+    private fun v(tool: String, input: JsonObject) = SensitiveGuard.evaluate(tool, input, policy).verdict
 
     // ── the reported call, both routes a regex literal takes into the guard ───────────────────────────────
 

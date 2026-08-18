@@ -131,7 +131,7 @@ class ClaudeSettings(internal val project: Project? = null) {
         /**
          * Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security), one per [SensitiveGuard.Policy]
          * `enforce*` field — all default **on**, reproducing the original hard-lock behaviour exactly. Turning one
-         * off never silently allows a matching call: [SensitiveGuard.verdict] always downgrades a disabled rule's
+         * off never silently allows a matching call: [SensitiveGuard.evaluate] always downgrades a disabled rule's
          * hit to ASK (a card, every time, for every caller) rather than either a silent allow or an unchanged DENY.
          */
         @JvmField var securityBlockCredentials: Boolean = true
