@@ -1,18 +1,19 @@
-// The Git view's branch map: the horizontal graph, and the two controls that make a branch something you can
-// act on rather than a word on a card.
+// The Git view's commit graph: the lane assignment underneath it, and the list it is drawn into.
 //
 // Four classes of rule are pinned here, and each one is a thing that would otherwise regress in silence:
-//  - the map is drawn from REAL topology or not at all — one node per commit, one edge per parent link the
-//    payload actually carries, no card when the host sent no parents and none when there is a single commit.
-//    This is the founding rule of `app-session-git.js`: an invented fork is indistinguishable on screen from
-//    a real one, so it must be impossible to draw;
-//  - what is cut is SAID. A truncated map presented as complete is the same defect as an invented one, and
+//  - the LANE ASSIGNMENT is arithmetic, and it is tested as arithmetic (`CC.dash.gitLanes`) rather than
+//    through the pixel positions it becomes: the FIRST parent continues its lane, a merge's other parents
+//    open lanes of their own, a lane stops being reserved the moment the commit it waited for is drawn, and a
+//    parent outside the window reserves nothing at all. Get any of those wrong and the result is still a
+//    picture — just of a history the repository does not have;
+//  - the graph is drawn from REAL topology or not at all: one row per commit the payload carries, one stroke
+//    per link it actually names, and never a line to a commit that is not there. An invented fork is
+//    indistinguishable on screen from a real one, which is why it has to be impossible to draw;
+//  - what is cut is SAID. A truncated graph presented as complete is the same defect as an invented one, and
 //    the note is the only thing standing between the two;
-//  - a commit and a branch can both be selected and both offer something to do, with the state carried
-//    programmatically (`aria-pressed`, `aria-current`) and not by colour alone — WCAG 1.4.1 and 4.1.2 — and
-//    the merge and checked-out markers said in words for the same reason;
-//  - the branch is a real control. It was dead text for a release while the button that changes it sat four
-//    cards down under a heading named after who runs it, which is not where anyone scans for "switch branch".
+//  - colour carries nothing on its own (WCAG 1.4.1). The branch is a text tag on its row, a merge says the
+//    word, which ref is checked out is programmatic (`aria-current`), and the drawing itself is `aria-hidden`
+//    because every relationship in it is already in the row's own text.
 const { loadFrontend, readCss } = require('./helpers/load');
 
 const C1 = '1111111111111111111111111111111111111111';
@@ -40,7 +41,7 @@ const commit = (hash, subject, parents) => ({
  */
 const GIT = {
   available: true,
-  repo: { present: true, branch: 'main', head: C4.slice(0, 7), root: 'proj' },
+  repo: { present: true, branch: 'main', head: C4, root: 'proj' },
   changes: [],
   commits: [
     commit(C4, "Merge branch 'side'", [C3, C2B]),
@@ -52,8 +53,8 @@ const GIT = {
   refs: [
     { name: 'main', kind: 'local', hash: C4, short: C4.slice(0, 7), current: true },
     { name: 'origin/main', kind: 'remote', hash: C3, short: C3.slice(0, 7), current: false },
-    // Points at a commit older than the window: it must not become a button that goes nowhere, and it must
-    // be counted out loud.
+    // Points at a commit older than the window: it must not become a tag that names a row nobody can see, and
+    // it must be counted out loud.
     { name: 'archive/2024', kind: 'local', hash: AWAY, short: AWAY.slice(0, 7), current: false },
   ],
   actions: [
@@ -74,201 +75,162 @@ const GIT = {
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
-describe('git branch map', () => {
+describe('git commit graph', () => {
   let win;
 
   const panel = () => win.document.querySelector('.dashboard');
-  const map = () => panel().querySelector('[data-card="git-map"]');
+  const history = () => panel().querySelector('[data-card="git-history"]');
   const openGit = () => {
     const btn = win.document.querySelector('.dash-toggle[data-view="git"]');
     btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
   };
   const click = (el) => el.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-  const node = (hash) => map().querySelector('.git-map-node[data-hash="' + hash + '"]');
-  const ref = (name) => map().querySelector('.git-map-ref[data-ref="' + name + '"]');
+  const row = (hash) => history().querySelector('.git-commit[data-hash="' + hash + '"]');
+  const ref = (hash, name) => row(hash).querySelector('.git-ref[data-ref="' + name + '"]');
+  const lanes = (entries) => win.CC.dash.gitLanes(entries);
+  /** The same entries the card builds, minus the DOM: what the pure assignment is given. */
+  const entriesOf = (commits) => commits.map((c) => ({ hash: c.hash, parents: c.parents, commit: c }));
 
   beforeEach(() => {
     win = loadFrontend(['app-session.js', 'app-composer.js'], { vendor: false });
     win.cc.session({ git: clone(GIT) });
   });
 
-  // ── drawn from real topology, or not drawn ───────────────────────────────────────────────────────────
+  // ── the lane assignment, as arithmetic ───────────────────────────────────────────────────────────────
 
-  it('draws one node per commit and one edge per parent link the payload carries', () => {
-    openGit();
-    expect(map()).not.toBeNull();
-    expect(map().querySelectorAll('.git-map-node').length).toBe(5);
-    // Five links: the merge has two parents, the three middle commits one each, and the root has none. A
-    // sixth edge would mean one was invented; a fourth, that a real one was dropped.
-    expect(map().querySelectorAll('.dg-edge').length).toBe(5);
+  it('keeps the mainline straight: the first parent continues the lane', () => {
+    const model = lanes(entriesOf(GIT.commits));
+    const laneOf = (hash) => model.rows.filter((r) => r.hash === hash)[0].lane;
+    // The merge, its FIRST parent, and that one's parent all share a lane; only the branch that was merged
+    // in is pushed aside. Without that rule the mainline wanders into whichever slot happened to be free and
+    // the picture stops being readable at exactly the moment there is something to read.
+    expect(laneOf(C4)).toBe(0);
+    expect(laneOf(C3)).toBe(0);
+    expect(laneOf(C2A)).toBe(0);
+    expect(laneOf(C2B)).toBe(1);
+    // Two lines of development, so two lanes — never one per commit and never one left over.
+    expect(model.lanes).toBe(2);
   });
 
-  it('puts the two lines of development in two lanes, and keeps the mainline straight', () => {
-    openGit();
-    const top = (hash) => parseFloat(node(hash).style.top);
-    const left = (hash) => parseFloat(node(hash).style.left);
-    // The FIRST parent continues its lane, so the merge, its first parent and that one's parent all share a
-    // row; only the side branch is pushed down. Without that rule the mainline wanders into whichever slot
-    // was free and the picture stops being readable.
-    expect(top(C4)).toBe(top(C3));
-    expect(top(C3)).toBe(top(C2A));
-    expect(top(C2B)).toBeGreaterThan(top(C4));
-    // Time runs left to right: the root is leftmost and the newest commit is rightmost.
-    expect(left(C1)).toBeLessThan(left(C2A));
-    expect(left(C2A)).toBeLessThan(left(C4));
+  it('a merge books a lane for every other parent, and says which lanes leave its dot', () => {
+    const model = lanes(entriesOf(GIT.commits));
+    const merge = model.rows[0];
+    expect(merge.merge).toBe(true);
+    // Its own lane continues to the first parent; the second parent opens the lane the side branch is drawn
+    // in. Both are `down`, which is what makes the row draw two lines out of one dot.
+    expect(merge.down).toEqual([0, 1]);
+    expect(merge.up).toEqual([]); // nothing points at the newest commit
+    expect(merge.through).toEqual([]);
   });
 
-  it('draws no map when the host sent no parents — an unconnected row of dots is not a history', () => {
-    const flat = clone(GIT);
-    flat.commits.forEach((c) => {
-      c.parents = [];
-    });
-    win.cc.session({ git: flat });
-    openGit();
-    // The whole point of the card: with no topology there is nothing honest to draw, so it is absent rather
-    // than present and empty. The history rail is unaffected and still lists the commits.
-    expect(map()).toBeNull();
-    expect(panel().querySelectorAll('.git-commit').length).toBe(5);
+  it('a fork ends every lane that was waiting for it, and frees the ones it did not take', () => {
+    const model = lanes(entriesOf(GIT.commits));
+    const root = model.rows[4];
+    // Both branches lead back to c1: two lanes arrive and terminate at this one dot. `up` is what draws that.
+    expect(root.hash).toBe(C1);
+    expect(root.up).toEqual([0, 1]);
+    expect(root.down).toEqual([]); // a root has no parents, so nothing leaves it
+    // …and the lane it did not take is released rather than left reserved for a commit already drawn. Left
+    // reserved, it would step every later line one lane further right for the rest of the graph.
+    expect(model.lanes).toBe(2);
   });
 
-  it('draws no map for a single commit, which has no relationship to show', () => {
-    const one = clone(GIT);
-    one.commits = [commit(C1, 'Root commit', [])];
-    win.cc.session({ git: one });
-    openGit();
-    expect(map()).toBeNull();
-  });
-
-  // ── it says what it cut ──────────────────────────────────────────────────────────────────────────────
-
-  it('names the window it is showing and counts the branches outside it', () => {
-    openGit();
-    // Every note in the card, not the first: the card carries two — the hint about selecting a node, and
-    // this one — and picking `querySelector` would silently assert against whichever happens to come first.
-    const notes = Array.from(map().querySelectorAll('.git-note'))
-      .map((el) => el.textContent)
-      .join(' ');
-    // Always states the window, even when nothing was truncated: a complete-looking picture read as the
-    // whole history is exactly the misreading this card must not cause.
-    expect(notes).toContain('Showing the newest 5 commits.');
-    expect(notes).toContain('1 branch points outside this window.');
-  });
-
-  it('lists only the branches it can actually point at', () => {
-    openGit();
-    // `archive/2024` sits on a commit outside the window, so a button for it could only fail to go anywhere.
-    // It is counted in the note instead; the header's branch chip still reaches the full list.
-    expect(Array.from(map().querySelectorAll('.git-map-ref-name')).map((el) => el.textContent)).toEqual([
-      'main',
-      'origin/main',
+  it('reuses a freed lane rather than growing the graph forever', () => {
+    // A line that ends (`c` is a root), then an unrelated older line. The second one belongs in lane 0: the
+    // first has finished with it. A graph that never reuses a lane is one whose gutter grows without bound.
+    const model = lanes([
+      { hash: 'a', parents: ['b'] },
+      { hash: 'b', parents: ['c'] },
+      { hash: 'c', parents: [] },
+      { hash: 'd', parents: ['e'] },
+      { hash: 'e', parents: [] },
     ]);
+    expect(model.rows.map((r) => r.lane)).toEqual([0, 0, 0, 0, 0]);
+    expect(model.lanes).toBe(1);
   });
 
-  // ── selection, and what it offers ────────────────────────────────────────────────────────────────────
-
-  it('a commit node is a real button whose name carries what the drawing says in shape and colour', () => {
-    openGit();
-    const merge = node(C4);
-    expect(merge.tagName).toBe('BUTTON');
-    expect(merge.getAttribute('type')).toBe('button');
-    // 1.4.1: the merge is drawn as a wider dot and the checked-out commit takes the accent. Neither survives
-    // forced colours and neither is audible, so both are also words.
-    expect(merge.getAttribute('aria-label')).toContain('merge of 2 parents');
-    expect(merge.getAttribute('aria-label')).toContain('main (checked out)');
-    expect(node(C1).getAttribute('aria-label')).not.toContain('merge');
-  });
-
-  it('selecting a commit shows what can be done there, and says so out loud', () => {
-    const spoken = [];
-    win.CC.announce = (m) => spoken.push(m);
-    openGit();
-    click(node(C3));
-
-    // 4.1.2: the state is programmatic, not just a ring.
-    expect(node(C3).getAttribute('aria-pressed')).toBe('true');
-    expect(node(C4).getAttribute('aria-pressed')).toBe('false');
-    const detail = map().querySelector('.git-map-detail');
-    expect(detail.querySelector('.git-hash').textContent).toBe(C3.slice(0, 7));
-    expect(detail.querySelector('.git-subject').textContent).toBe('Third on main');
-    // The host's catalogue, not a list written in the page.
-    expect(Array.from(detail.querySelectorAll('.git-commit-action')).map((b) => b.textContent)).toEqual([
-      'View diff',
-      'Copy hash',
+  it('a parent outside the window reserves nothing, because it can never arrive to claim it', () => {
+    const model = lanes([
+      { hash: 'a', parents: ['gone'] },
+      { hash: 'b', parents: ['also-gone'] },
     ]);
-    // 4.1.3: the row appears without the focus moving, so nothing else would tell a screen-reader user.
-    expect(spoken.some((m) => m.indexOf('Third on main') >= 0)).toBe(true);
+    // No lane is held open for a commit this window cannot show, and no edge leaves the dot towards one: a
+    // line trailing off the row would say "continues" in exactly the same ink as a line that ends.
+    expect(model.rows[0].down).toEqual([]);
+    expect(model.rows[1].down).toEqual([]);
+    expect(model.lanes).toBe(1);
   });
 
-  it('a per-commit button sends the catalogue id with that row own hash', () => {
+  it('lays out every entry exactly once, in the order it was given', () => {
+    const model = lanes(entriesOf(GIT.commits));
+    expect(model.rows.map((r) => r.hash)).toEqual([C4, C3, C2B, C2A, C1]);
+    expect(model.rows.map((r) => r.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  // ── the list it is drawn into ────────────────────────────────────────────────────────────────────────
+
+  it('draws one row per commit, and no second card competing with it', () => {
+    openGit();
+    expect(history()).not.toBeNull();
+    expect(history().querySelectorAll('.git-commit').length).toBe(5);
+    // The horizontal branch map is gone, not hidden: one history, one picture of it. Two cards drawing the
+    // same commits from two payload readings is how they come to disagree.
+    expect(panel().querySelector('[data-card="git-map"]')).toBeNull();
+  });
+
+  it('draws one stroke per line crossing a row, and nothing for a link the payload does not carry', () => {
+    openGit();
+    const strokes = (hash) => row(hash).querySelectorAll('.git-edge').length;
+    // The merge: its own lane down to the first parent, plus the branch it absorbed. Nothing arrives from
+    // above — it is the newest commit.
+    expect(strokes(C4)).toBe(2);
+    // A commit on the mainline while the side branch is open: in, out, and the side lane passing by.
+    expect(strokes(C3)).toBe(3);
+    // The root: both lanes arrive and end here, and nothing continues past it.
+    expect(strokes(C1)).toBe(2);
+  });
+
+  it('hides the drawing from assistive technology, since every row states its own relationships', () => {
+    openGit();
+    expect(row(C4).querySelector('.git-graph').getAttribute('aria-hidden')).toBe('true');
+    // The lane is a colour, and the palette repeats: `data-lane` is the SLOT, which is all the stylesheet can
+    // reasonably know. It is decoration, and nothing depends on it being unique.
+    expect(row(C2B).querySelector('.git-dot-node').getAttribute('data-lane')).toBe('1');
+  });
+
+  it('says "merge" in words, because a wider dot is no more audible than a colour', () => {
+    openGit();
+    // WCAG 1.4.1: the drawing marks a merge by shape and the checked-out commit by hue, and neither survives
+    // forced colours or a screen reader. The subject of a merge does not always say so either.
+    expect(row(C4).querySelector('.git-merge').textContent).toBe('merge');
+    expect(row(C1).querySelector('.git-merge')).toBeNull();
+  });
+
+  it('names each branch on the row it points at, and only where it can point', () => {
+    openGit();
+    expect(ref(C4, 'main').querySelector('.git-ref-name').textContent).toBe('main');
+    expect(ref(C3, 'origin/main').querySelector('.git-ref-kind').textContent).toBe('remote');
+    // Which one you are on is an attribute, not the accent alone (1.4.1 / 4.1.2), and "HEAD" is the word for
+    // everyone the accent does not reach.
+    expect(ref(C4, 'main').getAttribute('aria-current')).toBe('true');
+    expect(ref(C4, 'main').querySelector('.git-ref-kind').textContent).toBe('HEAD');
+    expect(ref(C3, 'origin/main').getAttribute('aria-current')).toBeNull();
+    // `archive/2024` sits on a commit outside the window: there is no row to hang it on, so it is not drawn.
+    expect(history().querySelectorAll('.git-ref').length).toBe(2);
+  });
+
+  it('a branch tag opens the platform switcher — the same entry the header chip fires', () => {
     const sent = [];
     win.CC.send = (m) => sent.push(m);
     openGit();
-    click(node(C2B));
-    click(map().querySelector('.git-map-detail .git-commit-action'));
-    // The FULL hash, never the seven characters on screen: an abbreviation is unique only until it is not.
-    expect(sent.pop()).toEqual({ type: 'gitAction', id: 'commitDiff', hash: C2B });
-  });
-
-  it('offers the branch switcher only where a branch actually is', () => {
-    openGit();
-    click(node(C1));
-    const bare = map().querySelector('.git-map-detail');
-    expect(bare.querySelector('.git-action')).toBeNull();
-    click(node(C1)); // pressing the selected one again clears it
-    click(node(C4));
-    const tagged = map().querySelector('.git-map-detail');
-    expect(tagged.querySelector('.git-action').textContent).toContain('Branches');
-    expect(tagged.querySelector('.git-map-tag').textContent).toContain('main');
-  });
-
-  it('pressing a branch goes to its commit, and says which one you are on', () => {
-    openGit();
-    // 1.4.1 / 4.1.2 again: which branch is checked out is an attribute, and the kind is a word.
-    expect(ref('main').getAttribute('aria-current')).toBe('true');
-    expect(ref('origin/main').getAttribute('aria-current')).toBeNull();
-    expect(ref('main').querySelector('.git-map-ref-kind').textContent).toBe('HEAD');
-    expect(ref('origin/main').querySelector('.git-map-ref-kind').textContent).toBe('remote');
-
-    click(ref('origin/main'));
-    expect(node(C3).getAttribute('aria-pressed')).toBe('true');
-    expect(ref('origin/main').getAttribute('aria-pressed')).toBe('true');
-    expect(map().querySelector('.git-map-detail .git-subject').textContent).toBe('Third on main');
-  });
-
-  it('keeps the selection across a host repaint', () => {
-    openGit();
-    click(node(C3));
-    // The dashboard rebuilds on every push, several times a turn. A selection held only in the elements is
-    // thrown away by a repaint the user did not cause.
-    win.cc.session({ git: clone(GIT) });
-    expect(node(C3).getAttribute('aria-pressed')).toBe('true');
-    expect(map().querySelector('.git-map-detail .git-subject').textContent).toBe('Third on main');
-  });
-
-  it('drops a selection that has fallen out of the window rather than describing a commit off screen', () => {
-    openGit();
-    click(node(C1));
-    const shorter = clone(GIT);
-    shorter.commits = shorter.commits.slice(0, 3); // C1 is gone; its children keep their parent links
-    win.cc.session({ git: shorter });
-    expect(map().querySelector('.git-map-detail').textContent).toContain('Select a commit');
-  });
-
-  // ── the branch in the header is a control ────────────────────────────────────────────────────────────
-
-  it('the header branch is a button that opens the switcher, not a label', () => {
-    const sent = [];
-    win.CC.send = (m) => sent.push(m);
-    openGit();
-    const chip = panel().querySelector('.git-branch');
-    expect(chip.tagName).toBe('BUTTON');
-    // 2.5.3 Label in Name: the visible string is inside the spoken one, so voice control can activate it by
-    // saying what it reads.
-    expect(chip.textContent).toBe('main');
-    expect(chip.getAttribute('aria-label')).toContain('main');
-    click(chip);
-    // One id, three doors — the same catalogue entry the action bar and the map fire. Never an invented
-    // "switch to this branch" message: the page holds no branch-scoped action and the plugin runs no checkout.
+    const tag = ref(C4, 'main');
+    expect(tag.tagName).toBe('BUTTON');
+    // 2.5.3 Label in Name: the whole visible label is inside the spoken one, so voice control can activate it
+    // by saying what it reads.
+    expect(tag.getAttribute('aria-label')).toBe('main HEAD — switch branch');
+    click(tag);
+    // ONE catalogue id, never an invented "check out this branch": the page holds no branch-scoped action and
+    // the plugin runs no checkout.
     expect(sent.pop()).toEqual({ type: 'gitAction', id: 'branches' });
   });
 
@@ -279,24 +241,132 @@ describe('git branch map', () => {
     openGit();
     // A button firing an id the catalogue lookup will miss is the one control on the page that cannot work,
     // and it fails silently — the warning goes to idea.log where nobody is looking.
-    expect(panel().querySelector('.git-branch').tagName).toBe('SPAN');
+    expect(ref(C4, 'main')).toBeNull();
+    expect(history().querySelector('.git-ref').tagName).toBe('SPAN');
   });
 
-  // ── the drawing is decoration over content that is reachable without it ──────────────────────────────
-
-  it('hides the connector layer from assistive technology, since every node states its own links', () => {
+  it('hangs the working copy off the commit HEAD is standing on', () => {
+    const dirty = clone(GIT);
+    dirty.changes = ['README.md'];
+    win.cc.session({ git: dirty });
     openGit();
-    expect(map().querySelector('.dg-edges').getAttribute('aria-hidden')).toBe('true');
+    const nodes = Array.from(history().querySelectorAll('.git-node'));
+    expect(nodes[0].classList.contains('git-wip')).toBe(true);
+    // It goes through the same lane assignment as everything else, with HEAD's commit as its parent — so it
+    // is drawn ON the line it will actually land on instead of floating above the graph.
+    expect(nodes[0].querySelectorAll('.git-edge').length).toBe(1);
+    expect(row(C4).querySelectorAll('.git-edge').length).toBe(3); // …and that line now arrives from above
   });
 
-  it('gives every commit a target no smaller than WCAG 2.2 SC 2.5.8 allows', () => {
+  it('names the window it is showing and counts the branches outside it', () => {
+    openGit();
+    const note = history().querySelector('.git-note').textContent;
+    // Always states the window, even when nothing was truncated: a complete-looking picture read as the whole
+    // history is exactly the misreading this card must not cause. "every branch" is a statement about the
+    // data — the host walks every ref — and it is why a commit made on another branch can appear here.
+    expect(note).toContain('Showing the newest 5 commits across every branch.');
+    expect(note).toContain('1 branch points outside this window.');
+  });
+
+  it('says so when the window is too short to reach a branch point, instead of just looking flat', () => {
+    const flat = clone(GIT);
+    // Two commits of one line, with the fork and every other tip older than the window. This is the shape a
+    // release branch that has been linear for longer than the limit produces — and on screen it is exactly
+    // what a broken graph looks like, so the card has to say which of the two it is.
+    flat.commits = [commit(C3, 'Third on main', [C2A]), commit(C2A, 'Second on main', [C1])];
+    win.cc.session({ git: flat });
+    openGit();
+    const note = history().querySelector('.git-note').textContent;
+    expect(history().querySelectorAll('.git-commit').length).toBe(2);
+    expect(note).toContain('2 branches point outside this window.');
+    expect(note).toContain('Every commit here is on one line; no branch point falls inside this window.');
+    // …and it is only said when it is true: the full fixture has a fork on screen and needs no excuse for it.
+    win.cc.session({ git: clone(GIT) });
+    expect(history().querySelector('.git-note').textContent).not.toContain('on one line');
+  });
+
+  it('says when a line continues past the oldest commit drawn, rather than drawing it', () => {
+    const shorter = clone(GIT);
+    shorter.commits = shorter.commits.slice(0, 3); // c1 is gone; its children keep their parent links
+    win.cc.session({ git: shorter });
+    openGit();
+    expect(history().querySelector('.git-note').textContent).toContain(
+      'Lines continuing past the oldest commit shown have no edge drawn.'
+    );
+  });
+
+  // ── the stylesheet the drawing depends on ────────────────────────────────────────────────────────────
+
+  it('declares the vertical rhythm the graph is drawn on', () => {
     const css = readCss();
-    // The dot is 12px because that is all the drawing needs; the button is 24x24 because that is the floor.
-    // Shrinking the button to the dot would look tidier and fail the criterion, which is why it is pinned
-    // here rather than left to a comment.
-    const rule = /\.git-map-node\s*\{[^}]*\}/.exec(css);
+    // No gap BETWEEN rows, and it is not a density preference: each row draws its own slice of the lanes
+    // inside its own gutter, so a gap is space no SVG covers — it dashes every lane with a hole at each
+    // commit. The separation is the body's padding, which the gutter stretches over.
+    expect(/\.git-rail\s*\{[^}]*\}/.exec(css)[0]).toMatch(/gap:\s*0\b/);
+    expect(/\.git-body\s*\{[^}]*\}/.exec(css)[0]).toMatch(/padding:\s*6px 0/);
+    // The dot sits at the row's middle whatever the row's height turns out to be…
+    expect(/\.git-dot-node\s*\{[^}]*\}/.exec(css)[0]).toMatch(/top:\s*50%/);
+    // …which only holds because the drawing is STRETCHED to the row rather than sized in pixels, and the
+    // viewBox's own midpoint is therefore the same place. Shorter rows are the case that would break it.
+    openGit();
+    const svg = row(C3).querySelector('.git-graph');
+    expect(svg.getAttribute('preserveAspectRatio')).toBe('none');
+    expect(svg.getAttribute('viewBox')).toMatch(/ 100$/);
+  });
+
+  it('keeps the per-commit actions reachable by keyboard, and off the row they hang from', () => {
+    const css = readCss();
+    const strip = /\.git-commit-actions\s*\{[^}]*\}/.exec(css)[0];
+    // OUT OF FLOW: the row is exactly as tall hovered as not, so the list cannot shift under the pointer and
+    // the commit you were about to press cannot move. Faded is not free — as a line of its own this strip was
+    // the tallest thing in a two-line row, on every commit at once.
+    expect(strip).toMatch(/position:\s*absolute/);
+    // Hidden by OPACITY only. `display: none` and `visibility: hidden` take a control out of the tab order,
+    // and one that exists only under a pointer is a WCAG 2.1.1 failure that nothing on screen reports.
+    expect(strip).toMatch(/opacity:\s*0/);
+    expect(strip).not.toMatch(/display:\s*none/);
+    expect(strip).not.toMatch(/visibility:\s*hidden/);
+    // …so Tab has to bring it back — `:hover` alone strands it for anyone without a mouse — but keyed on the
+    // STRIP and never on the row. A row-level reveal paints the strip across that row's own branch tag at the
+    // exact moment the tag takes focus, in any tool window narrow enough for the labels to reach it: SC 2.4.11
+    // (Focus Not Obscured), with the obscured thing being the control the user has just tabbed onto. Keyed on
+    // the strip, the only focus that can summon it is focus already inside it, and that button paints on top.
+    expect(css).toMatch(/\.git-commit-actions:focus-within/);
+    expect(css).not.toMatch(/\.git-commit:focus-within\s+\.git-commit-actions/);
+    // The row itself still lights up on focus. That is the affordance, and it covers nothing.
+    expect(css).toMatch(/\.git-commit:focus-within\s*\{/);
+
+    openGit();
+    const buttons = Array.from(row(C3).querySelectorAll('button'));
+    expect(buttons.every((b) => b.getAttribute('type') === 'button')).toBe(true);
+    // Tab order is the row's reading order: what the row says first, then what can be done about it. The
+    // strip is the last thing in the body and is painted at that row's right-hand end.
+    expect(buttons[0].classList.contains('git-ref')).toBe(true);
+    expect(buttons[buttons.length - 1].classList.contains('git-commit-action')).toBe(true);
+    expect(row(C3).querySelector('.git-body').lastElementChild.classList.contains('git-commit-actions')).toBe(
+      true
+    );
+  });
+
+  it('gives a branch tag a target no smaller than WCAG 2.2 SC 2.5.8 allows', () => {
+    const css = readCss();
+    // It is a control sitting inside a line of running text, which is exactly where the 24px floor gets
+    // quietly traded away for a tidier row.
+    const rule = /\.git-ref\s*\{[^}]*\}/.exec(css);
     expect(rule).not.toBeNull();
-    expect(rule[0]).toMatch(/width:\s*24px/);
-    expect(rule[0]).toMatch(/height:\s*24px/);
+    expect(rule[0]).toMatch(/min-height:\s*24px/);
+    expect(rule[0]).toMatch(/min-width:\s*24px/);
+  });
+
+  it('declares one colour per palette slot the layout can hand it', () => {
+    const css = readCss();
+    // The page emits `data-lane` modulo the palette size. A slot with no rule is a lane drawn in the fallback
+    // grey, which reads as "these commits are unrelated" — and nothing in a DOM assertion would notice.
+    for (let slot = 0; slot < 6; slot += 1) {
+      expect(css).toContain(".git-gutter [data-lane='" + slot + "']");
+    }
+    // …and the strokes are kept at their declared weight through the row's vertical stretch. Without this the
+    // graph thins to invisibility on a tall row, which is a contrast failure that only appears with data.
+    expect(/\.git-edge\s*\{[^}]*\}/.exec(css)[0]).toMatch(/vector-effect:\s*non-scaling-stroke/);
   });
 });

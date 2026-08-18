@@ -227,6 +227,13 @@
   /**
    * Host: the Git conversation changed — `{running, starting, rows}`, or null when there is not one yet.
    *
+   * **`rows` is always the WHOLE conversation, never a delta, and it reaches every open chat's browser** —
+   * not only the one whose user typed. `renderRows`/`place` rely on the first half (anything past the
+   * payload's length is dropped, so a delta would delete the conversation) and the user relies on the second:
+   * there is one Git conversation per project and it has to look the same from whichever chat you open the
+   * view in. It used to arrive only in a page that had already acted on the chat, which left every other page
+   * drawing an empty pane over a conversation that was already running.
+   *
    * No `permissions` here: its cards go to the page's ONE permission region with the rest, tagged with the
    * conversation they belong to. See the file header.
    */

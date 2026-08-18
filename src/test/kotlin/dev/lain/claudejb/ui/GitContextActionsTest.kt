@@ -144,6 +144,47 @@ class GitContextActionsTest {
     }
 
     /**
+     * **The scope of a commit read is part of what a surface claims, and the two surfaces claim opposite
+     * things.** This entry names the checked-out branch in its label and again in the chooser's title, so its
+     * rows must come from that branch; the dashboard's commit graph needs every line of development or it can
+     * only draw a rail. Both ask the SAME method, and the two answers are indistinguishable — a list of commits
+     * looks identical whichever refs produced it, so widening the read one layer down changes what this menu
+     * says without touching a line of this file. That is precisely how it broke: the graph needed every ref,
+     * the gateway was widened for it, and this chooser started listing other branches' work under a title
+     * naming one, silently.
+     *
+     * Three assertions, one behaviour: this file does not opt into the wide scope, the dashboard does opt in
+     * explicitly rather than inheriting it, and the default the two of them lean on is still the narrow one.
+     *
+     * The dashboard's call is pinned WHOLE, limit included, because the two halves fail the same way. Twenty
+     * commits is right for a chooser about one branch and wrong for a graph over every line — shared out, it
+     * is four or five per branch and draws no fork — so a graph that quietly inherits this file's window is
+     * the straight rail again, arrived at from the other end.
+     */
+    @Test
+    fun `the branch-titled chooser reads one branch, and only the graph reads every line`() {
+        val menu = File("src/main/kotlin/dev/lain/claudejb/ui/GitContextActions.kt").readLines()
+            .filterNot { line ->
+                val trimmed = line.trimStart()
+                trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*")
+            }
+        assertTrue(
+            menu.none { it.contains(WIDE_SCOPE) },
+            "The branch chooser now reads every line of development, under a title that names one branch.",
+        )
+        val dashboard = File("src/main/kotlin/dev/lain/claudejb/ui/GitIntegration.kt").readText()
+        assertTrue(
+            dashboard.contains("recentCommits(limit = GRAPH_COMMIT_LIMIT, scope = GitLogScope.$WIDE_SCOPE)"),
+            "The commit graph no longer asks for its own window over every line, so it can only draw a straight rail.",
+        )
+        val service = File("src/main/kotlin/dev/lain/claudejb/git/GitHistoryService.kt").readText()
+        assertTrue(
+            service.contains("scope: GitLogScope = GitLogScope.CURRENT_BRANCH"),
+            "recentCommits() no longer defaults to the narrow scope: every unqualified caller just widened.",
+        )
+    }
+
+    /**
      * **Absent, not greyed.** With no Git plugin and no working copy these entries can do nothing at all, and a
      * dead menu item that reports nothing is worse than a missing one. The decision is one line of `update`, and
      * a line is exactly the kind of thing a later "let's grey it out instead" turns around silently — so it is
@@ -174,6 +215,10 @@ class GitContextActionsTest {
     ) = GitCommitInfo(hash, subject, authorName, authorEmail, authoredAtMillis, changedPaths)
 
     private companion object {
+
+        /** The `GitLogScope` constant only the graph may name. Spelled once, so the two halves cannot drift. */
+        const val WIDE_SCOPE = "EVERY_LINE_OF_DEVELOPMENT"
+
         const val COMMITTED_AT = 1_700_000_000_000L
         const val THREE_DAYS_MS = 3L * 24 * 60 * 60 * 1000
         const val NOW = COMMITTED_AT + THREE_DAYS_MS

@@ -95,6 +95,12 @@ class GitApiContractTest {
     fun `GitHistoryUtils history still takes a root plus raw git-log parameters`() {
         // The vararg IS the contract: it is how `-n <limit>` reaches `git log`. A signature change here would
         // silently become "history() with no limit" — the whole repository, on every call.
+        //
+        // It carries the REF SELECTION too (`HEAD --branches --remotes --tags`, plus `--topo-order`), which is
+        // the difference between a branch graph and a straight line: with no revision named, `git log` walks
+        // only what HEAD reaches, so a commit living on another branch is never printed and there is nothing to
+        // fork into. Those are Git's own command-line arguments and no reflection can check them — what is
+        // checkable, and what this pins, is that the vararg through which they travel still exists.
         val method = load("git4idea.history.GitHistoryUtils")
             .getMethod("history", Project::class.java, VirtualFile::class.java, Array<String>::class.java)
             .assertNotDeprecated()

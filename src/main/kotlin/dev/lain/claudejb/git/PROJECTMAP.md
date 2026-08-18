@@ -24,8 +24,10 @@ instead of a `NoClassDefFoundError` at the first click.
 | `GitAvailability.kt` | The one gate: is there Git here, and is the plugin loaded. |
 | `GitGateway.kt` | **The only file naming a `git4idea` type.** The boundary the optional dependency is confined behind. |
 | `GitCommitInfo.kt` | Plain Kotlin. Nothing from the VCS API appears in a public signature. |
+| `GitLogScope.kt` | Which lines of development a `git log` read covers. Narrow by default; the wide set is asked for by name. |
 | `GitBranchTopology.kt` | Where the branch stands against its upstream. Every field independently absent, and never a false zero. |
-| `GitRemoteInfo.kt` | The `origin` remote and the pure parse of its URL. Imports nothing, so it unit-tests on a bare JVM. |
+| `GitRefInfo.kt` | **The half of the commit graph that cannot be derived.** Parents give the shape of the history; only a ref says which line is `main`, which is `origin/main` and which one you are standing on — so a graph without refs is anonymous dots, and naming a line by guessing is the invented topology the Git view refuses to draw. `GitRefKind` has **three** cases and not two: a detached `HEAD` is neither local nor remote, and folding it into `LOCAL` puts a branch name on screen that does not exist. Plain Kotlin, like `GitCommitInfo` and `GitBranchTopology`. |
+| `GitRemoteInfo.kt` | The `origin` remote and the pure parse of its URL. Imports nothing, so it unit-tests on a bare JVM. **It refuses to guess a provider from a hostname** — a substring match calls `mygithub.io` GitHub and sends a signed request to the wrong service — which is exactly the gap [`../forge/`](../forge/PROJECTMAP.md)`ForgeProbe` fills by asking the host's own API. Do not "improve" it into a matcher. |
 | `GitHistoryService.kt` | The read-only questions the UI asks, each with its empty answer and its threading rule. |
 | `GitLogNavigator.kt` | Handing off to the IDE's own Git Log. We build no Git UI. |
 
@@ -44,20 +46,24 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `GitAvailability.GIT_PLUGIN_ID` | val | `GitAvailability.kt:19` | The bundled Git plugin's id, as declared in its own descriptor (`plugins/vcs-git`). |
 | `GitAvailability.isGitPluginEnabled` | fun | `GitAvailability.kt:22` | True when the bundled Git plugin is installed **and enabled** in the running IDE. |
 | `GitBranchTopology` | class | `GitBranchTopology.kt:20` | Where the checked-out branch stands relative to the branch it tracks: the upstream's name, how far the two have … |
-| `GitCommitInfo` | class | `GitCommitInfo.kt:16` | One commit, flattened into plain Kotlin types. |
-| `GitGateway` | object | `GitGateway.kt:37` | **The only file in the plugin that names a `git4idea` type.** Everything else — [GitHistoryService], … |
-| `GitGateway.repositoryRoots` | fun | `GitGateway.kt:40` | The VCS roots of every Git repository registered in [project]; empty when the project is not a working copy. |
-| `GitGateway.currentBranchName` | fun | `GitGateway.kt:43` | The checked-out branch of the repository rooted at [root], or null when detached, fresh or unknown. |
-| `GitGateway.currentRevision` | fun | `GitGateway.kt:46` | The revision `HEAD` points at in the repository rooted at [root], or null on a fresh repository. |
-| `GitGateway.recentCommits` | fun | `GitGateway.kt:55` | The [limit] most recent commits reachable from `HEAD` in the repository rooted at [root], newest first. |
-| `GitGateway.branchTopology` | fun | `GitGateway.kt:76` | Where the checked-out branch of the repository rooted at [root] stands against the branch it tracks. |
-| `GitGateway.primaryRemote` | fun | `GitGateway.kt:122` | The remote this repository is *about*, or null when there is no repository and no remote with a URL. |
-| `GitGateway.onRepositoryChanged` | fun | `GitGateway.kt:181` | Calls [onChanged] whenever the IDE's own Git plugin says a repository moved, until [parent] is disposed. |
+| `GitCommitInfo` | class | `GitCommitInfo.kt:23` | One commit, flattened into plain Kotlin types. |
+| `GitGateway` | object | `GitGateway.kt:38` | **The only file in the plugin that names a `git4idea` type.** Everything else — [GitHistoryService], … |
+| `GitGateway.repositoryRoots` | fun | `GitGateway.kt:41` | The VCS roots of every Git repository registered in [project]; empty when the project is not a working copy. |
+| `GitGateway.currentBranchName` | fun | `GitGateway.kt:44` | The checked-out branch of the repository rooted at [root], or null when detached, fresh or unknown. |
+| `GitGateway.currentRevision` | fun | `GitGateway.kt:47` | The revision `HEAD` points at in the repository rooted at [root], or null on a fresh repository. |
+| `GitGateway.refs` | fun | `GitGateway.kt:71` | Every branch of the repository rooted at [root], with the commit each one points at. |
+| `GitGateway.recentCommits` | fun | `GitGateway.kt:129` | The [limit] most recent commits of the repository rooted at [root], newest first, over the lines of development … |
+| `GitGateway.branchTopology` | fun | `GitGateway.kt:186` | Where the checked-out branch of the repository rooted at [root] stands against the branch it tracks. |
+| `GitGateway.primaryRemote` | fun | `GitGateway.kt:232` | The remote this repository is *about*, or null when there is no repository and no remote with a URL. |
+| `GitGateway.onRepositoryChanged` | fun | `GitGateway.kt:298` | Calls [onChanged] whenever the IDE's own Git plugin says a repository moved, until [parent] is disposed. |
 | `GitHistoryService` | class | `GitHistoryService.kt:31` | Read-only Git context for the project: which branch is checked out, what the recent commits did, and what is currently … |
 | `GitLogNavigator` | object | `GitLogNavigator.kt:29` | Hands history off to **the IDE's own Git Log**, and builds nothing of its own. |
 | `GitLogNavigator.showLog` | fun | `GitLogNavigator.kt:35` | Brings the Version Control tool window — the one hosting the Git Log — to the front. |
 | `GitLogNavigator.showCommit` | fun | `GitLogNavigator.kt:68` | Selects commit [hash] in the project's own Git Log, opening the tool window if it is closed. |
 | `GitLogNavigator.showFileHistory` | fun | `GitLogNavigator.kt:95` | Opens the IDE's own file-history view for [path] (absolute, either separator). |
+| `GitLogScope` | class | `GitLogScope.kt:17` | Which lines of development a `git log` read covers. |
+| `GitRefInfo` | class | `GitRefInfo.kt:19` | One ref — a local branch, a remote-tracking branch, or a detached `HEAD` — and the commit it points at. |
+| `GitRefKind` | class | `GitRefInfo.kt:34` | What kind of ref this is. |
 | `GitRemoteInfo` | class | `GitRemoteInfo.kt:19` | The `origin` remote: the URL Git holds, and what can be read out of it. |
 | `GitRemoteProvider` | class | `GitRemoteInfo.kt:119` | Which service the remote's host belongs to, as far as the URL is willing to say. |
 
@@ -80,6 +86,12 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 
 ## Minefields here
 
+- **`recentCommits` is read by two surfaces that mean different things by it, and the answers are
+  indistinguishable.** A list of commits looks the same whichever refs produced it, so changing the ref
+  selection here silently changes what a surface upstairs claims: the gear menu promises one branch in its own
+  title, the dashboard graph needs every line or it can only draw a rail. `GitLogScope` is that choice, it
+  defaults to the NARROW reading, and the wide one is asked for by name at the single call site that wants it.
+  Never widen the default to save a caller the argument — widening is the direction that fails silently.
 - **`GitCommit.getAffectedPaths()` is internal API.** The Marketplace has already blocked a release of this
   plugin over an internal API, so this is a publication risk and not a lint. Paths come from `changes`, whose
   `afterRevision ?: beforeRevision` also keeps a deleted file in the list.
@@ -95,6 +107,12 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 
 - The three UI categories built on this → [`../ui/`](../ui/PROJECTMAP.md): `GitContextActions` (read),
   `GitPromptedActions` (the agent writes, behind an approval card), `GitIdeMenu` (the platform's own actions
-  by id), `GitActionCatalog` (the one list both the page and the executor read)
+  by id), `GitActionCatalog` (the one list both the page and the executor read), `GitIntegration` (the service
+  that dispatches a catalogue entry by its kind, and the one place the plugin spawns `git` itself)
 - The Git view's payload → [`../ui/jcef/`](../ui/jcef/PROJECTMAP.md) (`JcefGitData`)
-- The dedicated Git chat and its forced approval → [`../session/`](../session/PROJECTMAP.md)
+- The Git conversation — which has **no tab**: it is pushed into the Git view under its own `cc.gitChat`
+  namespace by `../ui/GitChatFeed.kt`. The forced approval its turns run under is a flag on the session
+  itself → [`../session/`](../session/PROJECTMAP.md) (`ClaudeSession.gitIntegration`)
+- What GitHub and GitLab are asked about the branch this package names →
+  [`../forge/`](../forge/PROJECTMAP.md). Read-only, opt-in, and it consumes `GitRemoteInfo`'s host rather than
+  parsing a remote URL of its own

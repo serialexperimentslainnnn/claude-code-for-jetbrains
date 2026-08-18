@@ -95,14 +95,75 @@ internal object GitGateway {
     private const val DETACHED_HEAD = "HEAD"
 
     /**
-     * The [limit] most recent commits reachable from `HEAD` in the repository rooted at [root], newest first.
+     * The [limit] most recent commits of the repository rooted at [root], newest first, over the lines of
+     * development [scope] names.
+     *
+     * **The ref selection is what makes a graph possible at all, and it is also what a caller is promising its
+     * reader.** `git log` with no revision named walks the history reachable from `HEAD` and nothing else, so a
+     * commit that exists only on another branch is never printed — and no amount of parent hashes recovers it,
+     * because there is nothing in the list to fork into: a graph drawn from that answer is a straight line by
+     * construction, however the drawing is done. The other direction costs just as much and is quieter: a list
+     * headed "commits on `main`" that was read over every ref shows work from branches nobody mentioned, and
+     * nothing in the answer says which row came from where. So the choice is [scope]'s, made by name at each
+     * call site, and it defaults to [GitLogScope.CURRENT_BRANCH] — the reading this method has always had.
+     *
+     * `HEAD --branches --remotes --tags` is git4idea's own spelling of "every line of development" (its
+     * `LOG_ALL`), and it is preferred over the shorter `--all` **deliberately**: `--all` means every ref under
+     * `refs/`, `refs/stash` and `refs/notes` included, and those name commits that belong to no branch — they
+     * arrive as parentless roots in a lane of their own, on a card whose whole claim is that everything drawn
+     * is real. `HEAD` leads the list for the case the branch refs cannot cover: a detached `HEAD` is a line of
+     * development with no ref pointing at it, and it is the whole of the narrow scope for the same reason.
+     *
+     * `--topo-order` keeps a branch's commits contiguous instead of interleaving every branch by date. It
+     * changes the ORDER, never the set, and it is the difference between a graph that reads down a lane and one
+     * that zig-zags across all of them. It is passed under both scopes rather than only the wide one: on a
+     * single line of history it can change nothing, and one shape of command line is one thing to reason about.
+     *
+     * **[limit] bounds the walk, not each line**: under [GitLogScope.EVERY_LINE_OF_DEVELOPMENT] a repository
+     * with several active branches fits fewer commits of each into the same window.
      *
      * Throws [VcsException] the way `GitHistoryUtils` does (a broken repository, a `git` that will not run); the
      * caller turns that into an empty result rather than letting it escape into the UI.
      */
     @Throws(VcsException::class)
-    fun recentCommits(project: Project, root: VirtualFile, limit: Int): List<GitCommitInfo> =
-        GitHistoryUtils.history(project, root, "-n", limit.toString()).map { commit -> toInfo(commit, root.path) }
+    fun recentCommits(
+        project: Project,
+        root: VirtualFile,
+        limit: Int,
+        scope: GitLogScope = GitLogScope.CURRENT_BRANCH,
+    ): List<GitCommitInfo> {
+        // detekt's `SpreadOperator` has the mechanism right and the conclusion wrong here, so the suppression
+        // is bounded to this ONE statement rather than to the function, the class or the file.
+        //
+        // The rule fires because `*` copies the array before the call. That copy cannot be avoided: the
+        // platform's signature is `history(project, root, vararg parameters: String)`, so the arguments reach
+        // it as an array however they are spelled. What it costs is four to six string references, copied
+        // immediately before spawning a `git` child process that walks and parses up to a hundred commits —
+        // the two are not of the same order, and no measurement is needed to say so.
+        //
+        // The change the rule pushes towards would be a real regression: spelling the refs as literals at the
+        // call site removes [revisionsOf], and with it [GitLogScope], which exists precisely so the ref
+        // selection is a NAMED intention instead of four arguments nobody re-reads. A spread inside a loop, or
+        // in front of something cheaper than a process spawn, is still a finding worth fixing.
+        @Suppress("SpreadOperator")
+        val commits = GitHistoryUtils.history(project, root, *revisionsOf(scope), "--topo-order", "-n", limit.toString())
+        return commits.map { commit -> toInfo(commit, root.path) }
+    }
+
+    /**
+     * [scope] as the revisions `git log` is asked to walk. Pure ref SELECTION: it names what to read and moves
+     * nothing.
+     *
+     * The strings live here, and only here, because this is the file that already speaks to Git. They are also
+     * spelled out rather than taken from `git4idea.history.GitLogUtil.LOG_ALL`, which holds the same four:
+     * importing that class would put a second git4idea type on this package's read-only allowlist for a value
+     * that is four `git log` arguments — arguments belonging to Git's own command line, which does not move
+     * under us the way a platform API can.
+     */
+    private fun revisionsOf(scope: GitLogScope): Array<String> = when (scope) {
+        GitLogScope.CURRENT_BRANCH -> arrayOf("HEAD")
+        GitLogScope.EVERY_LINE_OF_DEVELOPMENT -> arrayOf("HEAD", "--branches", "--remotes", "--tags")
+    }
 
     /**
      * Where the checked-out branch of the repository rooted at [root] stands against the branch it tracks.
