@@ -250,12 +250,49 @@ class AuthGate(
         // underneath it would take away the very file the flow is about to write.
         if (signInInProgress()) return true
         if (!CredentialsVault.needsRenewal()) return true
-        if (CredentialsVault.renew(binary, settings.resolveEnv())) {
-            AccountProfile.invalidate()
-            return true
-        }
+        if (attemptRenewal(binary, settings)) return true
+        // A renewal that failed does not condemn the launch: drop the ttl cache so the fallback question —
+        // "does the BINARY hold its own login?" — is asked again rather than answered from a stale yes.
         ownLoginCheckedAt = 0
         return hasCredential(settings)
+    }
+
+    /**
+     * Renews a credential the SERVER has rejected, whatever the clock thinks of it.
+     *
+     * **This is the other half of the bug [renew] could not see.** That one is gated on
+     * [CredentialsVault.needsRenewal], which is `usableToken() == null && canRenew()` — and `usableToken()`
+     * believes the blob's own `expiresAt`. A token that is revoked while still hours from expiring is therefore
+     * "usable" by that test: nothing renews it, the turn fails with
+     * `401 OAuth access token has been revoked`, and the next launch asks the same question and gets the same
+     * answer. Observed exactly so — an `expiresAt` six hours in the future against a server that had already
+     * revoked the token — and there was no way out of it but signing in by hand.
+     *
+     * So the expiry check is skipped here and only [CredentialsVault.canRenew] governs: is there a refresh
+     * token, does it carry its scopes, is it itself still alive. That keeps the cooldown intact, which is what
+     * stops a 401 in a loop from spawning a process every few seconds.
+     *
+     * @return true when a fresh credential is now in the safe — the caller's signal that relaunching is worth it.
+     */
+    fun renewRejected(binary: File, settings: ClaudeSettings): Boolean {
+        if (signInInProgress()) return false
+        if (!CredentialsVault.canRenew()) return false
+        return attemptRenewal(binary, settings)
+    }
+
+    /**
+     * The renewal itself, shared by the two triggers: the clock's ([renew]) and the server's ([renewRejected]).
+     *
+     * It answers ONLY "is there a fresh credential in the safe now" — the two callers need different things
+     * from a failure and neither may inherit the other's. [renew] falls back to asking whether any identity
+     * exists at all (a launch with an unrenewable credential can still run on the binary's own login);
+     * [renewRejected] must not, because its caller relaunches on a true and relaunching into the same rejected
+     * token is the loop this exists to break.
+     */
+    private fun attemptRenewal(binary: File, settings: ClaudeSettings): Boolean {
+        if (!CredentialsVault.renew(binary, settings.resolveEnv())) return false
+        AccountProfile.invalidate()
+        return true
     }
 
     /**

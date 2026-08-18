@@ -43,12 +43,12 @@ import java.io.File
  * measured at ~10 h on a fresh `auth login` — so with nothing but the token in the safe the identity died
  * overnight and the sign-in card was back after every reboot: the credential persisted perfectly and simply
  * expired. Only the binary can spend a refresh token, and that stays true here; the plugin does not hold an
- * OAuth client, does not talk to the token endpoint and does not write the file back. It runs the binary's
- * own non-interactive `auth login` with the vaulted refresh token in the environment
- * ([AuthCli.loginFromRefreshToken]), lets it mint and store a fresh credential, and harvests that the same
- * way it harvests any other login. The refresh token (weeks, and rotated at every renewal) becomes the thing
- * that survives a restart, and the plaintext file exists only for the moment between the binary writing it
- * and [harvest] taking it away.
+ * OAuth client and does not talk to the token endpoint. What it does is give the binary **its own file back**
+ * for the length of one token exchange ([renewOnDisk] — an environment-only renewal was tried first and never
+ * worked, see the note there), lets it refresh and rewrite it, and harvests that the same way it harvests any
+ * other login. The refresh token (weeks, and rotated at every renewal) becomes the thing that survives a
+ * restart, and the plaintext file exists only for the moment between the binary writing it and [harvest]
+ * taking it away.
  */
 object CredentialsVault {
 
@@ -214,9 +214,9 @@ object CredentialsVault {
     /**
      * Whether the vaulted blob can be turned back into a live access token without the user.
      *
-     * Three conditions, all from the blob itself: a refresh token, the scopes it was issued with (the
-     * non-interactive path asks for them and the grant cannot be restated without them — see
-     * [AuthCli.loginFromRefreshToken]), and a
+     * Three conditions, all from the blob itself: a refresh token, the scopes it was issued with (planted
+     * alongside it on disk for [renewOnDisk] and never restated — see [refreshEnv] for why the grant is not
+     * repeated in the environment), and a
      * `refreshTokenExpiresAt` that is still in the future. A blob with no expiry recorded is given the
      * benefit of the doubt: the endpoint is the authority on that, and a wrong guess here costs one failed
      * renewal, while refusing costs a sign-in the user did not need.
@@ -237,68 +237,161 @@ object CredentialsVault {
     fun needsRenewal(): Boolean = usableToken() == null && canRenew()
 
     /**
-     * Mints a fresh credential from the vaulted refresh token, by running the binary's own non-interactive
-     * `auth login` ([AuthCli.loginFromRefreshToken]) and taking custody of what it writes.
+     * Brings the vaulted credential back to life. One implementation, [renewOnDisk] — the binary is given its
+     * own file back for the length of one token exchange.
      *
-     * BLOCKING — it spawns a process and makes a network call. Pooled thread only, and never while a
-     * [dev.lain.claudejb.session.LoginCoordinator] sign-in is in flight: both write the same file, and the
-     * caller owns that guard.
+     * **The environment route was tried for a release and never worked**, which is why it is not attempted
+     * first: `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` + `CLAUDE_CODE_OAUTH_SCOPES` is what shipped, and a login that
+     * expired overnight kept asking the user to sign in again every morning regardless. The run that was taken
+     * as proof of that path reached the token endpoint with a deliberately INVALID refresh token and got a
+     * `400`, which says only that the branch exists — a malformed request and a rejected token are the same
+     * status code. What has actually been observed working, on `claude` 2.1.226 with a real credential whose
+     * `expiresAt` was in the past, is the file: the binary refreshed it and moved `expiresAt` nine hours
+     * forward with no `CLAUDE_CODE_OAUTH_*` set at all.
      *
-     * The order after a successful login is the same one every other credential path here follows, for the
-     * same reason: [AccountProfile.capture] asks `~/.claude.json` WHO this is while the login is freshest,
-     * then [harvest] takes the credential off the disk. Reversed, the question can still be answered — but a
-     * renewal is also the moment the account object is rewritten, so capturing here keeps the dashboard's
-     * identity from ageing out with the token that carried it.
+     * Kept as a named function rather than inlined at the call sites: the callers ask "renew this credential",
+     * and how that is achieved is this file's business — the day the env route can be shown to work, it
+     * changes here and nowhere else.
      *
-     * A failure of any leg (login, harvest, or a harvested blob that still is not usable) arms a cooldown
-     * and answers false; the caller then falls back to whatever other identity exists, and ultimately to the
-     * sign-in card. Nothing is cleared: a transient failure must not destroy a refresh token that is still
-     * perfectly good for the next attempt.
+     * BLOCKING — pooled thread only, and never while a [dev.lain.claudejb.session.LoginCoordinator] sign-in is
+     * in flight (both write the same file; that guard belongs to the caller).
      *
      * @param baseEnv the RAW settings env. Deliberately not the launch env — handing the binary the expired
      *   access token we are trying to replace is at best noise and at worst the thing it authenticates with.
      */
-    fun renew(binary: File, baseEnv: Map<String, String>): Boolean {
+    fun renew(binary: File, baseEnv: Map<String, String>): Boolean = renewOnDisk(binary, baseEnv)
+
+    /**
+     * The environment the refresh run gets: the settings env **minus the access token**.
+     *
+     * **This is what makes the on-disk refresh possible at all, and dropping it would silently defeat it.** The
+     * binary resolves an env credential BEFORE its own store, so handing it `CLAUDE_CODE_OAUTH_TOKEN` — the
+     * very token that expired or was revoked — means it authenticates with that and never looks at the file we
+     * just planted for it. There is then nothing to refresh and nothing rewritten, and the failure looks like
+     * "the binary refuses to refresh" rather than "we told it not to".
+     *
+     * **Stripped CASE-INSENSITIVELY**: environment names are case-insensitive on Windows, so a hand-written
+     * `Claude_Code_Oauth_Token` in Settings would survive an exact-match removal and be exactly the credential
+     * the refresh exists to replace.
+     *
+     * **Every `CLAUDE_CODE_OAUTH_*` goes, not just the access token**, so the planted file is the only thing
+     * the binary can refresh from. The refresh token and the scopes are not re-added here — they are in the
+     * file, and putting them in the environment as well is the route that shipped for a release and never
+     * renewed anything. Leaving a hand-written one from Settings in place would make the outcome depend on
+     * which source the binary happens to prefer, which is not a thing to discover from a bug report.
+     */
+    internal fun refreshEnv(baseEnv: Map<String, String>): Map<String, String> =
+        baseEnv.filterKeys { !it.startsWith(OAUTH_ENV_PREFIX, ignoreCase = true) }
+
+    /** The family of names the credential travels under, stripped as a whole by [refreshEnv]. */
+    private const val OAUTH_ENV_PREFIX = "CLAUDE_CODE_OAUTH"
+
+    /** Set by a failed [renew]; see [canRenew]. */
+    @Volatile
+    private var renewBlockedUntil = 0L
+
+    /**
+     * True for the length of [renewOnDisk]'s window — the only period in which `~/.claude/.credentials.json`
+     * is on disk on purpose. [harvest] refuses while it is set; see the note there for why the lock is on the
+     * operation rather than on its callers.
+     */
+    @Volatile
+    private var renewingOnDisk = false
+
+    /**
+     * Renewal by giving the binary **its own file back** for the length of one call: plant, refresh, harvest,
+     * delete. The fallback for a binary that will not refresh from the environment alone.
+     *
+     * **Why this exists when [renew] already does the same job through the env.** Measured against `claude`
+     * 2.1.226 with a real credential whose `expiresAt` had been moved into the past: with
+     * `.credentials.json` and `.claude.json` in place and **no** `CLAUDE_CODE_OAUTH_*` variables at all, the
+     * binary refreshed the access token and rewrote the file by itself — `expiresAt` moved nine hours forward
+     * on a run nobody typed anything into. That is the behaviour this reproduces, and it is the one path that
+     * has actually been observed to work end to end.
+     *
+     * **What it costs, stated because the vault exists to prevent exactly this**: the credential is in
+     * cleartext on disk for the length of one token exchange. Five things bound that, and none is optional:
+     *
+     *  1. the file is written `600` before anything is put in it — never created world-readable and then
+     *     tightened, which is a window of its own;
+     *  2. **the delete is in a `finally`**, so a throw, a timeout or a killed process cannot leave it behind;
+     *  3. it is skipped entirely if a file is already there — that means a login is in flight or the binary is
+     *     mid-write, and planting over it would destroy a credential we did not create;
+     *  4. [renewingOnDisk] stops [harvest] — and therefore the boot watcher's 3-second poll — from taking the
+     *     file away while the binary is reading it;
+     *  5. the window is one `auth login` run with a 20 s ceiling, not the life of a session.
+     *
+     * The verdict is read from the FILE, never from the process: see [AuthCli.refreshUsingOwnFiles] for why the
+     * exit code says nothing here.
+     *
+     * BLOCKING — pooled thread only, and never while a [dev.lain.claudejb.session.LoginCoordinator] sign-in is
+     * in flight: both write this same file, and that guard belongs to the caller.
+     */
+    fun renewOnDisk(binary: File, baseEnv: Map<String, String>): Boolean {
         if (inertHere()) return false
-        val oauth = oauthNode() ?: return false
-        val refreshToken = oauth.string("refreshToken") ?: return false
-        val scopes = oauth.strings("scopes")?.takeIf { it.isNotEmpty() } ?: return false
-        val env = renewalEnv(baseEnv, refreshToken, scopes)
-        val renewed = AuthCli.loginFromRefreshToken(binary, env) && run {
-            AccountProfile.capture()
-            harvest()
-            hasUsableToken()
+        val blob = SecretStore.get(SecretStore.CREDENTIALS_JSON)?.takeIf { it.isNotBlank() } ?: return false
+        val file = credentialsFile()
+        if (file.exists()) {
+            // Not ours to overwrite. Whatever put it there — a terminal login, a sign-in mid-flow — owns it,
+            // and the right move is to take custody of THAT rather than to plant over it.
+            log.info("a credentials file is already on disk; harvesting it instead of planting one")
+            return harvest() && hasUsableToken()
         }
-        if (!renewed) log.warn("could not renew the vaulted credential from its refresh token")
+        renewingOnDisk = true
+        val renewed = try {
+            if (!plant(file, blob)) {
+                false
+            } else {
+                // The env WITHOUT the access token — see [refreshEnv]: left in, the binary authenticates with
+                // the dead token instead of refreshing from the file we just planted.
+                AuthCli.refreshUsingOwnFiles(binary, refreshEnv(baseEnv))
+                // The account object is rewritten by the same run, and it is the freshest it will ever be.
+                AccountProfile.capture()
+                harvestNow() && hasUsableToken()
+            }
+        } finally {
+            wipe(file)
+            renewingOnDisk = false
+        }
+        if (!renewed) log.warn("the on-disk credential refresh did not produce a usable token")
         renewBlockedUntil = if (renewed) 0L else System.currentTimeMillis() + RENEW_COOLDOWN_MS
         return renewed
     }
 
     /**
-     * The environment the non-interactive renewal runs under. Two invariants live here and neither is
-     * cosmetic, so it is a function with a test rather than four lines inside [renew]:
+     * Writes [blob] to [file] with owner-only permissions, creating `~/.claude` if needed.
      *
-     *  - **Both names or nothing.** `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` without `CLAUDE_CODE_OAUTH_SCOPES` is
-     *    refused by the binary outright ("required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN") — the grant
-     *    cannot be restated without the scopes it was issued under. [canRenew] already refuses a blob with no
-     *    scopes; this is the other half of the same rule.
-     *  - **`CLAUDE_CODE_OAUTH_TOKEN` is stripped CASE-INSENSITIVELY.** Environment names are case-insensitive
-     *    on Windows, so a hand-written `Claude_Code_Oauth_Token` in Settings would survive an exact-match
-     *    removal and then be the very expired token the renewal exists to replace.
+     * The permissions are set on an EMPTY file and the content goes in afterwards, which is the opposite of the
+     * obvious order and the only safe one: `writeText` then `setReadable(false, false)` publishes the
+     * credential world-readable for however long the two calls take. On a filesystem or OS that refuses POSIX
+     * permissions the write is abandoned rather than done insecurely — there is a working env-based path and a
+     * sign-in card behind this, so failing closed costs a renewal, not the session.
      */
-    internal fun renewalEnv(
-        baseEnv: Map<String, String>,
-        refreshToken: String,
-        scopes: List<String>,
-    ): Map<String, String> =
-        baseEnv.filterKeys { !it.equals(SecretStore.OAUTH_TOKEN, ignoreCase = true) } + mapOf(
-            ENV_REFRESH_TOKEN to refreshToken,
-            ENV_SCOPES to scopes.joinToString(" "),
-        )
+    private fun plant(file: File, blob: String): Boolean = runCatching {
+        file.parentFile?.mkdirs()
+        if (!file.createNewFile()) return false // lost a race with something else — do not touch it
+        val ownerOnly = file.setReadable(false, false) && file.setWritable(false, false) &&
+            file.setReadable(true, true) && file.setWritable(true, true)
+        if (!ownerOnly) {
+            log.warn("could not make the credentials file owner-only; refusing to write a credential to it")
+            file.delete()
+            return false
+        }
+        file.writeText(blob)
+        true
+    }.onFailure { log.warn("could not plant the credentials file for a refresh", it) }.getOrDefault(false)
 
-    /** Set by a failed [renew]; see [canRenew]. */
-    @Volatile
-    private var renewBlockedUntil = 0L
+    /** Overwrite-then-unlink, for the paths where [harvestNow] did not already do it. Never throws. */
+    private fun wipe(file: File) {
+        if (!file.isFile) return
+        runCatching {
+            file.writeText(" ".repeat(file.length().coerceAtMost(MAX_WIPE_BYTES).toInt()))
+            file.delete()
+        }.onFailure { log.warn("could not remove the planted credentials file", it) }
+    }
+
+    /** Ceiling on the overwrite in [wipe]: a credential is ~500 bytes, and a huge file here is not one. */
+    private const val MAX_WIPE_BYTES = 64L * 1024
 
     /**
      * The plan name recorded in the vaulted blob (`max`, `pro`, …), or null.
@@ -335,6 +428,20 @@ object CredentialsVault {
      */
     fun harvest(): Boolean {
         if (inertHere()) return false
+        // THE LOCK LIVES HERE, not in the callers, and that placement is the point. `harvest()` is called from
+        // `launch()`, from `stop()` AND from the boot watcher, which polls every 3 s while no session is up —
+        // so during [renewOnDisk]'s window the file the binary is refreshing would be taken out from under it
+        // by a timer nobody was thinking about. Guarding the three call sites means remembering to guard the
+        // fourth; guarding the operation means the window is closed for every route that exists or is added.
+        if (renewingOnDisk) {
+            log.debug("not harvesting: a credential refresh is using the file right now")
+            return false
+        }
+        return harvestNow()
+    }
+
+    /** [harvest] without the lock — for [renewOnDisk], which holds it and is the one caller that must proceed. */
+    private fun harvestNow(): Boolean {
         val file = credentialsFile()
         if (!file.isFile) return false
         val text = runCatching { file.readText() }.getOrNull()?.takeIf { it.isNotBlank() }

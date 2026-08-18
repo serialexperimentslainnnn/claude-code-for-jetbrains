@@ -36,10 +36,18 @@ object SecretStore {
     const val API_KEY = "ANTHROPIC_API_KEY"
 
     /**
-     * NOT an env var: the full content of the binary's `.credentials.json`, held here AT REST. The file
-     * itself exists only while a session runs — [dev.lain.claudejb.process.CredentialsVault] materializes
-     * it at launch and harvests+deletes it at teardown, so the subscription login's disk footprint is zero
-     * whenever the plugin is idle.
+     * NOT an env var: the full content of the binary's `.credentials.json`, held here AT REST.
+     *
+     * **The file does not exist while a session runs.** The credential reaches the binary through the
+     * environment ([dev.lain.claudejb.process.CredentialsVault.envOverlay]) and nothing writes it back — the
+     * subscription login's disk footprint is zero for the whole life of a session, not just when the plugin is
+     * idle. (An earlier version of this note said the vault "materializes it at launch". It did not, and the
+     * sentence outlived the function that had.)
+     *
+     * The one exception is a **renewal**, which is the one thing the environment cannot do: the binary refreshes
+     * an expired access token only from its own file, so
+     * [dev.lain.claudejb.process.CredentialsVault.renewOnDisk] plants this blob, lets it refresh, harvests the
+     * result and deletes the file again — one token exchange wide, `600`, and removed in a `finally`.
      */
     const val CREDENTIALS_JSON = "CLAUDE_CREDENTIALS_JSON"
 
