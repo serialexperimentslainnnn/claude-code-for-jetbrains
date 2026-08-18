@@ -39,7 +39,7 @@ class SensitiveGuardTest {
     private fun read(path: String) = buildJsonObject { put("file_path", path) }
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
     private fun v(tool: String, input: JsonObject, p: SensitiveGuard.Policy = policy) =
-        SensitiveGuard.verdict(tool, input, p)
+        SensitiveGuard.evaluate(tool, input, p).verdict
 
     // ── credential files: agent ASKS, third-party DENIED, no opt-out ─────────────────────────────────────
 
@@ -286,10 +286,10 @@ class SensitiveGuardTest {
 
     @Test
     fun `reason names the surface, and is null on clean input`() {
-        assertNotNull(SensitiveGuard.reason(read("~/.ssh/id_rsa"), policy))
-        assertNotNull(SensitiveGuard.reason(read("/home/bob/x"), policy))
-        assertNotNull(SensitiveGuard.reason(bash("mimikatz"), policy))
-        assertNull(SensitiveGuard.reason(read("/home/me/proj/Foo.kt"), policy))
+        assertNotNull(SensitiveGuard.evaluate("Read", read("~/.ssh/id_rsa"), policy).reason)
+        assertNotNull(SensitiveGuard.evaluate("Read", read("/home/bob/x"), policy).reason)
+        assertNotNull(SensitiveGuard.evaluate("Bash", bash("mimikatz"), policy).reason)
+        assertNull(SensitiveGuard.evaluate("Read", read("/home/me/proj/Foo.kt"), policy).reason)
     }
 
     @Test
@@ -479,9 +479,9 @@ class SensitiveGuardTest {
 
     @Test
     fun `reason() always names where to change the rule, whether enforced or downgraded`() {
-        assertTrue(SensitiveGuard.reason(read("/home/bob/x"), policy)!!.contains("Settings"))
+        assertTrue(SensitiveGuard.evaluate("Read", read("/home/bob/x"), policy).reason!!.contains("Settings"))
         val relaxed = policy.copy(enforceForeignOtherUserHome = false)
-        val downgradedReason = SensitiveGuard.reason(read("/home/bob/x"), relaxed)!!
+        val downgradedReason = SensitiveGuard.evaluate("Read", read("/home/bob/x"), relaxed).reason!!
         assertTrue(downgradedReason.contains("Settings"))
         assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
     }
@@ -570,7 +570,7 @@ class SensitiveGuardTest {
         assertEquals(Verdict.ASK, v("mcp__x__y", read("/tmp/stage.sh"), relaxed))
         assertEquals(Verdict.ASK, v("Read", read("/tmp/stage.sh"), relaxed))
         // Detection ran regardless of the toggle, so the reason still names the switch that downgraded it.
-        val downgraded = SensitiveGuard.reason(read("/tmp/stage.sh"), relaxed)!!
+        val downgraded = SensitiveGuard.evaluate("Read", read("/tmp/stage.sh"), relaxed).reason!!
         assertTrue(downgraded.contains("Settings"))
         assertTrue(downgraded.contains("downgraded", ignoreCase = true))
     }
@@ -607,7 +607,7 @@ class SensitiveGuardEvasionTest {
     private fun read(path: String) = buildJsonObject { put("file_path", path) }
     private val base = SensitiveGuard.Policy(home = home, currentUser = "me", projectRoot = "/home/me/proj")
     private fun v(tool: String, input: JsonObject, p: SensitiveGuard.Policy = base) =
-        SensitiveGuard.verdict(tool, input, p)
+        SensitiveGuard.evaluate(tool, input, p).verdict
 
     @Test
     fun `broken quotes do not hide a credential path`() {
@@ -639,7 +639,7 @@ class SensitiveGuardEvasionTest {
         assertTrue(CommandRules.deobfuscate("k=/etc/shadow; cat \$k").contains("cat /etc/shadow"))
     }
 
-    // ── real incident: an assigned value containing `$`/regex-replacement syntax crashed verdict() ──────────
+    // ── real incident: an assigned value containing `$`/regex-replacement syntax crashed classification ─────
     // Confirmed live via a stack trace in idea.log: java.lang.IllegalArgumentException: Illegal group reference,
     // from Matcher.appendReplacement, three frames under CommandRules.substituteAssignments — an assigned
     // value was passed straight to String.replace(Regex, String), which treats it as a REPLACEMENT TEMPLATE
@@ -684,7 +684,7 @@ class SensitiveGuardEvasionTest {
  * `claude` process's entire stdout stream, so a slow/hung mount froze the whole transcript, not just one card.
  *
  * These tests would have caught it: a resolver that COUNTS its calls proves the fix ("ordinary commands invoke
- * it near-zero times"), and a resolver that sleeps past the timeout proves `verdict()` still returns promptly
+ * it near-zero times"), and a resolver that sleeps past the timeout proves `evaluate()` still returns promptly
  * ("a hung filesystem cannot freeze the caller").
  */
 class SensitiveGuardResolverPerformanceTest {
@@ -709,7 +709,7 @@ class SensitiveGuardResolverPerformanceTest {
     fun `an ordinary Bash command invokes the resolver zero times — the bug's exact reproduction`() {
         val (resolver, callCount) = countingResolver()
         val policy = basePolicy.copy(pathResolver = resolver)
-        SensitiveGuard.verdict("Bash", bash("git commit -m 'fix: env parsing'"), policy)
+        SensitiveGuard.evaluate("Bash", bash("git commit -m 'fix: env parsing'"), policy)
         assertEquals(0, callCount(), "bare words with no path separator must never reach the resolver")
     }
 
@@ -717,7 +717,7 @@ class SensitiveGuardResolverPerformanceTest {
     fun `a Bash command with a real path only resolves that one token`() {
         val (resolver, callCount) = countingResolver()
         val policy = basePolicy.copy(pathResolver = resolver)
-        SensitiveGuard.verdict("Bash", bash("./gradlew test && echo done"), policy)
+        SensitiveGuard.evaluate("Bash", bash("./gradlew test && echo done"), policy)
         // Exactly one slash-containing token: "./gradlew". Everything else ("test", "echo", "done", "&&") is not.
         assertEquals(1, callCount())
     }
@@ -743,7 +743,7 @@ class SensitiveGuardResolverPerformanceTest {
         val (resolver, callCount) = countingResolver()
         val policy = basePolicy.copy(pathResolver = resolver)
         val manyPaths = (1..40).joinToString(" ") { "/tmp/f$it" }
-        SensitiveGuard.verdict("Bash", bash("tar czf out.tar $manyPaths"), policy)
+        SensitiveGuard.evaluate("Bash", bash("tar czf out.tar $manyPaths"), policy)
         // The bound here is the wall-clock budget, deliberately not a count of candidates: a count fails open at a
         // number the caller can exceed, judging everything past the cap on its literal spelling alone. On a healthy
         // filesystem a stat() is microseconds, so all forty fit — and forty decoys in front of a real argument buy
@@ -757,24 +757,24 @@ class SensitiveGuardResolverPerformanceTest {
         val policy = basePolicy.copy(pathResolver = resolver)
         val manyPaths = (1..40).joinToString(" ") { "/tmp/f$it" }
         val elapsedMs = measureTimeMillis {
-            SensitiveGuard.verdict("Bash", bash("tar czf out.tar $manyPaths"), policy)
+            SensitiveGuard.evaluate("Bash", bash("tar czf out.tar $manyPaths"), policy)
         }
         // Forty × the 200 ms per-call timeout would be eight seconds of the thread that reads the whole stdout
         // stream — worse than the incident this class exists to prevent. The shared budget ends it after a handful.
-        assertTrue(elapsedMs < 2_000, "verdict() took ${elapsedMs}ms — the shared budget did not end the resolving")
+        assertTrue(elapsedMs < 2_000, "evaluate() took ${elapsedMs}ms — the shared budget did not end the resolving")
         assertTrue(callCount() < 40, "every path was still given its own timeout: ${callCount()} calls")
     }
 
     @Test
-    fun `a resolver stuck on a hung mount cannot freeze verdict() — it returns within the timeout budget`() {
+    fun `a resolver stuck on a hung mount cannot freeze evaluate() — it returns within the timeout budget`() {
         val policy = basePolicy.copy(pathResolver = { _ ->
             Thread.sleep(5_000) // simulates a stat() on an unresponsive network mount
             null
         })
         val elapsedMs = measureTimeMillis {
-            SensitiveGuard.verdict("Read", read("/home/me/.ssh/id_rsa"), policy)
+            SensitiveGuard.evaluate("Read", read("/home/me/.ssh/id_rsa"), policy)
         }
-        assertTrue(elapsedMs < 2_000, "verdict() took ${elapsedMs}ms — the hung resolver blocked the caller")
+        assertTrue(elapsedMs < 2_000, "evaluate() took ${elapsedMs}ms — the hung resolver blocked the caller")
     }
 
     @Test
@@ -785,7 +785,10 @@ class SensitiveGuardResolverPerformanceTest {
             Thread.sleep(5_000)
             "/should/never/see/this"
         })
-        assertEquals(SensitiveGuard.Verdict.ASK, SensitiveGuard.verdict("Read", read("/home/me/.ssh/id_rsa"), policy))
+        assertEquals(
+            SensitiveGuard.Verdict.ASK,
+            SensitiveGuard.evaluate("Read", read("/home/me/.ssh/id_rsa"), policy).verdict,
+        )
     }
 
     @Test
@@ -795,7 +798,7 @@ class SensitiveGuardResolverPerformanceTest {
         })
         assertEquals(
             SensitiveGuard.Verdict.ASK,
-            SensitiveGuard.verdict("Read", read("/home/me/proj/innocent.txt"), policy),
+            SensitiveGuard.evaluate("Read", read("/home/me/proj/innocent.txt"), policy).verdict,
         )
     }
 }

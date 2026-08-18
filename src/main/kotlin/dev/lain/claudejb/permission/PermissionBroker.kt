@@ -142,8 +142,8 @@ class PermissionBroker(
                 // Tell the model WHICH rule refused and WHERE to change it. Until 5.0.0 this was a fixed string
                 // that always said "credentials or private keys" and "allow it in Settings" — inaccurate for a
                 // dangerous-command or foreign-territory denial, and vague about a setting that has an exact
-                // path. SensitiveGuard.reason has produced the precise wording since 4.4.0; nothing was calling
-                // it, so the user never saw it.
+                // path. SensitiveGuard.evaluate has produced the precise wording in its Decision.reason since
+                // 4.4.0; nothing was reading it, so the user never saw it.
                 respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
                 onSensitiveDenied(request.toolName, decision.reason)
                 true
