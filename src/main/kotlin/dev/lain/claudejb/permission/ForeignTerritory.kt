@@ -9,7 +9,7 @@ package dev.lain.claudejb.permission
  * The only exemption is the open project's own root (and the user's own home): a repo on a corporate share is
  * normal and the user opened it on purpose. The credential globs still apply to it.
  *
- * A hit here denies **every caller regardless of trust**, by design — see [SensitiveGuard.verdict]. Each
+ * A hit here denies **every caller regardless of trust**, by design — see [SensitiveGuard.evaluate]. Each
  * sub-rule is tagged with its [SensitiveGuard.ForeignReason] so a single one can be softened to ASK from
  * Settings without touching the other two.
  */
