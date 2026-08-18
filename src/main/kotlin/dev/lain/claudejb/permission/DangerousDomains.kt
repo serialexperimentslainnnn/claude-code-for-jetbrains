@@ -50,11 +50,13 @@ object DangerousDomains {
     val BLOCKED_DOMAINS: Set<String> = setOf(
         // Paste sites — text in, public URL out, no account.
         "pastebin.com", "paste.ee", "hastebin.com", "ix.io",
-        // One-shot file hosts. NB `anonfiles.com` was in the first draft of this list and is NOT here: the
-        // service shut down in August 2023 under exactly the abuse this rule is about, and the copycats that
-        // took its name sit on other TLDs — so the entry named a domain that serves nothing and did not cover
-        // what replaced it. That is what the review cadence above is for, in both directions.
-        "transfer.sh", "file.io", "gofile.io", "0x0.st",
+        // One-shot file hosts. `anonfiles.com` shut down in August 2023 under exactly the abuse this rule is
+        // about, and it is listed anyway: an entry that never matches costs one string comparison and nothing
+        // else, while a name whose brand is still being reused is the wrong thing to be clever about. **Removing
+        // an entry because it looks harmless is a narrowing of detection, and narrowing detection is not this
+        // list's business** — the review cadence above is for ADDING. The copycats on other TLDs are not covered
+        // by this entry and never were; that is an argument for more entries, never for one fewer.
+        "transfer.sh", "file.io", "anonfiles.com", "gofile.io", "0x0.st",
         // Request capture — a URL that records whatever is sent to it, which is exfiltration with a UI.
         "webhook.site", "requestbin.com", "beeceptor.com", "pipedream.net",
         // Out-of-band interaction / canary services: they exist to prove data left a network.
