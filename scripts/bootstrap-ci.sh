@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # --- preconditions -------------------------------------------------------------------------------------
-for bin in gh jq gpg gpgsm openssl ykman; do
+for bin in gh jq gpg openssl ykman; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
 done
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first" >&2; exit 1; }
@@ -160,13 +160,18 @@ else
   #     Both cards are read and neither is assumed to be either CA: the card whose F9 certificate is
   #     self-issued is the root, the other is the intermediate. Nothing is written down here — not a
   #     serial, not a DN, not a fingerprint — so a reissued PKI is picked up rather than contradicted;
-  #   * the CA PRIVATE KEY comes from gpgsm, GnuPG's X.509 store. It cannot come from F9: that slot is
-  #     storage in this PKI, never a signer, and a PIV certificate object has no private half to offer.
-  #     gpgsm can export a key but cannot ISSUE one — GnuPG is not a CA — so it exists as a file for
-  #     exactly one openssl call and is shredded immediately, not at the exit trap.
+  #   * the CA PRIVATE KEY is the PKI's own intermediate key, READ where the PKI keeps it and never
+  #     copied, moved or rewritten. It cannot come from anywhere prettier, and the two candidates that
+  #     look like it are both dead ends: F9 is storage in this PKI, never a signer, and a PIV certificate
+  #     object has no private half to offer; and gpgsm does not hold this key either — what its secret
+  #     listing shows under the DN "The Oracle Intermediate CA" is the ISSUER field of the PIV leaf
+  #     certificates it holds, not the CA itself. That misreading is what made the first version of this
+  #     step die on `gpgsm: No secret key`.
   #
-  # The PKI's own working directory is neither read nor written and build-matrix-pki.sh is never run:
-  # this asks the PKI for one leaf, it never creates, resets or reissues anything.
+  # Reading it is made safe by the check below rather than by trust: the key must be THE key for the
+  # certificate the card just handed over, compared as public halves, or nothing is issued. Nothing under
+  # the PKI is written, and build-matrix-pki.sh is never run — this asks the PKI for one leaf, it never
+  # creates, resets or reissues anything.
   info "reading the CA certificates from PIV slot F9"
   pki_root=""; pki_int=""
   while read -r serial; do
@@ -191,14 +196,20 @@ else
   fi
   cp "$pki_root" "$tmp/root.crt"; cp "$pki_int" "$tmp/int.crt"
 
-  # The name gpgsm is asked for is READ OFF the certificate the card just handed over, so the two halves
-  # of the intermediate cannot drift apart: whatever the card says the CA is, that is the key that signs.
   int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
            | awk -F'= ' '/commonName/{print $2; exit}')
-  info "issuing under: $int_cn  (gpg-agent will ask for its key)"
-  gpgsm --armor --export-secret-key-p8 "$int_cn" > "$tmp/int.key"
-  grep -q 'BEGIN.*PRIVATE KEY' "$tmp/int.key" \
-    || { echo "error: gpgsm holds no private key for '$int_cn' — cannot issue" >&2; exit 1; }
+  int_key=${PKI_INTERMEDIATE_KEY:-$HOME/pki/matrix/private/intermediate.key}
+  [ -r "$int_key" ] || { echo "error: cannot read the intermediate CA key at $int_key" >&2; exit 1; }
+
+  # The pairing check, and it is the whole licence for reading a key off disk: the file must be the
+  # private half of the certificate the CARD produced. Compared as public keys, so a stale copy left over
+  # from a previous PKI — the one failure that would otherwise issue a certificate nobody's root can
+  # verify — stops here rather than three steps later.
+  openssl pkey -in "$int_key" -pubout       > "$tmp/int-key.pub" 2>/dev/null
+  openssl x509 -in "$tmp/int.crt" -noout -pubkey > "$tmp/int-crt.pub" 2>/dev/null
+  cmp -s "$tmp/int-key.pub" "$tmp/int-crt.pub" \
+    || { echo "error: $int_key is not the key for the '$int_cn' certificate on the card" >&2; exit 1; }
+  info "issuing under: $int_cn"
 
   # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
   # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
@@ -225,11 +236,12 @@ EXT
   # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody has
   # in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
   # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
+  # The CA key is read in place and never copied: there is no second file to shred, and therefore no
+  # window in which a plaintext CA key exists anywhere it did not already exist.
   openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
-    -CA "$tmp/int.crt" -CAkey "$tmp/int.key" \
+    -CA "$tmp/int.crt" -CAkey "$int_key" \
     -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
     -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" 2>/dev/null
-  shred -u "$tmp/int.key" 2>/dev/null || { : > "$tmp/int.key"; rm -f "$tmp/int.key"; }
 
   # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
   # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor inside the chain adds
