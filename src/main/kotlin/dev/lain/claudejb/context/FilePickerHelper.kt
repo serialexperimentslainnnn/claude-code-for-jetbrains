@@ -1,7 +1,5 @@
 package dev.lain.claudejb.context
 
-import com.intellij.openapi.fileChooser.FileChooser
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.impl.EditorHistoryManager
 import com.intellij.openapi.project.Project
@@ -9,11 +7,17 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import java.io.File
 
 /**
- * Composer-side helper for attaching/opening files: project-root-relative labels plus the
- * IDE file-choosing, opening and recent-files plumbing the composer needs. The label logic
- * ([displayName]) is promoted out of `ExplainSelectionAction.relativize` so it can be unit-tested
- * in isolation (the action keeps its own private copy working); everything else is a thin,
- * non-deprecated wrapper over the platform `FileChooser`/`FileEditorManager`/`EditorHistoryManager`.
+ * Composer-side helper for attaching and opening files: project-root-relative labels plus the IDE editor
+ * and recent-files plumbing the Attach menu needs. The label logic ([displayName]) is promoted out of
+ * `ExplainSelectionAction.relativize` so it can be unit-tested in isolation (the action keeps its own private
+ * copy working); everything else is a thin, non-deprecated wrapper over the platform
+ * `FileEditorManager`/`EditorHistoryManager`.
+ *
+ * **No platform file chooser lives here, and that is a rule rather than an omission.** Files and directories
+ * are picked from [ProjectTree], the attach menu's in-page project browser, where every entry passes the same
+ * canonicalize-and-prefix gate that confines what the binary may write. A `FileChooser` can be walked anywhere
+ * on disk from wherever it is rooted, so re-adding one would put a second, weaker answer beside that gate —
+ * and the attach menu's contract is that it offers what is inside the project.
  */
 object FilePickerHelper {
 
@@ -48,21 +52,6 @@ object FilePickerHelper {
         if (basePath == null) return null
         return runCatching { File(basePath).toPath().relativize(File(path).toPath()).toString() }
             .getOrNull()?.takeIf { it.isNotEmpty() && !it.startsWith("..") }?.replace('\\', '/')
-    }
-
-    /**
-     * Show a multi-file picker (no jars) rooted at the project and return the chosen file paths;
-     * empty when the user cancels.
-     */
-    fun chooseFiles(project: Project): List<String> {
-        val descriptor = FileChooserDescriptorFactory.multiFiles()
-        return FileChooser.chooseFiles(descriptor, project, null).map { it.path }
-    }
-
-    /** Show a single-folder picker rooted at the project and return its path, or null on cancel. */
-    fun chooseDirectory(project: Project): String? {
-        val descriptor = FileChooserDescriptorFactory.singleDir()
-        return FileChooser.chooseFile(descriptor, project, null)?.path
     }
 
     /** Absolute paths of the files currently open in editors (for an "Add open files…" menu). EDT. */
