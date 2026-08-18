@@ -1144,20 +1144,26 @@ class ClaudeSession(
             trimmed?.let { add(it) }
             nonImage.forEach { add(wireMention(it, root)) }
         }
-        val displayParts = buildList {
+        // ONE LINE PER ATTACHMENT, and a blank line only between the prompt and the block of them. They were
+        // all joined with `\n\n`, so six attached files were six paragraphs — a wall of them under one line of
+        // prose, which is what it looked like. The page renders a user row as markdown with `breaks: true`, so
+        // a single newline is a `<br>`: the block reads as a list without becoming one.
+        val displayText = buildList {
             trimmed?.let { add(it) }
-            nonImage.forEach { add(displayMention(it)) }
-        }
+            nonImage.takeIf { it.isNotEmpty() }?.let { list ->
+                add(list.joinToString("\n") { displayMention(it) })
+            }
+        }.joinToString("\n\n")
         val images = attachments.filterIsInstance<Attachment.Image>().map { it.mediaType to it.base64 }
         val combined = wireParts.joinToString("\n\n")
         if (combined.isEmpty() && images.isEmpty()) return
         if (!isRunning()) {
             if (!start()) return
         }
-        val displayText = displayParts.joinToString("\n\n").ifEmpty { attachments.joinToString(" ") { it.displayName } }
+        val shown = displayText.ifEmpty { attachments.joinToString(" ") { it.displayName } }
         // Queue access is EDT-confined (the deque isn't thread-safe).
         edt {
-            queue.addLast(Outgoing(combined, images, displayText))
+            queue.addLast(Outgoing(combined, images, shown))
             fireState()
             pump()
         }

@@ -49,12 +49,19 @@
     var node = el('div', { class: 'msg user' });
     node.appendChild(head);
     node.appendChild(body);
-    // User prompts are shown VERBATIM — never run through marked/markdown. What the
-    // user typed is what the model received; rendering it as Markdown would mangle
-    // literal `*`, backticks, `#`, indentation, etc. 'text' uses textContent (no
-    // parsing, no sanitize) and CSS .msg.user .body keeps white-space: pre-wrap so
-    // newlines/indentation survive.
-    return { el: node, bodyNode: body, kind: 'text' };
+    // THE SAME PARSER AS CLAUDE'S OWN ROWS (`kind: 'md'` — marked, then DOMPurify), and it was `'text'` for
+    // three releases. What changed the answer is what the plugin PUTS in this text: an attachment is folded
+    // into the prompt as `[@name](jb://open?file=…)`, so verbatim meant the user read the link syntax instead
+    // of the link — a wall of percent-encoded paths, reported as exactly that. Rendering it makes those
+    // clickable through the same `jb://` gate the model's own paths go through.
+    //
+    // WHAT IT COSTS, stated because it is a real regression of a real bug: markdown the USER typed is now
+    // interpreted — `**bold**` loses its asterisks, a leading `#` becomes a heading. That is the defect 4.0.4
+    // fixed by choosing verbatim, and it is being traded back on purpose (his call, twice stated). Nothing is
+    // lost from the payload: `__rawText` still holds what was typed, which is what the Copy button gives.
+    // Indentation and blank lines survive markdown's own rules rather than `pre-wrap`, so a pasted block that
+    // matters should be fenced.
+    return { el: node, bodyNode: body, kind: 'md' };
   }
 
   function buildAssistant() {
