@@ -284,11 +284,14 @@ Within ~20 minutes the new version should appear at
   what `latestReleaseNotesHtml()` feeds into `changeNotes`).
 - Compatibility range (`since-build` / `until-build`) is correct.
 
-The GitHub Release carries four files, and its notes come from **`CHANGELOG.md`**
-— not `RELEASE_NOTES.md`, which is the storefront copy for a different reader:
+The GitHub Release carries the signed zip, its `.sha256`, a `.asc` for each, and
+`trust-chain.asc` — the keys those signatures are checked against, attached so a
+verifier never has to fetch a key from the same tree the artifact came from. Its
+notes come from **`CHANGELOG.md`**, not `RELEASE_NOTES.md`, which is the
+storefront copy for a different reader:
 
 ```sh
-gpg --import docs/ci-signing-key.asc
+gpg --import trust-chain.asc      # both hardware CAs and the CI signing key
 gpg --verify claude-code-native-X.Y.Z.zip.asc
 sha256sum -c claude-code-native-X.Y.Z.zip.sha256
 git verify-tag vX.Y.Z

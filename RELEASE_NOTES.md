@@ -215,6 +215,18 @@ in another; the Chat / Session / Workloads buttons floated over the transcript y
 resumed or forked chat a tool call could be filed under an agent it did not belong to, taking everything
 after it inside that agent as well.
 
+**If you verify what you install, the keys have changed.** The tag and the `.asc` beside each download are
+signed by a new key, certified by two hardware keys whose private halves have never existed as a file.
+Everything needed to check that is attached to this release as **one** file, `trust-chain.asc`: the signing
+key and both keys that vouch for it, together — because a chain is imported whole or it is not imported at
+all. Import it and verify exactly as before.
+
+The single key file that used to live in the repository is gone. It endorsed nothing you could follow — the
+keys that had certified it no longer exist — and it was not the key that signed 5.1.1 either, having been
+replaced in the tree after that release went out. A key file that verifies nothing is worse than no key
+file, because nobody re-checks it. From now on every release carries the chain that was current when it was
+cut, so it stays verifiable long after that key has been retired.
+
 ### Upgrade notes — coming from 5.1.1
 
 **Check your IDE first.** 5.5.0 needs **2025.3.1 (build 253.29346.138) or newer**. On 2025.1, 2025.2 or the

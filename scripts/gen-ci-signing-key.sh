@@ -125,24 +125,33 @@ CI signing key generated.
    (Settings > Environments > marketplace > Add environment secret).
 
    They go in the ENVIRONMENT, not in repository secrets: environment secrets do
-   not exist for any other job, and this environment requires your approval — so
-   the key is only ever in scope after a human said yes.
+   not exist for any other job, and this one admits only 'main' and 'v*.*.*'. It
+   scopes the key; it does NOT hold the release back — there is no reviewer on it.
 
    GPG_SIGNING_KEY        <- the block printed below
    GPG_SIGNING_PASSPHRASE <- $passphrase
 
 --------------------------------------------------------------------------------
-2) Publish the PUBLIC key so users can verify a release. Commit it as
-   docs/ci-signing-key.asc and note the fingerprint in SECURITY.md.
+2) Publish the PUBLIC key so users can verify a release — as part of the trust
+   chain, in step 3, never on its own. A leaf with nothing above it asks the
+   reader to trust a fingerprint printed in the repository the artifact came
+   from, which is not an anchor.
 
 --------------------------------------------------------------------------------
-3) Certify it with your hardware key, so the CI key is ENDORSED rather than
+3) Certify it with BOTH hardware CAs, so the CI key is ENDORSED rather than
    merely asserted by a file in the same repo an attacker would edit — and so
-   the endorsement can be revoked from hardware if the key ever leaks:
+   the endorsement can be revoked from hardware if the key ever leaks. Then
+   write the chain as ONE file, CAs first and the CI key last:
 
      gpg --import public.asc                       # PUBLIC half only
-     gpg --local-user <YOUR_FPR> --quick-sign-key $fpr
-     gpg --armor --export $fpr > docs/ci-signing-key.asc
+     gpg --local-user <ROOT_FPR> --quick-sign-key $fpr
+     gpg --local-user <INT_FPR>  --quick-sign-key $fpr
+     { gpg --armor --export <ROOT_FPR> <INT_FPR>
+       gpg --armor --export $fpr; } > docs/trust-chain.asc
+
+   --quick-sign-key, NEVER --quick-lsign-key: a local certification is stripped
+   on export, so the file would carry the CAs and no endorsement — and it looks
+   exactly like a correct one until somebody else imports it.
 
 --------------------------------------------------------------------------------
 4) Register the PUBLIC key on your GitHub ACCOUNT, or the release tag will never
@@ -150,7 +159,9 @@ CI signing key generated.
    which is exactly how a release shipped with an unverified tag.
 
      gh auth refresh -s write:gpg_key    # one-off, interactive
-     gh gpg-key add docs/ci-signing-key.asc
+     gh gpg-key add public.asc           # the LEAF alone, not the chain: this
+                                         # endpoint takes one armored key, and
+                                         # the chain's first block is a CA
      gh api user/gpg_keys --jq '.[]|"\(.key_id) \(([.emails[]?.email]|join(",")))"'
 
    The last command is the check that matters: if the key lists NO emails, the
@@ -168,7 +179,7 @@ cat "$tmp/private.asc"
 cat <<'EOF'
 ----- end GPG_SIGNING_KEY -----
 
------ public key: save as docs/ci-signing-key.asc -----
+----- public key: save as public.asc, then certify it into docs/trust-chain.asc -----
 EOF
 cat "$tmp/public.asc"
 echo "----- end public key -----"

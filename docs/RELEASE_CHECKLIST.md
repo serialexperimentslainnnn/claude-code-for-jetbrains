@@ -196,10 +196,12 @@ every automated check and was broken in the IDE (ADR 0001 §5).
 ## Post-release
 
 - [ ] Marketplace listing shows the new version within ~20 minutes.
-- [ ] GitHub Release out of draft, with four assets: the signed zip, its
-      `.sha256`, and a `.asc` for each.
+- [ ] GitHub Release out of draft, with five assets: the signed zip, its
+      `.sha256`, a `.asc` for each, and `trust-chain.asc`.
 - [ ] `git verify-tag vX.Y.Z` and `gpg --verify` on the artifact both pass
-      against `docs/ci-signing-key.asc`.
+      against `docs/trust-chain.asc`, **and** `gpg --check-sigs` on the CI key
+      shows a certification from each hardware CA. A chain that does not chain
+      is the failure this asset exists to prevent, and it looks like success.
 - [ ] Milestone for `vX.Y.Z` closed and linked issues closed.
 - [ ] `develop` back in sync with `main` — via a **pull request**; `develop` is
       protected and a fast-forward is impossible anyway, since GitHub creates the
