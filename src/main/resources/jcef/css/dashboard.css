@@ -806,11 +806,22 @@
    are ALREADY EMPTY to its right, rather than clipping a filesystem path while there is room a millimetre
    away. A path is the longest value on the strip and the only one with no natural break in it.
 
-   THE GRIDLINES DO NOT MOVE, and that is what makes the two compatible rather than a compromise between
-   them. It sets `grid-column-END`, so it changes where this item stops and nothing about the tracks; and the
-   tracks are `minmax(0, 1fr)` (see `--strip-cols`), whose size comes from the free space and never from
-   their content, so no item's width can feed back into them. Every other row of the strip keeps its
-   verticals exactly where they were, which is the whole thing the shared grid exists to guarantee.
+   BOTH LINES ARE STATED, and the end line alone was the bug. `grid-column-end: -1` with an `auto` start does
+   NOT reach back to where the item would have fallen: an item with a definite end and an indefinite start
+   takes a span of ONE (CSS Grid Layout §8.3, "if the placement contains only one line, the other is auto and
+   the span is 1"), so it was placed in the LAST track — `Working dir` pinned against the right edge, one
+   column wide and clipping a path, with three empty columns sitting between it and `Model`. It read as a
+   right-aligned column of its own, which is the one thing the shared grid exists to prevent.
+
+   The start is column 2 because the cell before it is column 1: `.mini-line > .mini-fact:first-child` pins
+   that, and the selector below says `:nth-child(2)`, so the rule matches exactly the arrangement its numbers
+   assume and matches nothing when the line is built some other way. A fill fact that is not the second cell
+   simply gets no rule and clips in its own column, which is visible; a rule that guessed would be silent.
+
+   THE GRIDLINES DO NOT MOVE, and that is what makes this compatible with "no row stretches its cells" rather
+   than a compromise between them: what changes is where this ITEM ends, never a track. The tracks are
+   `minmax(0, 1fr)` (see `--strip-cols`), whose size comes from the free space and never from their content,
+   so no item's width can feed back into them. Every other row keeps its verticals exactly where they were.
 
    DECLARED, NOT COUNTED: the class is put on by the JS at the one call site that means it
    (`workingDirFact`), the same way the line's own class is decided there rather than derived from how many
@@ -818,8 +829,8 @@
    neighbour, so if anything is ever placed after it the fill stops on its own instead of overlapping.
    The ellipsis stays underneath all of this: three columns are not infinite, and a genuinely absurd path
    still clips with the whole of it in the pair's `title`. */
-.mini-line > .mini-fact.mini-fill:last-child {
-  grid-column-end: -1;
+.mini-line > .mini-fact.mini-fill:nth-child(2):last-child {
+  grid-column: 2 / -1;
 }
 /* Each pair is one unit: the label and its value break together or not at all, so a wrap never leaves
    "Organization:" at the end of one line and its value at the start of the next.

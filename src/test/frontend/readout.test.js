@@ -379,14 +379,19 @@ describe('mini session view', () => {
     // silence because a value happened to be absent.
     expect(dir.classList.contains('mini-fill')).toBe(true);
     expect(win.document.querySelectorAll('.dash-mini-grid .mini-fill')).toHaveLength(1);
-    // An END line, and nothing else. No template, no start, no span on the cell rule.
-    const fill = rule('.mini-line > .mini-fact.mini-fill:last-child');
-    expect(fill).toMatch(/grid-column-end:\s*-1/);
+    // BOTH lines, and the end line alone was the bug: with an `auto` start, a definite end gives the item a
+    // span of ONE (CSS Grid §8.3), so it was placed in the LAST track — the path pinned against the right
+    // edge, one column wide and clipping, with three empty columns between it and `Model`.
+    const fill = rule('.mini-line > .mini-fact.mini-fill:nth-child(2):last-child');
+    expect(fill).toMatch(/grid-column:\s*2 \/ -1/);
+    // Still no template on the cell: it changes where the ITEM ends, never a track, which is what keeps the
+    // other rows' verticals still.
     expect(fill).not.toMatch(/grid-template-columns/);
-    expect(fill).not.toMatch(/grid-column-start/);
+    // `:nth-child(2)` is what makes the `2` honest — the cell before it is pinned to column 1 — and
     // `:last-child` is a precondition, not the decision: a fact cannot spill over a neighbour, so the fill
     // stops on its own if anything is ever placed after it.
-    expect(sheet).toMatch(/\.mini-fact\.mini-fill:last-child \{/);
+    expect(sheet).toMatch(/\.mini-line > \.mini-fact:first-child \{/);
+    expect(sheet).toMatch(/\.mini-fact\.mini-fill:nth-child\(2\):last-child \{/);
     // And the tracks stay content-independent and shared, which is what keeps the other four rows still.
     expect(rule('#composer')).toMatch(/--strip-cols:\s*repeat\(4, minmax\(0, 1fr\)\)/);
     ['.readout', '.usage-bars', '.dash-mini-grid'].forEach((row) => {
@@ -828,7 +833,7 @@ describe('strip separators', () => {
       '.strip-cell:last-child',
       '.strip-cell:nth-child(4n)',
       '.mini-line > .mini-fact:first-child',
-      '.mini-line > .mini-fact.mini-fill:last-child',
+      '.mini-line > .mini-fact.mini-fill:nth-child(2):last-child',
       '.readout .ro-item:first-child',
     ].forEach((selector) => expect(sheet).toContain(selector));
     expect(foldMedia()).toMatch(/\.strip-cell:nth-child\(n\s*\+\s*3\)/);
