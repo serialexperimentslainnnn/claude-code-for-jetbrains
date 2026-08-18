@@ -1,11 +1,55 @@
 // Transcript rendering (app-transcript.js). Drives cc.batch([...]) and asserts the DOM, covering the bugs from
 // the 4.0.4 / 4.2.0 passes: user prompts rendered VERBATIM (never Markdown), the code-block Copy affordance, and
 // coloured inline diffs. Batch item shape mirrors JcefBridge.entryJson: { id, order, speaker, text, meta?, ... }.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 function row(id, order, speaker, text, extra = {}) {
   return { id, order, speaker, text, state: 'FINISHED', elapsed: 0, ...extra };
 }
+
+describe('transcript — the user row is a row, not a card', () => {
+  /**
+   * REGRESSION. The user's body was a bordered, padded, shadowed box carrying `white-space: pre-wrap`. Both
+   * were right for the `kind: 'text'` body it had until 4.0.4 and both became wrong when `buildUser` moved to
+   * `kind: 'md'`: `pre-wrap` over ALREADY-RENDERED markup turns every newline in that markup into a visible
+   * break, so a prompt with a list came out with each bullet a blank line apart and the `1.` on a line of its
+   * own — reported with a screenshot. jsdom lays nothing out, so this is asserted against the stylesheet's
+   * TEXT, the same way the rest of the CSS contracts in this suite are.
+   */
+  const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+  const userBody = () => {
+    const at = css.indexOf('\n.msg.user .body {');
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  it('does not re-introduce pre-wrap over markdown, which is what ballooned the spacing', () => {
+    expect(userBody()).not.toMatch(/white-space/);
+  });
+
+  it('carries no container chrome — that is what made it a card', () => {
+    const rule = userBody();
+    expect(rule).not.toMatch(/border:/);
+    expect(rule).not.toMatch(/background:/);
+    expect(rule).not.toMatch(/box-shadow:/);
+  });
+
+  it('keeps what the container was actually needed for: wrapping an unbreakable path', () => {
+    // Without these a pasted path or token sets the row's width, which is a different visible bug.
+    expect(userBody()).toMatch(/word-break:\s*break-word/);
+    expect(userBody()).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('still says whose row it is, and still offers Copy', () => {
+    // The header is what marks the row as the user's now that no box does, so removing the chrome must not
+    // have taken it with it.
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(1, 0, 'USER', 'hello')]);
+    const head = win.document.querySelector('.msg.user .msg-head');
+    expect(head.querySelector('.name').textContent).toBe('You');
+    expect(win.document.querySelector('.msg.user .copy')).not.toBeNull();
+  });
+});
 
 describe('transcript — a user prompt goes through the same parser as Claude’s', () => {
   /**
