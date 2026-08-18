@@ -154,20 +154,12 @@ else
   # not a nicety: this script exists to leave the pipeline configured end to end, so a prompt asking for
   # the path to a PEM would be a hole in precisely the thing it delivers.
   #
-  # THE CA KEY NEVER LEAVES THE YUBIKEY. Both CAs live in PIV slot F9 — the root on one card, the
-  # intermediate on the other — key and certificate together, so the signature is produced ON the card
-  # and this script never holds, copies or shreds a CA private key. Two dead ends are worth naming so
-  # they are not rediscovered: `gpgsm` does NOT hold these keys (what its secret listing shows under
-  # `CN=The Oracle Intermediate CA` is the ISSUER field of the PIV leaf certificates it holds), and
-  # `~/pki/matrix/private/intermediate.key` is a DIFFERENT key — newer than what is on the cards, so
-  # signing with it would issue a certificate the root cannot verify.
+  # Nothing about the maintainer's PKI is written down here — not a serial, not a DN, not a fingerprint,
+  # not a path. Which card carries which CA is DERIVED: the card whose F9 certificate is self-issued is
+  # the root, the other is the intermediate. A reissued PKI is therefore picked up rather than
+  # contradicted, and a repository that anyone can read describes no one's key material.
   #
-  # Nothing is written down here — not a serial, not a DN, not a fingerprint. Which card carries which CA
-  # is DERIVED: the card whose F9 certificate is self-issued is the root, the other is the intermediate.
-  # A reissued PKI is therefore picked up rather than contradicted.
-  #
-  # Nothing under ~/pki is read or written and build-matrix-pki.sh is never run: this asks the PKI for
-  # one leaf, it never creates, resets or reissues anything.
+  # The PKI is read, never written: this asks it for one leaf and creates, resets and reissues nothing.
   info "reading the CA certificates from PIV slot F9"
   pki_root=""; pki_int=""; int_card=""
   while read -r serial; do
@@ -197,7 +189,7 @@ else
   # then abort the whole run with no message at all. Reading the input to the end costs nothing here.
   int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
            | awk -F'= ' '/commonName/{ if (v == "") v = $2 } END { print v }')
-  info "issuing under: $int_cn  (certificate read from card $int_card)"
+  info "issuing under: $int_cn"
 
   # The CERTIFICATES come off the cards; the SIGNATURE cannot. Slot F9 is the attestation slot, and Yubico's
   # firmware restricts it to attesting keys generated on the device — "It is only used for attestation of
@@ -210,12 +202,12 @@ else
   # card's certificate is the reference and the key is found by comparing public halves, so a key file that
   # merely has the right name cannot be used: a PKI reissued on disk and not on the cards would otherwise
   # produce a chain that fails `openssl verify` at the end of this step, after the secrets were set.
-  ca_key=${MATRIX_CA_KEY:-}
+  ca_key=${CA_KEY:-}
   want=$(openssl x509 -in "$tmp/int.crt" -noout -pubkey \
          | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1)
   if [ -n "$ca_key" ]; then
     have=$(openssl pkey -in "$ca_key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
-    [ "$have" = "$want" ] || { echo "error: MATRIX_CA_KEY is not the key in card $int_card's F9" >&2; exit 1; }
+    [ "$have" = "$want" ] || { echo "error: CA_KEY is not the key in card $int_card's F9" >&2; exit 1; }
   else
     while read -r cand; do
       [ -n "$cand" ] || continue
@@ -224,18 +216,18 @@ else
       have=$(openssl pkey -in "$cand" -pubout -outform DER -passin pass: 2>/dev/null \
              | sha256sum | cut -d' ' -f1)
       if [ "$have" = "$want" ]; then ca_key=$cand; break; fi
-    done < <(find "${MATRIX_PKI_DIR:-$HOME/pki}" -type f \( -name '*.key' -o -name '*.pem' \) 2>/dev/null)
+    done < <(find "${PKI_DIR:-$HOME/pki}" -type f \( -name '*.key' -o -name '*.pem' \) 2>/dev/null)
   fi
   if [ -z "$ca_key" ]; then
-    echo "error: no private key under ${MATRIX_PKI_DIR:-$HOME/pki} matches the CA on card $int_card." >&2
-    echo "       F9 cannot sign (attestation slot), so the CA's key has to be reachable." >&2
-    echo "       Point MATRIX_CA_KEY at it, or reissue the cards from the PKI that holds it." >&2
+    echo "error: no reachable private key matches the CA certificate on card $int_card." >&2
+    echo "       F9 cannot sign (attestation slot), so the CA's key has to be readable here." >&2
+    echo "       Set CA_KEY to its path, or PKI_DIR to the tree holding it. Nothing was changed." >&2
     exit 1
   fi
-  info "signing with the CA key at $ca_key (public half verified against the card)"
+  info "signing with the CA key (public half verified against the card)"
   # Never copied into $tmp: openssl reads it in place, so this step creates no second copy of a CA key and
-  # has none to shred. It is also worth saying plainly, once, rather than leaving it implied — anyone who
-  # can read that file IS the intermediate CA, and on this machine it is stored unencrypted.
+  # has none to shred. The path is not printed either — a log, a screenshot or a pasted run should not be
+  # the thing that tells a reader where the CA of a trust chain is kept.
 
   # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
   # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
@@ -246,7 +238,7 @@ else
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
     -aes-256-cbc -pass "file:$tmp/keypass" -out "$tmp/leaf.key" 2>/dev/null
   openssl req -new -key "$tmp/leaf.key" -passin "file:$tmp/keypass" -sha384 \
-    -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key" \
+    -subj "/CN=Claude Code Native plugin upload key" \
     -out "$tmp/leaf.csr" 2>/dev/null
 
   # codeSigning, and only that. The PKI's own leaf profile is clientAuth/serverAuth — a TLS certificate —

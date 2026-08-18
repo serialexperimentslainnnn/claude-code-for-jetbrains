@@ -125,45 +125,21 @@ Two consequences, both the opposite of what the name suggests:
   plugin gets a warning dialog. The trade is one software key in an environment secret against a dialog
   in front of everyone.
 
-**It is issued by the local PKI, not self-signed.** The certificate is a `codeSigning` leaf under *The
-Oracle Intermediate CA*, which chains to *The Architect Root CA* — the same trust chain the release
-signatures hang off, so the upload credential is not a stray anchor nobody can place.
+**It is issued, not self-signed.** The certificate is a `codeSigning` leaf under the maintainer's own
+certificate authority, so the upload credential is not a stray anchor nobody can place. **How that CA is
+kept is deliberately not described here** — a public repository is the wrong place to say where anyone's
+key material lives, and the script hardcodes none of it: it derives what it needs at run time and fails
+loudly when it cannot. Set `CA_KEY` (a file) or `PKI_DIR` (a tree to search) if the defaults do not find
+it.
 
-**There is nothing to hand over and nothing to prepare.** The step asks no question: plug both CA
-YubiKeys in and it issues, verifies and uploads. The two halves of the CA come from deliberately
-different places, and neither is written down anywhere in the script:
-
-- **The CA certificates come off the YubiKeys, PIV slot `F9`**, which is where this PKI keeps them. Both
-  cards are read and neither is assumed to be either CA — the card whose `F9` certificate is *self-issued*
-  is the root, the other is the intermediate. No serial, no DN and no fingerprint is hardcoded, so a
-  reissued PKI is picked up rather than contradicted.
-- **The signature cannot be produced on the card, and that is firmware, not configuration.** `F9` holds
-  the CA's key *and* certificate, but Yubico restricts the attestation slot to attesting keys generated on
-  the device — *"It is only used for attestation of other keys generated on device with instruction f9"*.
-  A signing attempt logs in cleanly and then fails inside the card, which is indistinguishable from a
-  wrong PIN unless you know this, so it is written down here: **no PKCS#11 module, mechanism or digest
-  changes it**. `libykcs11` does expose `F9` as id 25 (`0x19`) and does advertise `ECDSA-SHA384`; the card
-  still refuses.
-- **So the CA's private key is read from disk, and MATCHED to the card rather than assumed.** The card's
-  certificate is the reference: the script compares public halves and uses the key that *is* the CA on
-  `F9`, so a PKI reissued on disk and not on the cards fails at the comparison instead of producing a
-  chain that dies at `openssl verify` after the secrets were set. It searches `~/pki` (override with
-  `MATRIX_PKI_DIR`, or name the file with `MATRIX_CA_KEY`), reads the key **in place**, and never copies
-  it into the temp dir — so there is no second copy of a CA key to shred.
-
-  One dead end, named so it is not rediscovered: `gpgsm` does **not** hold these CA keys. What its secret
-  listing shows under `CN=The Oracle Intermediate CA` is the **issuer** field of the PIV *leaf*
-  certificates it holds, not a CA key it could sign with.
-
-`~/pki` is read, never written, and `build-matrix-pki.sh` is never run: the script asks the PKI for one
-leaf, it never creates, resets or reissues anything.
+**There is nothing to hand over and nothing to prepare.** The step asks no question and writes nothing
+outside its own temp directory. The CA is read, never written: it is asked for one leaf, and nothing is
+created, reset or reissued.
 
 ```sh
-ykman --device "$serial" piv certificates export f9 -      # per card; public read, no PIN, no touch
-
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out leaf.key
 openssl req -new -key leaf.key -sha384 -out leaf.csr \
-  -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key"
+  -subj "/CN=Claude Code Native plugin upload key"
 openssl x509 -req -in leaf.csr -sha384 -CA int.crt -CAkey "$ca_key" \
   -set_serial "0x$(openssl rand -hex 16)" -days 3650 -extfile leaf.ext -out leaf.crt
 cat leaf.crt int.crt > fullchain.crt
@@ -172,17 +148,15 @@ openssl verify -CAfile root.crt -untrusted int.crt leaf.crt
 
 Four details there are decisions rather than defaults:
 
-- **EC P-384 / SHA-384**, the shape this PKI issues in, and one `marketplace-zip-signer` supports
-  natively (`SignatureAlgorithm.ECDSA_WITH_SHA384`) — no RSA detour to keep a tool happy that does not
-  need one.
-- **`extendedKeyUsage = codeSigning`**, written here rather than borrowed: the PKI's own leaf profile is
-  `clientAuth,serverAuth`, i.e. a TLS certificate, which is the wrong claim for one that signs an
-  artifact.
-- **`openssl verify` runs before any secret is set**, so a wrong CA — a stale card, a half-reissued PKI —
-  fails loudly instead of publishing.
-- **Ten years**, rather than JetBrains' example one or the PKI's own 1095 days: an expiring upload key
-  breaks publishing on a date nobody has in a calendar, and expiry protects nothing here, since the
-  certificate is not a trust anchor for any user.
+- **EC P-384 / SHA-384**, which `marketplace-zip-signer` supports natively
+  (`SignatureAlgorithm.ECDSA_WITH_SHA384`) — no RSA detour to keep a tool happy that does not need one.
+- **`extendedKeyUsage = codeSigning`**, written here rather than inherited from whatever profile the CA
+  issues by default: a TLS profile is the wrong claim for a certificate that signs an artifact.
+- **`openssl verify` runs before any secret is set**, so a CA that does not chain fails loudly instead of
+  publishing.
+- **Ten years**, rather than JetBrains' example one: an expiring upload key breaks publishing on a date
+  nobody has in a calendar, and expiry protects nothing here, since the certificate is not a trust anchor
+  for any user.
 
 `PRIVATE_KEY` is stored **encrypted**, with `PRIVATE_KEY_PASSWORD` as the matching passphrase — a random
 32 bytes that is never displayed, because its only consumer is the CI job that reads it from the secret.
@@ -194,9 +168,9 @@ set, nobody — including you — can read back what was uploaded, so without a 
 certificate is CI signing with right now"* and *"did this artifact come from that certificate"* stop
 being answerable. It is a leaf, not a CA: losing it costs one re-run of this step.
 
-Everything else the step touched — the exported card certificates, the CSR, the issued key and the chain
-— is shredded **at that point in the step**, not left to the exit trap. The CA key is not in that list
-because it was never copied: it is read where the PKI keeps it.
+Everything else the step touched — the CA certificates it read, the CSR, the issued key and the chain —
+is shredded **at that point in the step**, not left to the exit trap. The CA's own key is not in that
+list because it is never copied: it is read where it already lives.
 
 `CERTIFICATE_CHAIN` is **leaf then issuer**, with the root deliberately left out: a self-signed anchor in
 the chain adds nothing a verifier can use, since it either already trusts that root or must not be told
@@ -232,8 +206,8 @@ CI_FPR=<fingerprint printed by the script>
 ROOT_FPR=E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3
 INT_FPR=318BBEFF6E5DD5A03A8280518DAB773C3796B834
 gpg --import public.asc                                     # PUBLIC half only
-gpg --local-user "$ROOT_FPR" --quick-sign-key "$CI_FPR"     # Root, YubiKey 27263482
-gpg --local-user "$INT_FPR"  --quick-sign-key "$CI_FPR"     # Intermediate, YubiKey 32861026
+gpg --local-user "$ROOT_FPR" --quick-sign-key "$CI_FPR"     # root CA, on its own YubiKey
+gpg --local-user "$INT_FPR"  --quick-sign-key "$CI_FPR"     # intermediate CA, on the other
 { gpg --armor --export "$ROOT_FPR" "$INT_FPR"               # export AFTER signing
   gpg --armor --export "$CI_FPR"; } > docs/trust-chain.asc  # CI key LAST — see below
 git add docs/trust-chain.asc
