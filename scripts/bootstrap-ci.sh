@@ -185,8 +185,10 @@ else
     gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
     info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written to disk"
     info "$(openssl x509 -in "$tmp/chain.crt" -noout -subject -enddate | tr '\n' ' ')"
-    warn "If the first publish is rejected as an unknown certificate, your Marketplace profile pins a"
-    warn "public key. Re-run this step with the original private.pem, or update the profile."
+    # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the
+    # user's IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as
+    # "not available yet" in the plugin-signing docs. So this key is only ever an upload credential and
+    # rotating it is invisible — to users and to the Marketplace alike. Nothing to upload anywhere.
   fi
 fi
 
