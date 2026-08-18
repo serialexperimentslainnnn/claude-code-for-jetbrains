@@ -119,6 +119,14 @@ class ClaudeSession(
         quota = QuotaWarnings(log, QuotaWarnings.Announce(inTranscript = ::systemNotice, asNotification = ::notifyInfo)),
     )
 
+    /** How this chat's tab title is decided — see [SessionTitling]. */
+    private val titling = SessionTitling(
+        currentTitle = { title },
+        setTitle = { title = it },
+        fireTitleChanged = { edt { fireTitleChanged() } },
+        requestGeneratedTitle = queries::requestGeneratedTitle,
+    )
+
     /** What the binary SAYS, as opposed to what it does in a turn — see [NoticeNarrator]. */
     private val notices = NoticeNarrator(
         log = log,
@@ -210,24 +218,6 @@ class ClaudeSession(
     /** True between an interrupt request and its ack/timeout/turn-end — drives the Stop button's "Interrupting…" label. */
     @Volatile var interrupting: Boolean = false
         private set
-
-    /**
-     * Whether this process has already asked the binary to name the conversation.
-     *
-     * Set BEFORE the request goes out, so a refusal, a timeout or a blank answer costs one attempt and not a
-     * request per turn for the rest of the session. The binary persists the title it generates, so the normal
-     * case never reaches here twice anyway — this bounds the abnormal one.
-     */
-    @Volatile private var titleGenerationAsked: Boolean = false
-
-    /**
-     * Whether the user has renamed this chat by hand.
-     *
-     * A generated title is asked for once and arrives whenever it arrives; a rename in that window must not
-     * be overwritten by it. What the user typed is never replaced by what a model wrote — the ordering of the
-     * two answers is not allowed to decide that.
-     */
-    @Volatile private var userRenamed: Boolean = false
 
     /**
      * The most recent `rate_limit_event`, whichever window it described. Kept for the composer's quota pill,
@@ -1363,25 +1353,17 @@ class ClaudeSession(
     }
 
     /**
-     * Off-EDT: resolves the binary's real session title (the one `--resume` shows), relabels the tab if it
-     * changed, and records the currently-open tab set so it can be restored on the next startup. No transcript
-     * is persisted — the binary's session file is the source of truth and is re-read on restore.
+     * Off-EDT: resolves the binary's real session title (the one `--resume` shows) and asks for a generated
+     * one when needed — see [titling] — and records the currently-open tab set so it can be restored on the
+     * next startup. No transcript is persisted — the binary's session file is the source of truth and is
+     * re-read on restore.
      */
     private fun recordOpenAndTitle(id: String) {
         AppExecutorUtil.getAppExecutorService().execute {
             // The Git chat keeps its name (see [gitIntegration]): the fallback title is the first thing asked,
             // which here is a git command and not what this tab is. It is not offered a generated one either,
             // for the same reason — the tab is called Git because that is what it is.
-            if (!gitIntegration) {
-                val resolved = SessionTitleReader.read(id)
-                if (resolved != null && resolved.text != title) {
-                    title = resolved.text
-                    edt { fireTitleChanged() }
-                }
-                // Nothing has NAMED this chat yet — it is showing its opening line. The binary can do better
-                // and it is one request away; see [askForGeneratedTitle].
-                if (resolved?.authored != true) askForGeneratedTitle(resolved?.prompt)
-            }
+            if (!gitIntegration) titling.resolve(id)
             // Every chat that HAS a tab. The Git conversation is drawn inside the Git view and has none, so
             // recording it here would make the next startup open one for it — undoing the whole point of it
             // not being a tab. Same exclusion as `ChatSessionManager.persistOpenTabs`, and for one reason.
@@ -1390,43 +1372,6 @@ class ClaudeSession(
                     .filterNot { it.gitIntegration }
                     .mapNotNull { it.sessionId },
             )
-        }
-    }
-
-    /**
-     * Asks the binary to name this conversation — once, off the critical path, and never at the cost of the
-     * name it already has.
-     *
-     * **Why the binary and not us.** Naming a conversation is a model's job, and the model is already up: the
-     * `generate_session_title` control request runs inside the live session, so there is no second process, no
-     * credential and no prompt of our own. It persists the answer in its own session file, which is why this
-     * costs one request per chat *ever* rather than one per start — the next launch reads it back as an
-     * authored title (`SessionTitle.authored`) and never gets here.
-     *
-     * **When.** At the end of a turn, from [recordOpenAndTitle]. Not earlier: before the first turn there is
-     * no session id, no prompt on disk and nothing to summarise. Not later than the first turn either — a tab
-     * whose name settles two turns in is a tab the user has already learned to find by position.
-     *
-     * **What it cannot do:** name a subagent. The request carries no agent id and acts on the session that
-     * answers it, so a subtab's title stays what the parent model wrote for it in
-     * `subagents/agent-<id>.meta.json` — which is already model-authored text (see [AgentMeta.label]), and is
-     * the same kind of text this request takes as input.
-     *
-     * Fail-safe by construction: [titleGenerationAsked] is set before the request leaves, so a refusal, a
-     * watchdog timeout or a blank answer costs one attempt and leaves the fallback standing, silently.
-     */
-    private fun askForGeneratedTitle(prompt: String?) {
-        val description = prompt?.takeIf { it.isNotBlank() } ?: return
-        if (titleGenerationAsked) return
-        titleGenerationAsked = true
-        queries.requestGeneratedTitle(description) { generated ->
-            // On the EDT (SessionQueries hops). Cut to tab size by the same rule as the fallback: the length
-            // of a title is not the model's to decide.
-            val named = generated?.let { SessionTitleReader.asTitle(it) } ?: return@requestGeneratedTitle
-            // A rename that landed while this was in flight is the user's word on the matter, and it stands.
-            if (userRenamed || named == title) return@requestGeneratedTitle
-            title = named
-            fireTitleChanged()
         }
     }
 
@@ -1733,14 +1678,14 @@ class ClaudeSession(
     /**
      * Renames the current session (E5): tells the binary, updates the tab title, notifies listeners.
      *
-     * This is the top of the order of authority, and [userRenamed] is what keeps it there: a generated title
-     * still in flight when the user types one must not land on top of it.
+     * This is the top of the order of authority, and [SessionTitling.markRenamed] is what keeps it there: a
+     * generated title still in flight when the user types one must not land on top of it.
      */
     fun renameSession(title: String) {
         val trimmed = title.trim()
         if (trimmed.isBlank()) return
         if (isRunning()) write(ControlProtocol.renameSessionRequest(ControlProtocol.newRequestId(), trimmed))
-        userRenamed = true
+        titling.markRenamed()
         this.title = trimmed
         edt { fireTitleChanged() }
     }
