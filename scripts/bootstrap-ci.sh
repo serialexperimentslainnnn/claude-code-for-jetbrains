@@ -192,8 +192,11 @@ else
   fi
   cp "$pki_root" "$tmp/root.crt"; cp "$pki_int" "$tmp/int.crt"
 
+  # `awk … {print; exit}` would be the obvious spelling and is the one to avoid throughout this script:
+  # awk leaving early closes the pipe, the writer on the left dies of SIGPIPE, and `pipefail` + `set -e`
+  # then abort the whole run with no message at all. Reading the input to the end costs nothing here.
   int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
-           | awk -F'= ' '/commonName/{print $2; exit}')
+           | awk -F'= ' '/commonName/{ if (v == "") v = $2 } END { print v }')
   info "issuing under: $int_cn  (card $int_card, on-card signature)"
 
   # The signer is a PKCS#11 URI, not a file. `libykcs11` is what exposes F9 — OpenSC's module publishes
@@ -203,7 +206,18 @@ else
   # The PIN is read once, written to the 0700 temp dir and handed over as `pin-source`, never as
   # `pin-value`: a URI is an ARGUMENT, and arguments are world-readable in /proc. If the provider ignores
   # it, openssl falls back to prompting on the terminal, which is a worse experience and not a leak.
-  ykcs11=${YKCS11_MODULE:-$(find /usr/lib64 /usr/lib -name 'libykcs11.so*' 2>/dev/null | head -1)}
+  # Located by walking a list rather than by `find … | head -1`, and that is a bug fix rather than a
+  # style preference: under `set -euo pipefail` the pipe kills the script WITHOUT A WORD. head closes the
+  # pipe, find dies of SIGPIPE, pipefail turns that into a non-zero status for the assignment, and set -e
+  # exits — so the run stopped dead after "issuing under:" with no error, no line number and no clue.
+  ykcs11=${YKCS11_MODULE:-}
+  if [ -z "$ykcs11" ]; then
+    for cand in /usr/lib64/libykcs11.so.2 /usr/lib64/libykcs11.so \
+                /usr/lib/x86_64-linux-gnu/libykcs11.so.2 /usr/lib/x86_64-linux-gnu/libykcs11.so \
+                /usr/lib/libykcs11.so.2 /usr/lib/libykcs11.so /usr/local/lib/libykcs11.so; do
+      if [ -e "$cand" ]; then ykcs11=$cand; break; fi
+    done
+  fi
   [ -n "$ykcs11" ] || { echo "error: libykcs11 not found — install yubico-piv-tool" >&2; exit 1; }
   export PKCS11_PROVIDER_MODULE="$ykcs11"
   read_secret piv_pin "PIV PIN for card $int_card"
@@ -313,6 +327,18 @@ else
 
   ci_fpr=$(cat "$tmp/gpg/fingerprint")
 
+  # The PRIVATE half is imported into your keyring, and that is custody rather than convenience: a GitHub
+  # environment secret is WRITE-ONLY. Nothing — not the API, not the UI, not a workflow — can read back
+  # what was uploaded, so a key that exists only there cannot be inspected, cannot be revoked with its own
+  # revocation certificate, and cannot re-sign anything the day the workflow is not the thing signing. It
+  # stays encrypted with the passphrase it was generated under, so what lands on disk is ciphertext.
+  if gpg --batch --import "$tmp/gpg/private.asc" 2>/dev/null; then
+    info "imported the CI key $ci_fpr into your keyring (private half, still passphrase-protected)"
+  else
+    warn "could not import the CI key into your keyring — it will exist ONLY as a GitHub secret,"
+    warn "  which is write-only: it can never be read back, audited or reused."
+  fi
+
   # --- certify the CI key with the maintainer's hardware key -------------------------------------------
   # This is what turns the CI key from "a key that happens to sign the artifacts" into "a key the
   # maintainer vouches for". Two concrete consequences, and the second is the important one:
@@ -322,8 +348,6 @@ else
   #   * if the CI key ever leaks, the certification can be REVOKED from hardware, which withdraws the
   #     maintainer's endorsement without needing anyone to notice a new file. A bare key has no such lever.
   #
-  # Only the PUBLIC half is imported into your keyring. The private half stays in the temp dir and is
-  # shredded on exit — it exists in exactly two places: that GitHub secret, and nowhere.
   #
   # BOTH certification authorities sign it, not just one. The certifiers are derived rather than written
   # down: every primary key whose secret half lives on a SMARTCARD (field 15 of the `sec` colon record is
@@ -340,11 +364,31 @@ else
   mapfile -t certifiers < <(gpg --list-secret-keys --with-colons \
     | awk -F: '$1=="sec" && $15!="" && $15!="+" { getline; if ($1=="fpr") print $10 }')
 
+  # The imported private half is useless without its passphrase, and the passphrase's only other home is a
+  # write-only GitHub secret — so the local copy would be a key nobody, including you, can ever open. It is
+  # stashed beside the keyring ENCRYPTED TO THE CAs, never in the clear: a plaintext passphrase file next
+  # to the key it unlocks is the same thing as an unprotected key, spelled in two files instead of one.
+  pass_stash="$HOME/.gnupg/claude-code-native-ci-passphrase.asc"
+  if [ ${#certifiers[@]} -gt 0 ]; then
+    recipients=(); for fpr in "${certifiers[@]}"; do recipients+=(-r "$fpr"); done
+    if gpg --batch --yes --armor --trust-model always "${recipients[@]}" \
+           --output "$pass_stash" --encrypt "$tmp/gpg/passphrase" 2>/dev/null; then
+      chmod 600 "$pass_stash"
+      info "stashed the CI passphrase at $pass_stash (opens with any CA YubiKey)"
+    else
+      warn "could not encrypt the CI passphrase to a CA — none of them has an encryption subkey."
+      warn "  the imported CI key stays locked: its passphrase now lives ONLY in the GitHub secret."
+    fi
+  fi
+
   if [ ${#certifiers[@]} -eq 0 ]; then
     warn "no hardware-held key in your keyring — the CI key cannot be certified by a CA."
     warn "the exported key will carry no endorsement; users can only take its fingerprint on faith."
+    warn "the CI passphrase could not be stashed either — there is no key here to encrypt it to."
     cp "$tmp/gpg/public.asc" docs/trust-chain.asc
   else
+    # The public half again, deliberately: the private import above may have failed, and certification
+    # needs the key present. A second import of a key already held is a no-op, not a duplicate.
     gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
     warn "TOUCH YOUR YUBIKEY once per certifier — ${#certifiers[@]} of them."
 
@@ -366,7 +410,8 @@ else
     done
 
     for fpr in "${certifiers[@]}"; do
-      uid=$(gpg --list-keys --with-colons "$fpr" | awk -F: '$1=="uid" {print $10; exit}')
+      uid=$(gpg --list-keys --with-colons "$fpr" \
+            | awk -F: '$1=="uid" { if (v == "") v = $10 } END { print v }')
       info "certifying $ci_fpr with $fpr ($uid)"
       # --quick-sign-key, never --quick-lsign-key: a LOCAL signature stays in your keyring and is stripped
       # on export, so the endorsement would be invisible to every user it exists for.
@@ -399,7 +444,7 @@ else
     # one is what makes the bundle a CHAIN rather than a list.
     survived() {  # $1 = signer fingerprint, $2 = signed fingerprint
       GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$2" 2>/dev/null \
-        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m {print "y"; exit}'
+        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }'
     }
     for a in "${certifiers[@]}"; do
       for b in "${certifiers[@]}"; do
@@ -416,9 +461,9 @@ else
 
     for fpr in "${certifiers[@]}"; do
       have_key=$(GNUPGHOME="$chain_home" gpg --list-keys --with-colons 2>/dev/null \
-        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f {print "y"; exit}')
+        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f { v = "y" } END { print v }')
       have_sig=$(GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$ci_fpr" 2>/dev/null \
-        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m {print "y"; exit}')
+        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }')
       if [ "$have_key" = y ] && [ "$have_sig" = y ]; then
         info "docs/trust-chain.asc: $fpr is present, and its certification of the CI key survived"
       else
