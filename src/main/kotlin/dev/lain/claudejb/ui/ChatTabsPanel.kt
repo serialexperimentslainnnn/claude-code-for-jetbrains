@@ -156,11 +156,20 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         tab.attention = false
         pushChats()
         cards.show(content, tab.id)
-        (tab.component as? JcefChatPanel)?.let {
+        (tab.component as? JcefChatPanel)?.let { panel ->
             // Selecting a chat means "show me this chat" — including when an agent's transcript is what is
             // currently painted in it. Without this there is NO WAY BACK from an agent's subtab.
-            it.transcript.showTranscript(null)
-            it.focusInput()
+            //
+            // BOTH CALLS REACH A BROWSER, and a throw from either used to take the rest of this method with it:
+            // `onSelected` never ran, so the selection was half applied — the card had moved, the listener that
+            // settles `active` and the dashboard had not — and the only visible result was a tab that did not
+            // seem to respond. An exception inside a bridge callback reaches no `error` event and no log either,
+            // so it was invisible twice over. The selection is not abandoned for a page that cannot draw yet:
+            // the failure is recorded and the rest of the switch completes.
+            runCatching { panel.transcript.showTranscript(null) }
+                .onFailure { LOG.warn("Claude Code tabs: showing '${tab.title}' failed to reset its transcript", it) }
+            runCatching { panel.focusInput() }
+                .onFailure { LOG.warn("Claude Code tabs: showing '${tab.title}' failed to take focus", it) }
         }
         onSelected(tab)
     }
@@ -176,13 +185,39 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     fun tabFor(session: ClaudeSession): ChatTab? =
         tabs.firstOrNull { (it.component as? JcefChatPanel)?.session === session }
 
+    /**
+     * A click on a chat pill, by the id the page was drawn with.
+     *
+     * **A miss is LOGGED, and that is the whole point of this shape.** The page draws whatever list it was last
+     * pushed and hands the id back verbatim, so a pill whose tab is gone sends an id that resolves to nothing —
+     * and a bare `?.let` then does nothing at all, with no exception and no trace: a tab you can see, click, and
+     * get no response from. That is exactly how the ghost-tab report reads from the user's chair, and it is
+     * indistinguishable from twenty other causes without this line. Naming the id and what DOES exist is what
+     * makes the next report answerable from a log instead of from a reproduction.
+     */
     fun selectById(id: String) {
-        tabs.firstOrNull { it.id == id }?.let { select(it) }
+        val tab = tabs.firstOrNull { it.id == id }
+        if (tab == null) {
+            LOG.warn(unknownTab("selectChat", id))
+            return
+        }
+        select(tab)
     }
 
+    /** As [selectById]: a close aimed at a tab that is already gone is silent otherwise. */
     fun closeById(id: String) {
-        tabs.firstOrNull { it.id == id }?.let { close(it) }
+        val tab = tabs.firstOrNull { it.id == id }
+        if (tab == null) {
+            LOG.warn(unknownTab("closeChat", id))
+            return
+        }
+        close(tab)
     }
+
+    /** What a gesture aimed at a tab that does not exist should say: the id asked for, and the ids that exist. */
+    private fun unknownTab(gesture: String, id: String): String =
+        "Claude Code tabs: $gesture named '$id', which is not an open tab — the page is drawing a list this " +
+            "strip no longer has. Open now: ${tabs.map { it.id to it.title }}"
 
     /**
      * Closes [tab]: shows something else, removes it, fires the close callback and disposes what it carried.
