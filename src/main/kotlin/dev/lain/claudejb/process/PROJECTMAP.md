@@ -69,7 +69,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ClaudeBinaryLocator.resolveNodeScript` | fun | `ClaudeBinaryLocator.kt:80` | If [binary] is a Windows npm `.cmd`/`.bat` shim, returns the underlying `cli.js` so the caller can launch `node cli.js … |
 | `ClaudeBinaryLocator.locateNode` | fun | `ClaudeBinaryLocator.kt:101` | Resolves a launchable `node` for driving an npm shim. |
 | `ClaudeLoginFlow` | class | `ClaudeLoginFlow.kt:22` | Drives `claude auth login` (the OAuth flow) **natively**, without dropping the user into an IDE terminal. |
-| `ClaudeProcess` | class | `ClaudeProcess.kt:22` | Thin transport over one long-lived `claude` process driven in stream-json mode. |
+| `ClaudeProcess` | class | `ClaudeProcess.kt:23` | Thin transport over one long-lived `claude` process driven in stream-json mode. |
 | `ConsoleApiKey` | object | `ConsoleApiKey.kt:30` | Takes custody of the API key that `claude auth login --console` mints for itself. |
 | `ConsoleApiKey.harvest` | fun | `ConsoleApiKey.kt:46` | The Console-minted key, removed from `~/.claude.json` on the way out — or null when there is none, the file is … |
 | `CredentialsVault` | object | `CredentialsVault.kt:53` | Keeps the subscription login OFF the disk, full stop. |

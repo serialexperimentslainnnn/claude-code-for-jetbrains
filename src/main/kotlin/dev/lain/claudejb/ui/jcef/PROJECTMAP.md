@@ -43,12 +43,14 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefAccountData.accountJson` | fun | `JcefAccountData.kt:24` | `{ email, org, plan, provider, loggedIn }` — session-reported account fields, enriched by the `auth status` probe … |
 | `JcefAccountData.accountJson` | fun | `JcefAccountData.kt:48` | The card itself, out of the sources that answer for it, so the fallback order can be pinned without a live session. |
 | `JcefAccountData.firstPresent` | fun | `JcefAccountData.kt:96` | The first candidate that carries something, or null. |
-| `JcefBridge` | object | `JcefBridge.kt:27` | The **inbound pure half** of the JCEF bridge: it parses the frontend's messages (`window.__ccSend`) into a typed [Msg]. |
-| `JcefBridge.jsString` | fun | `JcefBridge.kt:267` | A string as a JS expression: a JSON string literal is a valid JavaScript string literal, and the serializer's escaping … |
-| `JcefBridge.parse` | fun | `JcefBridge.kt:277` | Parses one `window.__ccSend` payload. |
-| `JcefCardPayload` | object | `JcefCardPayload.kt:20` | The request-card half of the outbound (Kotlin → JS) payloads: the permission cards the frontend renders, including the … |
-| `JcefCardPayload.permissionJson` | fun | `JcefCardPayload.kt:23` | One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). |
-| `JcefCardPayload.permissionsJson` | fun | `JcefCardPayload.kt:94` |  |
+| `JcefBridge` | object | `JcefBridge.kt:26` | The **inbound pure half** of the JCEF bridge: it parses the frontend's messages (`window.__ccSend`) into a typed [Msg]. |
+| `JcefBridge.SCOPE_GIT` | val | `JcefBridge.kt:45` | The scope naming the conversation embedded in the Git view, when a request card belongs to it. |
+| `JcefBridge.jsString` | fun | `JcefBridge.kt:351` | A string as a JS expression: a JSON string literal is a valid JavaScript string literal, and the serializer's escaping … |
+| `JcefBridge.parse` | fun | `JcefBridge.kt:361` | Parses one `window.__ccSend` payload. |
+| `JcefCardPayload` | object | `JcefCardPayload.kt:21` | The request-card half of the outbound (Kotlin → JS) payloads: the permission cards the frontend renders, including the … |
+| `JcefCardPayload.permissionJson` | fun | `JcefCardPayload.kt:24` | One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). |
+| `JcefCardPayload.permissionsJson` | fun | `JcefCardPayload.kt:95` |  |
+| `JcefCardPayload.permissionsJson` | fun | `JcefCardPayload.kt:110` | Every card on screen, from EVERY conversation that can put one there, each tagged with its own. |
 | `JcefComposerOptions` | object | `JcefComposerOptions.kt:19` | One builder per composer pill — each is an independent `{ label, options[…] }` shape. |
 | `JcefComposerOptions.providerJson` | fun | `JcefComposerOptions.kt:22` | provider { id, label, options[{id,label,selected}] } |
 | `JcefComposerOptions.modelJson` | fun | `JcefComposerOptions.kt:46` | model { label, options[{value,label,selected}] } The list is autodetected from the binary's `initialize` catalog. |
@@ -58,8 +60,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefCostData` | object | `JcefCostData.kt:17` | The dashboard's two measured cards — what the context window holds, and what the session has spent. |
 | `JcefCostData.contextJson` | fun | `JcefCostData.kt:20` | `{ categories:[{name, tokens}], used, max, pct }` or null when no context usage has been polled yet. |
 | `JcefCostData.costJson` | fun | `JcefCostData.kt:45` | `{ usd, input, output, cacheWrite, cacheRead }` or null when no session cost has been polled yet. |
-| `JcefGitData` | object | `JcefGitData.kt:44` | The Git view's payload — one card of [JcefSessionData]'s document, under the `git` key. |
-| `JcefGitData.gitJson` | fun | `JcefGitData.kt:113` | The `git` value, or null when there is nothing collected to draw. |
+| `JcefGitData` | object | `JcefGitData.kt:46` | The Git view's payload — one card of [JcefSessionData]'s document, under the `git` key. |
+| `JcefGitData.gitJson` | fun | `JcefGitData.kt:123` | The `git` value, or null when there is nothing collected to draw. |
 | `PageRoute` | class | `JcefHost.kt:49` | How the assembled page reaches the browser, in the order the rungs are tried. |
 | `nextPageRoute` | fun | `JcefHost.kt:58` | The rung to try after [current] failed to bring the page up, or null when there is none left. |
 | `pageArrived` | fun | `JcefHost.kt:87` | Whether a finished load actually delivered the document we asked for — the question `onLoadEnd` alone does not answer, … |
@@ -70,31 +72,40 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefModelLabels.deriveModelLabel` | fun | `JcefModelLabels.kt:45` | Turns a model id like "claude-opus-4-8" into a friendly label like "Opus 4.8"; a last resort when the binary catalog … |
 | `JcefPlanData` | object | `JcefPlanData.kt:19` | The plan-mode plan, for the dashboard's Plan card. |
 | `JcefPlanData.planJson` | fun | `JcefPlanData.kt:21` |  |
-| `JcefSessionData` | object | `JcefSessionData.kt:51` | Serializes a [ClaudeSession] into the `cc.session` dashboard payload consumed by `app-session.js`. |
-| `JcefSessionData.sessionJson` | fun | `JcefSessionData.kt:80` | The dashboard payload. |
+| `JcefSessionData` | object | `JcefSessionData.kt:56` | Serializes a [ClaudeSession] into the `cc.session` dashboard payload consumed by `app-session.js`. |
+| `JcefSessionData.sessionJson` | fun | `JcefSessionData.kt:87` | The dashboard payload. |
+| `JcefSettingsMenu` | object | `JcefSettingsMenu.kt:42` | The composer's ⚙ menu: the settings worth changing without leaving the chat. |
+| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:59` | The menu for [session]'s chat. |
+| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:62` | The menu, in the order it is drawn. |
+| `JcefSettingsMenu.apply` | fun | `JcefSettingsMenu.kt:87` | Applies [key] to the settings document, or answers false when this build does not know it. |
+| `JcefSettingsMenu.applyToSession` | fun | `JcefSettingsMenu.kt:103` | Mirrors a model / effort / permission-mode row onto the running session, and does nothing for any other key. |
+| `JcefSettingsMenu.alwaysAllowTool` | fun | `JcefSettingsMenu.kt:132` | `always:Bash` → `Bash`; null for any other key, and for a name outside [ToolNaming.BUILTIN_TOOLS]. |
 | `JcefState` | object | `JcefState.kt:24` | Serializes a [ClaudeSession]'s composer-relevant runtime state into the JSON payloads the JCEF web layer's … |
-| `JcefState.stateJson` | fun | `JcefState.kt:71` | [openDiffs] is how many diff tabs the plugin has open right now … |
-| `JcefState.metaJson` | fun | `JcefState.kt:154` |  |
+| `JcefState.stateJson` | fun | `JcefState.kt:61` |  |
+| `JcefState.metaJson` | fun | `JcefState.kt:139` |  |
 | `JcefStatus` | object | `JcefStatus.kt:13` | The ONE state vocabulary the page colours by: `running` · `completed` · `failed` · `stopped`. |
 | `JcefStatus.of` | fun | `JcefStatus.kt:15` |  |
 | `JcefStatus.of` | fun | `JcefStatus.kt:28` | A background task has no lifecycle beyond "is it still listed": present means running. |
-| `JcefTabsData` | object | `JcefTabsData.kt:29` | The tab bar's payload: the chats, this chat's agent tree, and its background tasks. |
-| `JcefTabsData.tabsJson` | fun | `JcefTabsData.kt:50` | [windowMinutes] and [nowMillis] are the retention window and the instant to measure it from, resolved once by the … |
+| `JcefTabsData` | object | `JcefTabsData.kt:36` | The tab bar's payload: the chats, this chat's agent tree, and its background tasks. |
+| `JcefTabsData.tabsJson` | fun | `JcefTabsData.kt:51` | [windowMinutes] and [nowMillis] are the retention window and the instant to measure it from, resolved once by the … |
 | `JcefTheme` | object | `JcefTheme.kt:27` | Produces the flat CSS-variable theme map the JCEF web layer consumes. |
 | `JcefTheme.vars` | fun | `JcefTheme.kt:52` |  |
 | `JcefTranscriptPayload` | object | `JcefTranscriptPayload.kt:19` | The transcript half of the outbound (Kotlin → JS) payloads: one row, a coalesced batch of rows, an agent's … |
 | `JcefTranscriptPayload.entryJson` | fun | `JcefTranscriptPayload.kt:27` | One transcript row as the frontend's entry shape: `{id, order, speaker, text, meta?, toolUseId?, parent?, state, … |
-| `JcefTranscriptPayload.batchJson` | fun | `JcefTranscriptPayload.kt:56` | A batch of `(row, order)` for one `cc.batch([...])` frame (the JS upserts each by id). |
-| `JcefTranscriptPayload.agentBatchJson` | fun | `JcefTranscriptPayload.kt:70` | The same row shape, built from a **reconstructed** entry rather than a live one. |
-| `JcefTranscriptPayload.linksJson` | fun | `JcefTranscriptPayload.kt:127` | The answer to a `resolveLinks` request: `{ rowId, links:[{ token, path, line? |
+| `JcefTranscriptPayload.batchJson` | fun | `JcefTranscriptPayload.kt:59` | A batch of `(row, order)` for one `cc.batch([...])` frame (the JS upserts each by id). |
+| `JcefTranscriptPayload.agentBatchJson` | fun | `JcefTranscriptPayload.kt:73` | The same row shape, built from a **reconstructed** entry rather than a live one. |
+| `JcefTranscriptPayload.linksJson` | fun | `JcefTranscriptPayload.kt:131` | The answer to a `resolveLinks` request: `{ rowId, links:[{ token, path, line? |
+| `JcefTreeData` | object | `JcefTreeData.kt:43` | The two answers the composer's in-menu project browser waits for — one folder's contents, and what marking that folder … |
+| `JcefTreeData.childrenJson` | fun | `JcefTreeData.kt:53` | One folder's contents. |
+| `JcefTreeData.expansionJson` | fun | `JcefTreeData.kt:80` | What marking that folder drags in — the paths themselves, never a count. |
 | `JcefUsageData` | object | `JcefUsageData.kt:15` | The dashboard's plan-limits card. |
 | `JcefUsageData.usageJson` | fun | `JcefUsageData.kt:29` | `{ plan, windows:[{ key, label, pct, resetsAt, exhausted }], extra:{…} }`, or null when nothing is known. |
 | `JcefWorkloadData` | object | `JcefWorkloadData.kt:23` | What is RUNNING, for the dashboard: the agent tree, the background tasks, and the Workloads diagram that draws both … |
 | `JcefWorkloadData.visible` | fun | `JcefWorkloadData.kt:33` | What [session] shows under a window of [windowMinutes], as of [nowMillis]. |
 | `JcefWorkloadData.windowJson` | fun | `JcefWorkloadData.kt:73` | The retention window itself, so the view can offer it: `{ minutes, options:[{ minutes, label }] }`. |
-| `JcefWorkloadData.workloadsJson` | fun | `JcefWorkloadData.kt:106` | The agent tree for the Agents / Subagents windows: `[{ agentId, label, type, status, depth, parent, chain, running … |
-| `JcefWorkloadData.agentTreeJson` | fun | `JcefWorkloadData.kt:120` |  |
-| `JcefWorkloadData.backgroundTasksJson` | fun | `JcefWorkloadData.kt:175` | One row per live background task: `{ id, desc, type }`; empty array when none. |
+| `JcefWorkloadData.workloadsJson` | fun | `JcefWorkloadData.kt:111` | The agent tree for the Agents / Subagents windows: `[{ agentId, label, type, status, depth, parent, chain, running … |
+| `JcefWorkloadData.agentTreeJson` | fun | `JcefWorkloadData.kt:125` |  |
+| `JcefWorkloadData.backgroundTasksJson` | fun | `JcefWorkloadData.kt:180` | One row per live background task: `{ id, desc, type }`; empty array when none. |
 | `LoopbackPageServer` | class | `LoopbackPageServer.kt:42` | Serves the one inlined chat document over real loopback HTTP, for the case where a CEF scheme handler cannot reach the … |
 | `RemoteDevNotice` | object | `RemoteDevNotice.kt:21` | The page shown in place of the chat when the client cannot reach the loopback port the IDE backend serves it on. |
 | `RemoteDevNotice.sshCommand` | fun | `RemoteDevNotice.kt:24` | The command the user runs on their own machine to open the forward, for the given backend [port]. |

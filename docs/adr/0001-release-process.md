@@ -110,6 +110,25 @@ ends, not an oversight.
 > objection is not commit hygiene but the release trigger, since a release-PR bot and "a merge to `main`
 > publishes what `build.gradle.kts` declares" are two different sources of truth for the version.
 
+**A defect that comes with hand-writing it, recorded rather than fixed here: the release date is stamped by
+hand, so it can lie.** *Keep a Changelog* puts a date on every `## [x.y.z]` heading, and that heading is
+published **verbatim** as the GitHub Release body (§5) — so the date a user reads is whatever was typed while
+the section was being written, which is days or weeks before the merge that actually releases it. Nothing
+re-checks it and nothing can: the date sits in the same commit as the notes, while the release is triggered
+by a merge whose timing is not known when they are written. `RELEASE_NOTES.md` carries the same date and the
+same defect, in the same commit.
+
+**The exit is to stop storing it and derive it.** `release.yml` already computes the version from
+`build.gradle.kts` when it cuts the tag, and that job is the only actor that knows the real release date — so
+the heading keeps the version and the workflow stamps the date into the Release body it assembles. That is a
+change to the release workflow and is deliberately not made from a feature branch; it lands with whichever
+comes first, adopting `release-please` (which dates the heading itself, making this moot) or the next change
+to `release.yml` for any other reason.
+
+**Until then the rule is: a date in a `## [x.y.z]` heading is the date the section was written, not the date
+it shipped.** Re-stamp it in the release PR if the two have drifted, and do not treat it as evidence of when
+anything was published — the tag is.
+
 ### 5. CI/CD on GitHub Actions, with publication gated three ways
 
 The pipeline lives in `.github/workflows/` and the branch protections in `.github/rulesets/` (applied with

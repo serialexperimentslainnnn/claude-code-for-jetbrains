@@ -50,26 +50,30 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ForeignTerritory` | object | `ForeignTerritory.kt:16` | Rule family 2 of [SensitiveGuard] — **foreign territory**: another user's home (`/home/<not-me>`, `/Users/<not-me>`, … |
 | `ForeignTerritory.foreignHit` | fun | `ForeignTerritory.kt:52` |  |
 | `ForeignTerritory.foreignHome` | fun | `ForeignTerritory.kt:78` | Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). |
-| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:113` | `\\server\share` / `//server/share` — remote by construction, on any OS. |
+| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:126` | `\\server\share` / `//server/share` — remote by construction, on any OS. |
 | `GuardPaths` | object | `GuardPaths.kt:16` | The **path phase** of [SensitiveGuard]: one canonical textual form for every candidate, containment against a root, … |
-| `GuardPaths.normalize` | fun | `GuardPaths.kt:21` | One canonical form: `\`→`/`, env/`~` expanded, `//`→`/` (UNC's leading `//` kept), trailing `/` dropped. |
-| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:29` |  |
-| `GuardPaths.under` | fun | `GuardPaths.kt:59` | Containment, on normalized forms: is [path] the root itself or something under it? |
-| `GuardPaths.fold` | fun | `GuardPaths.kt:126` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
-| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:196` | Each candidate, plus — when a resolver is configured — its canonical real path. |
+| `GuardPaths.normalize` | fun | `GuardPaths.kt:51` | One canonical form — and the UNC `//` prefix survives it only when the caller actually wrote a double separator. |
+| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:67` |  |
+| `GuardPaths.under` | fun | `GuardPaths.kt:97` | Containment, on normalized forms: is [path] the root itself or something under it? |
+| `GuardPaths.fold` | fun | `GuardPaths.kt:164` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
+| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:234` | Each candidate, plus — when a resolver is configured — its canonical real path. |
 | `PendingPermission` | class | `PermissionBroker.kt:17` | A tool request awaiting the user's decision. |
 | `ElicitationCard` | class | `PermissionBroker.kt:55` | The data for an MCP elicitation card (carried on a [PendingPermission]). |
 | `PermissionBroker` | class | `PermissionBroker.kt:71` | Decides `can_use_tool` requests. |
-| `SensitiveGuard` | object | `SensitiveGuard.kt:84` | A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for, or … |
-| `SensitiveGuard.AGENT_TOOLS` | val | `SensitiveGuard.kt:109` | The agent's OWN tools — the allowlist of trusted callers. |
-| `SensitiveGuard.isTrustedCaller` | fun | `SensitiveGuard.kt:183` | True only for the agent's OWN tools. |
-| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:202` | [Verdict] plus its explanation, in a single classification pass. |
-| `SensitiveGuard.verdict` | fun | `SensitiveGuard.kt:208` | The verdict for a tool call. |
-| `SensitiveGuard.reason` | fun | `SensitiveGuard.kt:243` | The one-line reason a call tripped the guard (for the card / transcript), or null. |
+| `SensitiveGuard` | object | `SensitiveGuard.kt:94` | A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for, or … |
+| `SensitiveGuard.AGENT_TOOLS` | val | `SensitiveGuard.kt:119` | The agent's OWN tools — the allowlist of trusted callers. |
+| `SensitiveGuard.isTrustedCaller` | fun | `SensitiveGuard.kt:199` | True only for the agent's OWN tools. |
+| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:218` | [Verdict] plus its explanation, in a single classification pass. |
+| `SensitiveGuard.verdict` | fun | `SensitiveGuard.kt:224` | The verdict for a tool call. |
+| `SensitiveGuard.reason` | fun | `SensitiveGuard.kt:261` | The one-line reason a call tripped the guard (for the card / transcript), or null. |
+| `TempDirs` | object | `TempDirs.kt:90` | Rule family 4 of [SensitiveGuard] — **the system temporary directory**: `/tmp` and the other spellings of the same … |
+| `TempDirs.tempHit` | fun | `TempDirs.kt:117` | The first candidate that names the temporary directory, or null when none does. |
+| `TempDirs.isTemp` | fun | `TempDirs.kt:126` | Is [path] the system temporary directory, or something inside it? |
 | `ToolInputScanner` | object | `ToolInputScanner.kt:26` | The **input surface** every rule of [SensitiveGuard] is matched against: the paths a tool call names, and the commands … |
-| `ToolInputScanner.pathCandidates` | fun | `ToolInputScanner.kt:86` |  |
-| `ToolInputScanner.commandText` | fun | `ToolInputScanner.kt:153` | The raw command/script string [input] carries under a command-shaped key ([COMMAND_KEY]: `command`, `cmd`, `script`, … |
-| `ToolInputScanner.commandCandidates` | fun | `ToolInputScanner.kt:155` |  |
+| `ToolInputScanner.messageText` | fun | `ToolInputScanner.kt:84` | The text [input] sends, for the transcript to show WITHOUT the card having to be expanded. |
+| `ToolInputScanner.pathCandidates` | fun | `ToolInputScanner.kt:122` |  |
+| `ToolInputScanner.commandText` | fun | `ToolInputScanner.kt:189` | The raw command/script string [input] carries under a command-shaped key ([COMMAND_KEY]: `command`, `cmd`, `script`, … |
+| `ToolInputScanner.commandCandidates` | fun | `ToolInputScanner.kt:191` |  |
 
 <!-- MAP:GENERATED END -->
 
@@ -110,6 +114,25 @@ indexed, and neither are extensions: they are called on their receiver, not on t
   outright. A user home is an absolute location, and `GuardPaths.expandWithResolved` anchors a relative
   candidate at the project root before this sees it, so `../../<someone>/…` is still caught without a bare
   `home/` segment ever meaning anything on its own.
+- **A third route into the same misread was closed in `GuardPaths.normalize`, and it is the one to read before
+  hardening a recogniser again.** The UNC prefix was decided AFTER `\` had been translated to `/`, so a slash next
+  to a backslash was indistinguishable from `\\host\share` — and that is the opening of every regex literal, since
+  `/` delimits it and its first atom is usually an escape. `/\btype\s*:\s*/` therefore reached the rule as
+  `//btype/s*:/s*`: a hostname-shaped host and a non-empty share, i.e. straight through both earlier hardenings,
+  hard-denied with no override on a search the user asked for. The prefix is now taken from the separators the
+  caller wrote, which is what Microsoft's definition says it is ("A UNC name of any format, which always start with
+  two backslash characters"). Two consequences worth keeping: the test belongs to the **canonicalisation**, not to
+  a recogniser, because it has to run on the env-expanded form (a Windows home can itself be a share) and before
+  the translation destroys the evidence; and it withdraws a prefix, never a candidate — a dropped candidate is an
+  ALLOW from every rule at once, which is the same trap as the length cap below. **What it deliberately does not
+  reach**: a regex whose escapes are doubled for a shell (`\\btype\\s*`) is character-for-character a host and a
+  share, and the raw form of a command has to keep reaching the rule because that is the only form a `cmd.exe` UNC
+  argument survives in. Closing that with a legal-name test on the share is the obvious next move and is **wrong**:
+  the two discriminating characters in Microsoft's reserved set are `*`, an ordinary glob against a real share, and
+  `:`, which opens an NTFS alternate data stream — so the test would relax a genuine DENY and hand back a known
+  Windows path-filter evasion, to buy back one spelling. A protocol-relative URL (`//cdn.example.com/lib.js`) is
+  the same category and is left alone for the same reason; what keeps it out of the common route is provenance,
+  not shape — an HTML or JS leaf reaches the guard under a content key and is never offered as a location.
 - **`ToolInputScanner` has two ceilings, and the ORDER between them is the security property.** `MAX_PATH_LEN`
   is the line between a filename and a file's contents; `MAX_FOLD_LEN` is the length past which a spelling
   names nothing an operating system will open. They cannot be one number, because folding is what decides

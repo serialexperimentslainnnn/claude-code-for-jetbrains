@@ -76,7 +76,7 @@ to a collaborator. Adding behaviour here means adding it to the right collaborat
 |---|---|
 | `SessionStore.kt` | Paths into the binary's own files, behind a UUID-shaped traversal guard. **Reads only; deletes nothing.** |
 | `SessionTranscriptReader.kt` | JSONL → transcript entries. **The only JSONL parser in the repository.** |
-| `SessionTitleReader.kt` | What a chat is called, in one place so the live title and the restored tabs cannot disagree. |
+| `SessionTitleReader.kt` | What a chat is called, in one place so the live title and the restored tabs cannot disagree — **and whether anyone has named it yet** (`SessionTitle.authored`), which is what decides if a generated title is still owed. |
 | `SessionHistory.kt` · `LegacySessionHistory.kt` · `LegacyModels.kt` | The ordered open-tab ids, and the legacy shapes still adopted. |
 
 **Diffs, rollback and everything else**
@@ -132,7 +132,9 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `Asks.WORKSPACE_DIFF` | val | `ControlAsks.kt:196` | Everything this session changed on disk, in one round-trip — the question the per-edit diffs cannot answer, and the … |
 | `Asks.PLAN` | val | `ControlAsks.kt:210` | The session's plan-mode plan, on demand — in the transcript the plan is one card you scroll past. |
 | `Asks.BINARY_VERSION` | val | `ControlAsks.kt:217` | The responder's CLI binary version (diagnostics dialog). |
-| `Asks.rewind` | fun | `ControlAsks.kt:226` | Rewind tracked files to a turn anchor. |
+| `Asks.generateTitle` | fun | `ControlAsks.kt:237` | Asks the binary to NAME this conversation, and to keep the name. |
+| `Asks.sideQuestion` | fun | `ControlAsks.kt:265` | `/btw` — a question answered alongside the conversation, without becoming a turn in it. |
+| `Asks.rewind` | fun | `ControlAsks.kt:280` | Rewind tracked files to a turn anchor. |
 | `DiffLifecycleManager` | class | `DiffLifecycleManager.kt:32` | Owns the full diff lifecycle of one [ClaudeSession]: capturing the pre-write snapshot of a reviewable … |
 | `HookActivityNarrator` | class | `HookActivityNarrator.kt:17` | Turns the binary's native hook telemetry (system/hook_started → hook_progress → hook_response) into ONE evolving … |
 | `HookBroker` | class | `HookBroker.kt:26` | Host-side decision engine for **hook callbacks** the `claude` binary invokes over the control channel. |
@@ -191,17 +193,21 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SessionStore.sessionDir` | fun | `SessionStore.kt:74` | The binary's per-session sidecar directory, `<sessionId>/` next to `<sessionId>.jsonl`. |
 | `SessionStore.subagentsDir` | fun | `SessionStore.kt:87` | `<sessionId>/subagents/`, the directory holding one transcript + metadata pair per subagent. |
 | `SessionStore.listFiles` | fun | `SessionStore.kt:94` | Session transcript files for the project at [basePath], newest-first. |
-| `SessionTitleReader` | object | `SessionTitleReader.kt:15` | Reads the human-readable session title the `claude` binary generates (the one shown by `--resume`) from its sidecar … |
-| `SessionTitleReader.readTitle` | fun | `SessionTitleReader.kt:27` | Returns the binary's title for [sessionId], or null if no sidecar / no title line is found. |
-| `SessionTitleReader.pickTitle` | fun | `SessionTitleReader.kt:42` | Picks the session title from raw JSONL lines, in order of authority: the last non-blank `customTitle` (the user's own … |
+| `SessionTitle` | class | `SessionTitleReader.kt:15` | What a session's own file says the conversation is called, and whether anyone actually named it. |
+| `SessionTitleReader` | object | `SessionTitleReader.kt:37` | Reads the human-readable session title the `claude` binary keeps (the one shown by `--resume`) from its sidecar … |
+| `SessionTitleReader.read` | fun | `SessionTitleReader.kt:49` | Returns the binary's title for [sessionId], or null when there is no sidecar and nothing to name it. |
+| `SessionTitleReader.readTitle` | fun | `SessionTitleReader.kt:53` | Just the display text of [read] — for the callers that only paint it. |
+| `SessionTitleReader.pick` | fun | `SessionTitleReader.kt:81` | Picks the session title from raw JSONL lines, in order of authority: the last non-blank `customTitle` (the user's own … |
+| `SessionTitleReader.pickTitle` | fun | `SessionTitleReader.kt:130` | Just the display text of [pick] — kept because most callers only paint it. |
+| `SessionTitleReader.asTitle` | fun | `SessionTitleReader.kt:139` | Any text as a tab-sized title: its first non-blank line, cut on a word boundary so it never ends mid-syllable. |
 | `EntryDTO` | class | `SessionTranscriptReader.kt:21` | A flat transcript entry, decoded from the binary's own JSONL. |
-| `SessionRef` | class | `SessionTranscriptReader.kt:57` | Lightweight handle to a past session: its id, the binary-issued title, the file mtime (newest-first sort key), and … |
-| `SessionTranscriptReader` | object | `SessionTranscriptReader.kt:72` | Read-only reconstruction of a past conversation from the `claude` binary's transcript (the single source of truth — … |
-| `SessionTranscriptReader.DEFAULT_RESTORE_CAP` | val | `SessionTranscriptReader.kt:85` | Conservative default cap for the restore path: reconstruct only the last this-many transcript entries of a very large … |
-| `SessionTranscriptReader.readEntries` | fun | `SessionTranscriptReader.kt:92` | Decoded transcript for [sessionId], or empty if the sidecar is absent/unreadable. |
-| `SessionTranscriptReader.parseEntries` | fun | `SessionTranscriptReader.kt:104` | Maps raw JSONL [lines] to the plugin's transcript model. |
-| `SessionTranscriptReader.listSessions` | fun | `SessionTranscriptReader.kt:293` | Past sessions for [project], newest-first, capped at [MAX_LISTED_SESSIONS]. |
-| `SessionTranscriptReader.parseMetadata` | fun | `SessionTranscriptReader.kt:313` | Scans raw JSONL [lines] for the first user prompt, the git branch and the earliest timestamp. |
+| `SessionRef` | class | `SessionTranscriptReader.kt:62` | Lightweight handle to a past session: its id, the binary-issued title, the file mtime (newest-first sort key), and … |
+| `SessionTranscriptReader` | object | `SessionTranscriptReader.kt:77` | Read-only reconstruction of a past conversation from the `claude` binary's transcript (the single source of truth — … |
+| `SessionTranscriptReader.DEFAULT_RESTORE_CAP` | val | `SessionTranscriptReader.kt:90` | Conservative default cap for the restore path: reconstruct only the last this-many transcript entries of a very large … |
+| `SessionTranscriptReader.readEntries` | fun | `SessionTranscriptReader.kt:97` | Decoded transcript for [sessionId], or empty if the sidecar is absent/unreadable. |
+| `SessionTranscriptReader.parseEntries` | fun | `SessionTranscriptReader.kt:109` | Maps raw JSONL [lines] to the plugin's transcript model. |
+| `SessionTranscriptReader.listSessions` | fun | `SessionTranscriptReader.kt:299` | Past sessions for [project], newest-first, capped at [MAX_LISTED_SESSIONS]. |
+| `SessionTranscriptReader.parseMetadata` | fun | `SessionTranscriptReader.kt:319` | Scans raw JSONL [lines] for the first user prompt, the git branch and the earliest timestamp. |
 | `StatusLineFormatter` | object | `StatusLineFormatter.kt:7` | Pure formatting for the composer status line. |
 | `StatusLineFormatter.thinkingSuffix` | fun | `StatusLineFormatter.kt:20` | A compact suffix for the live reasoning-token estimate (system/thinking_tokens), or "" when there's nothing to show. |
 | `SubagentNotice` | object | `SubagentNotice.kt:14` | The one line a finished subagent gets in the MAIN transcript. |
@@ -222,7 +228,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `Speaker` | class | `TranscriptModel.kt:7` | Who produced a transcript entry; drives styling in the chat panel. |
 | `ToolState` | class | `TranscriptModel.kt:14` | Lifecycle of a tool call, reflected on its box: [LOADING] just dispatched (light blue), [RUNNING] actively executing — … |
 | `TranscriptEntry` | class | `TranscriptModel.kt:17` | One renderable line of the conversation. |
-| `TranscriptModel` | class | `TranscriptModel.kt:85` | Observable list of [TranscriptEntry]. |
+| `TranscriptModel` | class | `TranscriptModel.kt:92` | Observable list of [TranscriptEntry]. |
 | `TranscriptReconciler` | class | `TranscriptReconciler.kt:33` | Streaming reconciliation for a single session's top-level assistant output. |
 | `WorkloadWindow` | object | `WorkloadWindow.kt:11` | The one place the "Show workloads completed in the last X minutes" visibility rule lives, so the tab bar and the … |
 | `WorkloadWindow.ALL` | val | `WorkloadWindow.kt:14` | The "All" sentinel for [WINDOW_MINUTES]: no age ever hides a workload. |

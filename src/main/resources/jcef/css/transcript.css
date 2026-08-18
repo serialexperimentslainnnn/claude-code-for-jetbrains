@@ -364,8 +364,9 @@ details.fold .fold-body p:first-child {
 }
 /* NB the Agents / Subagents / Background-tasks WINDOWS are gone, and their rules with them: `.agent-row`,
    `.agent-row-head`, `.agent-status[.running|.completed|.failed]`, `.agent-chain`, `.subagent-row` and
-   `.task-row`. Those three list views were replaced by the single Workloads diagram (`.dg-*`) and by the tab
-   bar's own menu (`.tab-menu-*`), so nothing has emitted these class names since. Deleted rather than kept
+   `.task-row`. What answers those questions now is the Workloads diagram (`.dg-*`, dashboard.css) for the
+   whole picture, and the tab bar's second row (`.subtab-capsule`, tabs.css) for the open chat's own agents,
+   subagents and background tasks — so nothing has emitted these class names since. Deleted rather than kept
    "just in case": a rule nobody can reach is one more thing to read and to keep consistent with a theme. */
 
 /* An Agent/Task card is a link to that agent's tab, not an expander: its work lives in its own transcript

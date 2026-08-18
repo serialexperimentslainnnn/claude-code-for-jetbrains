@@ -4,16 +4,40 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.5.0] — 2026-08-14
+## [5.5.0] — 2026-08-18
 
 **This release needs IntelliJ Platform 2025.3.1 (build 253.29346.138) or newer.** On 2026.2 it is the fix:
 5.1.1 could not open a chat there at all. On 2025.1, 2025.2 or the first 2025.3, stay on 5.1.1 — it keeps
 working — or update the IDE.
 
 ### Added
-- **A tab per agent, with its own transcript**, reachable from a bar under the chats that keeps the whole
-  tree — agents, their agents, background tasks — one hover away. Closing a tab hides a view and destroys
-  nothing, and any subtab can be pinned as a tab of its own.
+- **A tab per agent, with its own transcript.** A second row under the chats lists everything the open chat
+  started — agents, the agents they started, background tasks — all of it at once rather than behind a menu,
+  and scrollable the same way the chats are. Opening one swaps what the conversation area shows; closing it
+  hides a view and destroys nothing, and the card that started the agent opens it again.
+- **The chat tabs are all one width**, so the row reads as a strip rather than as an accordion of long and
+  short titles, and nothing reflows when you select a tab. A long name ellipsises with the whole of it in the
+  tooltip. Selecting a chat centres it, which is what makes ordinary use need no scrolling at all.
+- **A *Chat settings* menu on the composer** — the wrench beside the prompt box — holding the settings worth
+  changing without leaving the chat, in ten collapsible groups: model, effort, permission mode, the chat
+  toggles, the six rules of the security lock, setting sources, allowed / disallowed / always-allowed tools,
+  and the two MCP switches. Model, effort and mode act on the chat you are in — they are the same controls as
+  the pills beside them, so the two can never disagree — and anything that can only take effect the next time
+  a chat starts says so over its group instead of quietly doing nothing. Everything else is one row away,
+  behind *Open Plugin Settings*.
+- **"Always allow" can be granted in advance** from that menu, instead of only by answering a permission card
+  for that tool first. What it cannot do is widen the deterministic lock: a credential file, a dangerous
+  command, the system temp folder and anything outside your project still stop and ask, for an always-allowed
+  tool exactly as for any other.
+- **The composer's two rows of buttons collect what does not fit behind a ⋮**, instead of running off the edge
+  of a narrow tool window where nothing could reach them. The send button is never collected and never
+  shrinks to make room.
+- **Attach ▸ Files… and Directory… browse your project inside the menu**, as a tree that unfolds in place,
+  rather than opening a separate file dialog over the IDE. Pick as many as you like and press *Done*; marking
+  a folder marks everything under it and tells you how many that is before you commit to it. It offers what
+  the IDE considers yours — your `.gitignore` and the project's excluded folders are honoured, so `build/`
+  and `node_modules/` are simply not there — and it says so out loud when a folder is too large to offer
+  whole, rather than quietly attaching part of it.
 - **The chat's own buttons are in the chat.** New chat, Stop, Commands, Git, Close all diffs and Log out sit
   in a row above the prompt box, where they are used, instead of in the tool window's title bar — which now
   holds only the IDE's own controls. Stop is greyed unless a turn is running, and Close all diffs unless
@@ -27,8 +51,10 @@ working — or update the IDE.
   minutes through four hours, or All — while anything still running is always shown.
 - **Background tasks keep their tab and their output after they end**, tailed live while they run and
   rebuilt after a restart. Until now both vanished at exactly the moment the output was worth reading.
-- **Git, without the plugin ever running `git`.** A **Git** button in the tool window's title bar opens a
-  chat tab of its own, and ⚙ offers **Initialize Git Repository**, **Commit Changes with Claude** and
+- **Git, without the plugin ever running `git`.** A **Git** button in the chat's own button row opens the
+  repository view, which holds a conversation of its own about the repository — so none of this plumbing
+  lands in the chat you are working in, and none of it makes you leave it either. ⚙ also offers
+  **Initialize Git Repository**, **Commit Changes with Claude** and
   **Revert This File with Claude** — each one asks Claude to do it, so the command is in front of you in an
   approval card before it runs and you can answer back ("squash those two", "not that file") instead of
   getting one shot at a button. On a project that is not a repository yet, opening it offers to create one.
@@ -44,7 +70,18 @@ working — or update the IDE.
   the history of the file you have open — all of it handing off to the IDE's own Git Log. It only ever
   reads, and on an IDE without the Git plugin, or outside a working copy, the entries are simply absent.
 - **A Git view in the session dashboard**, so the same repository picture and the same actions are one click
-  from the conversation: the branch, what is still uncommitted file by file, and the recent commits.
+  from the conversation: the branch, what is still uncommitted file by file, and the history as **one graph
+  with branch lanes** — a commit list and a separate branch map asked you to hold two pictures of the same
+  history at once. Every line and every fork in it comes from real parents and real refs; nothing is
+  inferred, and a line that continues past the oldest commit shown says so rather than ending in mid-air. It
+  reads every branch, remote branch and tag, not only the one you have checked out, because a fork you can
+  only see one side of cannot be drawn. Colour carries nothing on its own: a branch is a text tag on its row
+  and a merge says the word.
+- **GitHub and GitLab answer for the branch you are on**: the pull or merge requests open from it, and its
+  most recent CI run. Read-only, and opt-in — it does nothing until you paste an access token under Settings ▸
+  Claude Code ▸ **Git forge**, and until then there is no card and no prompt to configure one. The token is stored in
+  your OS keychain and kept **per server**, so a company GitLab and gitlab.com are two separate credentials
+  and one can never be sent to the other. Clearing the field revokes it.
 - **⚙ ▸ Review This Session's Changes…** — everything the agent has touched this session, as native diff
   tabs, against one base. When the original side cannot be rebuilt exactly the file still opens and that
   pane says why — new file, binary, too large or restricted, or changed on disk since — because a fabricated
@@ -55,9 +92,11 @@ working — or update the IDE.
 - **The transcript keeps a bounded number of rows in memory**, dropping the oldest and saying so in a row at
   the top. **Nothing is lost**: the whole conversation is on disk, and "Open Previous Session…" reads it
   back in full.
-- **A chat is named after what you asked it**, instead of being "Chat 3" for its whole life: the first thing
-  you typed, one line. A name you set yourself still wins, and the name is the same in the live tab, in the
-  tabs restored at startup and in the list behind "Open Previous Session…".
+- **A chat names itself.** At the end of the first turn Claude is asked to title the conversation, and the
+  title is kept with the conversation — so it survives a restart and is never asked for twice. Until it
+  arrives the tab shows the first thing you typed, one line, rather than "Chat 3" for the rest of its life. A
+  name you set yourself always wins, whenever you set it. The same name appears in the live tab, in the tabs
+  restored at startup and in the list behind "Open Previous Session…".
 - **The agent is told what it is running inside** — that the transcript is a real interface and not a
   terminal, that its edits become a diff you review and its paths become links you click, and that a
   deterministic guard may refuse a call outright. It is fixed text: nothing about your machine, your
@@ -79,11 +118,18 @@ working — or update the IDE.
   from it no longer drops you at the top of a long chat.
 - **The waiting screens arrive in reading order**, and behind a short grace period, so a session that starts
   quickly draws nothing at all.
+- **The lines above the prompt box line up.** Status, model and working directory, your account, the plan
+  bars and their reset times are five rows on one grid of four equal columns at one size, so the figures sit
+  under each other instead of drifting from row to row. When the panel is too narrow for four, **Show more**
+  folds away the last two columns of all five rows at once — a bar and its own reset time can never end up
+  separated — and your organisation is left out when it only repeats your email.
+- **The Workloads diagram's cards are half the width they were**, so more of a deep tree fits in a tool
+  window without scrolling sideways.
 
 ### Removed
 - **Diff History is gone.** The per-edit **Restore** you actually use was never in it — it is on the edit's
   own card in the transcript, and it stays there. For everything a whole session changed, use ⚙ ▸ **Review
-  This Session's Changes…**. The slot it held in the title bar is now the **Git** button.
+  This Session's Changes…**. The composer button that opened it is now the **Git** one.
 - **"Roll back all changes" is gone with it, and is not coming back.** Without Git it also reverts what *you*
   typed between Claude's edits, with no way to tell the two apart; with Git, Local Changes does the same job
   better and lets you undo the undo.
@@ -96,11 +142,12 @@ working — or update the IDE.
   restoring one, so it settles whether or not the binary announces it; and a status this build does not
   recognise is shown as a failure rather than as work still in progress, because a red row is wrong loudly
   and a spinning one is wrong in silence.
-- **"Commit with Claude" wrote its whole turn into the conversation you were in** whenever the Git tab was
-  not already open — which was most of the time, since nothing opened it on its own. It always goes to the
-  Git chat now, which is created if it does not exist. Opening it that way no longer drags you over to it
-  either: the tab appears and badges itself when its turn wants you, and pressing the **Git** button is
-  still what takes you there.
+- **"Commit with Claude" wrote its whole turn into the conversation you were in** whenever the Git
+  conversation was not already open — which was most of the time, since nothing opened it on its own. It
+  always goes to the Git conversation now, which is started the first time you look at the Git view and never
+  before: it is a second `claude` process with its own cost, so nobody pays for it who does not use it. Its
+  answers and its approval cards appear in that view, where the button was, rather than in a tab you would
+  have to go and find.
 - **The Git view kept naming the branch you had left.** It now follows the IDE's own Git plugin, so a
   checkout made anywhere — the IDE, this plugin, a terminal outside it — updates the view.
 - **⚙ ▸ Git Operations did nothing.** The entries are the IDE's own actions and were being invoked without
@@ -131,8 +178,21 @@ working — or update the IDE.
   then disappeared entirely whenever the chat list arrived empty. They are a row of their own directly above
   the prompt box now, in the same shape as the model and mode pills, so they cover nothing and are always
   there.
+- **`/btw` never showed you an answer.** A side question is answered alongside the conversation by a worker of
+  its own, and the transcript deliberately ignores anything that is not the main run — that is the same filter
+  that keeps a subagent's output from interleaving with your chat — so the reply was dropped every time and
+  the question sat there unanswered. It is now asked over the channel that hands the answer straight back, and
+  it appears as a note under your question rather than as a turn. If the binary declines or does not answer,
+  the note says so instead of leaving nothing.
+- **Opening a new chat looked like the plugin reloading.** The tab was shown the instant it was created, which
+  meant watching an empty panel assemble the whole interface in front of you. The tab still appears
+  immediately; only the switch to it waits for its page to be ready, and it waits no more than a few seconds
+  so the button can never do nothing.
+- **A button pressed while your chats were being restored did nothing at all** — *New chat* during startup,
+  and the replacement chat you are owed when you close the last one. Nothing was wired yet, and nothing said
+  so.
 - **Hovering a tab showed the agents of the chat you were in** rather than the agents of the tab under the
-  pointer.
+  pointer. The whole row is now visible for the chat you have open, so there is nothing to hover for.
 - **A restored chat showed the agent's own bookkeeping as things you had said** — task notifications, the
   "Caveat: the messages below were generated…" preamble, a `/compact` you ran. They are shown for what they
   are now, and that also stops one of them becoming the chat's title.
@@ -145,8 +205,10 @@ working — or update the IDE.
   missing identity raises the sign-in card. Your message is never re-sent for you, so nothing runs twice.
 - **The same finished task read green in one view and grey in another.** Running, completed, failed and
   stopped mean one thing everywhere now.
-- **A chat with an agent pinned as its own tab was drawn twice in the Workloads diagram**, along with
-  everything under it.
+- **Closing an agent's tab could kill the chat that started it** — the conversation was left on screen over a
+  process that had already been shut down, and it dropped out of the chats restored at the next startup. An
+  agent is a view of its chat, never a second chat, so there is no longer any arrangement in which two tabs
+  share one conversation; the same defect was also what drew a chat twice in the Workloads diagram.
 
 ### Internal
 
@@ -172,6 +234,16 @@ Repository and build only — none of it changes the plugin you install.
   declarations, which only their own file can reach and which the compiler does not report; and one for a
   page module or stylesheet that exists on disk and is never loaded, which is served to nobody while its own
   tests pass.
+- A gate over the tool window's wiring, for a class of defect that leaves no trace: a button is pressed, a
+  nullable lookup resolves to nothing, and there is no error anywhere. It also pins that exactly one place in
+  the code can build a chat panel, which is what makes "one tab per conversation" a property of the code
+  rather than of everyone remembering it.
+- The one place this interface knowingly falls short of WCAG 2.2 AA is written down as a decision rather than
+  left as an oversight: the close on the agent row is 20×20 where the criterion asks for 24×24, because the
+  row is 21 pixels tall and a larger control would make the conversation shift every time you opened an
+  agent. On the chats' row, where there is space, it is the full size. It is scoped to that one control and
+  watched by a test in both directions — one that fails if it shrinks further, and one that fails if the
+  reason for it goes away and nobody notices it could be retired.
 
 ## [5.1.1] — 2026-08-10
 

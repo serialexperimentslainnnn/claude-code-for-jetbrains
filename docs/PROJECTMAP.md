@@ -15,7 +15,7 @@ Three kinds live side by side and they are not interchangeable:
 |---|---|---|
 | **Procedure** | `RELEASE_PROCEDURE.md` · `RELEASE_CHECKLIST.md` · `BRANCHING.md` · `CI_SETUP.md` · `UI_TESTING.md` · `DRIFT_DETECTION.md` | What to do, in order, when doing a thing. |
 | **Reference** | `BINARY_COMPAT.md` · `TELEMETRY.md` · `FAQ.md` · `TROUBLESHOOTING.md` | What is true, for someone who needs to know it. |
-| **Decisions** | `adr/0001-release-process.md` · `adr/0002-threat-model.md` · `adr/0003-i18n-deferred.md` (index: `adr/README.md`) | Why a thing is the way it is, dated and immutable. |
+| **Decisions** | `adr/0001-release-process.md` · `adr/0002-threat-model.md` · `adr/0003-i18n-deferred.md` · `adr/0004-target-size-exception.md` (index: `adr/README.md`) | Why a thing is the way it is, dated and immutable. |
 
 `ci-signing-key.asc` is the public half of the CI signing key. It is a public key and belongs in the
 repository; nothing secret does.
@@ -41,6 +41,7 @@ repository; nothing secret does.
 | `adr/0001-release-process.md` | ADR 0001 — Release process: branching, signing and tag immutability |
 | `adr/0002-threat-model.md` | ADR 0002 — Threat model: what the plugin defends against, and what it does not |
 | `adr/0003-i18n-deferred.md` | ADR 0003 — Internationalisation is deferred, deliberately |
+| `adr/0004-target-size-exception.md` | ADR 0004 — One declared shortfall against WCAG 2.2 SC 2.5.8: the subtab row's close |
 | `adr/README.md` | Architecture Decision Records |
 
 <!-- MAP:GENERATED END -->

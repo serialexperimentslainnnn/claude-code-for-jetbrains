@@ -5,8 +5,9 @@
 
 ## What lives here
 
-What the user hands the agent from the IDE: the open file, the selection, the diagnostics, a picked file, a
-pasted image. This is the IDE-intelligence side of the composer's `@`-mentions and Attach menu.
+What the user hands the agent from the IDE: the open file, the selection, the diagnostics, a file picked out of
+the project tree, a pasted image. This is the IDE-intelligence side of the composer's `@`-mentions and Attach
+menu.
 
 The package is split so that **the parts that can be tested are pure and the impure part is only the process
 spawn**: `ImageAttachments` decides bytes → data URL and the size and type rules, `ClipboardCli` decides the
@@ -17,7 +18,8 @@ argv and the preferred clipboard type, and neither of them runs anything.
 | File | What it decides |
 |---|---|
 | `EditorContextProvider.kt` | The IDE facts: current file, selection, diagnostics, clipboard text. |
-| `FilePickerHelper.kt` | The pickers and the recent-files list behind the Attach menu. |
+| `FilePickerHelper.kt` | Project-relative labels, the recent-files list and the editor plumbing behind the Attach menu. |
+| `ProjectTree.kt` | Browsing the project inside the Attach menu: a folder's children, and what marking it drags in. |
 | `Attachment.kt` | What an attachment is once it has been accepted. |
 | `ImageAttachments.kt` | Pure: bytes → data URL, and the size and type rules that decide what is accepted. |
 | `ClipboardCli.kt` | Pure: the `wl-paste`/`xclip` argv and which offered type is preferred. |
@@ -42,26 +44,24 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ClipboardCli.textType` | fun | `ClipboardCli.kt:112` | The clipboard's preferred text target name, or null when no `text/…` is offered (cheap presence check). |
 | `ClipboardCli.preferredTextType` | fun | `ClipboardCli.kt:129` | Choose the best text target from a tool's advertised types/TARGETS, or null when none is textual. |
 | `ClipboardCli.installHint` | fun | `ClipboardCli.kt:143` | A best-effort `install` command for the detected distro family (from /etc/os-release). |
-| `EditorContextProvider` | object | `EditorContextProvider.kt:17` | The composer's context sources: the current editor file/selection, so the user can inject them as @-context the way … |
-| `EditorContextProvider.currentFilePath` | fun | `EditorContextProvider.kt:20` | Absolute path of the file open in the active editor, or null. |
-| `EditorContextProvider.currentSelection` | fun | `EditorContextProvider.kt:27` | Selected text in the active editor, or null if there is no selection. |
-| `EditorContextProvider.currentSelectionStartLine` | fun | `EditorContextProvider.kt:33` | 1-based line where the current selection starts (or the caret line if nothing is selected), or null. |
-| `EditorContextProvider.selectionAsAttachment` | fun | `EditorContextProvider.kt:40` | The current selection (file path, start line, text, lang) as an [Attachment.Selection], or null. |
-| `EditorContextProvider.currentFileAsAttachment` | fun | `EditorContextProvider.kt:49` | The active file as an [Attachment.FileRef] (`@path` mention), or null when no editor is focused. |
-| `EditorContextProvider.imageFromClipboard` | fun | `EditorContextProvider.kt:60` | Reads an image off the system clipboard, or null. |
-| `EditorContextProvider.clipboardHasText` | fun | `EditorContextProvider.kt:67` | True if the system clipboard currently holds plain text (so a paste is a text paste, not an image). |
-| `EditorContextProvider.clipboardText` | fun | `EditorContextProvider.kt:81` | Plain-text contents of the system clipboard, or null. |
-| `EditorContextProvider.clipboardImageHelp` | fun | `EditorContextProvider.kt:96` | Help text for getting clipboard-image paste working, or null when it should already work (Windows/macOS read images … |
-| `EditorContextProvider.langForExtension` | fun | `EditorContextProvider.kt:148` | Maps a file extension to a Markdown-fence language hint, or null when unknown. |
-| `FilePickerHelper` | object | `FilePickerHelper.kt:18` | Composer-side helper for attaching/opening files: project-root-relative labels plus the IDE file-choosing, opening and … |
-| `FilePickerHelper.displayName` | fun | `FilePickerHelper.kt:26` | Project-root-relative display label for [path]. |
-| `FilePickerHelper.displayName` | fun | `FilePickerHelper.kt:39` | [displayName] overload keyed off the project's root ([Project.getBasePath]). |
-| `FilePickerHelper.relativeWithinRoot` | fun | `FilePickerHelper.kt:47` | The forward-slash path of [path] relative to [basePath], or null when [path] is outside the root (a `..` result), … |
-| `FilePickerHelper.chooseFiles` | fun | `FilePickerHelper.kt:57` | Show a multi-file picker (no jars) rooted at the project and return the chosen file paths; empty when the user cancels. |
-| `FilePickerHelper.chooseDirectory` | fun | `FilePickerHelper.kt:63` | Show a single-folder picker rooted at the project and return its path, or null on cancel. |
-| `FilePickerHelper.openFiles` | fun | `FilePickerHelper.kt:69` | Absolute paths of the files currently open in editors (for an "Add open files…" menu). |
-| `FilePickerHelper.openFiles` | fun | `FilePickerHelper.kt:73` | Open each resolvable path in an editor tab (requesting focus); unresolved paths are skipped. |
-| `FilePickerHelper.recentFiles` | fun | `FilePickerHelper.kt:86` | Up to [limit] recently opened files (newest-first) from the IDE's editor history, dropping any that no longer exist on … |
+| `EditorContextProvider` | object | `EditorContextProvider.kt:18` | The composer's context sources: the current editor file/selection, so the user can inject them as @-context the way … |
+| `EditorContextProvider.currentFilePath` | fun | `EditorContextProvider.kt:21` | Absolute path of the file open in the active editor, or null. |
+| `EditorContextProvider.currentSelection` | fun | `EditorContextProvider.kt:28` | Selected text in the active editor, or null if there is no selection. |
+| `EditorContextProvider.currentSelectionStartLine` | fun | `EditorContextProvider.kt:34` | 1-based line where the current selection starts (or the caret line if nothing is selected), or null. |
+| `EditorContextProvider.selectionAsAttachment` | fun | `EditorContextProvider.kt:41` | The current selection (file path, start line, text, lang) as an [Attachment.Selection], or null. |
+| `EditorContextProvider.currentFileAsAttachment` | fun | `EditorContextProvider.kt:50` | The active file as an [Attachment.FileRef] (`@path` mention), or null when no editor is focused. |
+| `EditorContextProvider.imageFromClipboard` | fun | `EditorContextProvider.kt:61` | Reads an image off the system clipboard, or null. |
+| `EditorContextProvider.clipboardHasText` | fun | `EditorContextProvider.kt:68` | True if the system clipboard currently holds plain text (so a paste is a text paste, not an image). |
+| `EditorContextProvider.clipboardText` | fun | `EditorContextProvider.kt:94` | Plain-text contents of the clipboard, or null. |
+| `EditorContextProvider.clipboardImageHelp` | fun | `EditorContextProvider.kt:114` | Help text for getting clipboard-image paste working, or null when it should already work (Windows/macOS read images … |
+| `EditorContextProvider.langForExtension` | fun | `EditorContextProvider.kt:166` | Maps a file extension to a Markdown-fence language hint, or null when unknown. |
+| `FilePickerHelper` | object | `FilePickerHelper.kt:22` | Composer-side helper for attaching and opening files: project-root-relative labels plus the IDE editor and … |
+| `FilePickerHelper.displayName` | fun | `FilePickerHelper.kt:30` | Project-root-relative display label for [path]. |
+| `FilePickerHelper.displayName` | fun | `FilePickerHelper.kt:43` | [displayName] overload keyed off the project's root ([Project.getBasePath]). |
+| `FilePickerHelper.relativeWithinRoot` | fun | `FilePickerHelper.kt:51` | The forward-slash path of [path] relative to [basePath], or null when [path] is outside the root (a `..` result), … |
+| `FilePickerHelper.openFiles` | fun | `FilePickerHelper.kt:58` | Absolute paths of the files currently open in editors (for an "Add open files…" menu). |
+| `FilePickerHelper.openFiles` | fun | `FilePickerHelper.kt:62` | Open each resolvable path in an editor tab (requesting focus); unresolved paths are skipped. |
+| `FilePickerHelper.recentFiles` | fun | `FilePickerHelper.kt:75` | Up to [limit] recently opened files (newest-first) from the IDE's editor history, dropping any that no longer exist on … |
 | `ImageAttachments` | object | `ImageAttachments.kt:22` | Turns an image payload — raw clipboard bytes, a rendered AWT image, a file on disk, or a base64 blob the web app … |
 | `ImageAttachments.MAX_IMAGE_BYTES` | val | `ImageAttachments.kt:32` | Ceiling for an image arriving from the **web layer** (drag&drop / paste in the composer). |
 | `ImageAttachments.fromWebPayload` | fun | `ImageAttachments.kt:59` |  |
@@ -70,6 +70,14 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ImageAttachments.imageFromFile` | fun | `ImageAttachments.kt:126` | Reads an image file from disk, detecting media type by extension, as an [Attachment.Image], or null. |
 | `ImageAttachments.mediaTypeForExtension` | fun | `ImageAttachments.kt:139` | Maps an image file extension to its IANA media type, or null when not a supported image. |
 | `ImageAttachments.pngBase64` | fun | `ImageAttachments.kt:148` | Encodes an AWT image (the shape the system clipboard hands back) as base64 PNG, or null. |
+| `ProjectTree` | object | `ProjectTree.kt:48` | The project tree as the composer's attach menu walks it: **what a folder contains**, and **what marking that folder … |
+| `ProjectTree.MAX_ENTRIES` | val | `ProjectTree.kt:81` | The most paths one answer may carry, and the same ceiling for a single listing. |
+| `ProjectTree.children` | fun | `ProjectTree.kt:111` | The direct children of [path] (the empty string being the project root), ordered as an explorer orders them. |
+| `ProjectTree.expand` | fun | `ProjectTree.kt:132` | Everything marking the directory at [path] drags in: in [Mode.FILES] every attachable file at or below it, in … |
+| `ProjectTree.resolve` | fun | `ProjectTree.kt:148` | The absolute file [relativePath] names inside [root], or **null when it does not name one inside it**. |
+| `ProjectTree.ordered` | fun | `ProjectTree.kt:161` | Explorer order: directories first, then files, each alphabetically and case-insensitively. |
+| `ProjectTree.isAttachableFile` | fun | `ProjectTree.kt:172` | Whether a file is worth offering as an attachment: small enough, and text — or an image, which is the one binary shape … |
+| `ProjectTree.walk` | fun | `ProjectTree.kt:200` | The bounded breadth-first expansion, with the tree supplied by [childrenOf] rather than read from disk. |
 
 <!-- MAP:GENERATED END -->
 
@@ -79,6 +87,14 @@ indexed, and neither are extensions: they are called on their receiver, not on t
   process cannot be tested, and this package's rules are exactly the kind that get an edge case wrong.
 - Clipboard work happens **off the EDT, with a deadline**. A hung Wayland clipboard must not freeze the IDE.
 - Bounds are checked at the edge: an oversized or unsupported attachment is refused here, not deeper in.
+- **Path confinement is `DiffPresenter.isWithinRoot`, never a second implementation.** `ProjectTree` reuses it for
+  every path the page sends and every entry it produces; a third canonicalize-and-prefix check is how one of them
+  ends up weaker than the others.
+- **The Attach menu never opens a platform `FileChooser`.** Files and directories are browsed in-page through
+  `ProjectTree`, so every entry it offers has passed that one gate. A chooser can be walked anywhere on disk
+  from wherever it is rooted, which is a second and weaker answer to the question the gate already answers.
+- **The project index answers, not the disk.** `ProjectFileIndex.isExcluded` is true for excluded *or* ignored, so
+  `build/`, `out/`, `node_modules/` and `.git/` stay out of a listing for free; a `File.walk` would attach them.
 
 ## Minefields here
 

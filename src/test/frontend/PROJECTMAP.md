@@ -25,21 +25,27 @@ quietly tests something else.
 | File | Holds |
 |---|---|
 | `accessibility.test.js` | Accessibility conformance (WCAG 2.2 AA). |
+| `asset-bytes.test.js` | Every byte the page is built from is TEXT — no control characters in any source the host inlines. |
 | `asset-manifest.test.js` | Every asset on disk is one the host actually serves — and every asset the host names is on disk. |
 | `boot.test.js` | The boot screen: it must appear while the binary launches, and — more importantly — must always come down. |
 | `bridge-contract.test.js` | Kotlin↔JS bridge contract. |
 | `bridge-inbound.test.js` | Kotlin↔JS bridge contract, the OTHER two directions. |
+| `composer-overflow.test.js` | The ⋮ at the end of the two control rows (app-composer-base.js, wired by app-composer-actions.js and |
 | `composer.test.js` | Composer send/stop button (app-composer.js). |
 | `css-contract.test.js` | JS↔CSS class contract. |
 | `dashboard-views.test.js` | The dashboard's two views and the rows that link to a tab. |
 | `dashboard.test.js` | Session dashboard (app-session.js). |
+| `git-map.test.js` | The Git view's commit graph: the lane assignment underneath it, and the list it is drawn into. |
 | `git-view.test.js` | The dashboard's Git view: the Overview/Chat header, the grouped action bar and the single-rail history. |
 | `helpers/load.js` | Test harness for the JCEF web app. |
+| `helpers/source.js` | The code of a source, without its prose. |
 | `model-menu.test.js` | The model pill's "Other models" group (app-composer.js). |
+| `page-boot.test.js` | The WHOLE page, loaded the way the host serves it, doing the first thing it is asked to do. |
 | `palette.test.js` | The slash-command palette (app-composer-palette.js): one text box, and a ranked list. |
 | `permissions.test.js` | Permission cards (app-permissions.js). |
 | `readout.test.js` | The composer readout: a zero is a measurement, an absence is not. |
-| `tabs.test.js` | The tab bar: the chats, the one open subtab, and the diagram behind the ⋮. |
+| `settings-menu.test.js` | The ⚙ settings menu at the head of the controls row. |
+| `tabs.test.js` | The tab bar: the chats, and every subtab of the one you are in. |
 | `tool-error.test.js` | Where does a FAILED tool's error text actually land, and can it be read? |
 | `tool-output.test.js` | What a tool card SHOWS: the result it got back, and the message it sent. |
 | `transcript-entrance.test.js` | Every top-level transcript row enters the same way. |
@@ -53,6 +59,10 @@ quietly tests something else.
 - **Contract tests come in both directions.** `css-contract.test.js` checks that every class the JS writes
   has a rule; `bridge-contract.test.js` checks the two halves of the host↔web protocol agree. One direction
   alone leaves the other free to rot.
+- **A source scan reads code, never the prose around it** — `helpers/source.js`, one copy for all three
+  scanning gates. This repository documents by quoting the code a comment is about, so every shape they look
+  for appears in prose as often as in source; and the three read it in opposite directions, so the same
+  paragraph invents a demand in two of them and withdraws one in the third.
 - The CSS parts are read from the same declared list the host uses, so a part cannot go untested by being
   added to the directory and nowhere else.
 - **DOM-identity assertions, not just content assertions**, where the point is that a render was *skipped*:

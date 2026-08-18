@@ -24,7 +24,7 @@ it decides every payload and every state word, and the page paints what it is se
 | **composer** | `app-composer-base`, `-menus`, `-pills`, `-attach`, `-readout`, `-palette`, `-boot`, `-auth` + `app-composer.js` | Everything below the transcript, plus the boot and sign-in screens. |
 | **permissions** | `app-permissions.js` | Permission, question and elicitation cards. |
 | **dashboard** | `app-session-base`, `-cards`, `-mcp`, `-workloads`, `-git` + `app-session.js` | The session dashboard and its views. |
-| **tabs** | `app-tabs-base`, `-guard`, `-tree`, `-pill`, `-scroll` + `app-tabs.js` | The chat and agent tab bar. |
+| **tabs** | `app-tabs-base`, `-guard`, `-pill`, `-scroll` + `app-tabs.js` | Three rows at most: the chats · what the open chat started · and, when you open one of its agents, what THAT started. |
 
 Plus `shell.html` (the CSP'd document), `css/` (concatenated into a single `<style>` block in the cascade
 order declared by `JcefHost.CSS_PARTS`, which is where that list lives), and the
@@ -58,20 +58,21 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 16. `app-composer-boot.js`
 17. `app-composer-auth.js`
 18. `app-composer-actions.js`
-19. `app-composer.js`
-20. `app-permissions.js`
-21. `app-session-base.js`
-22. `app-session-cards.js`
-23. `app-session-mcp.js`
-24. `app-session-workloads.js`
-25. `app-session-git.js`
-26. `app-session.js`
-27. `app-tabs-base.js`
-28. `app-tabs-guard.js`
-29. `app-tabs-tree.js`
-30. `app-tabs-pill.js`
-31. `app-tabs-scroll.js`
-32. `app-tabs.js`
+19. `app-composer-settings.js`
+20. `app-composer.js`
+21. `app-permissions.js`
+22. `app-session-base.js`
+23. `app-session-cards.js`
+24. `app-session-mcp.js`
+25. `app-session-workloads.js`
+26. `app-session-git.js`
+27. `app-session-gitchat.js`
+28. `app-session.js`
+29. `app-tabs-base.js`
+30. `app-tabs-guard.js`
+31. `app-tabs-pill.js`
+32. `app-tabs-scroll.js`
+33. `app-tabs.js`
 
 ## Modules — one subject each
 
@@ -79,7 +80,7 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 |---|---|
 | `app-core.js` | Claude Code JCEF shell core. |
 | `app-core-markdown.js` | Markdown rendering and code-block chrome. |
-| `app-core-diagram.js` | the node diagram (Workloads, and the subtab popup). |
+| `app-core-diagram.js` | the node diagram behind the Workloads view. |
 | `app-core-theme.js` | the IDE theme, reduced motion, Vibe Mode and the one-shot render diagnostics. |
 | `app-transcript.js` | the transcript itself: the row registry and the pass that places each row. |
 | `app-transcript-rows.js` | the per-speaker row builders. |
@@ -89,12 +90,13 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `app-composer-base.js` | the composer family's shared plumbing. |
 | `app-composer-menus.js` | the floating popup menus. |
 | `app-composer-pills.js` | the provider / model / mode / effort / thinking chips. |
-| `app-composer-attach.js` | attachments: the 📎 menu, the chip row, and images. |
+| `app-composer-attach.js` | attachments: the 📎 menu, the project tree inside it, the chip row, and images. |
 | `app-composer-readout.js` | the session line above the prompt box. |
 | `app-composer-palette.js` | the slash-command palette. |
 | `app-composer-boot.js` | the boot screen and the "Claude Code was not found" card. |
 | `app-composer-auth.js` | the sign-in card. |
-| `app-composer-actions.js` | the chat's own action buttons (new chat, stop, commands, Git, close diffs, sign out) and the row the |
+| `app-composer-actions.js` | the chat's own action buttons (new chat, commands, Git, close this chat, sign out) and the row the |
+| `app-composer-settings.js` | the ⚙ menu at the head of the controls row. |
 | `app-composer.js` | cc.state(s), cc.meta(m), cc.openPalette(), cc.focusInput() |
 | `app-permissions.js` | the permission cards. |
 | `app-session-base.js` | the dashboard family's shared plumbing. |
@@ -102,13 +104,13 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `app-session-mcp.js` | the MCP servers card. |
 | `app-session-workloads.js` | the Workloads diagram, and the window it is drawn under. |
 | `app-session-git.js` | the Git view. |
+| `app-session-gitchat.js` | the Git conversation's TRANSCRIPT, embedded in the Git view. |
 | `app-session.js` | the dashboard panel, and which of its views you are looking at. |
 | `app-tabs-base.js` | the tab bar's shared state and lookups. |
 | `app-tabs-guard.js` | the flicker guard, whole. |
-| `app-tabs-tree.js` | the panel behind the ⋮: every agent, subagent and background task, as a menu. |
-| `app-tabs-pill.js` | one tab, and the ⋮ that hangs the tree off it. |
+| `app-tabs-pill.js` | one tab, and the × beside it. |
 | `app-tabs-scroll.js` | how the row of chats MOVES. |
-| `app-tabs.js` | with the whole tree of subtabs a hover away. |
+| `app-tabs.js` | the tab bar — the chats, what the open chat started, and what the agent you opened started. |
 
 ## Registrations — the page's public surface
 
@@ -127,12 +129,14 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.announce` | `app-core.js:216` |
 | `CC.coverTranscript` | `app-core.js:240` |
 | `CC.flashCopied` | `app-core.js:319` |
+| `CC.selfCheck` | `app-core.js:432` |
 | `CC.markdown` | `app-core-markdown.js:18` |
 | `CC.decorateOneCodeBlock` | `app-core-markdown.js:125` |
 | `CC.languageForPath` | `app-core-markdown.js:191` |
-| `CC.diagramLabel` | `app-core-diagram.js:71` |
-| `CC.diagram` | `app-core-diagram.js:78` |
-| `CC.panView` | `app-core-diagram.js:326` |
+| `CC.diagramLabel` | `app-core-diagram.js:104` |
+| `CC.diagramShown` | `app-core-diagram.js:127` |
+| `CC.diagram` | `app-core-diagram.js:132` |
+| `CC.panView` | `app-core-diagram.js:385` |
 | `CC.applyTheme` | `app-core-theme.js:29` |
 | `CC.reducedMotion` | `app-core-theme.js:64` |
 | `CC.diagnostics` | `app-core-theme.js:72` |
@@ -144,19 +148,21 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.transcript.conversationEl` | `app-transcript.js:114` |
 | `CC.transcript.rows` | `app-transcript.js:115` |
 | `CC.transcript.toolCards` | `app-transcript.js:116` |
-| `cc.batch` | `app-transcript.js:379` |
-| `cc.clear` | `app-transcript.js:432` |
-| `cc.trimRows` | `app-transcript.js:519` |
+| `CC.transcript.createRow` | `app-transcript.js:302` |
+| `CC.transcript.updateRow` | `app-transcript.js:303` |
+| `cc.batch` | `app-transcript.js:404` |
+| `cc.clear` | `app-transcript.js:457` |
+| `cc.trimRows` | `app-transcript.js:544` |
 | `CC.transcript.builderFor` | `app-transcript-rows.js:130` |
-| `cc.toggleReasoning` | `app-transcript-rows.js:169` |
-| `CC.transcript.toolIconSvg` | `app-transcript-tools.js:39` |
-| `CC.transcript.buildTool` | `app-transcript-tools.js:49` |
-| `CC.transcript.applyToolElapsed` | `app-transcript-tools.js:127` |
-| `CC.transcript.applyToolState` | `app-transcript-tools.js:143` |
-| `CC.transcript.routeToolOutput` | `app-transcript-tools.js:167` |
-| `CC.transcript.renderCommandBlock` | `app-transcript-tools.js:288` |
-| `CC.transcript.jbHref` | `app-transcript-tools.js:309` |
-| `CC.transcript.renderToolLabel` | `app-transcript-tools.js:320` |
+| `cc.toggleReasoning` | `app-transcript-rows.js:173` |
+| `CC.transcript.toolIconSvg` | `app-transcript-tools.js:45` |
+| `CC.transcript.buildTool` | `app-transcript-tools.js:62` |
+| `CC.transcript.applyToolElapsed` | `app-transcript-tools.js:159` |
+| `CC.transcript.applyToolState` | `app-transcript-tools.js:175` |
+| `CC.transcript.routeToolOutput` | `app-transcript-tools.js:250` |
+| `CC.transcript.renderCommandBlock` | `app-transcript-tools.js:430` |
+| `CC.transcript.jbHref` | `app-transcript-tools.js:442` |
+| `CC.transcript.renderToolLabel` | `app-transcript-tools.js:453` |
 | `CC.transcript.requestLinks` | `app-transcript-links.js:86` |
 | `cc.links` | `app-transcript-links.js:193` |
 | `CC.transcript.runSearch` | `app-transcript-find.js:150` |
@@ -168,6 +174,10 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.composer.els` | `app-composer-base.js:59` |
 | `CC.composer.lastState` | `app-composer-base.js:61` |
 | `CC.composer.hostClipboard` | `app-composer-base.js:63` |
+| `CC.composer.overflowFit` | `app-composer-base.js:136` |
+| `CC.composer.overflowMeasure` | `app-composer-base.js:150` |
+| `CC.composer.createOverflow` | `app-composer-base.js:203` |
+| `CC.composer.refreshOverflow` | `app-composer-base.js:477` |
 | `CC.composer.openMenu` | `app-composer-menus.js:18` |
 | `CC.composer.menuSig` | `app-composer-menus.js:41` |
 | `CC.composer.togglePillMenu` | `app-composer-menus.js:43` |
@@ -176,34 +186,37 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.composer.PILL_DEFS` | `app-composer-pills.js:58` |
 | `CC.composer.buildPill` | `app-composer-pills.js:94` |
 | `CC.composer.renderPills` | `app-composer-pills.js:127` |
-| `CC.composer.syncOpenMenu` | `app-composer-pills.js:155` |
-| `CC.composer.attachGlyph` | `app-composer-attach.js:20` |
-| `CC.composer.toggleAttachMenu` | `app-composer-attach.js:199` |
-| `cc.attachData` | `app-composer-attach.js:215` |
-| `CC.composer.renderAttachments` | `app-composer-attach.js:266` |
-| `CC.composer.wireImageDrop` | `app-composer-attach.js:299` |
-| `CC.composer.insertAtCursor` | `app-composer-attach.js:329` |
-| `CC.composer.wireImagePaste` | `app-composer-attach.js:344` |
-| `cc.attachments` | `app-composer-attach.js:402` |
-| `CC.composer.renderReadout` | `app-composer-readout.js:16` |
+| `CC.composer.syncOpenMenu` | `app-composer-pills.js:160` |
+| `CC.composer.attachGlyph` | `app-composer-attach.js:63` |
+| `CC.composer.toggleAttachMenu` | `app-composer-attach.js:916` |
+| `cc.attachData` | `app-composer-attach.js:937` |
+| `cc.treeChildren` | `app-composer-attach.js:954` |
+| `cc.treeExpansion` | `app-composer-attach.js:970` |
+| `CC.composer.renderAttachments` | `app-composer-attach.js:1025` |
+| `CC.composer.wireImageDrop` | `app-composer-attach.js:1058` |
+| `CC.composer.insertAtCursor` | `app-composer-attach.js:1088` |
+| `CC.composer.wireImagePaste` | `app-composer-attach.js:1103` |
+| `cc.attachments` | `app-composer-attach.js:1161` |
+| `CC.composer.renderReadout` | `app-composer-readout.js:35` |
 | `CC.composer.openPalette` | `app-composer-palette.js:173` |
-| `CC.composer.setCommands` | `app-composer-palette.js:399` |
-| `cc.openPalette` | `app-composer-palette.js:405` |
+| `CC.composer.setCommands` | `app-composer-palette.js:404` |
+| `cc.openPalette` | `app-composer-palette.js:410` |
 | `CC.composer.renderBoot` | `app-composer-boot.js:27` |
 | `CC.composer.setInstallMethods` | `app-composer-boot.js:228` |
 | `cc.bootPathError` | `app-composer-boot.js:236` |
 | `cc.authState` | `app-composer-auth.js:64` |
 | `CC.composer.authWanted` | `app-composer-auth.js:83` |
 | `CC.composer.renderAuth` | `app-composer-auth.js:104` |
-| `CC.composer.buildActionRows` | `app-composer-actions.js:85` |
-| `CC.composer.viewsRow` | `app-composer-actions.js:125` |
-| `CC.composer.renderActions` | `app-composer-actions.js:136` |
-| `CC.composer.ensureBuilt` | `app-composer.js:212` |
-| `CC.composer.autosize` | `app-composer.js:272` |
-| `cc.state` | `app-composer.js:421` |
-| `cc.meta` | `app-composer.js:432` |
-| `cc.focusInput` | `app-composer.js:438` |
-| `cc.insertText` | `app-composer.js:449` |
+| `CC.composer.buildActionRows` | `app-composer-actions.js:82` |
+| `CC.composer.viewsRow` | `app-composer-actions.js:173` |
+| `CC.composer.mountSettingsButton` | `app-composer-settings.js:205` |
+| `cc.settingsMenu` | `app-composer-settings.js:683` |
+| `CC.composer.ensureBuilt` | `app-composer.js:265` |
+| `CC.composer.autosize` | `app-composer.js:325` |
+| `cc.state` | `app-composer.js:489` |
+| `cc.meta` | `app-composer.js:500` |
+| `cc.focusInput` | `app-composer.js:506` |
+| `cc.insertText` | `app-composer.js:517` |
 | `CC.dash.core` | `app-session-base.js:101` |
 | `CC.dash.conversation` | `app-session-base.js:102` |
 | `CC.dash.appRoot` | `app-session-base.js:103` |
@@ -222,45 +235,48 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.dash.buildAccountCard` | `app-session-cards.js:262` |
 | `CC.dash.buildEnvCard` | `app-session-cards.js:263` |
 | `CC.dash.buildMcpCard` | `app-session-mcp.js:123` |
-| `CC.dash.buildWorkloadsCard` | `app-session-workloads.js:320` |
-| `CC.dash.buildGitHeadCard` | `app-session-git.js:524` |
-| `CC.dash.buildGitActionsCard` | `app-session-git.js:525` |
-| `CC.dash.buildGitHistoryCard` | `app-session-git.js:526` |
-| `CC.dash.buildGitTopologyCard` | `app-session-git.js:527` |
-| `CC.dash.buildGitForgeCard` | `app-session-git.js:528` |
-| `CC.dash.mountToggles` | `app-session.js:402` |
-| `CC.dash.toggleDashboard` | `app-session.js:443` |
-| `CC.dash.dashboardShown` | `app-session.js:444` |
-| `cc.session` | `app-session.js:457` |
-| `cc.mcp` | `app-session.js:463` |
-| `cc.showGitView` | `app-session.js:497` |
-| `cc.openDashboard` | `app-session.js:505` |
-| `cc.closeDashboard` | `app-session.js:519` |
-| `CC.tabbar.state` | `app-tabs-base.js:27` |
-| `CC.tabbar.selected` | `app-tabs-base.js:30` |
-| `CC.tabbar.openPanel` | `app-tabs-base.js:33` |
-| `CC.tabbar.send` | `app-tabs-base.js:90` |
-| `CC.tabbar.bar` | `app-tabs-base.js:91` |
-| `CC.tabbar.nodeById` | `app-tabs-base.js:92` |
-| `CC.tabbar.taskById` | `app-tabs-base.js:93` |
-| `CC.tabbar.pruneSelection` | `app-tabs-base.js:94` |
-| `CC.tabbar.isSelected` | `app-tabs-base.js:95` |
-| `CC.tabbar.depthOf` | `app-tabs-base.js:96` |
-| `CC.tabbar.hasWork` | `app-tabs-base.js:97` |
-| `CC.tabbar.drawn` | `app-tabs-guard.js:88` |
-| `CC.tabbar.drawnSignature` | `app-tabs-guard.js:90` |
-| `CC.tabbar.openTree` | `app-tabs-tree.js:360` |
-| `CC.tabbar.closeTree` | `app-tabs-tree.js:361` |
-| `CC.tabbar.scheduleOpen` | `app-tabs-tree.js:362` |
-| `CC.tabbar.scheduleClose` | `app-tabs-tree.js:363` |
-| `CC.tabbar.pill` | `app-tabs-pill.js:141` |
+| `CC.dash.buildWorkloadsCard` | `app-session-workloads.js:323` |
+| `CC.dash.gitViewTabs` | `app-session-git.js:969` |
+| `CC.dash.gitLanes` | `app-session-git.js:971` |
+| `CC.dash.buildGitHeadCard` | `app-session-git.js:972` |
+| `CC.dash.buildGitActionsCard` | `app-session-git.js:973` |
+| `CC.dash.buildGitHistoryCard` | `app-session-git.js:974` |
+| `CC.dash.buildGitTopologyCard` | `app-session-git.js:975` |
+| `CC.dash.buildGitForgeCard` | `app-session-git.js:976` |
+| `CC.gitChatActive` | `app-session-gitchat.js:99` |
+| `CC.dash.gitChatPane` | `app-session-gitchat.js:220` |
+| `CC.dash.gitChatShown` | `app-session-gitchat.js:223` |
+| `CC.dash.gitSubView` | `app-session.js:209` |
+| `CC.dash.setGitSubView` | `app-session.js:220` |
+| `CC.dash.mountToggles` | `app-session.js:470` |
+| `CC.dash.toggleDashboard` | `app-session.js:511` |
+| `CC.dash.dashboardShown` | `app-session.js:512` |
+| `CC.dash.lastSession` | `app-session.js:524` |
+| `cc.session` | `app-session.js:537` |
+| `cc.mcp` | `app-session.js:543` |
+| `cc.showGitView` | `app-session.js:577` |
+| `cc.openDashboard` | `app-session.js:585` |
+| `cc.closeDashboard` | `app-session.js:599` |
+| `CC.tabbar.state` | `app-tabs-base.js:29` |
+| `CC.tabbar.selected` | `app-tabs-base.js:32` |
+| `CC.tabbar.send` | `app-tabs-base.js:201` |
+| `CC.tabbar.bar` | `app-tabs-base.js:202` |
+| `CC.tabbar.nodeById` | `app-tabs-base.js:203` |
+| `CC.tabbar.taskById` | `app-tabs-base.js:204` |
+| `CC.tabbar.pruneSelection` | `app-tabs-base.js:205` |
+| `CC.tabbar.isSelected` | `app-tabs-base.js:206` |
+| `CC.tabbar.chatWork` | `app-tabs-base.js:207` |
+| `CC.tabbar.openBranch` | `app-tabs-base.js:208` |
+| `CC.tabbar.drawn` | `app-tabs-guard.js:112` |
+| `CC.tabbar.drawnSignature` | `app-tabs-guard.js:114` |
+| `CC.tabbar.pill` | `app-tabs-pill.js:101` |
 | `CC.tabbar.scrollLeftTo` | `app-tabs-scroll.js:127` |
 | `CC.tabbar.dragToScroll` | `app-tabs-scroll.js:128` |
 | `CC.tabbar.wheelToScroll` | `app-tabs-scroll.js:129` |
 | `CC.tabbar.keepFocusVisible` | `app-tabs-scroll.js:130` |
-| `CC.tabbar.showChat` | `app-tabs.js:60` |
-| `CC.tabbar.showAgent` | `app-tabs.js:61` |
-| `CC.tabbar.showTask` | `app-tabs.js:62` |
+| `CC.tabbar.showChat` | `app-tabs.js:76` |
+| `CC.tabbar.showAgent` | `app-tabs.js:77` |
+| `CC.tabbar.showTask` | `app-tabs.js:78` |
 
 ## Cascade order — `JcefHost.CSS_PARTS`, and it is a contract too
 
@@ -299,11 +315,11 @@ like the load order above, and it is changed in the same place: `JcefHost.CSS_PA
   from — and the containment comes apart **silently**: nothing looks wrong until somebody adds the next
   layer. That is why the contract asserts the stacking context *first* and the ordering only after, and why
   it asserts the ordering as relations between the roles rather than as digits.
-- **The popups are mounted on `document.body` deliberately, and "it floats" is not the reason.** A menu
-  hanging off a tab has to escape `#tabsbar`, which clips its overflow — that is the whole criterion. The
-  find bar floats too and belongs *inside* `#work`: mounted on the body it was positioned against the
-  viewport, and in a narrow tool window it covered a focused chat tab outright, which is WCAG 2.2 SC 2.4.11
-  (Focus Not Obscured). Escaping a clip is a reason to leave the work area. Nothing else is.
+- **The popups are mounted on `document.body` deliberately, and "it floats" is not the reason.** Escaping a
+  clip is: a surface anchored inside `#tabsbar` cannot paint outside it, because that element hides its own
+  overflow. The find bar floats too and belongs *inside* `#work`: mounted on the body it was positioned
+  against the viewport, and in a narrow tool window it covered a focused chat tab outright, which is WCAG 2.2
+  SC 2.4.11 (Focus Not Obscured). Escaping a clip is a reason to leave the work area. Nothing else is.
 - **A module header's `Owns:` line is the row this map prints for it**, and it outranks the em-dash subject
   on the title line. That is the sentence to edit when a module's row reads wrong — not the table, which is
   generated.
@@ -320,10 +336,18 @@ like the load order above, and it is changed in the same place: `JcefHost.CSS_PA
 
 ## Minefields here
 
-- **A guard that skips a render must cover everything drawn**, including an open panel — otherwise a pointer
-  resting on a tab means a full rebuild, a re-anchor and a reopen under the cursor several times a second.
-  That was the reported flicker, and the guard's stamps only make sense together, which is why they stay in
-  one file.
+- **Never put a parenthesis in a comment inside `JcefHost.appNames` or `CSS_PARTS`.** `gen-projectmap.py`
+  slices the declaration at the first `)` after `listOf(` without stripping comments, so one there truncates
+  the list it reads and every module declared below it silently vanishes from the generated half of this map —
+  load order, module row and registrations alike. `helpers/load.js` strips `//` lines before the same slice,
+  so the tests keep loading the whole page while the map describes part of it, and nothing reconciles the two.
+  It has happened; the fix is in the script, and until it lands the comment style is the guard.
+- **A guard that skips a render must describe everything drawn, and nothing else.** Too little and the skip
+  lies — a row the signature does not mention is drawn once and frozen, so an agent that finished keeps its
+  running colour. Too much and the skip never fires, which at the dozens of pills the subtab row exists for
+  is a full rebuild several times a second: that was the reported flicker. The rule for editing either file
+  is one sentence — if the row starts drawing something it starts appearing in the signature, and if it stops
+  drawing something it stops appearing there.
 - **Do not "keep the DOM fresh while hidden."** The dashboard did exactly that and laid out a diagram nobody
   was looking at. Stash the payload; render on show.
 - **Chromium does not move a horizontal scroller with a vertical wheel.** The gesture has to be translated,

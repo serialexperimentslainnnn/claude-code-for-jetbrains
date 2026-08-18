@@ -105,9 +105,10 @@ previous sessions via `--resume`.
 
 ## How do I clean up leftover diff tabs?
 
-Use **Close All Diffs** in the Claude Code tool window's title bar, or close
-them individually. Diffs opened by the plugin are real editor tabs, not modal
-windows, so they stay until you close them.
+Close them the way you close any editor tab — the standard close shortcut, or
+right-click ▸ **Close All Tabs**. Diffs opened by the plugin are real editor
+tabs, not modal windows, so they stay until you close them; the plugin closes
+the ones it opened when the session that opened them goes away.
 
 ## How do I undo something Claude changed?
 
