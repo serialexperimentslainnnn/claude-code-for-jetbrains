@@ -88,16 +88,21 @@
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
-/* USER — a soft full-width card, not a bubble */
+/* USER — an ordinary transcript row, like the assistant's, and NOT a card.
+
+   It was a bordered, padded, shadowed box, and it carried `white-space: pre-wrap`. Both were correct for the
+   `kind: 'text'` body it used to have and both became wrong when `buildUser` moved to `kind: 'md'`
+   (app-transcript-rows.js): the box turned a long prompt into a scrollable slab of chrome instead of text you
+   read, and `pre-wrap` over ALREADY-RENDERED markup makes every newline in that markup a visible line break —
+   which is what put each list bullet a blank line apart and the `1.` on a line of its own. The rule's own
+   comment still said "Verbatim user text (kind 'text' → textContent)", which is how a stale sentence outlives
+   its symbol in a stylesheet.
+
+   What stays is the only part the container was really needed for: wrapping. A pasted path or a token has no
+   break opportunity, and without these two it would set the row's width. The header (`You` + Copy) is
+   untouched — it is what marks the row as the user's now that no box does. */
 .msg.user .body {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  box-shadow: var(--shadow-sm);
-  /* Verbatim user text (kind 'text' → textContent): preserve the newlines and
-     indentation the user typed instead of collapsing runs of whitespace. */
-  white-space: pre-wrap;
+  padding: 0 1px;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
