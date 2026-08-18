@@ -282,7 +282,7 @@ class ClaudeSession(
      * Keeps the agent tree and the background tasks in step with what the binary writes to disk — see
      * [AgentScanner]. This class asks for a scan; everything the scan does is over there.
      */
-    private val agentScanner = AgentScanner(
+    private val agentScanner: AgentScanner = AgentScanner(
         project = project,
         agents = runningAgents,
         tasks = backgroundTaskRegistry,
@@ -292,7 +292,7 @@ class ClaudeSession(
             override fun labelCards() {
                 labelAgentCards()
                 // A scan is the only thing that can make an agent settled, which is half the revival gate.
-                ensureAgentRevivalPoll()
+                poll.ensureAgentRevivalPoll()
             }
             override fun onFresh(fresh: List<String>) = fireAgents(fresh)
             override fun onOutputGrew() = fireState()
@@ -483,67 +483,26 @@ class ClaudeSession(
     /** Whether file-checkpointing is enabled (native rewind requires it). */
     val checkpointingEnabled: Boolean get() = ClaudeSettings.getInstance(project).enableFileCheckpointing
 
-    private val quotaPollTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollQuota() }.apply { isRepeats = true }
-
-    /** Guards [pollQuota] against overlapping round-trips; see the comment there. EDT-confined. */
-    private var quotaPollInFlight = false
-
-    /**
-     * Reads a running background task's output file while it runs — see [AgentScanner.tailNow].
-     *
-     * A separate timer from [quotaPollTimer] and NOT tied to the turn: a task backgrounded near the end of a
-     * turn keeps writing after the turn is over, and that is precisely when the user goes to read it. It
-     * costs a `size` check per running task per tick and stops itself the moment nothing is tailable, so an
-     * idle session runs no timer at all.
-     */
-    private val outputTailTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollLiveOutput() }.apply { isRepeats = true }
-
-    private fun pollLiveOutput() {
-        if (!backgroundTaskRegistry.anyTailable) {
-            outputTailTimer.stop()
-            return
-        }
-        agentScanner.tailNow()
-    }
-
-    /** Starts the live-output poll if anything is worth tailing. EDT. Idempotent — a running timer is left alone. */
-    private fun ensureOutputTail() {
-        if (backgroundTaskRegistry.anyTailable && !outputTailTimer.isRunning) outputTailTimer.start()
-    }
-
-    /**
-     * Re-reads the agent tree while a turn runs, so an agent that is RESUMED stops reading as finished.
-     *
-     * No event covers this: a settled agent revives by getting more records in its own transcript, and a nested
-     * one has no `tool_use_id` at all, so it revives only through its parent. Neither writes anything to the
-     * main stream — the growth is visible only by walking the directory again, which is what
-     * [AgentRegistry.reopenIfGrown] acts on.
-     *
-     * A pass re-parses every admitted agent's whole transcript, so it costs far more than [outputTailTimer]'s
-     * `size` check and runs at [AGENT_REVIVAL_POLL_MS] rather than [QUOTA_POLL_MS]. Both halves of the gate are
-     * necessary conditions for the pass to be able to do anything: only the binary writes those files and it
-     * only writes them during a turn, and only a settled agent can be brought back — so a chat with no agents,
-     * and an idle chat, run no timer at all.
-     */
-    private val agentRevivalTimer = javax.swing.Timer(AGENT_REVIVAL_POLL_MS) { pollAgentRevival() }.apply {
-        isRepeats = true
-    }
-
-    private fun pollAgentRevival() {
-        if (!turnActive || !anySettledAgent()) {
-            agentRevivalTimer.stop()
-            return
-        }
-        agentScanner.scan()
-    }
-
-    /** Starts the revival poll if anything could revive. EDT. Idempotent — a running timer is left alone. */
-    private fun ensureAgentRevivalPoll() {
-        if (turnActive && anySettledAgent() && !agentRevivalTimer.isRunning) agentRevivalTimer.start()
-    }
-
-    /** Whether any agent has stopped running — the only kind a rescan can bring back. */
-    private fun anySettledAgent(): Boolean = runningAgents.nodes.values.any { it.status != AgentStatus.RUNNING }
+    /** The three background timers this session runs, and their retirement rules — see [PollSchedule]. */
+    private val poll = PollSchedule(
+        isRunning = ::isRunning,
+        turnActive = { turnActive },
+        effects = PollSchedule.SessionEffects(edt = ::edt, fireState = ::fireState),
+        quota = PollSchedule.QuotaSource(
+            requestSessionCost = queries::requestSessionCost,
+            requestContextUsage = queries::requestContextUsage,
+            onSessionCost = { lastSessionCost = it },
+            onContextUsage = { lastContextUsage = it },
+        ),
+        outputTail = PollSchedule.OutputTailSource(
+            anyTailable = { backgroundTaskRegistry.anyTailable },
+            tailNow = { agentScanner.tailNow() },
+        ),
+        agentRevival = PollSchedule.AgentRevivalSource(
+            anySettledAgent = { runningAgents.nodes.values.any { it.status != AgentStatus.RUNNING } },
+            scanAgents = { agentScanner.scan() },
+        ),
+    )
 
     /**
      * True once the `initialize` handshake has answered — i.e. the binary is up AND talking, with commands,
@@ -554,51 +513,6 @@ class ClaudeSession(
     @Volatile
     var initialized: Boolean = false
         private set
-
-    /**
-     * Fire one session-cost + context-usage poll; results are cached and pushed to panels via [fireState].
-     * No-op while the process is not running (the control requests would deliver null and clobber the cached
-     * last-good values, blanking the usage meter); and even when running we only overwrite the cache on a
-     * non-null result, so a transient null never blanks the panels — the last good values stay until a real one arrives.
-     */
-    private fun pollQuota() {
-        if (!isRunning()) return
-        // Never let polls overlap. The control channel is SHARED with `can_use_tool` and the tool-result
-        // traffic, so at a one-second cadence a binary busy streaming answers slower than we ask, the
-        // requests pile up, and everything queued behind them — tool cards finishing, permissions — waits
-        // on two numbers. One poll in flight at a time; a slow answer skips a tick instead of stacking.
-        if (quotaPollInFlight) return
-        quotaPollInFlight = true
-        var pending = 2
-        // ONE state push per poll, not one per answer: a full push re-serializes meta + state + dashboard,
-        // and doing it twice a second competed with the streaming transcript for no new information.
-        val settle = {
-            if (--pending == 0) {
-                quotaPollInFlight = false
-                fireState()
-            }
-        }
-        queries.requestSessionCost { cost ->
-            if (cost != null) lastSessionCost = cost
-            settle()
-        }
-        queries.requestContextUsage { cu ->
-            if (cu != null) lastContextUsage = cu
-            settle()
-        }
-        // The timer exists to track a turn AS IT RUNS, nothing else. Context and cost cannot move while the
-        // session sits idle, so polling forever was a round-trip through the binary for two numbers that
-        // provably had not changed — and retiring at turn end is also what makes the 1-second cadence
-        // affordable at all. The turn-start, turn-end and process-ready paths each poll directly, so nothing
-        // waits on a clock.
-        if (!turnActive) edt { quotaPollTimer.stop() }
-    }
-
-    /** Begin tracking a running turn: poll now, then keep the meters live until it ends. */
-    private fun startQuotaPolling() = edt {
-        pollQuota()
-        if (!quotaPollTimer.isRunning) quotaPollTimer.start()
-    }
 
     private val broker by lazy {
         PermissionBroker(
@@ -639,13 +553,13 @@ class ClaudeSession(
         // attaching to an ALREADY-RUNNING session (a second tab, a reopened tool window) used to show empty
         // context and cost for up to a full poll interval for no reason: the data was one control request away
         // the whole time. `pollQuota` no-ops when the process is not up, and the ready path polls again then.
-        edt { pollQuota() }
+        edt { poll.pollQuota() }
     }
 
     fun removeListener(listener: SessionListener) {
         listeners.remove(listener)
         // Stop the shared poll once no panel observes this session anymore (no leaked timer).
-        edt { if (listeners.isEmpty() && quotaPollTimer.isRunning) quotaPollTimer.stop() }
+        edt { if (listeners.isEmpty() && poll.quotaRunning) poll.stopQuota() }
     }
 
     fun isRunning(): Boolean = process?.isRunning() == true
@@ -991,11 +905,11 @@ class ClaudeSession(
             // Fill the context and cost meters NOW rather than on the poll timer's first tick.
             //
             // The timer's initial delay equals its interval (a javax.swing.Timer default), so the first poll is
-            // a full QUOTA_POLL_MS — one minute — after the panel registered. Worse, that registration happens
+            // a full QUOTA_POLL_MS — one second — after the panel registered. Worse, that registration happens
             // while the binary is still launching, so `pollQuota` returns early on the not-running guard and the
             // meters stay empty for a SECOND interval. The data is available the moment the process is up; there
             // is no reason to make the user look at an empty readout while we wait for a clock.
-            pollQuota()
+            poll.pollQuota()
             pump()
         }
     }
@@ -1213,9 +1127,9 @@ class ClaudeSession(
             currentUserMessageId = msgUuid
             write(ControlProtocol.userMessageWithImages(next.text, next.images, uuid = msgUuid))
             turnActive = true
-            startQuotaPolling()
+            poll.startQuotaPolling()
             // The other half of the revival gate: agents settled by an earlier turn become revivable again.
-            ensureAgentRevivalPoll()
+            poll.ensureAgentRevivalPoll()
         }
         promptSuggestion = null // a new prompt was sent; the previous turn's suggestion is now stale
         fireState()
@@ -1268,7 +1182,7 @@ class ClaudeSession(
         liveThinkingTokens = 0
         // An interrupted turn still consumed context and cost, and it is also a turn END — so this both
         // refreshes the meters and lets the poll retire, exactly as a normal result does.
-        pollQuota()
+        poll.pollQuota()
         fireState()
     }
 
@@ -1913,7 +1827,7 @@ class ClaudeSession(
         if (backgroundTaskRegistry.observe(event)) {
             // The tool_result is where a backgrounded command NAMES its output file, and it is the last event
             // that will arrive until it finishes — so the poll starts here or the output is never read live.
-            ensureOutputTail()
+            poll.ensureOutputTail()
             fireState()
         }
         val snap = diffs.onToolResult(event.toolUseId)
@@ -1979,7 +1893,7 @@ class ClaudeSession(
         turnActive = false
         // The turn just moved both numbers; read them once now. Setting turnActive false first means the poll
         // also retires the timer, so an idle session goes quiet instead of ticking forever.
-        pollQuota()
+        poll.pollQuota()
         interrupting = false // the turn ended (possibly via our interrupt) — clear the transient label
         liveThinkingTokens = 0
         if (event.result.isError) {
@@ -2150,7 +2064,7 @@ class ClaudeSession(
                 // the instant it ended. The registry keeps it, marked finished — the same contract a finished
                 // agent's tab already has.
                 backgroundTaskRegistry.observeLevel(event.info.tasks)
-                ensureOutputTail()
+                poll.ensureOutputTail()
                 fireState()
             }
         }
@@ -2552,9 +2466,7 @@ class ClaudeSession(
         generation++
         starting = false
         // Stop the shared timers so the disposed session leaks no EDT timer.
-        quotaPollTimer.stop()
-        outputTailTimer.stop()
-        agentRevivalTimer.stop()
+        poll.stopAll()
         // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
         cancelPendingElicitations()
         diffs.clearReviewDiffs()
@@ -2612,25 +2524,6 @@ class ClaudeSession(
 
         /** How long to wait for a reply to a host-initiated control request before failing it (watchdog). */
         const val CONTROL_TIMEOUT_SECONDS = 30L
-
-        /** Interval (ms) of the session-scoped quota poll (get_session_cost + get_context_usage), shared by all
-         *  ChatPanels observing this session — one timer per session, not one per tab.
-         *
-         *  One second, and the budget holds because of two multipliers already in place: the timer only runs
-         *  WHILE A TURN IS ACTIVE (it retires at turn end — idle sessions poll zero times), and both requests
-         *  are local IPC to the `claude` process, which answers from its own counters without a network hop.
-         *  At 60s the context meter and cost sat visibly frozen through a whole turn and only told the truth
-         *  after it ended, which reads as a broken meter exactly while the user is watching it. */
-        const val QUOTA_POLL_MS = 1_000
-
-        /** Interval (ms) of the agent-revival rescan — see [agentRevivalTimer].
-         *
-         *  Five seconds, not one: a pass re-parses every admitted agent's transcript, and a session that ran
-         *  dozens of agents is exactly the one this feature exists for, so the cost scales with the worst case.
-         *  A revived agent takes seconds to produce anything a user could read, so five is below the point where
-         *  the tab's status could be told apart from instant — and the gate keeps the timer off a chat that is
-         *  idle or has nothing settled, which is the majority of a session's wall time. */
-        const val AGENT_REVIVAL_POLL_MS = 5_000
 
         /**
          * Default model on a fresh install: the concrete Opus tier is **pinned** (not the binary's floating
