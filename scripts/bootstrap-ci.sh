@@ -197,32 +197,45 @@ else
   # then abort the whole run with no message at all. Reading the input to the end costs nothing here.
   int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
            | awk -F'= ' '/commonName/{ if (v == "") v = $2 } END { print v }')
-  info "issuing under: $int_cn  (card $int_card, on-card signature)"
+  info "issuing under: $int_cn  (certificate read from card $int_card)"
 
-  # The signer is a PKCS#11 URI, not a file. `libykcs11` is what exposes F9 — OpenSC's module publishes
-  # only the card-authentication slot — and it maps the attestation slot to id 25 (0x19), which is the
-  # one magic number here and the reason it is spelled out rather than hidden in a variable.
+  # The CERTIFICATES come off the cards; the SIGNATURE cannot. Slot F9 is the attestation slot, and Yubico's
+  # firmware restricts it to attesting keys generated on the device — "It is only used for attestation of
+  # other keys generated on device with instruction f9". So it holds the CA and refuses to sign with it:
+  # the PIN is accepted, the login succeeds, and GENERAL AUTHENTICATE comes back a device error. No PKCS#11
+  # module, mechanism or digest changes that, and an attempt looks exactly like a wrong PIN, which is why
+  # this paragraph exists rather than a retry.
   #
-  # The PIN is read once, written to the 0700 temp dir and handed over as `pin-source`, never as
-  # `pin-value`: a URI is an ARGUMENT, and arguments are world-readable in /proc. If the provider ignores
-  # it, openssl falls back to prompting on the terminal, which is a worse experience and not a leak.
-  # Located by walking a list rather than by `find … | head -1`, and that is a bug fix rather than a
-  # style preference: under `set -euo pipefail` the pipe kills the script WITHOUT A WORD. head closes the
-  # pipe, find dies of SIGPIPE, pipefail turns that into a non-zero status for the assignment, and set -e
-  # exits — so the run stopped dead after "issuing under:" with no error, no line number and no clue.
-  ykcs11=${YKCS11_MODULE:-}
-  if [ -z "$ykcs11" ]; then
-    for cand in /usr/lib64/libykcs11.so.2 /usr/lib64/libykcs11.so \
-                /usr/lib/x86_64-linux-gnu/libykcs11.so.2 /usr/lib/x86_64-linux-gnu/libykcs11.so \
-                /usr/lib/libykcs11.so.2 /usr/lib/libykcs11.so /usr/local/lib/libykcs11.so; do
-      if [ -e "$cand" ]; then ykcs11=$cand; break; fi
-    done
+  # The signing key is therefore the CA's own private key on disk — MATCHED to the card, never assumed. The
+  # card's certificate is the reference and the key is found by comparing public halves, so a key file that
+  # merely has the right name cannot be used: a PKI reissued on disk and not on the cards would otherwise
+  # produce a chain that fails `openssl verify` at the end of this step, after the secrets were set.
+  ca_key=${MATRIX_CA_KEY:-}
+  want=$(openssl x509 -in "$tmp/int.crt" -noout -pubkey \
+         | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1)
+  if [ -n "$ca_key" ]; then
+    have=$(openssl pkey -in "$ca_key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$have" = "$want" ] || { echo "error: MATRIX_CA_KEY is not the key in card $int_card's F9" >&2; exit 1; }
+  else
+    while read -r cand; do
+      [ -n "$cand" ] || continue
+      # `-passin pass:` so an ENCRYPTED key fails immediately instead of stopping the run on a prompt:
+      # a key we cannot open unattended is one this script cannot use, whichever key it turns out to be.
+      have=$(openssl pkey -in "$cand" -pubout -outform DER -passin pass: 2>/dev/null \
+             | sha256sum | cut -d' ' -f1)
+      if [ "$have" = "$want" ]; then ca_key=$cand; break; fi
+    done < <(find "${MATRIX_PKI_DIR:-$HOME/pki}" -type f \( -name '*.key' -o -name '*.pem' \) 2>/dev/null)
   fi
-  [ -n "$ykcs11" ] || { echo "error: libykcs11 not found — install yubico-piv-tool" >&2; exit 1; }
-  export PKCS11_PROVIDER_MODULE="$ykcs11"
-  read_secret piv_pin "PIV PIN for card $int_card"
-  printf '%s' "$piv_pin" > "$tmp/piv-pin"; unset piv_pin
-  ca_key="pkcs11:serial=$int_card;id=%19;type=private;pin-source=file:$tmp/piv-pin"
+  if [ -z "$ca_key" ]; then
+    echo "error: no private key under ${MATRIX_PKI_DIR:-$HOME/pki} matches the CA on card $int_card." >&2
+    echo "       F9 cannot sign (attestation slot), so the CA's key has to be reachable." >&2
+    echo "       Point MATRIX_CA_KEY at it, or reissue the cards from the PKI that holds it." >&2
+    exit 1
+  fi
+  info "signing with the CA key at $ca_key (public half verified against the card)"
+  # Never copied into $tmp: openssl reads it in place, so this step creates no second copy of a CA key and
+  # has none to shred. It is also worth saying plainly, once, rather than leaving it implied — anyone who
+  # can read that file IS the intermediate CA, and on this machine it is stored unencrypted.
 
   # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
   # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
@@ -249,13 +262,11 @@ EXT
   # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody has
   # in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
   # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
-  # `-provider default` is listed explicitly: naming any provider replaces the default set, and without
-  # it the ordinary algorithms the rest of this call needs are gone.
-  openssl x509 -req -provider pkcs11 -provider default -in "$tmp/leaf.csr" -sha384 \
+  openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
     -CA "$tmp/int.crt" -CAkey "$ca_key" \
     -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
     -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" \
-    || { echo "error: the card refused to sign — wrong PIN, or that CA card was removed" >&2; exit 1; }
+    || { echo "error: signing failed — $ca_key did not open, or it is not the CA's key" >&2; exit 1; }
 
   # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
   # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor inside the chain adds
@@ -294,17 +305,18 @@ EXT
     warn "the certificate is reproducible by re-running this step; nothing is lost but the audit trail."
   fi
 
-  # The card material and the PIN go NOW, not at the exit trap: everything above is done with them, and a
-  # file that is still needed cannot be deleted early — which makes "delete it here" a claim the rest of
-  # the step has to keep true. The trap remains as the backstop for the paths that exit before this line.
-  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/piv-pin" "$tmp/leaf.p12" \
+  # The card material goes NOW, not at the exit trap: everything above is done with it, and a file that is
+  # still needed cannot be deleted early — which makes "delete it here" a claim the rest of the step has to
+  # keep true. The trap remains as the backstop for the paths that exit before this line. The CA key is not
+  # in this list because it was never copied here: it was read in place, from the PKI that owns it.
+  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/leaf.p12" \
                   "$tmp/leaf.csr" "$tmp/leaf.ext" "$tmp/leaf.key" "$tmp/leaf.crt" \
                   "$tmp/fullchain.crt" "$tmp/keypass"; do
     [ -e "$leftover" ] || continue
     shred -u "$leftover" 2>/dev/null || { : > "$leftover"; rm -f "$leftover"; }
   done
-  unset ca_key PKCS11_PROVIDER_MODULE
-  info "card certificates, PIN and issued key wiped from $tmp"
+  unset ca_key
+  info "card certificates and issued key wiped from $tmp"
   # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the user's
   # IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as "not
   # available yet" in the plugin-signing docs. So this key is only ever an upload credential and rotating
