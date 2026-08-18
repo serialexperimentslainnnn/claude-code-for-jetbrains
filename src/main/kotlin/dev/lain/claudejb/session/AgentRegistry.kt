@@ -110,6 +110,21 @@ class AgentRegistry(
     private val completedAtByToolUse = ConcurrentHashMap<String, Long>()
 
     /**
+     * The same seal for the agents no `tool_use_id` can key: a NESTED agent, spawned inside another agent's
+     * turn, which no Task call of ours ever named.
+     *
+     * It exists because such an agent now answers from its own transcript ([observedStateOf] rule 2) instead
+     * of copying whatever its parent was doing, and an ending read there has to be dated where it is watched.
+     * Without a seal of its own the instant would be filled at admission with [runStartedAtMillis] — the
+     * moment the IDE started, hours old by the afternoon — so a subagent that finished a minute ago would be
+     * outside the retention window before it was ever drawn.
+     *
+     * Keyed by agent id, and dropped by the same evidence that drops the other map: a transcript that grew
+     * past the ending already accounted for ([reopenIfGrown]).
+     */
+    private val completedAtByAgent = ConcurrentHashMap<String, Long>()
+
+    /**
      * Per agent id, the number of parseable records in its transcript when its ending was last accounted for —
      * the baseline [reopenIfGrown] compares against.
      *
@@ -282,9 +297,10 @@ class AgentRegistry(
      * With no baseline crossed nothing is removed, so an agent that finished and never writes again keeps both
      * its status and its stop instant across any number of passes.
      *
-     * A nested agent has no `toolUseId`, so there is nothing of its own to drop — it inherits its parent's
-     * state (rule 2 of [observedStateOf]), and a revived parent is what brings it back. Its own growth is not
-     * independent evidence, because it cannot run outside the turn that spawned it.
+     * A nested agent has no `toolUseId`, so there is nothing keyed by a Task call to drop — but it does have
+     * an ending of its own now ([observedStateOf] rule 2), and therefore a seal of its own to unseal. Growth
+     * drops that too, so an agent resumed and finished AGAIN is dated by its second ending rather than by its
+     * first, whichever of the two maps holds it.
      */
     private fun reopenIfGrown(meta: AgentMeta, count: Int) {
         val accounted = accountedRecordsByAgent.put(meta.agentId, count) ?: return
@@ -295,21 +311,7 @@ class AgentRegistry(
             statusByToolUse.remove(id)
             completedAtByToolUse.remove(id)
         }
-    }
-
-    /**
-     * How a transcript's ending reads as a status.
-     *
-     * [AgentEnding.Ending.RESUMED] is RUNNING and stays distinct from [AgentEnding.Ending.UNFINISHED]: a
-     * transcript that grew past a turn it had already closed is an agent working again, while one that never
-     * closed a turn belongs to a process that is gone. Collapsing the two paints one of them wrongly, whichever
-     * word is chosen. Nothing to judge is the same as never finishing — a restored chat whose agent left no
-     * parseable record cannot be vouched for as live.
-     */
-    private fun statusOf(ending: AgentEnding.Ending?): AgentStatus = when (ending) {
-        AgentEnding.Ending.COMPLETED -> AgentStatus.COMPLETED
-        AgentEnding.Ending.RESUMED -> AgentStatus.RUNNING
-        AgentEnding.Ending.UNFINISHED, null -> AgentStatus.STOPPED
+        completedAtByAgent.remove(meta.agentId)
     }
 
     /**
@@ -338,32 +340,41 @@ class AgentRegistry(
      *    observed and not the instant this scan happens to run. It answers first and it is not permanent:
      *    [reopenIfGrown] drops it when the agent's transcript grows, and the rules below then answer a resumed
      *    agent as the live work it is.
-     * 2. **Its parent's state, whatever that is.** A NESTED agent has no `toolUseId` of its own — it was
-     *    spawned inside another agent's turn, so no Task call of ours ever named it — and rule 1 can never
-     *    settle it. It cannot outlive the turn that spawned it, so a finished parent means a finished child;
-     *    and by the same token a parent that is still working means the child belongs to live work. It
-     *    therefore inherits the parent's instant too — the child stopped when the turn did — and inherits
-     *    nothing while that parent is still running.
-     * 3. **Did we watch it start?** An agent whose Task call is in [observedToolUse] was launched by THIS
-     *    process, so there is a live process behind it and it can never read as cut off — but WHETHER it is
-     *    still working is a question its own transcript answers ([liveStatusOf]), and answering it "running"
-     *    flatly is what left agents running for ever when no `task_notification` settled them.
-     * 4. **How its own transcript ends** ([AgentEnding]), for an agent from a previous run. A settled status
-     *    is per-process memory, so after a restart the plugin knows nothing about what it is restoring —
-     *    and calling all of it "cut off" painted every agent of every past session RED, which does not just
-     *    look wrong, it ASSERTS THAT THEY FAILED. Most had finished perfectly, and the binary wrote that
-     *    down: a transcript ending on `stop_reason: end_turn` is an agent that said its piece and stopped, and
-     *    one that grew past such an ending is an agent that was resumed ([statusOf]).
-     *    No instant comes with it: that status is read off a file, not watched, so nothing here can vouch
-     *    for when it happened — [settledStateOf] stamps it at admission instead.
-     * 5. Otherwise its transcript again ([liveStatusOf]) — same evidence as rule 4 and the same reading as
-     *    rule 3, since a chat that was never restored has a live process behind every agent in it. Only a
-     *    RESTORED chat takes rule 4's stricter reading, where an unfinished transcript means cut off.
+     * 2. **Its OWN transcript, when it closed a turn** ([AgentEnding.Ending.COMPLETED]). An ending of its own
+     *    outranks everything below it, its parent included, and that ordering is the whole point of the rule:
+     *    a subagent finishes and hands its answer back while the agent that spawned it goes on working, which
+     *    is not an edge case, it is what a subagent IS. Copying the parent's state instead — which is what
+     *    rule 3 used to do for EVERY child, unconditionally, before its own evidence was ever read — meant a
+     *    finished subagent reported RUNNING for as long as its parent ran, and everything downstream repeated
+     *    it faithfully: a dot that never turned in the tab bar, a Task card fading for ever (
+     *    [dev.lain.claudejb.session.ClaudeSession] hands that card the AGENT's state), and a row the Workloads
+     *    window could never expire, since it exempts running work by design. The instant is [sealCompletion]'s,
+     *    and only when something live is behind the agent — see there.
+     * 3. **Its parent's ending — for a child that never closed a turn of its own.** A NESTED agent has no
+     *    `toolUseId` — it was spawned inside another agent's turn, so no Task call of ours ever named it — and
+     *    rule 1 can never settle it. It cannot outlive the turn that spawned it, so a parent that has STOPPED
+     *    stops it too, with the parent's instant: the child ended when the turn did. A parent that is still
+     *    running settles nothing; all it says is that there is a live process behind the child, which is what
+     *    `live` below reads it as.
+     * 4. **A live process behind it → still working.** Three witnesses, making the same claim: its Task call
+     *    is in [observedToolUse] (this process launched it), its parent is still running (the turn it belongs
+     *    to is), or the chat was never restored (everything in it was started here). An unfinished transcript
+     *    then means in flight.
+     * 5. **Otherwise it was cut off.** A RESTORED chat's agent whose transcript never closed a turn belongs to
+     *    a process that is gone. That stricter reading is why rules 4 and 5 are separate at all: the same
+     *    unfinished file means "still working" for an agent we watched start and "cut off" for one read back
+     *    off disk, and collapsing the two is how every agent in a freshly reopened IDE came up red.
+     *    No instant comes with it — the status is read off a file, not watched, so nothing here can vouch for
+     *    when it happened, and [settledStateOf] stamps it at admission instead.
      *
-     * **Rules 2 and 3 are the fix for a live report**: `restoring` is set when a chat comes back from disk
-     * and is never cleared (it is what admits that chat's own subagents), so rule 5 used to swallow agents
-     * launched AFTERWARDS in that same chat — and since restoring open chats is the default, every agent in
-     * a freshly reopened IDE came up STOPPED, i.e. red, while it was plainly working.
+     * [AgentEnding.Ending.RESUMED] stays distinct from [AgentEnding.Ending.UNFINISHED] throughout: a
+     * transcript that grew past a turn it had already closed is an agent working again, whoever is asking, so
+     * it answers RUNNING without consulting the parent or the restore flag.
+     *
+     * **Why [restoring] cannot decide this on its own**: it is set when a chat comes back from disk and is
+     * never cleared (it is what admits that chat's own subagents), so an agent launched AFTERWARDS in that
+     * same chat is in a "restored" chat too — and since restoring open chats is the default, reading rule 5
+     * off that flag alone painted live work red. Rule 4's other two witnesses are what keep it honest.
      *
      * [resolved] holds the agents already built by this scan, parents first — see the sort in [scan].
      */
@@ -373,51 +384,47 @@ class AgentRegistry(
         meta.toolUseId?.let { id ->
             statusByToolUse[id]?.let { return Settled(it, completedAtByToolUse[id]) }
         }
-        meta.parentAgentId?.let { resolved[it] }?.let { return Settled(it.status, it.completedAtMillis) }
-        if (meta.toolUseId?.let { it in observedToolUse } == true) return liveStateOf(meta, lines)
-        if (!restoring) return liveStateOf(meta, lines)
-        return Settled(statusOf(AgentEnding.of(lines)), null)
+        val parent = meta.parentAgentId?.let { resolved[it] }
+        val live = meta.toolUseId?.let { it in observedToolUse } == true ||
+            parent?.status == AgentStatus.RUNNING ||
+            !restoring
+        return when (AgentEnding.of(lines)) {
+            AgentEnding.Ending.COMPLETED -> Settled(AgentStatus.COMPLETED, if (live) sealCompletion(meta) else null)
+
+            AgentEnding.Ending.RESUMED -> Settled(AgentStatus.RUNNING, null)
+
+            AgentEnding.Ending.UNFINISHED, null ->
+                parent?.takeIf { it.status != AgentStatus.RUNNING }
+                    ?.let { Settled(it.status, it.completedAtMillis) }
+                    ?: Settled(if (live) AgentStatus.RUNNING else AgentStatus.STOPPED, null)
+        }
     }
 
     /**
-     * What an agent WE WATCHED START is doing — the transcript decides, and the only thing it cannot say is
-     * "stopped".
+     * When an agent whose ending we READ stopped — sealed the first time its transcript says the turn closed.
      *
-     * Rules 3 and 5 used to return [AgentStatus.RUNNING] flatly, which meant that in a live session the
-     * agent's own transcript was **never consulted at all**: the single thing that could ever end an agent was
-     * its `task_notification`. When one does not arrive — and it does not for every shape of agent the binary
-     * runs, several of which emit the notification with no `tool_use_id` for [observeSettled] to key on — the
-     * agent stayed RUNNING for the rest of the session, and so did the Task card standing for it in the
-     * transcript, since [dev.lain.claudejb.session.ClaudeSession] hands that card's state to the agent
-     * ([AgentStatus.RUNNING] → `ToolState.RUNNING`). One cause, both symptoms.
+     * The evidence was already there: [scan] parses every agent's file on every pass, and the
+     * `task_notification` is an optimisation on top of that rather than the only witness. It has to be: the
+     * notification does not always arrive — `tool_use_id` is optional on that message and several of the
+     * binary's call sites pass none — so keying on it alone is what left agents RUNNING for a whole session.
      *
-     * The evidence was already read: [scan] parses every agent's file on every pass, and the notification is
-     * an optimisation on top of it, not the only witness. So the same [AgentEnding] the restore path uses
-     * answers here too — with one asymmetry that is the whole point of a separate function. A transcript that
-     * has not closed a turn means two different things depending on who is asking: for a RESTORED agent the
-     * process that was writing it is gone, so it was cut off ([AgentStatus.STOPPED]); for one we watched start
-     * in THIS session there is a live process behind it, so it is still working. Collapsing the two is how
-     * every agent in a freshly reopened IDE came up red while it was plainly running.
-     *
-     * **It also has to say WHEN, and that is not the same question.** An ending read off a transcript carries
-     * no instant, and [settledStateOf] fills an empty one with [runStartedAtMillis] — right for an agent
-     * restored from a previous run, whose real ending nothing here witnessed, and wrong for one that finished
-     * a minute ago in front of us: it dates the ending to when the IDE started, which is hours old by the
-     * afternoon, so the agent is already outside the retention window the moment it finishes. The instant
-     * this path reports is therefore [now], sealed the first time the transcript says the turn closed.
-     *
-     * Sealed, not re-read, because [dev.lain.claudejb.session.AgentScanner] scans repeatedly: stamping every
+     * **Sealed, not re-read.** [dev.lain.claudejb.session.AgentScanner] scans repeatedly: stamping on every
      * pass would walk the instant forward with the clock and the agent would never age out at all — the same
-     * bug, in the other direction. And sealed in the SAME map the `task_notification` path uses, so the two
-     * cannot disagree about when one agent stopped, and so [reopenIfGrown] unseals both alike: an agent that
-     * is resumed and finishes AGAIN is dated by its second ending, not by its first.
+     * defect as an ending dated hours ago, in the other direction. Only [reopenIfGrown] unseals it, and only
+     * on the evidence that says the agent is working again.
+     *
+     * **Which map depends on what can key the agent, and both are unsealed alike.** An agent with a Task call
+     * of its own is sealed in the very map [observeSettled] writes, so the two paths cannot disagree about
+     * when one agent stopped; a nested agent has no such key and is sealed by agent id ([completedAtByAgent]).
+     *
+     * The caller seals only when something LIVE is behind the agent. An ending read off a restored chat's file
+     * was not watched by this run, so dating it [now] would claim it happened at the reopening; [settledStateOf]
+     * stamps that case at admission instead, which is what puts it in the retention window on the same terms
+     * as everything else restored with it.
      */
-    private fun liveStateOf(meta: AgentMeta, lines: List<String>): Settled = when (AgentEnding.of(lines)) {
-        AgentEnding.Ending.COMPLETED ->
-            Settled(AgentStatus.COMPLETED, meta.toolUseId?.let { completedAtByToolUse.computeIfAbsent(it) { now() } })
-
-        AgentEnding.Ending.RESUMED, AgentEnding.Ending.UNFINISHED, null -> Settled(AgentStatus.RUNNING, null)
-    }
+    private fun sealCompletion(meta: AgentMeta): Long =
+        meta.toolUseId?.let { completedAtByToolUse.computeIfAbsent(it) { now() } }
+            ?: completedAtByAgent.computeIfAbsent(meta.agentId) { now() }
 
     /**
      * Admission, applied until it stops growing: an agent is ours if the plugin saw its Task call, if a

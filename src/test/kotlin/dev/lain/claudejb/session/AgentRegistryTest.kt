@@ -269,6 +269,54 @@ class AgentRegistryTest {
     }
 
     @Test
+    fun `a subagent that finished under a parent still working is not reported as running`() {
+        // THE DEFECT, and it is the ordinary case rather than an edge one: a child took its parent's state
+        // before its own transcript was ever read, so a subagent that had said its piece reported RUNNING for
+        // as long as the agent that spawned it kept working — which is what a subagent DOES. Everything
+        // downstream repeated it faithfully: a dot that never turned in the tab bar, a Task card fading for
+        // ever, and a row the Workloads window can never expire, since it exempts running work by design.
+        agent("a1", toolUseId = "toolu_ours", depth = 1)
+        writeTranscript("a1", openTurn) // the parent is mid-turn
+        agent("a2", parent = "a1", depth = 2)
+        writeTranscript("a2", closedTurn) // the child closed its own
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+
+        clock = 1_000_500_000L
+        reg.scan()
+
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("a1").status)
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a2").status)
+        // Dated when the ending was WATCHED. A nested agent has no Task call to key a seal on, and leaving it
+        // unstamped hands it the run's own start instant — hours old by the afternoon — so the agent would be
+        // outside the retention window at the very moment it finished.
+        assertEquals(1_000_500_000L, reg.nodes.getValue("a2").completedAtMillis)
+
+        // …and sealed, not re-read: the scanner runs repeatedly, and stamping every pass would walk the
+        // instant forward with the clock, so the agent would never age out at all.
+        clock = 1_000_900_000L
+        reg.scan()
+        assertEquals(1_000_500_000L, reg.nodes.getValue("a2").completedAtMillis)
+    }
+
+    @Test
+    fun `a subagent still working under a working parent stays running`() {
+        // The pair that makes the assertion above a measurement: the same scan, read the same way, answers
+        // differently for the child whose own transcript has not closed a turn.
+        agent("a1", toolUseId = "toolu_ours", depth = 1)
+        writeTranscript("a1", openTurn)
+        agent("a2", parent = "a1", depth = 2)
+        writeTranscript("a2", openTurn)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+
+        val node = reg.nodes.getValue("a2")
+        assertEquals(AgentStatus.RUNNING, node.status)
+        assertNull(node.completedAtMillis)
+    }
+
+    @Test
     fun `scan reports only newly admitted agents`() {
         agent("a1", toolUseId = "toolu_ours")
         val reg = registry()
