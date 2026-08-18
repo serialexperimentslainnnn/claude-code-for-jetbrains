@@ -54,17 +54,20 @@
    *  1. the CHAT tabs — the title, whether it is the open one, and whether it is asking for attention;
    *  2. WHICH subtab is open, because that pill wears the accent and is the only one carrying a close;
    *  3. the SUBTAB row — the chat's own agents and its background tasks, read through `T.chatWork`;
-   *  4. the BRANCH row, when one is open — which agent it belongs to (the row exists at all only because of
-   *     that, and its `aria-label` names it) and everything in it, read through `T.openBranch`.
+   *  4. the BRANCH rows, however many are open — one per level down the path to the open subtab. Each is
+   *     described by the agent whose children it holds (the row exists at all only because of that, and its
+   *     `aria-label` names it) and by everything in it, read through `T.openBranches`. The COUNT is part of
+   *     the string by construction: a level opening or closing adds or removes entries, so the signature
+   *     cannot compare equal across it.
    *
-   * Both rows are read through the functions that RENDER them, never re-derived here. A second traversal
-   * would eventually disagree with the first, and a signature describing a different row than the one on
-   * screen is worse than no signature: the skip would be lying rather than merely blunt.
+   * Every row is read through the function that RENDERS it, never re-derived here. A second traversal would
+   * eventually disagree with the first, and a signature describing a different row than the one on screen is
+   * worse than no signature: the skip would be lying rather than merely blunt.
    *
    * **What is deliberately NOT here is the rest of the tree.** A subagent inside a branch nobody has opened
    * is not drawn, so its status moving must not repaint the bar — that is most of the traffic on a session
-   * running dozens. It enters the signature the moment its branch does, through `openBranch`, and leaves
-   * again when the branch closes.
+   * running dozens. It enters the signature the moment its own level does, through `openBranches`, and leaves
+   * again when that level closes.
    */
   function drawnSignature() {
     var parts = T.state.chats.map(function (chat) {
@@ -76,13 +79,12 @@
     T.chatWork().forEach(function (w) {
       parts.push(entry(w));
     });
-    var branch = T.openBranch();
-    parts.push(branch ? branch.rootId + SEP + branch.rootLabel : '');
-    if (branch) {
+    T.openBranches().forEach(function (branch) {
+      parts.push(branch.rootId + SEP + branch.rootLabel);
       branch.items.forEach(function (w) {
         parts.push(entry(w));
       });
-    }
+    });
     return parts.join(SEP);
   }
 
