@@ -488,28 +488,25 @@
 }
 
 /* ── the ⚙ settings menu ──────────────────────────────────────────────────────
-   The same panel, the same rows and the same fold as every other popup on this bar (`.menu`, `.menu-item`,
-   `.menu-group`) — flat, dense, full-bleed, the platform's list metric. What it adds is only what a panel of
-   ten GROUPS needs and a menu of one choice does not: room for a long row, a heading that reads as one, a
-   mark that tells a choice from a switch, and a note for the groups that only reach the next chat. */
+   The same panel and the same rows as every other popup on this bar (`.menu`, `.menu-item`) — flat, dense,
+   full-bleed, the platform's list metric. What it adds is only what a panel of ten SECTIONS needs and a menu
+   of one choice does not: room for a long row, a section entry that reads as one, a mark that tells a choice
+   from a switch, and a note for the sections that only reach the next chat.
+
+   IT DRILLS DOWN INSTEAD OF FOLDING, so `.menu-group`'s accordion rules above are no longer part of this
+   menu — they still belong to the pill menus, which do fold. One section's rows are the whole panel while you
+   are in it, which is what keeps the 60vh cap honest: the panel is never ten headings plus one opened group
+   plus everything after it. */
 /* Wider than a pill menu, because a row here can be a tool name rather than a word and `.menu`'s 320px cap is
-   measured for a list of models. The HEIGHT is deliberately left at `.menu`'s own 60vh with its scroll: with
-   the long groups folded, ten headings and the five short groups fit inside it, and raising the cap would
-   only make room for the seventy-row list the fold exists to prevent. */
+   measured for a list of models. */
 .settings-menu {
   min-width: 240px;
   max-width: 340px;
 }
-/* The first group opens flush with the panel: `.menu-group`'s rule above draws a hairline ABOVE each group,
-   which separates ten groups from each other and, on the first one, draws a second line under the panel edge. */
-.settings-menu .menu-group:first-child {
-  border-top: none;
-  margin-top: 0;
-  padding-top: 0;
-}
-/* A heading is one of ten and has to be findable at a glance among ~30 rows. The caret and the indent below it
-   say "group" once you are reading; the weight is what says it while you are scanning. */
-.settings-menu .menu-group-header {
+/* A section entry leads somewhere, and reads as it: the weight is what makes it findable while scanning the
+   root panel, the chevron is what says it opens. Both are on the ENTRY, never on a heading above rows — there
+   are no headings here any more, because a section's rows only exist while that section is the panel. */
+.settings-menu .settings-group-entry {
   font-weight: 600;
 }
 /* A tool name is not a word: `allow:mcp__jetbrains__get_file_problems` is a legitimate row label. Capped and
@@ -635,11 +632,17 @@
   min-width: 0;
 }
 
-/* ── the attach popup's two views ─────────────────────────────────────────────
-   `.attach-body` is the element both views are drawn into, and the one that slides when you step between the
-   attach actions and the project tree. The slide says which way you went — forward into the tree, back out of
-   it — and it is DECORATION: `body.reduced-motion *` (boot.css) already zeroes every duration and delay on
-   the page, so there is nothing here to switch off and no second copy of that decision. */
+/* ── stepping between a popup's two levels ────────────────────────────────────
+   `.attach-body` and `.settings-body` are the elements a two-level popup draws its current panel into, and the
+   ones that slide when you step between them — into the project tree, into a settings section, and back out of
+   either. The slide says which way you went, and it is DECORATION: `body.reduced-motion *` (boot.css) already
+   zeroes every duration and delay on the page, so there is nothing here to switch off and no second copy of
+   that decision.
+
+   The two direction classes are declared on their OWN, unqualified by the body they sit on, precisely so the
+   second popup to need them did not have to bring a second pair of rules — and so a third would not either.
+   The keyframes keep the `attach-` name they were introduced with: renaming them would touch every call site
+   for no behaviour, which is churn a reader has to diff to dismiss. */
 @keyframes attach-in-right {
   from {
     opacity: 0;
@@ -660,11 +663,17 @@
     transform: none;
   }
 }
-.attach-body.attach-from-right {
+.attach-from-right {
   animation: attach-in-right 0.16s var(--ease);
 }
-.attach-body.attach-from-left {
+.attach-from-left {
   animation: attach-in-left 0.16s var(--ease);
+}
+/* The settings popup's panel: the unit that is replaced whole on every step, and therefore the unit that
+   animates. A plain block on purpose — `display: contents` would leave no box for the animation to run on,
+   which is a rule that silently does nothing. */
+.settings-body {
+  display: block;
 }
 
 /* The tree view's header — back · title · Multiple · Attach N — as the first ROW of the popup rather than a

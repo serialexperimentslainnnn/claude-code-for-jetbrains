@@ -586,7 +586,11 @@ describe('the 📎 tree — the stylesheet holds up its end', () => {
 
     expect(css).toMatch(/@keyframes attach-in-right\s*\{/);
     expect(css).toMatch(/@keyframes attach-in-left\s*\{/);
-    expect(ruleBody('.attach-body.attach-from-right')).toMatch(/animation:\s*attach-in-right/);
-    expect(ruleBody('.attach-body.attach-from-left')).toMatch(/animation:\s*attach-in-left/);
+    // The direction classes are declared UNQUALIFIED, so the second two-level popup — the ⚙ menu, which steps
+    // between its list of sections and one section — did not have to bring a second pair of rules, and a
+    // third would not either. Qualifying them by `.attach-body` again would leave the other popup animating
+    // nothing, silently.
+    expect(ruleBody('.attach-from-right')).toMatch(/animation:\s*attach-in-right/);
+    expect(ruleBody('.attach-from-left')).toMatch(/animation:\s*attach-in-left/);
   });
 });
