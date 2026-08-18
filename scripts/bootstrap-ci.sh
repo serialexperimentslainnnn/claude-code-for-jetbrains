@@ -16,7 +16,21 @@
 #     terminal, scrollback, or shell history.
 #
 # See docs/CI_SETUP.md for what each step means and why.
-set -euo pipefail
+set -Eeuo pipefail
+
+# `set -e` kills this script SILENTLY — no line, no command, no status — and it has done so three times
+# in a row on a failure that looked like the step simply doing nothing. Every one of them was the same
+# shape: an assignment whose command substitution failed, usually because `pipefail` promoted the failure
+# of something in the middle of a pipe. That is invisible by construction, so the trap below is not a
+# nicety: it is the difference between a bug report that says "it configures nothing" and one that names
+# the line. `-E` is what makes it fire inside functions, subshells and command substitutions too.
+on_err() {
+  local status=$1 line=$2 cmd=$3
+  printf '\n\033[31merror: line %s exited %s\033[0m\n' "$line" "$status" >&2
+  printf '  while running: %s\n' "$cmd" >&2
+  printf '  nothing further was changed; re-run when the cause is fixed.\n' >&2
+}
+trap 'on_err "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 cd "$(dirname "$0")/.."
 
@@ -205,18 +219,26 @@ else
   ca_key=${CA_KEY:-}
   want=$(openssl x509 -in "$tmp/int.crt" -noout -pubkey \
          | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1)
+  # `|| have=""` on every one of these, and it is load-bearing rather than defensive: MOST of the files
+  # looked at here are expected to fail to open — a key for another purpose, an encrypted one, a PEM that
+  # is a certificate. Without it the first such file ends the run, which is exactly what happened: the
+  # search died on an encrypted key several files before reaching the one it was looking for.
   if [ -n "$ca_key" ]; then
-    have=$(openssl pkey -in "$ca_key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
-    [ "$have" = "$want" ] || { echo "error: CA_KEY is not the key in card $int_card's F9" >&2; exit 1; }
+    have=$(openssl pkey -in "$ca_key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1) \
+      || have=""
+    [ "$have" = "$want" ] || { echo "error: CA_KEY is not the CA on card $int_card" >&2; exit 1; }
   else
+    tried=0
     while read -r cand; do
       [ -n "$cand" ] || continue
+      tried=$((tried + 1))
       # `-passin pass:` so an ENCRYPTED key fails immediately instead of stopping the run on a prompt:
       # a key we cannot open unattended is one this script cannot use, whichever key it turns out to be.
       have=$(openssl pkey -in "$cand" -pubout -outform DER -passin pass: 2>/dev/null \
-             | sha256sum | cut -d' ' -f1)
+             | sha256sum | cut -d' ' -f1) || have=""
       if [ "$have" = "$want" ]; then ca_key=$cand; break; fi
     done < <(find "${PKI_DIR:-$HOME/pki}" -type f \( -name '*.key' -o -name '*.pem' \) 2>/dev/null)
+    info "examined $tried candidate key files"
   fi
   if [ -z "$ca_key" ]; then
     echo "error: no reachable private key matches the CA certificate on card $int_card." >&2
@@ -415,7 +437,7 @@ else
 
     for fpr in "${certifiers[@]}"; do
       uid=$(gpg --list-keys --with-colons "$fpr" \
-            | awk -F: '$1=="uid" { if (v == "") v = $10 } END { print v }')
+            | awk -F: '$1=="uid" { if (v == "") v = $10 } END { print v }') || uid="?"
       info "certifying $ci_fpr with $fpr ($uid)"
       # --quick-sign-key, never --quick-lsign-key: a LOCAL signature stays in your keyring and is stripped
       # on export, so the endorsement would be invisible to every user it exists for.
@@ -448,7 +470,7 @@ else
     # one is what makes the bundle a CHAIN rather than a list.
     survived() {  # $1 = signer fingerprint, $2 = signed fingerprint
       GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$2" 2>/dev/null \
-        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }'
+        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }' || true
     }
     for a in "${certifiers[@]}"; do
       for b in "${certifiers[@]}"; do
@@ -464,10 +486,13 @@ else
     done
 
     for fpr in "${certifiers[@]}"; do
+      # A missing key makes gpg exit non-zero, which is the ANSWER here, not an error: the check exists to
+      # report it. Left bare it would abort the run instead, at the one point whose whole job is to say
+      # what did not survive the export.
       have_key=$(GNUPGHOME="$chain_home" gpg --list-keys --with-colons 2>/dev/null \
-        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f { v = "y" } END { print v }')
+        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f { v = "y" } END { print v }') || have_key=""
       have_sig=$(GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$ci_fpr" 2>/dev/null \
-        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }')
+        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }') || have_sig=""
       if [ "$have_key" = y ] && [ "$have_sig" = y ]; then
         info "docs/trust-chain.asc: $fpr is present, and its certification of the CI key survived"
       else
