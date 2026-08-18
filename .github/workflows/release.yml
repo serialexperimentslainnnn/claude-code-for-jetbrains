@@ -367,6 +367,19 @@ jobs:
           gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
           git verify-tag <tag>                        # this workflow cut this release from main
           ```
+
+          **The one check worth doing that this file cannot do for you.** Everything above arrives from
+          this repository, so it proves the release is internally consistent and nothing more — whoever
+          could publish a forged artifact could publish a bundle agreeing with it. The CAs are therefore
+          also on **keys.openpgp.org**, an operator with no relation to GitHub, and fetching one by
+          fingerprint is what turns the chain into evidence:
+
+          ```sh
+          gpg --keyserver hkps://keys.openpgp.org --recv-keys <CA fingerprint from SECURITY.md>
+          ```
+
+          Two copies of the same CA from two unrelated publishers either agree, or the disagreement is
+          the story.
           EOF
           gh release create "$TAG" --draft --title "$TAG" --notes-file /tmp/notes.md --verify-tag
 
