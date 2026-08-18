@@ -50,14 +50,27 @@ object CommandRules {
         re("""\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|python\d?|perl|ruby)\b"""),
         re("""\b(powershell|pwsh)\b[^|;&]*-e(nc|ncodedcommand)?\b\s+[A-Za-z0-9+/=]{16,}"""),
         re("""\b(bitsadmin|mshta|regsvr32|rundll32|installutil|msbuild)\b[^|;&]*(http|/i:|javascript:|scrobj)"""),
-        // Recognised offensive tooling
-        re("""\b(lazagne|secretsdump(\.py)?|impacket-\w+|responder|bloodhound|sharphound|crackmapexec|nxc)\b"""),
-        re("""\b(hashcat|johntheripper|hydra|medusa|patator|ophcrack|hashid)\b"""),
-        re("""\b(sqlmap|msfconsole|msfvenom|metasploit|beef-xss|setoolkit|empire|covenant|sliver)\b"""),
-        re("""\b(nmap|masscan|zmap|nikto|gobuster|dirbuster|feroxbuster|ffuf|wpscan)\b"""),
+        // Recognised offensive tooling — anchored to command position (see cmdStart below), not a bare-word match
+        cmdStart("""lazagne|secretsdump(\.py)?|impacket-\w+|responder|bloodhound|sharphound|crackmapexec|nxc"""),
+        cmdStart("""hashcat|johntheripper|hydra|medusa|patator|ophcrack|hashid"""),
+        cmdStart("""sqlmap|msfconsole|msfvenom|metasploit|beef-xss|setoolkit|empire|covenant|sliver"""),
+        cmdStart("""nmap|masscan|zmap|nikto|gobuster|dirbuster|feroxbuster|ffuf|wpscan"""),
     )
 
     private fun re(p: String) = Regex(p, RegexOption.IGNORE_CASE)
+
+    /**
+     * [names] (a `|`-joined alternation) matched only when it is the command actually being RUN at this shell
+     * position — string start, or right after a `;`/`|`/`&`/newline separator, optionally through a path prefix
+     * (`/usr/bin/nmap`, `./nmap`) and/or a leading `sudo` — never a bare word appearing anywhere in the text.
+     *
+     * The four offensive-tool lines below used to be `\b(name)\b`, which matches the tool's NAME wherever it
+     * occurs: `git commit -m "add nmap parser"`, a path containing `sqlmap`, a `Grep` for the word `hydra`. That
+     * denies an untrusted caller with no override on text that runs nothing — the same failure class `isUnc` and
+     * `substituteAssignments` each cost a live incident over. Anchoring is more PRECISE, not more lax: `nmap` as
+     * an argument to `-m` is still not a match, `nmap` as the command itself still is.
+     */
+    internal fun cmdStart(names: String) = re("""(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?($names)\b""")
 
     /**
      * How much of a matched dangerous command is quoted back in the denial reason. The excerpt is shown to the
@@ -68,12 +81,16 @@ object CommandRules {
 
     // ── the rule ─────────────────────────────────────────────────────────────────────────────────────────
 
-    internal fun dangerousCommand(input: JsonObject): String? {
+    internal fun dangerousCommand(
+        input: JsonObject,
+        home: String? = null,
+        env: Map<String, String> = emptyMap(),
+    ): String? {
         for (command in ToolInputScanner.commandCandidates(input)) {
             // Judge BOTH the raw command and its de-obfuscated form: an attacker hides `cat ~/.ssh/id_rsa` as
             // `c""at ~/.ss$IFS''h/id_rsa`, or ships it base64-encoded to `sh`. Matching only the raw string is a
             // sieve; matching the peeled string closes the cheap evasions (never all of them — see the class doc).
-            for (candidate in setOf(GuardPaths.expandEnv(command, null), deobfuscate(command))) {
+            for (candidate in setOf(GuardPaths.expandEnv(command, home, env), deobfuscate(command, home, env))) {
                 DANGEROUS_COMMANDS.firstOrNull { it.containsMatchIn(candidate) }
                     ?.let { return it.find(candidate)?.value?.take(MATCH_EXCERPT_CHARS) }
             }
@@ -107,7 +124,28 @@ object CommandRules {
      * characters would skip decoding exactly the payloads this step exists to catch. Perf-only; revisit once
      * phase 5's timings exist — if it bought nothing, revert it.
      */
-    fun deobfuscate(command: String): String {
+    fun deobfuscate(command: String, home: String? = null, env: Map<String, String> = emptyMap()): String {
+        var s = command
+        // TO A FIXPOINT, bounded by MAX_ANALYSIS_DEPTH, because the ORDER the tricks were applied in decides
+        // whether one pass is enough. Found by the fuzz suite: `a``ws$\IFSconfigure get secret` really does run
+        // `aws configure get secret`, and a single pass peels it in the wrong order — the `$IFS` step runs before
+        // the backslash step, so it sees `$\IFS`, matches nothing, and by the time the backslash is gone nothing
+        // looks at IFS again. Peeling until the string stops changing is order-independent; the bound is what
+        // keeps it terminating on the thread that reads the binary's entire stdout.
+        var passes = 0
+        while (passes++ < MAX_ANALYSIS_DEPTH) {
+            val next = peel(s, home, env)
+            if (next == s) break
+            s = next
+        }
+        // Base64 is appended AFTER the loop and exactly once: it GROWS the string, so inside the loop it would be
+        // a change on every pass and the fixpoint would never be reached.
+        decodeBase64Payloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
+        return s
+    }
+
+    /** One peeling pass. Idempotent by design, which is what lets [deobfuscate] iterate it safely. */
+    private fun peel(command: String, home: String?, env: Map<String, String>): String {
         var s = command
         if ('\\' in s) {
             // Line continuations first, so a command split across lines becomes one line.
@@ -133,10 +171,9 @@ object CommandRules {
             // Resolve trivial `name=value` assignments, then substitute `$name`/`${name}` with the value.
             s = substituteAssignments(s)
         }
-        // Expand $HOME/~ etc.
-        s = GuardPaths.expandEnv(s, null)
-        // Decode any base64 blob long enough to be a hidden command, and append it so its contents get matched.
-        decodeBase64Payloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
+        // Expand `~`/`$HOME`, and every other variable the launch environment can resolve — transitively, so
+        // `A=$B` with `B` in the environment reaches the value the shell will actually use.
+        s = GuardPaths.expandEnv(s, home, env)
         return s
     }
 

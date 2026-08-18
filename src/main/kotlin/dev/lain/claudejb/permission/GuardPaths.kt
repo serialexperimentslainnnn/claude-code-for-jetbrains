@@ -48,8 +48,8 @@ object GuardPaths {
      * Computed on the **env-expanded** form on purpose: a Windows home can itself be a UNC path, so `$HOME/x`
      * has to be able to acquire the prefix from the value substituted into it.
      */
-    fun normalize(path: String, home: String?): String {
-        val expanded = expandEnv(path.trim(), home)
+    fun normalize(path: String, home: String?, env: Map<String, String> = emptyMap()): String {
+        val expanded = expandEnv(path.trim(), home, env)
         val unc = startsWithDoubleSeparator(expanded)
         val collapsed = expanded.replace('\\', '/').replace(MULTI_SEPARATOR, "/")
         val result = if (unc) "/$collapsed" else collapsed
@@ -72,7 +72,21 @@ object GuardPaths {
     private fun startsWithDoubleSeparator(value: String): Boolean =
         value.length >= 2 && (value[0] == '\\' || value[0] == '/') && value[1] == value[0]
 
-    internal fun expandEnv(value: String, home: String?): String {
+    /**
+     * `~`, `$HOME` and the Windows profile variables from [home] — **and every other variable whose value [env]
+     * carries**.
+     *
+     * [env] is the environment the session will actually be launched with (settings' own env block plus this
+     * IDE's), and expanding from it is what turns `cat $CREDS` from an unjudgeable four-letter word into the path
+     * it really names, judged by the rule that fits it. Without it the guard had two bad options and took the
+     * worse one for years: match the literal `$CREDS` against a credential glob (it never matches) or refuse
+     * every command that mentions a variable (which is most of them).
+     *
+     * A name [env] does not carry is left ALONE rather than blanked — the unexpanded spelling is still a candidate
+     * (see `ToolInputScanner.bothSpellings`), and [EnvIndirection] is what notices that it stayed unresolved.
+     * Blanking it would silently turn `$CREDS/id_rsa` into `/id_rsa`, i.e. invent a destination.
+     */
+    internal fun expandEnv(value: String, home: String?, env: Map<String, String> = emptyMap()): String {
         var v = value
         if (!home.isNullOrBlank()) {
             val h = home.replace('\\', '/').trimEnd('/')
@@ -88,8 +102,78 @@ object GuardPaths {
                 v = h + "/" + v.substring(2)
             }
         }
-        return v
+        return if (env.isEmpty()) v else substituteEnv(v, env)
     }
+
+    /**
+     * Substitutes `$NAME`, `${NAME}`, `$env:NAME` and `%NAME%` from [env], **transitively**: a value that is
+     * itself written in terms of another variable is expanded again, up to [MAX_ENV_PASSES].
+     *
+     * Transitive because one indirection is not a limit an attacker respects: `A=$B`, `B=~/.ssh/id_rsa` and
+     * `cat $A` is the same bypass with one more hop, and stopping after a single pass would leave the guard
+     * matching `$B`. The loop runs to a FIXPOINT and the cap is what makes it terminate — `A=$B` with `B=$A` is a
+     * cycle, and it simply stops, leaving a residual reference behind. That residue is not a leak: it is exactly
+     * what [EnvIndirection] reads as "this could not be resolved", so an unresolvable loop ends in a card.
+     *
+     * `Matcher.quoteReplacement` is not needed here because the replacement is built by hand rather than through
+     * a template — but the hazard it guards against is the same one `CommandRules.substituteAssignments` was
+     * fixed for, so a rewrite of this loop that reaches for `String.replace(Regex, String)` must not pass the
+     * value straight in.
+     */
+    private fun substituteEnv(value: String, env: Map<String, String>): String = expandLoop(value, env).value
+
+    /**
+     * Whether [value] needed MORE than [MAX_ANALYSIS_DEPTH] passes to stop changing — i.e. a chain deeper than
+     * the analysis follows, or a cycle.
+     *
+     * Reported separately from the expanded string because the two answers have different verdicts:
+     * [SecurityRule.UNRESOLVED_VARIABLE] is a card for "nothing here could resolve this", and
+     * [SecurityRule.RECURSION_LIMIT] is a hard block for "this was built so it could not be resolved". One loop
+     * answers both, so they cannot disagree about what happened.
+     */
+    internal fun exceedsEnvDepth(value: String, home: String?, env: Map<String, String>): Boolean {
+        if (env.isEmpty() && home.isNullOrBlank()) return false
+        return expandLoop(expandEnv(value, home), env).exhausted
+    }
+
+    private class Expansion(val value: String, val exhausted: Boolean)
+
+    /** Expand to a fixpoint, or give up at [MAX_ANALYSIS_DEPTH] and say so. */
+    private fun expandLoop(value: String, env: Map<String, String>): Expansion {
+        var v = value
+        repeat(MAX_ANALYSIS_DEPTH) {
+            val next = ENV_REF.replace(v) { m ->
+                val name = m.groupValues.drop(1).firstOrNull { it.isNotEmpty() }.orEmpty()
+                lookup(env, name) ?: m.value // unknown: leave the reference standing, never blank it
+            }
+            if (next == v) return Expansion(v, exhausted = false)
+            v = next
+        }
+        // Still moving after the last allowed pass: a deeper chain, or a cycle. Both are the finding.
+        return Expansion(v, exhausted = ENV_REF.containsMatchIn(v))
+    }
+
+    /** Case-insensitive on the NAME, since `%Path%` and `$PATH` are the same variable on Windows. */
+    private fun lookup(env: Map<String, String>, name: String): String? =
+        env[name] ?: env.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+    /**
+     * A variable reference in any of the four spellings the guard understands.
+     *
+     * **The dollar is spelled `\x24`, and it has to be spelled as something.** A literal one cannot appear in this
+     * file at all — not in the pattern and not in this sentence. Backslash-dollar inside a raw string is a
+     * backslash followed by a TEMPLATE, so the pattern does not compile (there is no variable called `env`); a
+     * dollar in a character class does compile, but ktlint's own parser then reports `Identifier expected` and
+     * refuses the file, prose included; and the escaped-template spelling reads as noise in the middle of a
+     * pattern. `\x24` is the regex engine's own way to write the character, so every tool in the chain agrees.
+     */
+    private val ENV_REF = Regex(
+        """\x24\{([A-Za-z_][A-Za-z0-9_]*)\}""" +
+            """|\x24env:([A-Za-z_][A-Za-z0-9_]*)""" +
+            """|\x24([A-Za-z_][A-Za-z0-9_]*)""" +
+            """|%([A-Za-z_][A-Za-z0-9_]*)%""",
+        RegexOption.IGNORE_CASE,
+    )
 
     /**
      * Containment, on normalized forms: is [path] the root itself or something under it?
@@ -147,8 +231,14 @@ object GuardPaths {
     /** The first character of a candidate that no longer names a path but a variable still to be expanded. */
     private const val UNEXPANDED_PREFIXES = "~\$%"
 
-    /** Rooted at `/`, at a UNC host, or at a drive letter — anything else is relative to the working directory. */
-    private fun isAbsolute(path: String): Boolean = path.startsWith("/") || isDriveRooted(path)
+    /**
+     * Rooted at `/`, at a UNC host, or at a drive letter — anything else is relative to the working directory.
+     *
+     * Internal because [SensitiveGuard]'s OUTSIDE_PROJECT rule needs it too: a bare relative token (most of an
+     * ordinary command or edit) is not "outside the project" just because its literal spelling does not start
+     * with the root's — only an absolute candidate can genuinely name a location elsewhere.
+     */
+    internal fun isAbsolute(path: String): Boolean = path.startsWith("/") || isDriveRooted(path)
 
     /** `C:/…` — the one absolute spelling that starts with neither `/` nor `//`. */
     private fun isDriveRooted(path: String): Boolean = path.length > 2 && path[1] == ':' && path[2] == '/'
@@ -318,8 +408,19 @@ object GuardPaths {
 
     private const val NANOS_PER_MS = 1_000_000L
 
+    /**
+     * One call's worth of concurrent resolves, never more. [resolveWithTimeout] already accepts that a hung
+     * `stat()` leaks a thread — cancellation cannot reach it — but a cached pool means that leak is UNBOUNDED: a
+     * mount that hangs every `stat()` (a dead NFS/SMB share, exactly the kind of path [ForeignTerritory] exists to
+     * flag) spawns one more idle thread per call, forever, for as long as the session runs. A fixed pool caps the
+     * worst case at [MAX_RESOLVER_THREADS] leaked threads total instead of one per call; a task that has to queue
+     * behind a full pool is still bounded by [resolveWithTimeout]'s own `future.get` wait, so queueing costs time,
+     * never correctness.
+     */
+    private const val MAX_RESOLVER_THREADS = 8
+
     /** Daemon threads only — must never keep the JVM alive, and a stuck one (see [resolveWithTimeout]) is expected. */
-    private val resolverExecutor = Executors.newCachedThreadPool { r ->
+    private val resolverExecutor = Executors.newFixedThreadPool(MAX_RESOLVER_THREADS) { r ->
         Thread(r, "SensitiveGuard-resolver").apply { isDaemon = true }
     }
 }

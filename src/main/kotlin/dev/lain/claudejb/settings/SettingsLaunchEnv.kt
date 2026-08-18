@@ -31,7 +31,27 @@ fun ClaudeSettings.parseEnv(): Map<String, String> =
  * running. The current start flow is intentionally left unchanged here.
  */
 fun ClaudeSettings.resolveEnv(): Map<String, String> =
-    EnvScriptLoader.load(state.sourceScript) + parseEnv() + fakeFixtureEnv() + providerEnv() + checkpointEnv()
+    auditedScriptEnv() + parseEnv() + fakeFixtureEnv() + providerEnv() + checkpointEnv()
+
+/**
+ * The environment the source script provides — **after the same security rules the agent's own commands go
+ * through have read it**.
+ *
+ * A `source` is not a preview: its side effects ARE the point, so a script that dumps a key or exports a
+ * credential path has already done it by the time anything could warn about it. It is therefore judged first and
+ * skipped on a finding (see [SourceScriptAudit]), which costs a session the script's environment and costs nothing
+ * else — the opposite trade is a security control that reports the past.
+ */
+private fun ClaudeSettings.auditedScriptEnv(): Map<String, String> {
+    val path = state.sourceScript.trim()
+    if (path.isEmpty()) return emptyMap()
+    val finding = SourceScriptAudit.findingIn(path, sensitivePolicy(project?.basePath))
+    if (finding != null) {
+        SourceScriptAudit.refused(path, finding)
+        return emptyMap()
+    }
+    return EnvScriptLoader.load(path)
+}
 
 /** Env that routes the binary to the selected provider — empty for Anthropic (native auth). */
 private fun ClaudeSettings.providerEnv(): Map<String, String> =

@@ -53,6 +53,46 @@ function withField(match, extra) {
   return payload().items.map((it) => (match(it) ? Object.assign({}, it, extra) : it));
 }
 
+/**
+ * The real menu's shape for the one group that goes two levels deep: the security rules, each carrying its
+ * category as a `sub`. Kept apart from [payload] on purpose — every other group has no `sub` at all, and the
+ * tests above are what pin that those still behave exactly as they did before a second level existed.
+ */
+const nestedPayload = () => ({
+  items: [
+    { key: 'model:opus[1m]', group: 'Model', label: 'Opus 5', on: true, type: 'radio' },
+    {
+      key: 'rule:CREDENTIALS',
+      group: 'Security',
+      sub: 'Sensitive data',
+      label: 'Block credential files',
+      on: true,
+    },
+    {
+      key: 'rule:SECRET_DUMPING_COMMANDS',
+      group: 'Security',
+      sub: 'Sensitive data',
+      label: 'Block dangerous commands',
+      on: true,
+    },
+    {
+      key: 'rule:TEMP_DIR',
+      group: 'Security',
+      sub: 'Filesystem boundary',
+      label: 'Block the temp folder',
+      on: false,
+    },
+    {
+      key: 'rule:SHELL_FILE_WRITE',
+      group: 'Security',
+      sub: 'Filesystem boundary',
+      label: 'Block shell writes',
+      on: true,
+    },
+    { key: 'source:user', group: 'Setting sources', label: 'user', on: true, deferred: true },
+  ],
+});
+
 describe('the ⚙ button', () => {
   let win;
   beforeEach(() => {
@@ -453,6 +493,104 @@ describe('the sections', () => {
   });
 });
 
+describe('a group that goes two levels deep', () => {
+  let q;
+  beforeEach(() => {
+    q = harness();
+    q.win.cc.settingsMenu(nestedPayload());
+    q.gear().click();
+  });
+
+  it('shows the categories, not the rules, when you step into the group', () => {
+    q.enter('Security');
+    expect(q.title()).toBe('Security');
+    // The sub-levels are entries, and none of the eleven rules is on this panel: a wall of switches is what
+    // the level exists to avoid.
+    const subs = Array.from(q.menu().querySelectorAll('.settings-group-entry')).map(
+      (el) => el.querySelector('.menu-item-label').textContent
+    );
+    expect(subs).toEqual(['Sensitive data', 'Filesystem boundary']);
+    expect(q.row('Block credential files')).toBeUndefined();
+  });
+
+  it('shows only that category’s rules one level further in', () => {
+    q.enter('Security');
+    q.entry('Filesystem boundary').click();
+    expect(q.title()).toBe('Filesystem boundary');
+    expect(q.row('Block the temp folder')).toBeTruthy();
+    expect(q.row('Block shell writes')).toBeTruthy();
+    expect(q.row('Block credential files')).toBeUndefined();
+    // The state travels with the row, and the polarity is the host's: `on:false` is a rule switched OFF.
+    expect(q.row('Block the temp folder').getAttribute('aria-checked')).toBe('false');
+    expect(q.row('Block shell writes').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('comes back out ONE level at a time, landing on the entry it came through', () => {
+    q.enter('Security');
+    q.entry('Sensitive data').click();
+    expect(q.title()).toBe('Sensitive data');
+
+    q.back().click();
+    // Back to the categories, NOT to the root: Escape and the back arrow are one step, which is the submenu
+    // behaviour of the ARIA menu pattern. Anything else throws away two levels of navigation from inside one.
+    expect(q.title()).toBe('Security');
+    expect(q.focused()).toContain('Sensitive data');
+
+    q.back().click();
+    expect(q.title()).toBe(null);
+    expect(q.focused()).toContain('Security');
+  });
+
+  it('Escape leaves one level, and only dismisses the popup at the root', () => {
+    q.enter('Security');
+    q.entry('Sensitive data').click();
+    q.key('Escape');
+    expect(q.title()).toBe('Security');
+    q.key('Escape');
+    expect(q.title()).toBe(null);
+    q.key('Escape');
+    expect(q.menu()).toBe(null);
+  });
+
+  it('Right enters a sub-level and Left comes back, the same as the first level', () => {
+    q.enter('Security');
+    q.entry('Filesystem boundary').focus();
+    q.key('ArrowRight');
+    expect(q.title()).toBe('Filesystem boundary');
+    q.key('ArrowLeft');
+    expect(q.title()).toBe('Security');
+  });
+
+  it('a press inside a sub-level sends the host’s key verbatim, once', () => {
+    q.enter('Security');
+    q.entry('Filesystem boundary').click();
+    q.row('Block the temp folder').click();
+    expect(q.toggles()).toEqual([{ type: 'settingsToggle', key: 'rule:TEMP_DIR', on: true }]);
+  });
+
+  it('a push that moves a row to another category is a structural change, so the panel is redrawn', () => {
+    q.enter('Security');
+    q.entry('Sensitive data').click();
+    expect(q.row('Block dangerous commands')).toBeTruthy();
+    // Only `sub` differs. If it were absent from the signature, the panel would compare equal and keep drawing
+    // a row that no longer belongs to it.
+    q.win.cc.settingsMenu({
+      items: nestedPayload().items.map((it) =>
+        it.key === 'rule:SECRET_DUMPING_COMMANDS' ? Object.assign({}, it, { sub: 'Filesystem boundary' }) : it
+      ),
+    });
+    expect(q.row('Block dangerous commands')).toBeUndefined();
+  });
+
+  it('a group with no sub is untouched by the level existing', () => {
+    q.enter('Setting sources');
+    // Straight to the rows, no intermediate panel: exactly as before, which is what makes the wire field
+    // optional rather than a migration.
+    expect(q.title()).toBe('Setting sources');
+    expect(q.row('user')).toBeTruthy();
+  });
+});
+
 describe('what the menu contains', () => {
   let q;
   beforeEach(() => {
@@ -804,6 +942,14 @@ describe('the row’s CSS contract', () => {
     const rule = ruleBody('.settings-menu .menu-item-label');
     expect(rule).toMatch(/max-width:\s*\d+px/);
     expect(rule).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it('reuses the drill-down classes for the second level, adding no CSS of its own', () => {
+    // The sub-level is the same gesture as the first level, so it is the same class — `.settings-group-entry`
+    // for the entry and `.settings-section-items` for the rows. A new class here would be a second popup
+    // language one press deeper, which is exactly what this stylesheet was consolidated to end.
+    expect(css).not.toMatch(/\.settings-sub\b/);
+    expect(css).not.toMatch(/\.settings-subgroup\b/);
   });
 
   it('leaves no rule behind for markup the menu stopped emitting', () => {

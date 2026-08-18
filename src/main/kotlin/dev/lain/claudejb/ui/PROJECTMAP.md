@@ -157,7 +157,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `noteLabel` | fun | `SettingsSection.kt:66` | A small, **width-bounded** HTML note. |
 | `csvSet` | fun | `SettingsSection.kt:70` |  |
 | `CheckboxGroup` | class | `SettingsSection.kt:74` | A row/grid of checkboxes backed by a comma-separated value — the GUI form of a list option. |
-| `SettingsSecuritySection` | class | `SettingsSecuritySection.kt:12` | The deterministic tool-call lock's six per-rule switches (see `permission/SensitiveGuard.kt`). |
+| `SettingsSecuritySection` | class | `SettingsSecuritySection.kt:40` | The deterministic tool-call lock's per-rule switches (see `permission/SensitiveGuard.kt`), one checkbox per … |
 | `SettingsToolsSection` | class | `SettingsToolsSection.kt:17` | Setting sources, the allowed/disallowed tool grids, and the revocable "Always allow" list — all pick-from-checkboxes, … |
 | `TabSessionCommands` | class | `TabSessionCommands.kt:29` | The conversation commands behind the tool window's gear menu — restore, rename, fork, reopen — and how a past session … |
 

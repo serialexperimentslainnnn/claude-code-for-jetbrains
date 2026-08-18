@@ -96,7 +96,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ClaudeSessionEventSurfacingHeadlessTest` | class | `headless/ClaudeSessionEventSurfacingHeadlessTest.kt:20` | Headless: the binary->host events surfaced in 3.3.0 reach session state / the transcript, driven through the … |
 | `ClaudeSessionTokenAccountingHeadlessTest` | class | `headless/ClaudeSessionTokenAccountingHeadlessTest.kt:15` | Headless: token accounting of [ClaudeSession] WITHOUT starting the binary, driven through the … |
 | `ClaudeSettingsConfigurableHeadlessTest` | class | `headless/ClaudeSettingsConfigurableHeadlessTest.kt:19` | Headless: the Settings page builds, resets, detects modifications, and applies without starting any process. |
-| `ClaudeSettingsHeadlessTest` | class | `headless/ClaudeSettingsHeadlessTest.kt:13` | Headless: the [ClaudeSettings] project service holds launch defaults and the "Always allow" tool set. |
+| `ClaudeSettingsHeadlessTest` | class | `headless/ClaudeSettingsHeadlessTest.kt:14` | Headless: the [ClaudeSettings] project service holds launch defaults and the "Always allow" tool set. |
 | `CredentialsVaultHeadlessTest` | class | `headless/CredentialsVaultHeadlessTest.kt:26` | Headless: [CredentialsVault] moves the binary's credentials file into the IDE's PasswordSafe and back. |
 | `DiffLifecycleManagerTest` | class | `headless/DiffLifecycleManagerTest.kt:17` | Headless: [DiffLifecycleManager] owns snapshot capture, the auto-opened diff registry and the write-safe VFS refresh … |
 | `GitChatRoutingHeadlessTest` | class | `headless/GitChatRoutingHeadlessTest.kt:46` | Headless: where a Git action's turn goes. |
@@ -117,16 +117,19 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `MultiMessageTokenFoldIntegrationTest` | class | `integration/MultiMessageTokenFoldIntegrationTest.kt:10` | A turn that emits two assistant messages: message_delta usage restarts near zero per message, so the first message's … |
 | `RateLimitIntegrationTest` | class | `integration/RateLimitIntegrationTest.kt:8` | A `rate_limit_event` on the stream is decoded into [RateLimitInfo] and exposed via [ClaudeSession.rateLimit] (drives … |
 | `ResumeFlowIntegrationTest` | class | `integration/ResumeFlowIntegrationTest.kt:18` | Resume path: the `claude` binary's own JSONL sidecar under `~/.claude/projects/<encoded>/<id>.jsonl` is the source of … |
-| `SecurityToggleLiveIntegrationTest` | class | `integration/SecurityToggleLiveIntegrationTest.kt:14` | Real-world regression: a user reported that flipping a Security toggle (Settings ▸ Claude Code ▸ Security) required an … |
+| `SecurityToggleLiveIntegrationTest` | class | `integration/SecurityToggleLiveIntegrationTest.kt:15` | Real-world regression: a user reported that flipping a Security toggle (Settings ▸ Claude Code ▸ Security) required an … |
 | `ThinkingFlowIntegrationTest` | class | `integration/ThinkingFlowIntegrationTest.kt:9` | A turn that streams thinking deltas and finalizes a thinking + text assistant message produces both a THINKING and an … |
 | `TokenAccountingIntegrationTest` | class | `integration/TokenAccountingIntegrationTest.kt:9` | Token bookkeeping across a single turn: message_start seeds the four live counters (input / cache_creation / … |
 | `ToolPermissionIntegrationTest` | class | `integration/ToolPermissionIntegrationTest.kt:10` | Full can_use_tool round-trip in default mode: a Write tool_use produces a `control_request` that the broker surfaces … |
 | `WriteUnsafeContextRegressionIntegrationTest` | class | `integration/WriteUnsafeContextRegressionIntegrationTest.kt:15` | Regression for the "Write-unsafe context" crash: a cascade of three Write tool calls in one turn must process cleanly … |
 | `PermissionBrokerMatrixTest` | class | `permission/PermissionBrokerMatrixTest.kt:26` | Matrix coverage of [PermissionBroker.handle]: the cross-product of {permissionMode} x {tool} x {withinRoot} x … |
 | `PermissionBrokerTest` | class | `permission/PermissionBrokerTest.kt:22` | Tests the [PermissionBroker]'s decision wiring through its injected lambdas (no process, no UI). |
+| `ScriptAnalysisTest` | class | `permission/ScriptAnalysisTest.kt:22` | [SecurityRule.SCRIPT_EXECUTION] against **real files on disk**, because the whole rule is about reading one. |
+| `SecurityRuleFamiliesTest` | class | `permission/SecurityRuleFamiliesTest.kt:20` | The rule families added in 5.5.0 — raw devices, shell file writes, proxy bypass, blocked domains, and the two OPAQUE … |
+| `SensitiveGuardFuzzTest` | class | `permission/SensitiveGuardFuzzTest.kt:30` |  |
 | `SensitiveGuardTest` | class | `permission/SensitiveGuardTest.kt:27` | The deterministic sensitive-data lock ([SensitiveGuard]) — exhaustive on purpose: this is enforcement code the model … |
-| `SensitiveGuardEvasionTest` | class | `permission/SensitiveGuardTest.kt:603` |  |
-| `SensitiveGuardResolverPerformanceTest` | class | `permission/SensitiveGuardTest.kt:690` | Regression coverage for a live incident: [SensitiveGuard.Policy.pathResolver] (`File(x).canonicalPath`, a blocking, … |
+| `SensitiveGuardEvasionTest` | class | `permission/SensitiveGuardTest.kt:720` |  |
+| `SensitiveGuardResolverPerformanceTest` | class | `permission/SensitiveGuardTest.kt:807` | Regression coverage for a live incident: [SensitiveGuard.Policy.pathResolver] (`File(x).canonicalPath`, a blocking, … |
 | `SensitiveGuardUncShapeTest` | class | `permission/SensitiveGuardUncShapeTest.kt:39` | Which spellings the guard is willing to read as a **network share**, and which it must not — the third incident in one … |
 | `ApiKeyApprovalTest` | class | `process/ApiKeyApprovalTest.kt:32` | [ApiKeyApproval] and [ConsoleApiKey] both write to `~/.claude.json` — **the user's own CLI config, shared with every … |
 | `BinaryInstallTest` | class | `process/BinaryInstallTest.kt:18` | [BinaryInstall]: the install-method catalogue and the "is this really the claude binary?" validation. |
@@ -190,6 +193,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `WorkspaceDiffReviewTest` | class | `session/WorkspaceDiffReviewTest.kt:14` | [WorkspaceDiffReview] — rebuilding the BASE side of a whole-session diff. |
 | `ClaudeSettingsParseEnvTest` | class | `settings/ClaudeSettingsParseEnvTest.kt:11` | Unit tests for [ClaudeSettings.parseEnv]. |
 | `LegacyPermissionModeTest` | class | `settings/LegacyPermissionModeTest.kt:21` | What a repository is allowed to say about the permission mode — see [LegacyPermissionMode]. |
+| `LegacySecurityTogglesTest` | class | `settings/LegacySecurityTogglesTest.kt:15` | The one-release fold that turns the seven `securityBlock*` booleans into `disabledSecurityRules`. |
 | `ProviderTest` | class | `settings/ProviderTest.kt:14` | Pins the security-critical [Provider] launch-env rules: a third-party provider gets its base URL and key as an ATOMIC … |
 | `SecretStoreIsolationContractTest` | class | `settings/SecretStoreIsolationContractTest.kt:35` | A platform test that touches the credential store must install one of its own. |
 | `GitActionCatalogTest` | class | `ui/GitActionCatalogTest.kt:26` | The Git action catalogue, pinned where it is a contract with something that cannot check it back. |
@@ -208,7 +212,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefGitDataTest` | class | `ui/jcef/JcefGitDataTest.kt:28` | Pure-JVM coverage of the Git view's payload: the shape the page is promised, the two ways it degrades when there is no … |
 | `JcefModelLabelTest` | class | `ui/jcef/JcefModelLabelTest.kt:12` | The model-label logic ([JcefModelLabels.modelDisplayLabel] / [JcefModelLabels.deriveModelLabel]) — pure, so tested … |
 | `JcefPayloadTest` | class | `ui/jcef/JcefPayloadTest.kt:32` | Pure-JVM coverage of the OUTBOUND half of the JCEF bridge — [JcefTranscriptPayload] (transcript rows, agent … |
-| `JcefSettingsMenuTest` | class | `ui/jcef/JcefSettingsMenuTest.kt:27` | The composer's ⚙ menu, tested on the pure half. |
+| `JcefSettingsMenuTest` | class | `ui/jcef/JcefSettingsMenuTest.kt:29` | The composer's ⚙ menu, tested on the pure half. |
 | `LoopbackPageServerTest` | class | `ui/jcef/LoopbackPageServerTest.kt:23` | Pure-JVM coverage of the loopback fallback that serves the chat document in Remote Development. |
 | `PageArrivalTest` | class | `ui/jcef/PageArrivalTest.kt:20` | Whether a finished load actually delivered the chat page — the question [pageArrived] answers and `onLoadEnd` does not. |
 | `PageRouteTest` | class | `ui/jcef/PageRouteTest.kt:19` | The order in which the chat page is attempted, and the fact that the attempts run out. |

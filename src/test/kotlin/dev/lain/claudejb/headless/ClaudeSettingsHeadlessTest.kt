@@ -1,6 +1,7 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.SecretStore
@@ -58,25 +59,33 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         assertEquals("opus[1m]", settings.state.model)
         assertTrue(settings.restoreOpenChatsOnStartup)
         assertTrue(settings.state.restoreOpenChatsOnStartup)
-        // Security toggles (Settings ▸ Claude Code ▸ Security) all default ON — a fresh install reproduces the
-        // original hard lock exactly; the user must explicitly soften a rule.
-        assertTrue(settings.state.securityBlockCredentials)
-        assertTrue(settings.state.securityBlockDangerousCommands)
-        assertTrue(settings.state.securityBlockForeignOtherUserHome)
-        assertTrue(settings.state.securityBlockForeignNetworkMounts)
-        assertTrue(settings.state.securityBlockForeignWslMounts)
+        // Nothing is disabled on a fresh install, which IS the original hard lock: the stored value is the set of
+        // rules the user switched off, so "every rule enforced" is the empty string rather than N booleans.
+        assertEquals("", settings.state.disabledSecurityRules)
+        assertEquals("", settings.state.securityExtraBlockedDomains)
     }
 
-    fun `test sensitivePolicy wires the security toggles through`() {
-        settings.state.securityBlockCredentials = false
-        settings.state.securityBlockForeignWslMounts = false
+    fun `test sensitivePolicy wires the disabled rules through`() {
+        settings.state.disabledSecurityRules = "CREDENTIALS,WSL_MOUNT"
         val policy = settings.sensitivePolicy(projectRoot = null)
-        assertFalse(policy.enforceCredentials)
-        assertFalse(policy.enforceForeignWslMounts)
-        // Untouched toggles stay at their default.
-        assertTrue(policy.enforceDangerousCommands)
-        assertTrue(policy.enforceForeignOtherUserHome)
-        assertTrue(policy.enforceForeignNetworkMounts)
+        assertEquals(setOf(SecurityRule.CREDENTIALS, SecurityRule.WSL_MOUNT), policy.disabledRules)
+        // Everything not named stays enforced, including rules that did not exist when this was seven booleans.
+        assertFalse(SecurityRule.SHELL_FILE_WRITE in policy.disabledRules)
+        assertFalse(SecurityRule.BLOCKED_DOMAIN in policy.disabledRules)
+    }
+
+    fun `test an unresolvable rule id is dropped rather than guessed at`() {
+        // The failure direction that makes the disabled set the right thing to store: a stale or garbled id can
+        // only ever fail to turn a rule OFF.
+        settings.state.disabledSecurityRules = "credentials,NOT_A_RULE,TEMP_DIR"
+        val policy = settings.sensitivePolicy(projectRoot = null)
+        assertEquals(setOf(SecurityRule.TEMP_DIR), policy.disabledRules)
+    }
+
+    fun `test the extra blocked domains reach the policy, comments and blanks dropped`() {
+        settings.state.securityExtraBlockedDomains = "# mine\npaste.example.com\n\n  drop.example.net  "
+        val policy = settings.sensitivePolicy(projectRoot = null)
+        assertEquals(listOf("paste.example.com", "drop.example.net"), policy.extraBlockedDomains)
     }
 
     fun `test a replaced state is what the settings then report`() {

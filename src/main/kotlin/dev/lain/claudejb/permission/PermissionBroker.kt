@@ -297,16 +297,19 @@ class PermissionBroker(
          *  always comes from a classification), so this exists so an unexpected null degrades to something
          *  truthful rather than to an empty message. */
         const val SENSITIVE_DENIED: String =
-            "Denied by the IDE: this call touches credentials, a dangerous command, or territory outside your own " +
-                "space. Ask the user to run it themselves, or to adjust Settings ▸ Claude Code ▸ Security."
+            "Denied by the IDE: this call touches credentials, a dangerous command, or territory it must not. " +
+                "Do not retry it and do not attempt another way to reach the same result."
 
-        /** The model-facing refusal: the guard's own words, framed so the model stops retrying instead of
-         *  rephrasing the same call. Kept pure and public so the wording is unit-testable. */
+        /**
+         * The model-facing refusal: states WHAT tripped the guard and WHAT the model must stop doing — nothing
+         * else. Deliberately carries no suggested workaround ("ask the user to run it themselves", "try X
+         * instead"): a refusal that hands the model its next move is an invitation to keep pushing at the same
+         * boundary from a different angle, which is exactly the shape a prompt injection exploits. The model is
+         * told to stop, not redirected — figuring out what to do next, if anything, is its problem, not this
+         * message's. Kept pure and public so the wording is unit-testable.
+         */
         fun denialMessage(reason: String?): String =
-            reason?.let {
-                "Denied by the IDE: it $it. This is not something retrying will change — ask the user to " +
-                    "run it themselves if they intended it."
-            }
+            reason?.let { "Denied by the IDE: it $it. Do not retry it and do not attempt another way to do the same thing." }
                 ?: SENSITIVE_DENIED
     }
 }

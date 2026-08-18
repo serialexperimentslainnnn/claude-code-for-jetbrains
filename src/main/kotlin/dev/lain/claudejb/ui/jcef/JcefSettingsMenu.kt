@@ -1,5 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.permission.SecurityCategory
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EffortLevel
@@ -32,12 +34,16 @@ import kotlinx.serialization.json.put
  * one of them take effect.
  *
  * **The keys are a closed set and the page never invents one.** A row that is not a single boolean field
- * carries a composite key — `mode:acceptEdits`, `always:Bash` — which the page returns verbatim and never
- * interprets. [apply] re-checks the suffix against the catalogue the row was built from (the session's model
- * list, [EffortLevel], [PermissionMode], [ClaudeSession.SETTING_SOURCES], [ToolNaming.BUILTIN_TOOLS]) before
- * writing anything, so "closed set" stays true because the value is VERIFIED, not because the string came
- * from somewhere trusted. A settings write is the last place to accept an arbitrary string from a browser,
- * and six of these rows are the deterministic guard's own switches.
+ * carries a composite key — `mode:acceptEdits`, `rule:TEMP_DIR`, `always:Bash` — which the page returns verbatim
+ * and never interprets. [apply] re-checks the suffix against the catalogue the row was built from (the session's
+ * model list, [EffortLevel], [PermissionMode], [SecurityRule], [ClaudeSession.SETTING_SOURCES],
+ * [ToolNaming.BUILTIN_TOOLS]) before writing anything, so "closed set" stays true because the value is VERIFIED,
+ * not because the string came from somewhere trusted. A settings write is the last place to accept an arbitrary
+ * string from a browser, and eleven of these rows are the deterministic guard's own switches.
+ *
+ * **One group has a third level.** A row may carry a `sub`, and the security rules are the only rows that do:
+ * eleven switches in one flat list is a wall, so they are drawn under their own [SecurityCategory]. A row without
+ * a `sub` behaves exactly as it did before that existed.
  */
 internal object JcefSettingsMenu {
 
@@ -170,16 +176,28 @@ internal object JcefSettingsMenu {
         entry("partialMessages", "Chat", "Stream partial messages", s.includePartialMessages)
     }
 
-    // The six the guard is made of. They are here because the moment you want one is the moment it has just
-    // refused something — and a trip to a settings dialog then is a trip taken while annoyed. Turning one off
-    // never grants anything silently: it downgrades a refusal to a card you still have to answer.
+    /**
+     * The rules the guard is made of, one row each, **inside a sub-level per [SecurityCategory]**.
+     *
+     * They are here because the moment you want one is the moment it has just refused something — and a trip to a
+     * settings dialog then is a trip taken while annoyed. Turning one off never grants anything silently: it
+     * downgrades a refusal to a card you still have to answer.
+     *
+     * This is the one group with a third level, and it earned it by growing: seven flat rows were a list, twelve
+     * are a wall. The sub-level is the rule's own [SecurityCategory], so the menu cannot invent a grouping the
+     * guard does not have — and a row's `sub` is the only thing that differs from every other group here.
+     *
+     * **Polarity: a row is `on` when the rule is ENFORCED**, which is the same direction as the seven booleans
+     * this replaced (`Block credential files` checked = blocking). The stored field is the DISABLED set, so an
+     * `on:false` ADDS to it — [applyRule] is where that inversion lives, once.
+     */
     private fun JsonArrayBuilder.securityRows(s: ClaudeSettings.State) {
-        entry("blockCredentials", "Security", "Block credential files", s.securityBlockCredentials)
-        entry("blockDangerous", "Security", "Block dangerous commands", s.securityBlockDangerousCommands)
-        entry("blockTempDirs", "Security", "Block the system temp folder", s.securityBlockTempDirs)
-        entry("blockOtherHomes", "Security", "Block other users' home folders", s.securityBlockForeignOtherUserHome)
-        entry("blockNetworkMounts", "Security", "Block network mounts", s.securityBlockForeignNetworkMounts)
-        entry("blockWslMounts", "Security", "Block other WSL drives", s.securityBlockForeignWslMounts)
+        val disabled = csvItems(s.disabledSecurityRules)
+        SecurityCategory.entries.forEach { category ->
+            SecurityRule.of(category).forEach { rule ->
+                entry("$RULE:${rule.name}", "Security", rule.label, rule.name !in disabled, sub = category.label)
+            }
+        }
     }
 
     private fun JsonArrayBuilder.sourceRows(s: ClaudeSettings.State) {
@@ -204,6 +222,10 @@ internal object JcefSettingsMenu {
      * One row. `type` and `deferred` are always emitted rather than left to the page's defaults: the page
      * decides the group heading from `deferred`, and a value it has to infer is one that can be inferred
      * differently on the next module that reads it.
+     *
+     * [sub] is the exception, and it is omitted when there is none **on purpose**: a row without it is a row of
+     * the group itself, exactly as every row was before the security rules needed a third level, so the other
+     * nine groups are untouched by its existence rather than opted out of it.
      */
     private fun JsonArrayBuilder.entry(
         key: String,
@@ -212,9 +234,11 @@ internal object JcefSettingsMenu {
         on: Boolean,
         radio: Boolean = false,
         deferred: Boolean = false,
+        sub: String? = null,
     ) = addJsonObject {
         put("key", key)
         put("group", group)
+        if (sub != null) put("sub", sub)
         put("label", label)
         put("on", on)
         put("type", if (radio) TYPE_RADIO else TYPE_CHECK)
@@ -223,23 +247,24 @@ internal object JcefSettingsMenu {
 
     // ── Writing ──────────────────────────────────────────────────────────────────────────────────────────
 
-    /** The single boolean fields. Null is not a case here: an unknown plain key is simply not ours. */
+    /**
+     * Key → setter, one per single boolean field. A lookup table rather than a `when`: the branches are all the
+     * same shape (assign one field), so a `when` here is only cyclomatic complexity with no decision in it —
+     * this file's `securityRows`/`entry` pairing already treats "one row, one field" as data, not control flow.
+     */
+    private val FLAG_SETTERS: Map<String, (ClaudeSettings.State, Boolean) -> Unit> = mapOf(
+        "restoreChats" to { s, on -> s.restoreOpenChatsOnStartup = on },
+        "reduceMotion" to { s, on -> s.reduceMotion = on },
+        "checkpointing" to { s, on -> s.enableFileCheckpointing = on },
+        "partialMessages" to { s, on -> s.includePartialMessages = on },
+        "ideMcp" to { s, on -> s.ideMcpEnabled = on },
+        "strictMcp" to { s, on -> s.strictMcpConfig = on },
+    )
+
+    /** Null is not a case here: an unknown plain key is simply not ours. */
     private fun applyFlag(state: ClaudeSettings.State, key: String, on: Boolean): Boolean {
-        when (key) {
-            "restoreChats" -> state.restoreOpenChatsOnStartup = on
-            "reduceMotion" -> state.reduceMotion = on
-            "checkpointing" -> state.enableFileCheckpointing = on
-            "partialMessages" -> state.includePartialMessages = on
-            "blockCredentials" -> state.securityBlockCredentials = on
-            "blockDangerous" -> state.securityBlockDangerousCommands = on
-            "blockTempDirs" -> state.securityBlockTempDirs = on
-            "blockOtherHomes" -> state.securityBlockForeignOtherUserHome = on
-            "blockNetworkMounts" -> state.securityBlockForeignNetworkMounts = on
-            "blockWslMounts" -> state.securityBlockForeignWslMounts = on
-            "ideMcp" -> state.ideMcpEnabled = on
-            "strictMcp" -> state.strictMcpConfig = on
-            else -> return false
-        }
+        val setter = FLAG_SETTERS[key] ?: return false
+        setter(state, on)
         return true
     }
 
@@ -257,9 +282,11 @@ internal object JcefSettingsMenu {
         else -> null
     }
 
-    /** The three multi-valued groups, each persisted as one CSV field. Null when [prefix] names none of them. */
+    /** The multi-valued groups, each persisted as one CSV field. Null when [prefix] names none of them. */
     private fun applyList(state: ClaudeSettings.State, prefix: String, value: String, on: Boolean): Boolean? =
         when (prefix) {
+            RULE -> applyRule(state, value, on)
+
             SOURCE -> toggle(value in ClaudeSession.SETTING_SOURCES, state.settingSources, value, on) {
                 state.settingSources = it
             }
@@ -274,6 +301,22 @@ internal object JcefSettingsMenu {
 
             else -> null
         }
+
+    /**
+     * `rule:TEMP_DIR` → add or remove that rule from the guard's DISABLED set. False for a name outside
+     * [SecurityRule], which is what keeps the key set closed against a browser.
+     *
+     * **The inversion lives here and only here**: the row is `on` when the rule is ENFORCED, and the field stores
+     * what is switched OFF, so `on` and the CSV membership are opposites. Written through
+     * [SecurityRule.canonicalCsv] rather than left in toggle order, because the Settings page rebuilds the same
+     * field from its checkboxes and compares the two spellings to decide whether it has been edited.
+     */
+    private fun applyRule(state: ClaudeSettings.State, value: String, on: Boolean): Boolean {
+        val rule = SecurityRule.from(value) ?: return false
+        val next = csvToggle(state.disabledSecurityRules, rule.name, on = !on)
+        state.disabledSecurityRules = SecurityRule.canonicalCsv(csvItems(next))
+        return true
+    }
 
     /**
      * One option of a radio group: [write] it when it was chosen, and refuse outright when [known] is false.
@@ -331,6 +374,7 @@ internal object JcefSettingsMenu {
     private const val MODEL = "model"
     private const val EFFORT = "effort"
     private const val MODE = "mode"
+    private const val RULE = "rule"
     private const val SOURCE = "source"
     private const val ALLOW = "allow"
     private const val DENY = "deny"

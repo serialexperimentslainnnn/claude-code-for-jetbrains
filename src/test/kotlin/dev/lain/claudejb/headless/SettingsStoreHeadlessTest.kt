@@ -51,7 +51,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
             maxBudgetUsd = 12.5
             addDirs = "/tmp/a\n/tmp/b"
             strictMcpConfig = true
-            securityBlockForeignWslMounts = false
+            disabledSecurityRules = "WSL_MOUNT"
             envVars = "FOO=bar\nTOKEN=shhh"
         }
         SettingsStore.save(saved)
@@ -62,7 +62,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
         assertEquals(12.5, loaded.maxBudgetUsd)
         assertEquals("/tmp/a\n/tmp/b", loaded.addDirs)
         assertTrue(loaded.strictMcpConfig)
-        assertFalse(loaded.securityBlockForeignWslMounts)
+        assertEquals("WSL_MOUNT", loaded.disabledSecurityRules)
         // The env block rides inside the document now — the whole thing is encrypted at rest, so there is no
         // longer a reason to keep it in a second entry.
         assertEquals("FOO=bar\nTOKEN=shhh", loaded.envVars)

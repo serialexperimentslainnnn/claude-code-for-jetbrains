@@ -21,12 +21,19 @@ No UI lives here, and no file is written from here.
 | File | What it decides |
 |---|---|
 | `SensitiveGuard.kt` | The verdict. Owns the policy and the order the rules are asked in; delegates every actual test to the files below. |
-| `ToolInputScanner.kt` | The input surface: which string leaves of a tool input are candidate paths, and which are candidate commands. Everything downstream tests what this hands it. |
-| `GuardPaths.kt` | The **path phase**, not a rule family: canonical spelling, `.`/`..` folding, containment against a root, and the bounded off-thread resolution of a candidate's real path. Every rule judges what this produces, so a change here moves all of them at once. |
+| `SecurityRules.kt` | The **vocabulary**: `SecurityCategory` → `SecurityRule` (eleven rules, six categories), which rule denies every caller, and `MAX_ANALYSIS_DEPTH` — the one bound both recursions share. |
+| `ToolInputScanner.kt` | The input surface: which string leaves are candidate paths, which are locations, which are commands, which are URLs, and which are RAW destinations. Everything downstream tests what this hands it. |
+| `GuardPaths.kt` | The **path phase**, not a rule family: canonical spelling, variable expansion (transitive, bounded), `.`/`..` folding, containment against a root, and the bounded off-thread resolution of a candidate's real path. Every rule judges what this produces, so a change here moves all of them at once. |
 | `CredentialPaths.kt` | Whether a path is a credential or key, structurally rather than by name. |
-| `CommandRules.kt` | Whether a command is destructive, after shell de-obfuscation and variable substitution. |
+| `CommandRules.kt` | Whether a command is destructive, after shell de-obfuscation (to a **fixpoint**) and variable substitution. |
 | `ForeignTerritory.kt` | Whether a path leaves the machine's own space: another user's home, a network or UNC mount, a non-`/mnt/c` WSL drive. |
-| `TempDirs.kt` | Whether a path is the system temporary directory (`/tmp`, `/var/tmp`, macOS `/private/*` and `/var/folders`, Windows `…\Temp`), matched by segment. |
+| `TempDirs.kt` | Whether a path is the system temporary directory (`/tmp`, `/var/tmp`, macOS `/private/…` and `/var/folders`, Windows `…\Temp`), matched by segment. |
+| `SystemDevices.kt` | Whether a path names the disk under the filesystem, or live memory — with the inert pseudo-devices exempted, or every `2>/dev/null` would be a card. |
+| `ShellFileWrites.kt` | Whether a command writes or modifies a file, i.e. a write with **no diff to review**. Location-independent: as true inside the project as outside it. |
+| `ProxyRules.kt` | Whether a command routes around the proxy the user declared. Gated on one being declared at all — a **data** gate, not the rule's switch. |
+| `DangerousDomains.kt` | Whether a URL's host is a curated anonymous drop/collect service. A destination allow-list inverted, matched suffix-wise on the HOST, **not** an IOC feed. |
+| `EnvIndirection.kt` | Whether a destination survived expansion unresolved — and whether it was built so it could not be resolved at all (deeper than the bound, or cyclic). |
+| `ScriptExecution.kt` | **Which files a command runs** (sourced, interpreted, launched). It does not judge them: `SensitiveGuard` reads each one and judges its contents with the whole rule set, recursively. |
 | `PermissionBroker.kt` | Modes, `forceAsk`, remembered approvals, and the `PendingPermission` handed to the UI. |
 
 <!-- MAP:GENERATED BEGIN -->
@@ -42,60 +49,113 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 |---|---|---|---|
 | `CommandRules` | object | `CommandRules.kt:17` | Rule family 3 of [SensitiveGuard] — **dangerous commands**: commands that dump a secret at rest, exfiltrate a file, … |
 | `CommandRules.DANGEROUS_COMMANDS` | val | `CommandRules.kt:20` |  |
-| `CommandRules.dangerousCommand` | fun | `CommandRules.kt:71` |  |
-| `CommandRules.deobfuscate` | fun | `CommandRules.kt:110` | Best-effort shell de-obfuscation: peel the cheap tricks an attacker uses to slip a command or a path past a … |
+| `CommandRules.cmdStart` | fun | `CommandRules.kt:73` | [names] (a `\|`-joined alternation) matched only when it is the command actually being RUN at this shell position — … |
+| `CommandRules.dangerousCommand` | fun | `CommandRules.kt:84` |  |
+| `CommandRules.deobfuscate` | fun | `CommandRules.kt:127` | Best-effort shell de-obfuscation: peel the cheap tricks an attacker uses to slip a command or a path past a … |
 | `CredentialPaths` | object | `CredentialPaths.kt:15` | Rule family 1 of [SensitiveGuard] — **credentials and key material**: the blacklist of files worth stealing, and the … |
 | `CredentialPaths.SENSITIVE_GLOBS` | val | `CredentialPaths.kt:18` |  |
 | `CredentialPaths.compile` | fun | `CredentialPaths.kt:100` |  |
+| `DangerousDomains` | object | `DangerousDomains.kt:41` | [SecurityRule.BLOCKED_DOMAIN] — **a curated set of anonymous drop/collect destinations**: paste sites, one-shot file … |
+| `DangerousDomains.BLOCKED_DOMAINS` | val | `DangerousDomains.kt:50` | The built-in set. |
+| `DangerousDomains.blockedHit` | fun | `DangerousDomains.kt:70` | The first blocked HOST among [urls], or null. |
+| `DangerousDomains.host` | fun | `DangerousDomains.kt:85` | The host of [url], lower-cased, without userinfo, port or trailing dot — or null when there is none. |
+| `EnvIndirection` | object | `EnvIndirection.kt:48` | [SecurityRule.UNRESOLVED_VARIABLE] and the variable half of [SecurityRule.RECURSION_LIMIT] — **a destination written … |
+| `EnvIndirection.indirectionHit` | fun | `EnvIndirection.kt:76` | The first destination whose value the guard could not pin down, with the rule that fits WHY — or null when every … |
 | `ForeignTerritory` | object | `ForeignTerritory.kt:16` | Rule family 2 of [SensitiveGuard] — **foreign territory**: another user's home (`/home/<not-me>`, `/Users/<not-me>`, … |
-| `ForeignTerritory.foreignHit` | fun | `ForeignTerritory.kt:52` |  |
-| `ForeignTerritory.foreignHome` | fun | `ForeignTerritory.kt:101` | Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). |
-| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:149` | `\\server\share` / `//server/share` — remote by construction, on any OS. |
+| `ForeignTerritory.foreignHit` | fun | `ForeignTerritory.kt:26` |  |
+| `ForeignTerritory.foreignHome` | fun | `ForeignTerritory.kt:81` | Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). |
+| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:94` | `\\server\share` / `//server/share` — remote by construction, on any OS: a doubled separator whose first segment has … |
 | `GuardPaths` | object | `GuardPaths.kt:16` | The **path phase** of [SensitiveGuard]: one canonical textual form for every candidate, containment against a root, … |
 | `GuardPaths.normalize` | fun | `GuardPaths.kt:51` | One canonical form — and the UNC `//` prefix survives it only when the caller actually wrote a double separator. |
-| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:75` |  |
-| `GuardPaths.under` | fun | `GuardPaths.kt:105` | Containment, on normalized forms: is [path] the root itself or something under it? |
-| `GuardPaths.fold` | fun | `GuardPaths.kt:172` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
-| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:242` | Each candidate, plus — when a resolver is configured — its canonical real path. |
+| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:89` | `~`, `$HOME` and the Windows profile variables from [home] — **and every other variable whose value [env] carries**. |
+| `GuardPaths.exceedsEnvDepth` | fun | `GuardPaths.kt:134` | Whether [value] needed MORE than [MAX_ANALYSIS_DEPTH] passes to stop changing — i.e. |
+| `GuardPaths.under` | fun | `GuardPaths.kt:189` | Containment, on normalized forms: is [path] the root itself or something under it? |
+| `GuardPaths.isAbsolute` | fun | `GuardPaths.kt:241` | Rooted at `/`, at a UNC host, or at a drive letter — anything else is relative to the working directory. |
+| `GuardPaths.fold` | fun | `GuardPaths.kt:262` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
+| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:332` | Each candidate, plus — when a resolver is configured — its canonical real path. |
 | `PendingPermission` | class | `PermissionBroker.kt:17` | A tool request awaiting the user's decision. |
 | `ElicitationCard` | class | `PermissionBroker.kt:55` | The data for an MCP elicitation card (carried on a [PendingPermission]). |
 | `PermissionBroker` | class | `PermissionBroker.kt:71` | Decides `can_use_tool` requests. |
-| `SensitiveGuard` | object | `SensitiveGuard.kt:94` | A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for, or … |
-| `SensitiveGuard.AGENT_TOOLS` | val | `SensitiveGuard.kt:119` | The agent's OWN tools — the allowlist of trusted callers. |
-| `SensitiveGuard.isTrustedCaller` | fun | `SensitiveGuard.kt:199` | True only for the agent's OWN tools. |
-| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:220` | [Verdict] plus its explanation, in a single classification pass. |
+| `ProxyRules` | object | `ProxyRules.kt:25` | [SecurityRule.PROXY_BYPASS] — **egress through a declared proxy only**: once the user has named an … |
+| `ProxyRules.proxyHit` | fun | `ProxyRules.kt:49` |  |
+| `ScriptExecution` | object | `ScriptExecution.kt:52` | [SecurityRule.SCRIPT_EXECUTION] — **the files a call runs**, so the guard can READ them and judge what is inside … |
+| `ScriptExecution.scriptsIn` | fun | `ScriptExecution.kt:104` | Every script [input] runs, normalised and anchored so the reader can open it. |
+| `SecurityCategory` | class | `SecurityRules.kt:26` | The two-level vocabulary of [SensitiveGuard]: a **category** is what the UI groups by, a **rule** is what one toggle … |
+| `MAX_ANALYSIS_DEPTH` | val | `SecurityRules.kt:66` | How deep the guard follows an indirection before it stops following and starts refusing — one bound, shared by the two … |
+| `SecurityRule` | class | `SecurityRules.kt:75` | One switchable rule of [SensitiveGuard]. |
+| `SensitiveGuard` | object | `SensitiveGuard.kt:136` | A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for, … |
+| `SensitiveGuard.AGENT_TOOLS` | val | `SensitiveGuard.kt:154` | The agent's OWN tools — the allowlist of trusted callers. |
+| `SensitiveGuard.isTrustedCaller` | fun | `SensitiveGuard.kt:283` | True only for the agent's OWN tools. |
+| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:304` | [Verdict] plus its explanation, in a single classification pass. |
+| `ShellFileWrites` | object | `ShellFileWrites.kt:45` | [SecurityRule.SHELL_FILE_WRITE] — **a command that writes or modifies a file**, as opposed to the reviewable … |
+| `ShellFileWrites.shellFileWrite` | fun | `ShellFileWrites.kt:69` |  |
+| `SystemDevices` | object | `SystemDevices.kt:32` | [SecurityRule.SYSTEM_DEVICE] — **raw system devices**: reading or writing the block device, physical memory, or … |
+| `SystemDevices.deviceHit` | fun | `SystemDevices.kt:76` | The first candidate that names a raw system device, or null when none does. |
+| `SystemDevices.isSystemDevice` | fun | `SystemDevices.kt:80` | Is [path] a raw system device — matched against both the literal and the [GuardPaths.fold]ed form, the same double … |
 | `TempDirs` | object | `TempDirs.kt:90` | Rule family 4 of [SensitiveGuard] — **the system temporary directory**: `/tmp` and the other spellings of the same … |
 | `TempDirs.tempHit` | fun | `TempDirs.kt:117` | The first candidate that names the temporary directory, or null when none does. |
 | `TempDirs.isTemp` | fun | `TempDirs.kt:126` | Is [path] the system temporary directory, or something inside it? |
-| `ToolInputScanner` | object | `ToolInputScanner.kt:26` | The **input surface** every rule of [SensitiveGuard] is matched against: the paths a tool call names, and the commands … |
-| `ToolInputScanner.messageText` | fun | `ToolInputScanner.kt:84` | The text [input] sends, for the transcript to show WITHOUT the card having to be expanded. |
-| `ToolInputScanner.pathCandidates` | fun | `ToolInputScanner.kt:122` |  |
-| `ToolInputScanner.commandText` | fun | `ToolInputScanner.kt:189` | The raw command/script string [input] carries under a command-shaped key ([COMMAND_KEY]: `command`, `cmd`, `script`, … |
-| `ToolInputScanner.commandCandidates` | fun | `ToolInputScanner.kt:191` |  |
+| `ToolInputScanner` | object | `ToolInputScanner.kt:35` | The **input surface** every rule of [SensitiveGuard] is matched against: the paths a tool call names, and the commands … |
+| `ToolInputScanner.messageText` | fun | `ToolInputScanner.kt:104` | The text [input] sends, for the transcript to show WITHOUT the card having to be expanded. |
+| `ToolInputScanner.pathCandidates` | fun | `ToolInputScanner.kt:150` |  |
+| `ToolInputScanner.locationCandidates` | fun | `ToolInputScanner.kt:195` | [pathCandidates], minus every command-key and pattern-key value. |
+| `ToolInputScanner.destinationCandidates` | fun | `ToolInputScanner.kt:221` | The RAW, unexpanded values of the keys that decide **where this call acts** — a location key, plus every token of a … |
+| `ToolInputScanner.urlCandidates` | fun | `ToolInputScanner.kt:252` | Every URL this call names — from a URL-shaped argument (`WebFetch`'s `url`) **and** from inside a command (`curl … |
+| `ToolInputScanner.commandText` | fun | `ToolInputScanner.kt:353` | The raw command/script string [input] carries under a command-shaped key ([COMMAND_KEY]: `command`, `cmd`, `script`, … |
+| `ToolInputScanner.commandCandidates` | fun | `ToolInputScanner.kt:355` |  |
 
 <!-- MAP:GENERATED END -->
 
 ## Conventions here
 
 - **A new rule is a new file, not a branch** in `SensitiveGuard`. The verdict file stays a verdict.
-- **Detection runs unconditionally.** The per-rule settings toggles downgrade an *outcome* from `DENY` to
+- **What is stored is the set of rules the user switched OFF.** An empty set is the original hard lock, so a
+  rule added later is enforced the moment it exists — enforcement is not a list anyone has to remember to
+  extend. An id that does not resolve is dropped, which can only ever fail to DISABLE something.
+- **Detection runs unconditionally.** The per-rule settings switches downgrade an *outcome* from `DENY` to
   `ASK` — never to `ALLOW`. A disabled rule still produces a card every single time, and `evaluate()`'s
   `Decision.reason` always names the Settings path that produced the downgrade.
+- **Analyse before refusing.** The two rules about *opacity* resolve first and refuse second: a `$VAR` is
+  expanded from the launch environment (transitively) so the call is judged as what it really names, and a
+  script is READ so its contents are judged by every other rule. Only what genuinely cannot be resolved or
+  read is a card. A rule that refuses because it did not look is a rule that gets switched off.
+- **Reaching `MAX_ANALYSIS_DEPTH` is itself a finding**, not a give-up: a variable chain or a script chain
+  deeper than five, or a cycle, is `RECURSION_LIMIT` — a hard block for every caller. The bound is also what
+  makes both recursions terminate on the thread that reads the binary's entire stdout.
+- **Every rewriting step in front of a matcher is a place a rule can be walked around.** So a candidate is
+  judged before AND after expansion, and de-obfuscation runs to a fixpoint rather than in one pass — the
+  ORDER the tricks were applied in decided whether one pass was enough.
 - **`forceAsk` is checked before the mode and before `isRemembered`**, and that order is the point: it only
   ever downgrades an approval to a card. It cannot allow anything that would otherwise have been asked, and a
   guard `DENY` stays a `DENY`.
 - Agent (first-party) tools may be asked; MCP and Skills are denied. `SensitiveGuard.AGENT_TOOLS` is a **trust
   allowlist and is only ever appended to** — it is not an inventory of what exists, and treating it as one is
   how `ToolSearch` once fell into the untrusted branch and took every deferred tool with it.
-- **`FOREIGN` denies regardless of caller trust**, by design. Widening caller trust does not soften it.
+- **Denying every caller is a property of the RULE** (`SecurityRule.deniesEveryCaller`), not of a category the
+  verdict knows by name. The three foreign-territory rules do it because reaching into someone else's space is
+  not a thing to ask about; `RECURSION_LIMIT` does it for the opposite reason — the call was structured so it
+  could not be judged. Widening caller trust softens neither.
 - **The open project is exempt from every LOCATION rule** — credentials, foreign territory and the temp
-  directory alike — and from none of the command ones. `TEMP_DIR` joining that list is not a softening: without
-  it, a project opened from under `$TMPDIR` (a scratch clone, a worktree, the IDE's own test fixtures) turns
-  every single tool call into a card, which is a disabled rule rather than a strict one. The exemption is
-  scoped by `GuardPaths.under` to the project subtree, never to the temp directory containing it.
+  directory alike — and from none of the ones that judge an ACTION (a dangerous command, a shell file write,
+  egress). `TEMP_DIR` joining the exempt list is not a softening: without it, a project opened from under
+  `$TMPDIR` (a scratch clone, a worktree, the IDE's own test fixtures) turns every single tool call into a card,
+  which is a disabled rule rather than a strict one. The exemption is scoped by `GuardPaths.under` to the
+  project subtree, never to the temp directory containing it.
 
 ## Minefields here
 
+- **A payload key is judged as a location, and that is a decision with a known cost.** `old_string`,
+  `new_string` and `content` reach the path rules exactly like `file_path`, so editing a line of documentation
+  that merely QUOTES `/home/bob/.cache/app` is a hard foreign deny until that rule is switched off. It is the
+  strict reading, taken deliberately: the alternative is a rule an attacker satisfies by choosing which key to
+  put the path under. What a payload is still NOT offered to is the two questions it cannot answer —
+  `destinationCandidates` (a `$HOME` in a Makefile being written is text, not a place the call goes) and
+  `urlCandidates` (a link written into a README is not egress). Do not "simplify" those two into the general
+  walk: every edit to a Makefile, a CI file or a shell script becomes a card the moment you do.
+- **The two OPAQUE rules are skipped inside a script the guard is reading** (`depth > 0`), and that exemption is
+  load-bearing rather than a shortcut: a build wrapper is MADE of `$JAVACMD` and `$(cd …)`, so asking "could
+  every variable be resolved" of a file the agent did not write in this request puts a card on every build. The
+  stated cost: a `cat $CREDS` inside a script, with `CREDS` set somewhere the plugin cannot read, is not caught.
 - **`ToolInputScanner.pathCandidates` walks every string leaf of a tool input, and every token of a command.**
   Any string a model happens to emit is tested as a path, which is what makes false positives here so easy and
   so damaging: a hit in `ForeignTerritory` is a hard deny with no override, on an operation the user asked for,

@@ -293,12 +293,11 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         // Any allowed value other than the default, so "the form wrote it back" is distinguishable from
         // "the form left the default alone".
         workloadWindowMinutes = 60
-        securityBlockCredentials = false
-        securityBlockDangerousCommands = false
-        securityBlockTempDirs = false
-        securityBlockForeignOtherUserHome = false
-        securityBlockForeignNetworkMounts = false
-        securityBlockForeignWslMounts = false
+        // Two rules switched off, in the CANONICAL spelling (declaration order): the section rebuilds this field
+        // from its checkboxes and compares the two strings to decide whether the page was edited, so a
+        // non-canonical fixture would make "opening the page is not an edit" fail for a reason that is not a bug.
+        disabledSecurityRules = "CREDENTIALS,TEMP_DIR"
+        securityExtraBlockedDomains = "paste.example.com"
         maxTurns = 7
         maxBudgetUsd = 12.5
         fallbackModel = "sonnet"
@@ -318,10 +317,10 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             // SettingsModelSection
             "effort", "permissionMode", "thinkingTokens", "includePartialMessages",
             "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",
-            // SettingsSecuritySection
-            "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
-            "securityBlockForeignOtherUserHome",
-            "securityBlockForeignNetworkMounts", "securityBlockForeignWslMounts",
+            // SettingsSecuritySection — one field for every rule the user switched off, plus its own egress list.
+            // The seven `securityBlock*` booleans that used to be here are NOT on the form any more: they are
+            // migration inputs read once by LegacySecurityToggles, and the section must leave them alone.
+            "disabledSecurityRules", "securityExtraBlockedDomains",
             // SettingsProviderSection (the key itself is not a state field — it is in the password safe)
             "provider",
             // SettingsExecutableSection
@@ -339,9 +338,18 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
          * is a remembered dialog answer, `enableFileCheckpointing` follows the rewind feature rather than a
          * checkbox, and `sensitiveExtraGlobs` has never had a field. Listed so they are a decision, not an
          * omission.
+         *
+         * The seven `securityBlock*` booleans are here for a different reason and only for one release: they are
+         * **superseded** by `disabledSecurityRules` and are read exactly once, by `LegacySecurityToggles.adopt`,
+         * so the form must neither draw them nor write them. Their presence in this bucket is what pins that —
+         * a section that started writing one again would silently overwrite a migrated configuration.
          */
-        val NOT_ON_THE_FORM =
-            setOf("signedOut", "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs")
+        val NOT_ON_THE_FORM = setOf(
+            "signedOut", "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs",
+            "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
+            "securityBlockForeignOtherUserHome", "securityBlockForeignNetworkMounts",
+            "securityBlockForeignWslMounts", "securityBlockOutsideProject",
+        )
 
         /** On the form, but written only on a real edit — see the assertion at the end of the test. */
         val UNWRITTEN_UNLESS_EDITED = setOf("model")

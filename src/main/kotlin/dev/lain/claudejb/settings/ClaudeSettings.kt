@@ -129,19 +129,40 @@ class ClaudeSettings(internal val project: Project? = null) {
         @JvmField var sensitiveExtraGlobs: String = ""
 
         /**
-         * Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security), one per [SensitiveGuard.Policy]
-         * `enforce*` field — all default **on**, reproducing the original hard-lock behaviour exactly. Turning one
-         * off never silently allows a matching call: [SensitiveGuard.evaluate] always downgrades a disabled rule's
-         * hit to ASK (a card, every time, for every caller) rather than either a silent allow or an unchanged DENY.
+         * The guard's rules the user switched OFF, by [dev.lain.claudejb.permission.SecurityRule] name,
+         * comma-separated. **Empty means every rule is enforced**, and that is the security model rather than a
+         * convenient default: the stored set is the DISABLED one, so a rule added in a later version is enforced
+         * the moment it exists, and a garbled or stale entry can only ever fail to turn a rule off.
+         *
+         * Turning one off never silently allows a matching call: [SensitiveGuard.evaluate] downgrades a disabled
+         * rule's hit to ASK (a card, every time, for every caller) rather than to a silent allow.
+         *
+         * CSV because that is this document's idiom for a set ([allowedTools], [disallowedTools],
+         * [alwaysAllowTools], [settingSources]) and both UI surfaces already have the helpers for one.
          */
+        @JvmField var disabledSecurityRules: String = ""
+
+        /**
+         * EXTRA blocked egress domains, one per line — **added** to
+         * [dev.lain.claudejb.permission.DangerousDomains.BLOCKED_DOMAINS], never replacing it. Same additive-only
+         * rule as [sensitiveExtraGlobs], for the same reason: the built-in half cannot be shrunk from here.
+         */
+        @JvmField var securityExtraBlockedDomains: String = ""
+
+        // --- Superseded by `disabledSecurityRules`, kept ONE release as migration inputs ------------------
+        //
+        // These seven were the per-rule toggles before the rules became a two-level catalogue. They are read
+        // exactly once, by [LegacySecurityToggles.adopt], and then written back to `true` — they are NOT the
+        // configuration any more and nothing else may read them. They stay because [SettingsStore] is
+        // field-agnostic and versionless: deleting a field is not a load error, it is a silent reset to the
+        // property's default, so a user who had turned a rule OFF would silently get it back ON.
+        //
+        // TODO(5.6.0): delete these seven and the adopt() fold with them, once one release has shipped with
+        //  `disabledSecurityRules` — by then every stored document has been rewritten through it at least once.
         @JvmField var securityBlockCredentials: Boolean = true
 
         @JvmField var securityBlockDangerousCommands: Boolean = true
 
-        /**
-         * Rule 4 — an action on the system temporary directory (`permission/TempDirs.kt`). The open project
-         * is exempt even when it sits under one, so this is only ever about `/tmp` outside the project.
-         */
         @JvmField var securityBlockTempDirs: Boolean = true
 
         @JvmField var securityBlockForeignOtherUserHome: Boolean = true
@@ -149,6 +170,8 @@ class ClaudeSettings(internal val project: Project? = null) {
         @JvmField var securityBlockForeignNetworkMounts: Boolean = true
 
         @JvmField var securityBlockForeignWslMounts: Boolean = true
+
+        @JvmField var securityBlockOutsideProject: Boolean = true
 
         // --- Advanced launch options (neutral defaults = flag omitted) ------------------------------
 
