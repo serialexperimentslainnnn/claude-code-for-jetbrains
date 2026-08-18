@@ -309,13 +309,32 @@ EXT
   # Carried as PKCS#12 because that is the one container holding key, leaf and issuer together, and with
   # the same random passphrase used above: pinentry asks once to unlock it and once to protect it, which
   # is gpg-agent doing its job, not a manual step bolted on.
-  openssl pkcs12 -export -inkey "$tmp/leaf.key" -in "$tmp/leaf.crt" -certfile "$tmp/int.crt" \
-    -name "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -nameopt RFC2253)" \
-    -passin "file:$tmp/keypass" -passout "file:$tmp/keypass" -out "$tmp/leaf.p12" 2>/dev/null
-  if gpgsm --batch --import "$tmp/leaf.p12" 2>/dev/null; then
+  # The SAME passphrase twice, one per line, and that is not redundancy: when `-passin` and `-passout`
+  # name the same file, OpenSSL reads line 1 for the first and line 2 for the SECOND. A one-line file
+  # therefore fails at the passout with "Error reading password from BIO" — an I/O error message for what
+  # is really an empty password, which is why it does not read like the file-format problem it is.
+  # Each line is TERMINATED, which is the whole trick: `$tmp/keypass` is written with no trailing newline,
+  # so concatenating it twice yields one line holding the passphrase twice — the same failure, reached by
+  # a different route, and one that a test using a newline-terminated file cannot see.
+  printf '%s\n%s\n' "$(cat "$tmp/keypass")" "$(cat "$tmp/keypass")" > "$tmp/keypass2"
+
+  # Nothing from here to the end of the local copy may abort the run. It is an audit convenience, the
+  # deliverable (three secrets) is already set, and step 4 — the GPG key the releases are signed with — is
+  # still to come: failing here used to take the whole bootstrap down AFTER the part that mattered
+  # succeeded, which reads as "the script does nothing" for a reason that costs nothing.
+  # The import is LOOPBACK, with the passphrase on a file descriptor. Left to pinentry, gpgsm asks for the
+  # passphrase protecting the PKCS#12 — which is the random one generated above and deliberately never
+  # displayed, so there is nobody who could answer it. A prompt no human can satisfy is worse than none:
+  # it stops the run dead on a step whose whole purpose is to leave nothing manual behind.
+  if openssl pkcs12 -export -inkey "$tmp/leaf.key" -in "$tmp/leaf.crt" -certfile "$tmp/int.crt" \
+       -name "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -nameopt RFC2253)" \
+       -passin "file:$tmp/keypass2" -passout "file:$tmp/keypass2" -out "$tmp/leaf.p12" 2>"$tmp/p12.err" \
+     && gpgsm --batch --pinentry-mode loopback --passphrase-fd 3 \
+          --import "$tmp/leaf.p12" 3< "$tmp/keypass" 2>>"$tmp/p12.err"; then
     info "kept a copy of the issued certificate and key in the local gpgsm store"
   else
-    warn "could not import the issued key into gpgsm — CI has it, you have no local copy."
+    warn "could not keep a local copy of the issued key — CI has it, you do not."
+    warn "  $(tr '\n' ' ' < "$tmp/p12.err" 2>/dev/null || true)"
     warn "the certificate is reproducible by re-running this step; nothing is lost but the audit trail."
   fi
 
@@ -323,9 +342,9 @@ EXT
   # still needed cannot be deleted early — which makes "delete it here" a claim the rest of the step has to
   # keep true. The trap remains as the backstop for the paths that exit before this line. The CA key is not
   # in this list because it was never copied here: it was read in place, from the PKI that owns it.
-  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/leaf.p12" \
+  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/leaf.p12" "$tmp/p12.err" \
                   "$tmp/leaf.csr" "$tmp/leaf.ext" "$tmp/leaf.key" "$tmp/leaf.crt" \
-                  "$tmp/fullchain.crt" "$tmp/keypass"; do
+                  "$tmp/fullchain.crt" "$tmp/keypass" "$tmp/keypass2"; do
     [ -e "$leftover" ] || continue
     shred -u "$leftover" 2>/dev/null || { : > "$leftover"; rm -f "$leftover"; }
   done
