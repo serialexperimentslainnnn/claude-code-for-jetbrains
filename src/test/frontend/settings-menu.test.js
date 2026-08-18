@@ -256,6 +256,27 @@ describe('the sections', () => {
     expect(entry.getAttribute('aria-expanded')).toBeNull();
   });
 
+  it('the section’s rows are in a container the stylesheet actually SHOWS', () => {
+    // The defect this pins, and the reason it is asserted against CSS text: the panel first reused
+    // `.menu-group-items`, the pill menus' accordion body, which is `display: none` unless a
+    // `.menu-group.open` ancestor reveals it. This panel has no such ancestor, so every section opened to a
+    // header with nothing under it — rows present, correct and invisible. jsdom lays nothing out, so every
+    // DOM assertion in this file stayed green while the menu was unusable.
+    q.enter('Security');
+    const region = q.menu().querySelector('[role="group"]');
+    expect(region.className).toBe('settings-section-items');
+    expect(region.className).not.toContain('menu-group-items');
+    // Its own rule, and one that shows it. The accordion's is the counter-example, quoted here so the two
+    // cannot be confused again: `.menu-group-items` is hidden until a parent opts in.
+    const sheet = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    const body = (sel) => {
+      const at = sheet.indexOf('\n' + sel + ' {');
+      return at < 0 ? null : sheet.slice(sheet.indexOf('{', at) + 1, sheet.indexOf('}', at));
+    };
+    expect(body('.settings-section-items')).toMatch(/display:\s*block/);
+    expect(body('.menu-group-items')).toMatch(/display:\s*none/);
+  });
+
   it('pressing one REPLACES the panel with that section, behind a back arrow', () => {
     q.enter('Security');
     expect(q.title()).toBe('Security');
@@ -757,8 +778,11 @@ describe('the row’s CSS contract', () => {
     // accordion went when the menu started drilling down, so this menu emits no `.menu-group` wrapper and no
     // `.menu-group-header` — and the rules that dressed them for THIS popup went with them. The base
     // `.menu-group` rules stay, because the pill menus do still fold.
-    expect(css).not.toMatch(/\.settings-section\b/);
     expect(css).not.toMatch(/\.settings-menu \.menu-group\b/);
     expect(css).not.toMatch(/\.settings-menu \.menu-group-header\b/);
+    // `.settings-section-items` IS emitted (it is the open section's rows) — which is why this asserts the
+    // exact old class rather than a prefix of the new one. A `\b` after `section` matches the `-` in
+    // `section-items`, and a test that fails on the thing it was written to allow is a test nobody trusts.
+    expect(css).not.toMatch(/\.settings-section \{/);
   });
 });

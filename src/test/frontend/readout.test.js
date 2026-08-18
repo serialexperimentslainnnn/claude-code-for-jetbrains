@@ -161,10 +161,14 @@ describe('plan-limit bars', () => {
         { key: 'seven_day', label: 'All models', pct: 9 },
       ],
     });
-    expect(items()[0].querySelector('.ub-reset').textContent).toBe('Reset time: 1h 30m');
-    // Its own line under the bar row, not a fourth item squeezed into it.
-    expect(items()[0].querySelector('.ub-row .ub-reset')).toBeNull();
+    // BESIDE its own percentage, on the window's one line — and bare, without the `Reset time:` label the
+    // vanished row needed. Next to `90.0%`, `1h 30m` is unambiguous, and the spelled-out sentence is in the
+    // cell's `title` for anyone who wants it.
+    expect(items()[0].querySelector('.ub-reset').textContent).toBe('1h 30m');
+    expect(items()[0].querySelector('.ub-row .ub-reset')).not.toBeNull();
     expect(items()[0].querySelector('.ub-row .ub-pct')).not.toBeNull();
+    // Last, so the line reads label · bar · number · how long that number has left.
+    expect(items()[0].querySelector('.ub-row').lastElementChild.className).toBe('ub-reset');
     expect(items()[0].getAttribute('title')).toContain('Resets in 1h 30m');
     // A window with no reset time says NOTHING. The element is emitted and left empty rather than filled
     // with a `—` or an `n/a`: a filler is a value, and the reading anyone would give it here is "resets
@@ -176,7 +180,7 @@ describe('plan-limit bars', () => {
   it('says "soon" once the reset time has passed rather than a negative countdown', () => {
     const past = new Date(Date.now() - 60000).toISOString();
     win.cc.state({ ...base, usage: [{ key: 'a', label: 'Over', pct: 100, resetsAt: past }] });
-    expect(items()[0].querySelector('.ub-reset').textContent).toBe('Reset time: soon');
+    expect(items()[0].querySelector('.ub-reset').textContent).toBe('soon');
     expect(items()[0].getAttribute('title')).toContain('Resets shortly');
   });
 
@@ -392,11 +396,14 @@ describe('mini session view', () => {
     // stops on its own if anything is ever placed after it.
     expect(sheet).toMatch(/\.mini-line > \.mini-fact:first-child \{/);
     expect(sheet).toMatch(/\.mini-fact\.mini-fill:nth-child\(2\):last-child \{/);
-    // And the tracks stay content-independent and shared, which is what keeps the other four rows still.
+    // And the tracks stay content-independent and declared once, which is what keeps the other rows still.
+    // The bars have their own declaration (three windows, three columns) and it is a variable too, so no row
+    // writes a template of its own — see "one column system" above.
     expect(rule('#composer')).toMatch(/--strip-cols:\s*repeat\(4, minmax\(0, 1fr\)\)/);
-    ['.readout', '.usage-bars', '.dash-mini-grid'].forEach((row) => {
+    ['.readout', '.dash-mini-grid'].forEach((row) => {
       expect(rule(row)).toMatch(/grid-template-columns:\s*var\(--strip-cols\)/);
     });
+    expect(rule('.usage-bars')).toMatch(/grid-template-columns:\s*var\(--strip-cols-bars\)/);
   });
 
   /**
@@ -492,10 +499,20 @@ describe('mini session view', () => {
     // "one size" true rather than "four rules that happen to agree today".
     expect(rule('.usage-bars .ub-reset')).not.toMatch(/font-size/);
     expect(rule('.mini-empty')).not.toMatch(/font-size/);
-    // Same tracks and same GAP on all three, both axes taken from the one declaration and never written out.
+    // Same GAP on all three, both axes taken from the one declaration and never written out.
     rows.forEach((selector) => {
-      expect(rule(selector)).toMatch(/grid-template-columns:\s*var\(--strip-cols\)/);
       expect(rule(selector)).toMatch(/gap:\s*var\(--strip-row\) var\(--strip-gap\)/);
+    });
+    // The tracks come from a declaration too — the same one for the rows of DATA, and a second, declared
+    // exception for the plan bars, whose count is not a layout choice: the binary reports three windows, so a
+    // fourth track is an empty track. What matters is that neither writes a template of its own, because a
+    // literal here is how the row count came to change on resize once already.
+    ['.readout', '.dash-mini-grid'].forEach((selector) => {
+      expect(rule(selector)).toMatch(/grid-template-columns:\s*var\(--strip-cols\)/);
+    });
+    expect(rule('.usage-bars')).toMatch(/grid-template-columns:\s*var\(--strip-cols-bars\)/);
+    rows.forEach((selector) => {
+      expect(rule(selector)).not.toMatch(/grid-template-columns:\s*repeat/);
     });
     // …and every row shares the start, so the strip has one left edge instead of four that match. The
     // disclosure is a row of the strip too, and lines up with them.
@@ -505,6 +522,7 @@ describe('mini session view', () => {
     // And the values exist exactly once, on the rows' common ancestor.
     const strip = rule('#composer');
     expect(strip).toMatch(/--strip-cols:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+    expect(strip).toMatch(/--strip-cols-bars:\s*repeat\(3, minmax\(0, 1fr\)\)/);
     expect(strip).toMatch(/--strip-font:\s*11px/);
     expect(strip).toMatch(/--strip-gap:\s*16px/);
     expect(strip).toMatch(/--strip-inset:\s*4px/);
@@ -536,8 +554,11 @@ describe('mini session view', () => {
       expect(rule(selector)).toMatch(/line-height:\s*var\(--strip-line\)/);
       expect(rule(selector)).not.toMatch(/line-height:\s*[\d.]+;/);
     });
-    // A bar and its own countdown are a row boundary like any other — and the pair the value came from.
-    expect(rule('.usage-bars .ub-item')).toMatch(/gap:\s*var\(--strip-row\)/);
+    // The bars' cell holds ONE line now — the countdown moved beside its percentage — so there is no boundary
+    // inside it to space, and it must not declare one: a gap there would put a phantom row's worth of space
+    // inside a cell whose content is a single flex line.
+    expect(rule('.usage-bars .ub-item')).not.toMatch(/gap:/);
+    expect(rule('.usage-bars .ub-item')).not.toMatch(/flex-direction:\s*column/);
     // The two blocks whose bottom margin IS a row gap: what follows each is the next row of the readout.
     ['.usage-bars', '.dash-mini'].forEach((selector) => {
       expect(rule(selector)).toMatch(/margin:\s*0 var\(--strip-inset\) var\(--strip-row\)/);
@@ -547,11 +568,12 @@ describe('mini session view', () => {
   });
 
   /**
-   * The five rows, in order, and a short row that stops rather than stretching.
+   * The four rows, in order, and a short row that stops rather than stretching.
    *
-   * Top to bottom: the plan bars, each window's countdown under its own bar, the two lines of standing
-   * facts, and the status line last — closest to the box you type in, which is where what a turn is doing
-   * belongs rather than four rows above it.
+   * Top to bottom: the plan bars with each window's countdown beside its own percentage, the two lines of
+   * standing facts, and the status line last — closest to the box you type in, which is where what a turn is
+   * doing belongs rather than three rows above it. It was five: the countdowns had a row of their own, which
+   * spent a line of the strip repeating `Reset time:` three times.
    *
    * IT IS THE DOM'S ORDER AND THIS TEST READS THE DOM, deliberately. `order:` and `column-reverse` would
    * paint the same picture and leave the tab order in the sequence the elements were appended in, which is a
@@ -559,10 +581,10 @@ describe('mini session view', () => {
    * on CSS. Two of the three are MOVED into place by `ensureMini`, so what is pinned here is where they
    * ended up, not the rule that put them there.
    */
-  it('is five rows in one order, and a short row stops instead of filling the width', () => {
+  it('is four rows in one order, and a short row stops instead of filling the width', () => {
     // TWO payloads, and they are not interchangeable — which is why this test was once asserting about a row
-    // that was not there. `cc.state` carries `usage` as an ARRAY of plan windows and is what draws rows four
-    // and five; `cc.session` carries `usage` as `{ plan, windows }` for the dashboard's own card, and never
+    // that was not there. `cc.state` carries `usage` as an ARRAY of plan windows and is what draws the bars
+    // row; `cc.session` carries `usage` as `{ plan, windows }` for the dashboard's own card, and never
     // reaches this row. The fixture pushes only the second, so the bars row sat in the DOM empty and
     // `hidden`, and every claim made about it was true of nothing.
     const in90min = new Date(Date.now() + 90 * 60000).toISOString();
@@ -588,16 +610,16 @@ describe('mini session view', () => {
       ['Model:', 'Working dir:'],
       ['Account:', 'Plan:'],
     ]);
-    // Rows four and five are one cell per window: the bar, and the countdown stacked under it. DRAWN, not
-    // merely present — the row hides itself when no window carries a percentage, and a hidden row is not a
-    // row of the strip.
+    // The first row is one cell per window, and the whole window is that one line. DRAWN, not merely present
+    // — the row hides itself when no window carries a percentage, and a hidden row is not a row of the strip.
     const bars = win.document.querySelector('.usage-bars');
     expect(bars.hasAttribute('hidden')).toBe(false);
     const bar = bars.querySelector('.ub-item');
     expect(bar.querySelector('.ub-row .ub-track')).not.toBeNull();
-    // Row five has to carry a countdown to be a row: the element is emitted for every window and left empty
-    // when there is no reset time, and an empty one produces no line at all.
-    expect(bar.querySelector('.ub-reset').textContent).toBe('Reset time: 1h 30m');
+    // The countdown is INSIDE that line, not a row under it. The element is emitted for every window and left
+    // empty when there is no reset time.
+    expect(bar.querySelector('.ub-row .ub-reset').textContent).toBe('1h 30m');
+    expect(bar.children.length).toBe(1);
     // A short row leaves the remaining columns EMPTY. Two facts is two cells, and nothing widens to take up
     // the slack — a row that stretches its last cell has a column layout of its own, which is the defect.
     expect(lines()[0]).toHaveLength(2);

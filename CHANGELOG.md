@@ -259,14 +259,14 @@ Repository and build only — none of it changes the plugin you install.
   the event-driven refreshes (turn edges, `rate_limit_event`, dashboard open, session ready) are unchanged.
 
 ### Added
-- **The chat's plan-limit row now says how long each window has left** — `Reset time: 4h 18m` on its own line
-  directly under that window's bar, with the full sentence in the tooltip. A percentage alone does not say
+- **The chat's plan-limit row now says how long each window has left** — `4h 18m` right after that window's
+  percentage, on the window's own line, with the full sentence in the tooltip. A percentage alone does not say
   whether it is urgent: 90% with eight minutes to go and 90% with six hours to go are different situations,
-  and only the dashboard was answering that. Under the bar rather than beside it because the row is already
-  three items wide per window, and a fourth made the countdown the first thing to be squeezed out — the one
-  case where it matters most. The countdown is computed by one function in `app-core`
+  and only the dashboard was answering that. The countdown is computed by one function in `app-core`
   (`CC.resetIn`/`resetInShort`) that the dashboard card now shares, and a window with no reset time renders
-  no element rather than an empty slot that would read as "resets now".
+  nothing rather than an empty slot that would read as "resets now". The bars row takes **three** columns
+  instead of the strip's four, which is the one declared exception to the shared column system: the binary
+  reports three windows, so a fourth track is an empty track.
 
 ### Changed
 - **Every `get_usage` poll now logs the reply it got**, `rate_limits` verbatim (truncated), at INFO. The

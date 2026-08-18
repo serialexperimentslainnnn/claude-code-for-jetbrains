@@ -509,6 +509,15 @@
 .settings-menu .settings-group-entry {
   font-weight: 600;
 }
+/* The open section's rows, and the rule exists because of what happened without it: the panel first borrowed
+   `.menu-group-items`, the pill menus' accordion body, which is `display: none` unless a `.menu-group.open`
+   ancestor reveals it. This panel has no such ancestor, so every section opened to a header with nothing
+   under it — the rows present, correct and invisible. A `display` of its own is therefore not decoration
+   here, it is the whole rule; the rows are laid out flush, exactly as on the root panel, because this panel
+   IS that section rather than a region nested inside a list. */
+.settings-section-items {
+  display: block;
+}
 /* A tool name is not a word: `allow:mcp__jetbrains__get_file_problems` is a legitimate row label. Capped and
    ellipsised on the LABEL rather than on the panel, because `positionMenu` writes an inline `max-width` on
    the popup itself and an inline style wins — a cap declared there would simply not be the one in force.
@@ -954,6 +963,15 @@
      bare `1fr` is `minmax(auto, 1fr)`: its floor is the cell's min-content width, so a long path would push
      the track wider instead of clipping. The `0` floor is what makes every ellipsis below reachable. */
   --strip-cols: repeat(4, minmax(0, 1fr));
+  /* THE ONE DECLARED EXCEPTION to "every row shares one column system", and it is granted to the plan-limit
+     bars because their count is not a layout choice: the binary reports three windows, so a fourth track is
+     an empty track, and squeezing `label · bar · 72.0% · 3h 2m` into a quarter of a narrow tool window is
+     what made the countdown need a row of its own in the first place. Three columns is what the row is FOR.
+
+     It is a variable rather than a literal on the rule for the same reason `--strip-cols` is: the fold below
+     re-parameterises both together, so the bars cross the breakpoint with everything else instead of keeping
+     three tracks while the other rows go to two and leaving a third of the row empty behind the ⋮. */
+  --strip-cols-bars: repeat(3, minmax(0, 1fr));
   /* The smallest size the strip already used, now the only one. The countdown and the facts were 11px and
      nothing was smaller; the two larger rows come down to meet them rather than the reverse, because this
      is metadata under a transcript, not a heading. */
@@ -1101,6 +1119,9 @@
 @media (max-width: 640px) {
   #composer {
     --strip-cols: repeat(2, minmax(0, 1fr));
+    /* The bars fold with everything else. Left at three, two visible cells would sit in two of three tracks
+       and the row would carry an empty third while its window hid behind the ⋮. */
+    --strip-cols-bars: repeat(2, minmax(0, 1fr));
   }
   /* `display: none`, never `visibility` and never an opacity: a cell that is not on screen must not be
      reachable with Tab or readable by a screen reader either. */
@@ -1200,23 +1221,22 @@
 }
 /* NB `.ro-bar` was the readout's own little quota bar. The plan-limit bars replaced it. */
 
-/* ── plan-limit bars, the strip's FIRST element and two of its rows ───────────
-   TWO ROWS IN ONE ELEMENT, and that is what makes them safe to move: every window's countdown lives inside
-   its own `.ub-item`, stacked under the bar, so `.usage-bars` carries the bars row and the resets row
-   together with each countdown still under the window it belongs to. Ordering them as two independent rows
-   of the grid is the one way to get a reset under somebody else's bar, and it is why nothing here ever
-   separates them.
-   On the strip's shared columns (`--strip-cols`), which is the row that fixes them: the binary reports three
-   plan-limit windows and a window cannot be made narrower or wider by a layout, so everything else lines up
-   with these rather than the other way round.
+/* ── plan-limit bars, the strip's FIRST element and ONE of its rows ───────────
+   ONE LINE PER WINDOW: `label · bar · 72.0% · 3h 2m`, the countdown last. It used to be two lines — the bars,
+   and a row of `Reset time: …` under them — which spent a whole line of the strip on three repetitions of the
+   same word for a value that qualifies the percentage next to it. The countdown is an item of its window's
+   own line now, and the strip is a row shorter.
+   Each window is still ONE cell (`.ub-item`), which is what keeps the bar and its countdown inseparable:
+   whatever hides a column acts on cells, so it cannot take a bar and leave the countdown that qualifies it.
+   THREE columns, not the strip's four (`--strip-cols-bars`, declared with the exception's reasoning on
+   `#composer`): the binary reports three windows, so a fourth track is an empty track.
    It was `repeat(auto-fit, minmax(200px, 1fr))`, which sounds like the same thing and is not: auto-fit
    decides the column COUNT from the available width, so this row had three tracks at one size of tool window
-   and two at another, while the facts had four at every size. A system that changes on resize is not a
-   system another row can share. More or fewer windows than tracks now wrap onto another row of the same
-   grid, exactly as a fourth fact does. */
+   and two at another. A count that changes on resize is not a system anything can line up with; this one
+   changes only at the declared fold, with every other row. */
 .usage-bars {
   display: grid;
-  grid-template-columns: var(--strip-cols);
+  grid-template-columns: var(--strip-cols-bars);
   /* `var(--strip-gap)` and not a number of its own — this row carried `14px` while the facts carried `18px`,
      and a `1fr` track is `(100% − 3 × gap) / 4`, so two rows with the same template and different gaps have
      every gridline in a different place. The templates matched and the rows still did not. */
@@ -1238,7 +1258,7 @@
 .usage-bars[hidden] {
   display: none;
 }
-/* Two lines per window: the bar row, and the countdown under it.
+/* ONE line per window, so the cell is the line and there is nothing to stack.
    `min-width: 0` because a grid item's automatic minimum is its min-content width, so without it a long
    label refuses to shrink and widens the track instead of clipping. `overflow: hidden` is the backstop for
    the one thing in this cell that cannot clip: the bar itself keeps `min-width: 24px` (below that it is a
@@ -1247,12 +1267,6 @@
    that overflows would put a horizontal scrollbar in the dock, which is the one thing it must never do. */
 .usage-bars .ub-item {
   display: flex;
-  flex-direction: column;
-  /* The strip's row gap, taken from the one declaration rather than written out — this is a row boundary
-     like any other, and it happens to be the pair that was already the tightest. Its `1px` is where
-     `--strip-row` came from; keeping the literal here would leave the value spelled in two places, one of
-     which nobody would think to change. */
-  gap: var(--strip-row);
   min-width: 0;
   overflow: hidden;
 }
@@ -1261,6 +1275,9 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  /* It IS the cell's content now that there is one line per window, so it takes the whole of it — without
+     this the row shrink-wraps its items and the track never grows into the space the cell has. */
+  flex: 1 1 auto;
 }
 .usage-bars .ub-label {
   flex: 0 1 auto;
@@ -1294,16 +1311,26 @@
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
-/* Time left in the window, on its own line under the bar. It qualifies the percentage and does not compete
-   with it — now by being dimmer only, since the whole strip is one size and this row's 11px is the size the
-   others came down to. Never wraps: a countdown broken across two lines reads as two values. */
+/* Time left in the window, the LAST item of that window's own line. It qualifies the percentage it sits
+   beside, and it does not compete with it: dimmer only, since the whole strip is one type size.
+   `flex: 0 0 auto` for the same reason as the percentage — both are short, fixed-width data, and the track is
+   the one item that should give and take the free space. Never wraps and never shrinks below its text: a
+   countdown broken across two lines, or ellipsised to `3h…`, reads as a different value rather than as the
+   same one abbreviated. If the cell runs out of room, `.ub-item`'s clip is what gives way. */
 .usage-bars .ub-reset {
+  flex: 0 0 auto;
   opacity: 0.72;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
+/* NB no `display: none` for the empty case, and that is deliberate rather than an omission. A window with no
+   reset time emits the span empty, and an empty inline box paints nothing — all it costs is the flex gap after
+   the percentage, which is indistinguishable from padding at the end of a cell. Hiding it would put a
+   `display: none` on one HALF of a window's pair, and the invariant this row rests on is that nothing can act
+   on a bar without its countdown or the reverse (`readout.test.js` asserts exactly that, over the stylesheet).
+   Six pixels of air is the cheaper side of that trade.
+   No `·` before it either: the gap inside the line already groups these four, and `.strip-cell::after` draws
+   the one separator this row has — between WINDOWS, in the grid gap, where a boundary belongs. */
 
 /* ════════════════════════════════════════════════════════════════════════════
    SLASH PALETTE

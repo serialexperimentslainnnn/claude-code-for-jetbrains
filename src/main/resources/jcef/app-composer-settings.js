@@ -472,8 +472,15 @@
       // Everything the section holds, in one flat run under its header. `role="group"` carries the section's
       // name to the rows rather than leaving it on the header alone, so a screen reader announces which
       // section a row belongs to without the reader having to remember what they pressed.
+      //
+      // ITS OWN CLASS, and never `.menu-group-items`. That one is the pill menus' accordion body: the
+      // stylesheet declares it `display: none` and reveals it only under a `.menu-group.open` ancestor, which
+      // this panel does not have and must not grow. Borrowed here, every section opened to a header with
+      // NOTHING under it — the rows were in the DOM, hidden by a rule belonging to a widget this menu stopped
+      // being. jsdom lays nothing out, so the tests were green throughout; that is why the contract for this
+      // is asserted against the stylesheet's TEXT (see settings-menu.test.js).
       var body = h('div', {
-        class: 'menu-group-items',
+        class: 'settings-section-items',
         attrs: {
           role: 'group',
           'aria-label': group.name || 'Settings',
