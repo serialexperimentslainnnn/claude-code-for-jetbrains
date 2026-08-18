@@ -135,20 +135,35 @@ function harness() {
     sent,
     gear: () => win.document.querySelector('.settings-btn'),
     menu: () => win.document.querySelector('.settings-menu'),
-    /** Every entry, folded-away rows included. */
+    /** Every entry of the panel on screen — which, since the drill-down, is every entry there is. */
     all: () =>
       Array.from(
         q.menu().querySelectorAll('[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]')
       ),
-    /** The heading of a group, by the name it shows. */
-    head: (name) =>
-      Array.from(q.menu().querySelectorAll('.menu-group-header')).find(
+    /** A section's row on the ROOT panel, by the name it shows. */
+    entry: (name) =>
+      Array.from(q.menu().querySelectorAll('.settings-group-entry')).find(
         (el) => el.querySelector('.menu-item-label').textContent === name
       ),
-    /** A setting row, by the label it shows. */
+    /** Go into a section, the way a user does. */
+    enter: (name) => q.entry(name).click(),
+    /** The back arrow of a section panel, absent on the root one. */
+    back: () => q.menu().querySelector('.attach-back'),
+    /**
+     * The panel itself — the element replaced whole on every step, and therefore the one that animates.
+     *
+     * Tests ask it for "the last entry" rather than asking the popup: the popup's last child is the panel,
+     * and a test reading `menu().lastElementChild` would be asserting about the wrapper instead of about the
+     * row it means.
+     */
+    body: () => q.menu().querySelector('.settings-body'),
+    /** The title of the section panel on screen, or null at the root. */
+    title: () => {
+      const el = q.menu().querySelector('.attach-title');
+      return el ? el.textContent : null;
+    },
+    /** A setting row, by the label it shows. Only the section on screen has any. */
     row: (label) => q.all().find((el) => el.textContent === label),
-    /** The `.menu-group` wrapper of a group. */
-    group: (name) => q.head(name).parentElement,
     key: (k) =>
       win.document.activeElement.dispatchEvent(
         new win.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })
@@ -207,7 +222,7 @@ describe('opening and closing', () => {
   });
 });
 
-describe('the groups', () => {
+describe('the sections', () => {
   let q;
   beforeEach(() => {
     q = harness();
@@ -215,84 +230,99 @@ describe('the groups', () => {
     q.gear().click();
   });
 
-  it('draws one group per group the host names, in the host’s own order', () => {
-    const groups = Array.from(q.menu().querySelectorAll('[role="group"]'));
-    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual([
+  it('opens on the list of sections, one per group the host names, in the host’s own order', () => {
+    const entries = Array.from(q.menu().querySelectorAll('.settings-group-entry'));
+    expect(entries.map((e) => e.querySelector('.menu-item-label').textContent)).toEqual([
       'Model',
       'Effort',
       'Security',
       'Setting sources',
     ]);
+    // And ONLY the sections: no setting row is on the root panel, which is the whole difference from the
+    // accordion this replaced — there, opening one group inserted its rows between the headings and pushed
+    // every section below it down the screen.
+    expect(q.row('Opus 5')).toBeUndefined();
+    expect(q.title()).toBeNull();
+    expect(q.back()).toBeNull();
   });
 
-  it('a heading is an entry that says what it controls and whether it is open', () => {
-    // A `role="menu"` whose headings are plain text is a menu whose headings the keyboard cannot reach, and
-    // a fold with no `aria-expanded` is a fold nobody is told about.
-    const head = q.head('Security');
-    expect(head.tagName).toBe('BUTTON');
-    expect(head.getAttribute('role')).toBe('menuitem');
-    expect(head.getAttribute('aria-expanded')).toBe('false');
-    const region = q.menu().querySelector('#' + head.getAttribute('aria-controls'));
-    expect(region.getAttribute('role')).toBe('group');
+  it('a section entry is an entry that says it leads somewhere', () => {
+    // `aria-haspopup` and NOT `aria-expanded`: the latter promises a region that opens in place, under the
+    // heading, with the rest of the menu still around it — which is precisely what this stopped doing.
+    const entry = q.entry('Security');
+    expect(entry.tagName).toBe('BUTTON');
+    expect(entry.getAttribute('role')).toBe('menuitem');
+    expect(entry.getAttribute('aria-haspopup')).toBe('menu');
+    expect(entry.getAttribute('aria-expanded')).toBeNull();
+  });
+
+  it('pressing one REPLACES the panel with that section, behind a back arrow', () => {
+    q.enter('Security');
+    expect(q.title()).toBe('Security');
+    expect(q.back()).toBeTruthy();
+    expect(q.back().getAttribute('aria-label')).toBe('Back to all settings');
+    // Its rows are there, in a region that carries the section's name…
+    const region = q.menu().querySelector('[role="group"]');
     expect(region.getAttribute('aria-label')).toBe('Security');
     expect(region.contains(q.row('Sandbox commands'))).toBe(true);
+    // …and nothing else is: not the other sections, and not the other sections' rows.
+    expect(q.entry('Model')).toBeUndefined();
+    expect(q.row('Opus 5')).toBeUndefined();
+    // Nor the way out of the page, which inside a section would sit one row from the way back.
+    expect(q.menu().textContent).not.toContain('Open Plugin Settings');
   });
 
-  it('the groups a turn is steered with open unfolded; the long ones do not', () => {
-    // Seventy rows behind a scrollbar is a worse Settings page, not a quicker one — but making the model
-    // list cost a press would make the fold cost more than it saves.
-    expect(q.head('Model').getAttribute('aria-expanded')).toBe('true');
-    expect(q.head('Effort').getAttribute('aria-expanded')).toBe('true');
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('false');
-    expect(q.head('Setting sources').getAttribute('aria-expanded')).toBe('false');
-    expect(q.group('Model').classList.contains('open')).toBe(true);
-    expect(q.group('Security').classList.contains('open')).toBe(false);
+  it('back returns to the list, on the entry you came through', () => {
+    q.enter('Security');
+    q.back().click();
+    expect(q.title()).toBeNull();
+    expect(q.entry('Model')).toBeTruthy();
+    // Not the top of the list: the next section you want is usually a neighbour of the one you just left.
+    expect(q.win.document.activeElement).toBe(q.entry('Security'));
   });
 
-  it('an unrecognised group starts folded — an extra press beats a popup that opens seventy rows tall', () => {
+  it('a section is entered fresh every time the menu is opened', () => {
+    // The accordion remembered which groups were unfolded, and remembering the open SECTION would be the same
+    // complaint arriving by the other door: the popup would open somewhere the user cannot see the reason for.
+    q.enter('Security');
+    q.gear().click(); // close
+    q.gear().click(); // and open again
+    expect(q.title()).toBeNull();
+    expect(q.entry('Security')).toBeTruthy();
+  });
+
+  it('a section the harness has never heard of is still a section', () => {
     q.win.cc.settingsMenu({ items: [{ key: 'x', group: 'Something New', label: 'X', on: false }] });
-    expect(q.head('Something New').getAttribute('aria-expanded')).toBe('false');
+    expect(q.entry('Something New')).toBeTruthy();
+    q.enter('Something New');
+    expect(q.title()).toBe('Something New');
+    expect(q.row('X')).toBeTruthy();
   });
 
-  it('a folded group is out of the keyboard rotation, not merely out of the paint', () => {
-    // The whole walk, in one assertion: Security and Setting sources are folded, so ArrowDown steps from one
-    // heading straight to the next and never stops on a row nobody can see.
+  it('the keyboard walks the panel on screen, and only that panel', () => {
+    // There is nothing to exclude any more: a section that is not on screen is not in the DOM, so a row of it
+    // cannot be stepped onto, cannot hold the tab stop and cannot be reached by Tab. The accordion needed a
+    // filter for exactly that, because `display: none` is invisible to jsdom and to a roving tabindex alike.
     const walk = [];
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 5; i++) {
       walk.push(q.focused());
       q.key('ArrowDown');
     }
     expect(walk).toEqual([
       'Model',
-      'Opus 5',
-      'Sonnet',
       'Effort',
-      'High',
-      'Low',
       'Security',
       'Setting sourcesApplies to new chats',
       'Open Plugin Settings',
     ]);
     // …and it wraps, rather than stopping at the bottom.
     expect(q.focused()).toBe('Model');
+
+    q.enter('Security');
+    expect(q.all().map((e) => e.textContent)).toEqual(['←', 'Block credential files', 'Sandbox commands']);
   });
 
-  it('folding from under the focus takes the focus and the tab stop back to the heading', () => {
-    // `display: none` is what stops a browser focusing these, and it answers a focused subtree becoming
-    // hidden by dropping the focus to `<body>` — out of the menu, out of the roving model, and with nothing
-    // on screen saying where it went. The tab order is the page's own doing and has the same hazard: a stop
-    // parked on a row that then folded away is a Tab press that lands nowhere.
-    q.key('ArrowDown'); // onto a row of the unfolded Model group
-    expect(q.focused()).toBe('Opus 5');
-    q.head('Model').click(); // fold it from under the focus
-    expect(q.win.document.activeElement).toBe(q.head('Model'));
-    const tabbable = q.all().filter((e) => e.getAttribute('tabindex') === '0');
-    expect(tabbable.length).toBe(1);
-    expect(tabbable[0]).toBe(q.head('Model'));
-    expect(q.row('Opus 5').getAttribute('tabindex')).toBe('-1');
-  });
-
-  it('Home and End land on the first and last entry the keyboard can reach', () => {
+  it('Home and End land on the first and last entry of the panel on screen', () => {
     q.key('End');
     expect(q.focused()).toBe('Open Plugin Settings');
     q.key('Home');
@@ -300,76 +330,72 @@ describe('the groups', () => {
     expect(q.all().filter((r) => r.getAttribute('tabindex') === '0').length).toBe(1);
   });
 
-  it('Right unfolds a heading and Left folds it, which is what a menu with regions does', () => {
-    q.key('ArrowDown');
-    q.key('ArrowDown');
-    q.key('ArrowDown');
-    q.key('ArrowDown');
+  it('Right enters a section and Left comes back, which is what a menu with submenus does', () => {
     q.key('ArrowDown');
     q.key('ArrowDown');
     expect(q.focused()).toBe('Security');
     q.key('ArrowRight');
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('true');
-    expect(q.focused()).toBe('Security'); // the heading keeps the focus; the rows are now below it
-    q.key('ArrowDown');
+    expect(q.title()).toBe('Security');
+    // The focus lands on the first ROW, past the back arrow: it is what the press was for.
     expect(q.focused()).toBe('Block credential files');
-    q.key('ArrowUp');
     q.key('ArrowLeft');
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('false');
+    expect(q.title()).toBeNull();
+    expect(q.focused()).toBe('Security');
   });
 
-  it('the arrows do nothing on an ordinary row — there is nothing there to open', () => {
-    q.key('ArrowDown');
+  it('Escape leaves one level, and only dismisses from the list', () => {
+    // The submenu behaviour of the ARIA menu pattern. Anything else makes the deepest panel the one place
+    // where the reader's habitual key throws the whole navigation away.
+    q.enter('Security');
+    q.key('Escape');
+    expect(q.menu()).toBeTruthy();
+    expect(q.title()).toBeNull();
+    q.key('Escape');
+    expect(q.menu()).toBeNull();
+    expect(q.win.document.activeElement).toBe(q.gear());
+  });
+
+  it('Right does nothing on a setting row — there is nothing there to enter', () => {
+    // Entering already lands on the first row, past the back arrow, so this is where the focus is.
+    q.enter('Model');
     expect(q.focused()).toBe('Opus 5');
     q.key('ArrowRight');
-    q.key('ArrowLeft');
     expect(q.focused()).toBe('Opus 5');
-    expect(q.head('Model').getAttribute('aria-expanded')).toBe('true');
+    expect(q.title()).toBe('Model');
   });
 
-  it('the fold is remembered between openings of the menu', () => {
-    // The popup is destroyed on every close, so without state outside it, changing two things in the same
-    // group would cost the same press twice.
-    q.head('Security').click();
-    q.head('Model').click();
-    q.gear().click(); // close
-    q.gear().click(); // and open again
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('true');
-    expect(q.head('Model').getAttribute('aria-expanded')).toBe('false');
-  });
+  it('a push that lands mid-section leaves the reader in it', () => {
+    q.enter('Security');
+    const row = q.row('Sandbox commands');
 
-  it('the fold survives a rebuild, and an identical push does not disturb it', () => {
-    q.head('Security').click();
-    const head = q.head('Security');
-
-    // An identical push is a skip: same node, same state.
+    // An identical push is a skip: same node, same panel.
     q.win.cc.settingsMenu(payload());
-    expect(q.head('Security')).toBe(head);
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('true');
+    expect(q.title()).toBe('Security');
+    expect(q.row('Sandbox commands')).toBe(row);
 
-    // A structural change is a real rebuild — every node is new, and the fold still has to come back, because
-    // it lives outside the DOM the rebuild destroyed.
+    // A structural change is a real rebuild — every node is new — and the panel still has to be the one the
+    // reader was in, because `view` lives outside the DOM the rebuild destroyed.
     q.win.cc.settingsMenu({
       items: payload().items.concat([{ key: 'net', group: 'Security', label: 'Block network', on: false }]),
     });
-    expect(q.head('Security')).not.toBe(head);
-    expect(q.head('Security').getAttribute('aria-expanded')).toBe('true');
-    expect(q.head('Model').getAttribute('aria-expanded')).toBe('true');
+    expect(q.title()).toBe('Security');
+    expect(q.row('Sandbox commands')).not.toBe(row);
+    expect(q.row('Block network')).toBeTruthy();
   });
 
-  it('a deferred group says so in text, inside the heading its reader hears', () => {
+  it('a deferred section says so in text, on the entry, before you go in', () => {
     // A launch flag that reads as a live switch is exactly the defect this note closes, and a note carried
     // only by a colour or only by a `title` closes it for half the readers. It is a child of the button, so
-    // it is part of the accessible name.
-    const note = q.head('Setting sources').querySelector('.settings-defer');
+    // it is part of the accessible name — and it is on the ENTRY because "these apply to new chats" is what
+    // decides whether it is worth going in at all.
+    const note = q.entry('Setting sources').querySelector('.settings-defer');
     expect(note).toBeTruthy();
     expect(note.textContent).toBe('Applies to new chats');
     expect(note.getAttribute('aria-hidden')).toBeNull();
-    expect(q.head('Setting sources').textContent).toContain('Applies to new chats');
-    expect(q.head('Setting sources').getAttribute('title')).toBeNull();
+    expect(q.entry('Setting sources').textContent).toContain('Applies to new chats');
     // …and only where the host said so.
-    expect(q.head('Security').querySelector('.settings-defer')).toBeNull();
-    expect(q.head('Model').querySelector('.settings-defer')).toBeNull();
+    expect(q.entry('Security').querySelector('.settings-defer')).toBeNull();
+    expect(q.entry('Model').querySelector('.settings-defer')).toBeNull();
   });
 });
 
@@ -389,20 +415,24 @@ describe('what the menu contains', () => {
     expect(empty.getAttribute('role')).toBe('menuitem');
     expect(empty.getAttribute('aria-disabled')).toBe('true');
     // And the door to the full page is there regardless: a menu with nothing to do in it is still useful.
-    expect(q.menu().lastElementChild.textContent).toBe('Open Plugin Settings');
+    expect(q.body().lastElementChild.textContent).toBe('Open Plugin Settings');
   });
 
   it('a switch and a choice are different roles, and each carries its state programmatically', () => {
     q.win.cc.settingsMenu(payload());
     q.gear().click();
+    q.enter('Model');
     expect(q.row('Opus 5').getAttribute('role')).toBe('menuitemradio');
-    expect(q.row('Block credential files').getAttribute('role')).toBe('menuitemcheckbox');
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('true');
     expect(q.row('Sonnet').getAttribute('aria-checked')).toBe('false');
     expect(q.row('Opus 5').classList.contains('selected')).toBe(true);
-    expect(q.row('Sandbox commands').classList.contains('selected')).toBe(false);
     // Real controls, so they pick up keyboard activation and the shared :focus-visible ring for free.
     expect(q.row('Opus 5').tagName).toBe('BUTTON');
+
+    q.back().click();
+    q.enter('Security');
+    expect(q.row('Block credential files').getAttribute('role')).toBe('menuitemcheckbox');
+    expect(q.row('Sandbox commands').classList.contains('selected')).toBe(false);
     expect(q.row('Block credential files').tagName).toBe('BUTTON');
   });
 
@@ -411,6 +441,7 @@ describe('what the menu contains', () => {
       items: [{ key: 'thinking', group: 'Chat', label: 'Extended thinking', on: true }],
     });
     q.gear().click();
+    q.enter('Chat');
     expect(q.row('Extended thinking').getAttribute('role')).toBe('menuitemcheckbox');
   });
 
@@ -419,6 +450,7 @@ describe('what the menu contains', () => {
     const long = 'allow:mcp__jetbrains__get_file_problems';
     q.win.cc.settingsMenu({ items: [{ key: long, group: 'Allowed tools', label: long, on: true }] });
     q.gear().click();
+    q.enter('Allowed tools');
     expect(q.row(long).getAttribute('title')).toBe(long);
   });
 
@@ -438,10 +470,14 @@ describe('what the menu contains', () => {
   it('a separator with a real role precedes the way out to the full settings', () => {
     q.win.cc.settingsMenu(payload());
     q.gear().click();
-    const out = q.menu().lastElementChild;
+    const out = q.body().lastElementChild;
     expect(out.getAttribute('role')).toBe('menuitem');
     expect(out.textContent).toBe('Open Plugin Settings');
     expect(out.previousElementSibling.getAttribute('role')).toBe('separator');
+    // On the ROOT panel only: inside a section it would be a way out of the page sitting one row from the
+    // way back to the list.
+    q.enter('Model');
+    expect(q.body().textContent).not.toContain('Open Plugin Settings');
   });
 });
 
@@ -454,6 +490,7 @@ describe('what a press sends', () => {
   });
 
   it('toggling a switch sends the key and the NEW value, and flips the row at once', () => {
+    q.enter('Security');
     q.row('Sandbox commands').click();
     expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'sandbox', on: true }]);
     // Optimistic on purpose: a switch that does nothing until a round trip completes reads as broken, and
@@ -463,14 +500,16 @@ describe('what a press sends', () => {
   });
 
   it('toggling an ON switch sends off', () => {
+    q.enter('Security');
     q.row('Block credential files').click();
     expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'blockCredentials', on: false }]);
   });
 
   it('choosing a radio unchecks its group on screen and sends exactly ONE message', () => {
-    // The assertion that pins exclusivity: the sibling goes off in the DOM, the other group is untouched, and
-    // nothing about either rides on the wire. The host owns the group — an `on:false` per sibling would be
-    // the page deciding what a group means, and several toggles racing for one gesture.
+    // The assertion that pins exclusivity: the sibling goes off in the DOM, and nothing about it rides on the
+    // wire. The host owns the group — an `on:false` per sibling would be the page deciding what a group
+    // means, and several toggles racing for one gesture.
+    q.enter('Model');
     q.row('Sonnet').click();
     expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'model:sonnet', on: true }]);
     expect(q.sent.filter((m) => m.on === false)).toEqual([]);
@@ -478,12 +517,16 @@ describe('what a press sends', () => {
     expect(q.row('Sonnet').classList.contains('selected')).toBe(true);
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('false');
     expect(q.row('Opus 5').classList.contains('selected')).toBe(false);
-    // A different radio group is a different question and is not answered by this press.
+    // A different radio group is a different question and is not answered by this press — which the panels
+    // make structural rather than a claim: the answer is still there when you go and look at it.
+    q.back().click();
+    q.enter('Effort');
     expect(q.row('High').getAttribute('aria-checked')).toBe('true');
     expect(q.row('Low').getAttribute('aria-checked')).toBe('false');
   });
 
   it('choosing the radio that is already chosen sends nothing', () => {
+    q.enter('Model');
     q.row('Opus 5').click();
     expect(q.sent).toEqual([]);
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('true');
@@ -492,10 +535,12 @@ describe('what a press sends', () => {
   it('the composite key goes back to the host LITERALLY — the page never reads inside one', () => {
     // `model:opus[1m]` is the host's spelling, brackets and all. The page receives it, hands it back and
     // validates nothing: that is what keeps the set of keys closed and knowable from one side.
+    q.enter('Model');
     q.row('Sonnet').click();
     q.row('Opus 5').click();
     expect(q.sent.map((m) => m.key)).toEqual(['model:sonnet', 'model:opus[1m]']);
-    q.head('Setting sources').click();
+    q.back().click();
+    q.enter('Setting sources');
     q.row('user').click();
     expect(q.sent[2].key).toBe('source:user');
   });
@@ -503,16 +548,22 @@ describe('what a press sends', () => {
   it('the choice survives a reopen, so the stash was updated and not only the screen', () => {
     // The stash is what the next render reads. Left stale, it would put the old choice back the moment
     // anything redrew — which a reopen does, from the payload and not from the DOM.
+    q.enter('Model');
     q.row('Sonnet').click();
     q.gear().click();
     q.gear().click();
+    q.enter('Model');
     expect(q.row('Sonnet').getAttribute('aria-checked')).toBe('true');
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('false');
   });
 
   it('the menu STAYS open — this is a panel of settings, not one choice', () => {
+    q.enter('Model');
     q.row('Sonnet').click();
     expect(q.menu()).toBeTruthy();
+    expect(q.title()).toBe('Model'); // and in the same section, so the second change is the next press
+    q.back().click();
+    q.enter('Effort');
     q.row('Low').click();
     expect(q.sent.length).toBe(2);
     expect(q.menu()).toBeTruthy();
@@ -521,16 +572,19 @@ describe('what a press sends', () => {
   it('announces the change, because nothing else does', () => {
     // WCAG 4.1.3: the press moves no focus and paints a glyph, so without a live-region write it is silent.
     const status = () => q.win.document.getElementById('a11y-status').textContent;
+    q.enter('Security');
     q.row('Sandbox commands').click();
     expect(status()).toBe('Sandbox commands on');
     q.row('Sandbox commands').click();
     expect(status()).toBe('Sandbox commands off');
+    q.back().click();
+    q.enter('Model');
     q.row('Sonnet').click();
     expect(status()).toBe('Sonnet selected');
   });
 
   it('Open Plugin Settings asks the host and closes behind itself', () => {
-    q.menu().lastElementChild.click();
+    q.body().lastElementChild.click();
     expect(q.sent).toEqual([{ type: 'openSettings' }]);
     expect(q.menu()).toBeNull();
     // No focus return here, unlike Escape: this entry hands the user to another window, and dragging the
@@ -549,7 +603,7 @@ describe('host pushes while the menu is open and while it is shut', () => {
     q.win.cc.settingsMenu(payload());
     expect(q.menu()).toBeNull(); // nothing drawn, nothing thrown
     q.gear().click();
-    expect(q.all().length).toBe(13); // 4 headings + 8 rows + the way out
+    expect(q.all().length).toBe(5); // 4 sections + the way out
   });
 
   it('redraws an open menu when the structure changes', () => {
@@ -558,8 +612,8 @@ describe('host pushes while the menu is open and while it is shut', () => {
     q.win.cc.settingsMenu({
       items: [{ key: 'thinking', group: 'Chat', label: 'Extended thinking', on: false }],
     });
-    expect(q.row('Extended thinking')).toBeTruthy();
-    expect(q.row('Opus 5')).toBeUndefined();
+    expect(q.entry('Chat')).toBeTruthy();
+    expect(q.entry('Model')).toBeUndefined();
   });
 
   it('an identical push does NOT rebuild the rows', () => {
@@ -580,6 +634,7 @@ describe('host pushes while the menu is open and while it is shut', () => {
     // could turn a group into a set of choices and the page would keep drawing independent switches.
     q.win.cc.settingsMenu(payload());
     q.gear().click();
+    q.enter('Security');
     const before = q.row('Block credential files');
     q.win.cc.settingsMenu({ items: withField((it) => it.group === 'Security', { type: 'radio' }) });
     expect(q.row('Block credential files')).not.toBe(before);
@@ -589,14 +644,15 @@ describe('host pushes while the menu is open and while it is shut', () => {
   it('a push that changes only `deferred` DOES rebuild, and the note appears', () => {
     q.win.cc.settingsMenu(payload());
     q.gear().click();
-    expect(q.head('Security').querySelector('.settings-defer')).toBeNull();
+    expect(q.entry('Security').querySelector('.settings-defer')).toBeNull();
     q.win.cc.settingsMenu({ items: withField((it) => it.group === 'Security', { deferred: true }) });
-    expect(q.head('Security').querySelector('.settings-defer')).toBeTruthy();
+    expect(q.entry('Security').querySelector('.settings-defer')).toBeTruthy();
   });
 
-  it('a state-only push updates the rows in place, folded ones included, keeping the focus', () => {
+  it('a state-only push updates the rows in place, keeping the focus', () => {
     q.win.cc.settingsMenu(payload());
     q.gear().click();
+    q.enter('Model');
     const row = q.row('Sonnet');
     row.focus();
     q.win.cc.settingsMenu({
@@ -605,34 +661,39 @@ describe('host pushes while the menu is open and while it is shut', () => {
     expect(q.row('Sonnet')).toBe(row);
     expect(q.win.document.activeElement).toBe(row);
     expect(row.getAttribute('aria-checked')).toBe('true');
-    // The folded group is synced too: its rows are on screen the instant it is unfolded, and a row skipped
-    // here would come back showing the state it had when the group was closed.
+    // A section that is not on screen holds no rows to update — it is not in the DOM — and its state is read
+    // off the payload when it is built, which is what going in and looking proves.
+    q.back().click();
+    q.enter('Security');
     expect(q.row('Sandbox commands').getAttribute('aria-checked')).toBe('true');
     expect(q.row('Block credential files').getAttribute('aria-checked')).toBe('false');
   });
 
-  it('a rebuild puts the focus back on the same entry, row or heading, not on the top of the list', () => {
+  it('a rebuild puts the focus back on the same entry, row or section, not on the top of the list', () => {
     q.win.cc.settingsMenu(payload());
     q.gear().click();
-    q.row('Sonnet').focus();
     const grown = () =>
       payload().items.concat([{ key: 'net', group: 'Security', label: 'Block network', on: false }]);
-    q.win.cc.settingsMenu({ items: grown() });
-    expect(q.win.document.activeElement.textContent).toBe('Sonnet');
 
-    // A heading is an entry like any other, so it has to be restorable like one.
-    q.head('Effort').focus();
+    // A section entry is an entry like any other, so it has to be restorable like one.
+    q.entry('Effort').focus();
+    q.win.cc.settingsMenu({ items: grown() });
+    expect(q.win.document.activeElement).toBe(q.entry('Effort'));
+
+    q.enter('Model');
+    q.row('Sonnet').focus();
     q.win.cc.settingsMenu({
-      items: grown().concat([{ key: 'e2', group: 'Effort', label: 'Medium', on: false }]),
+      items: grown().concat([{ key: 'm3', group: 'Model', label: 'Haiku', on: false, type: 'radio' }]),
     });
-    expect(q.win.document.activeElement).toBe(q.head('Effort'));
+    expect(q.title()).toBe('Model');
+    expect(q.win.document.activeElement.textContent).toBe('Sonnet');
   });
 
   it('survives a malformed payload instead of emptying the menu of its way out', () => {
     q.win.cc.settingsMenu({ items: [{ label: 'no key here' }, null] });
     q.gear().click();
     expect(q.menu().querySelectorAll('[role="menuitemcheckbox"],[role="menuitemradio"]').length).toBe(0);
-    expect(q.menu().lastElementChild.textContent).toBe('Open Plugin Settings');
+    expect(q.body().lastElementChild.textContent).toBe('Open Plugin Settings');
   });
 });
 
@@ -692,9 +753,12 @@ describe('the row’s CSS contract', () => {
   });
 
   it('leaves no rule behind for markup the menu stopped emitting', () => {
-    // The headings became pressable entries, so the label div and the section wrapper are gone. A rule for
-    // markup nobody emits is this repository's signature defect wearing a stylesheet.
+    // A rule for markup nobody emits is this repository's signature defect wearing a stylesheet. The
+    // accordion went when the menu started drilling down, so this menu emits no `.menu-group` wrapper and no
+    // `.menu-group-header` — and the rules that dressed them for THIS popup went with them. The base
+    // `.menu-group` rules stay, because the pill menus do still fold.
     expect(css).not.toMatch(/\.settings-section\b/);
-    expect(css).not.toMatch(/\.settings-group\b/);
+    expect(css).not.toMatch(/\.settings-menu \.menu-group\b/);
+    expect(css).not.toMatch(/\.settings-menu \.menu-group-header\b/);
   });
 });

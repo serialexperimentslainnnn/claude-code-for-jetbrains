@@ -12,10 +12,17 @@
  * which is the last entry and the reason this menu can stop where it stops.
  *
  * WHY IT IS STILL A MENU AND NOT THE SETTINGS PAGE IN A POPUP. Ten groups is around seventy rows, and seventy
- * rows behind a scrollbar in a narrow tool window is a worse Settings page, not a quicker one. FOLDING is what
- * keeps it a menu: what is on screen when it opens is ten headings and the five groups you actually steer a
- * turn with, so the thing you came for is one press away and the long tool lists cost a press to see and never
- * cost a scroll to get past.
+ * rows behind a scrollbar in a narrow tool window is a worse Settings page, not a quicker one.
+ *
+ * IT DRILLS DOWN, ONE SECTION AT A TIME, and it used to FOLD instead — which is the same idea and behaves
+ * nothing like it. An accordion keeps every heading on screen and inserts the opened group's rows between
+ * them, so opening `Permission mode` pushes the six groups under it down the screen, past the popup's cap and
+ * behind a scrollbar; opening a second group moves everything again. Reading the popup means re-finding your
+ * place after every press. So: the root panel is the list of sections, pressing one REPLACES the panel with
+ * that section's rows behind a back arrow, and nothing else moves. It is the same two-level shape the attach
+ * menu uses for the project tree — same header, same back button, same slide — because two popups a
+ * centimetre apart that navigate differently is exactly the kind of second language this file's last
+ * paragraph exists to refuse.
  *
  * WHERE IT SITS, AND WHY NOT NEXT TO THE CLIP. The clip is the composer's own bar: it acts on the message you
  * are writing. This acts on the CHAT, which is what `#controls` is for, so the gear is the first item of
@@ -32,19 +39,23 @@
  *
  * THE MENU IS A REAL MENU, not a styled div with click handlers. `aria-haspopup`/`aria-expanded` on a real
  * `<button>`, `role="menu"` on the popup, `role="menuitemcheckbox"`/`role="menuitemradio"` + `aria-checked` on
- * each row and `role="menuitem"` + `aria-expanded` on each foldable heading — so every state is programmatic
- * and none of them is only a colour (WCAG 2.2 SC 1.4.1 and 4.1.2). Declaring `role="menu"` is also a promise
- * about the keyboard: arrows, Home/End, Escape and Tab are implemented below, because ARIA that announces a
- * widget it does not behave like is worse than no ARIA at all.
+ * each row and `role="menuitem"` + `aria-haspopup` on each section entry — so every state is programmatic and
+ * none of them is only a colour (WCAG 2.2 SC 1.4.1 and 4.1.2). `aria-haspopup` and deliberately NOT
+ * `aria-expanded`: the latter promises a region that opens IN PLACE, under the entry, with the rest of the
+ * menu still around it, which is what the accordion did and this does not. Declaring `role="menu"` is also a
+ * promise about the keyboard: arrows, Home/End, Escape and Tab are implemented below, because ARIA that
+ * announces a widget it does not behave like is worse than no ARIA at all.
  *
  * THE KEYS ARE THE HOST'S. A row that is not a standalone flag carries a composite key — `mode:acceptEdits`,
  * `model:opus[1m]`, `allow:Bash`. This file never builds one and never reads inside one: it receives the key,
  * hands it back verbatim in `settingsToggle`, and the host validates it. That is what keeps the set of keys
  * closed and knowable from one side.
  *
- * The metrics are the IDE's, borrowed rather than re-invented: `.menu`, `.menu-item` and the `.menu-group`
- * fold in css/composer.css are the flat, dense, full-bleed rows the pill menus already use. A second popup
- * language two centimetres from the first is exactly what those rules were written to end.
+ * The metrics are the IDE's, borrowed rather than re-invented: `.menu` and `.menu-item` in css/composer.css
+ * are the flat, dense, full-bleed rows the pill menus already use, and the panel header is the attach menu's
+ * (`.attach-head`, `.attach-back`, `.attach-title`). A second popup language two centimetres from the first
+ * is exactly what those rules were written to end. What this menu does NOT borrow any more is `.menu-group`,
+ * the accordion the pill menus still use: it drills down instead.
  */
 (function () {
   'use strict';
@@ -65,14 +76,16 @@
   var drawnSig = '';
 
   /**
-   * Which groups are unfolded, by group name — module state, deliberately not persisted in the host.
+   * Which panel is on screen: `null` for the list of sections, or the group name being read.
    *
-   * It has to outlive the popup: the menu is destroyed on every close, so without this, opening it twice to
-   * change two things in the same group would cost the same press twice. It must NOT outlive the IDE session
-   * either — that would be a preference, and a preference needs a place to live, a migration and a way to
-   * reset. What it buys is the one thing that was missing, and nothing beyond it.
+   * It is reset on every open, deliberately. Remembering the last section would make the popup open somewhere
+   * other than where it was left the previous time — the same complaint as the accordion, arriving by the
+   * other door: what is on screen would depend on history the user cannot see.
    */
-  var unfolded = {};
+  var view = null;
+
+  /** Which way the next panel slides in, so the animation says whether you went in or came back out. */
+  var slide = '';
 
   /** Serial behind the `aria-controls` ids. Monotonic, so a rebuild can never reuse a live id. */
   var groupSeq = 0;
@@ -91,23 +104,6 @@
 
   /** The note a deferred group's heading carries. Text, so it is read out as well as seen. */
   var DEFER_NOTE = 'Applies to new chats';
-
-  /**
-   * The groups that open unfolded, matched case-insensitively by name.
-   *
-   * These five are the ones a turn is steered with: they are short, and having to unfold the model list to
-   * change the model would make the fold cost more than it saves. Everything else — the security rules, the
-   * setting sources and above all the three tool lists, which are as long as the project has tools — starts
-   * folded, and a name this does not recognise starts folded too. That asymmetry is the safe one: an extra
-   * press is a nuisance, a popup that opens seventy rows tall is the state the fold exists to prevent.
-   */
-  var OPEN_FIRST = {
-    model: 1,
-    effort: 1,
-    'permission mode': 1,
-    'jetbrains mcp server': 1,
-    'strict mcp config': 1,
-  };
 
   // Inline SVG, `currentColor`, no `url()`: the CSP forbids external resources and there is no asset pipeline.
   //
@@ -148,12 +144,37 @@
     return String(it.type || 'check') === 'radio';
   }
 
-  function isUnfolded(name) {
-    var owns = Object.prototype.hasOwnProperty;
-    if (owns.call(unfolded, name)) return !!unfolded[name];
-    // `hasOwnProperty` and not a truthiness test: a group called "constructor" would otherwise find one on
-    // the prototype and open itself.
-    return owns.call(OPEN_FIRST, name.toLowerCase());
+  /**
+   * The groups, in the order the host first mentions them, each with its rows.
+   *
+   * Built from the payload on every read rather than cached: the host re-pushes the whole list, and a cache
+   * would be a second copy of what a group contains — which is exactly how the panel on screen and the panel
+   * the keyboard walks come to disagree. `hasOwnProperty` and not a truthiness test, because a group called
+   * `constructor` would otherwise find one on the prototype.
+   */
+  function groups() {
+    var order = [];
+    var byGroup = {};
+    items().forEach(function (it) {
+      var name = groupOf(it);
+      if (!Object.prototype.hasOwnProperty.call(byGroup, name)) {
+        byGroup[name] = [];
+        order.push(name);
+      }
+      byGroup[name].push(it);
+    });
+    return order.map(function (name) {
+      return { name: name, list: byGroup[name] };
+    });
+  }
+
+  /** The rows of the section on screen, or `[]` when the root panel is. */
+  function currentGroup() {
+    var found = null;
+    groups().forEach(function (g) {
+      if (g.name === view) found = g;
+    });
+    return found;
   }
 
   // ---- the button -----------------------------------------------------------
@@ -305,58 +326,50 @@
   }
 
   /**
-   * One group: a foldable heading, then its region.
+   * One section, as a row of the ROOT panel: press it and the popup becomes that section.
    *
-   * The heading is a `role="menuitem"` with `aria-expanded`, so it is an entry the keyboard visits like any
-   * other and its folded state is programmatic. The rows live in the `role="group"` it controls, which keeps
-   * the name the group is announced by attached to the rows rather than to the heading alone.
+   * `aria-haspopup="menu"` and no `aria-expanded`, and the pair is the whole difference from the accordion it
+   * replaces. `aria-expanded` on a heading promises a region that opens IN PLACE, under the heading, with the
+   * rest of the menu still around it — which is what this stopped doing. What it does now is replace the
+   * panel, so what it announces is that it leads somewhere.
    */
-  function section(name, list) {
-    var open = isUnfolded(name);
-    var id = 'settings-group-' + ++groupSeq;
-    var wrap = h('div', { class: 'menu-group' + (open ? ' open' : '') });
-    var body = h('div', {
-      class: 'menu-group-items',
-      attrs: { role: 'group', 'aria-label': name || 'Settings', id: id },
-    });
-    var header = h('button', {
-      class: 'menu-item settings-item menu-group-header',
-      attrs: {
-        type: 'button',
-        role: 'menuitem',
-        tabindex: '-1',
-        'aria-expanded': open ? 'true' : 'false',
-        'aria-controls': id,
-      },
-      on: {
-        click: function (e) {
-          e.preventDefault();
-          e.stopPropagation(); // never let this reach the document handler that dismisses the menu
-          fold(header, !wrap.classList.contains('open'));
+  function groupEntry(g) {
+    var name = g.name || 'Settings';
+    var row = h(
+      'button',
+      {
+        class: 'menu-item settings-item settings-group-entry',
+        title: name,
+        attrs: {
+          type: 'button',
+          role: 'menuitem',
+          tabindex: '-1',
+          'aria-haspopup': 'menu',
+        },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation(); // never let this reach the document handler that dismisses the menu
+            enterGroup(g.name);
+          },
         },
       },
-    });
-    header.appendChild(h('span', { class: 'menu-item-label', text: name || 'Settings' }));
-    if (isDeferred(list)) {
-      // TEXT inside the heading, not a `title` and not a colour: it is part of the heading's accessible name,
-      // so it is heard as well as seen. A switch that looks like it does something and does not is the defect
-      // this note exists to close, and a note only the sighted receive closes it for half the readers.
-      header.appendChild(h('span', { class: 'settings-defer', text: DEFER_NOTE }));
+      h('span', { class: 'menu-item-label', text: name })
+    );
+    if (isDeferred(g.list)) {
+      // TEXT inside the row, not a `title` and not a colour: it is part of the row's accessible name, so it
+      // is heard as well as seen — and it is on the ENTRY, before you go in, because "these apply to new
+      // chats" is what decides whether it is worth going in at all.
+      row.appendChild(h('span', { class: 'settings-defer', text: DEFER_NOTE }));
     }
-    // The caret's glyph is CSS generated content, which Chromium does expose — and `aria-expanded` already
-    // says the same thing, better. Hidden, so the heading is not read as "Model ▸ collapsed".
-    header.appendChild(h('span', { class: 'menu-group-caret', attrs: { 'aria-hidden': 'true' } }));
-    header.__ccFocusId = 'g' + SEP + name;
-    header.__ccFold = { wrap: wrap, name: name };
-    list.forEach(function (it) {
-      body.appendChild(settingRow(it, name));
-    });
-    wrap.appendChild(header);
-    wrap.appendChild(body);
-    return wrap;
+    // The chevron is CSS generated content, hidden from the tree: `aria-haspopup` already says it leads
+    // somewhere, and a glyph read out as "black right-pointing pointer" says it worse.
+    row.appendChild(h('span', { class: 'menu-group-caret', attrs: { 'aria-hidden': 'true' } }));
+    row.__ccFocusId = 'g' + SEP + g.name;
+    return row;
   }
 
-  /** A group is deferred when anything in it is: the note belongs to the heading, and the heading is one. */
+  /** A group is deferred when anything in it is: the note belongs to the section, and the section is a row. */
   function isDeferred(list) {
     return list.some(function (it) {
       return !!it.deferred;
@@ -364,22 +377,60 @@
   }
 
   /**
-   * Fold or unfold a group from its heading. The heading takes the focus and the tab stop.
+   * The section panel's header: back, then the section's name.
    *
-   * Both explicitly, and neither is decoration. A row that has just been folded away must not keep the one
-   * tab stop, which is why `setRoving` walks every entry and not only the navigable ones; and the focus can
-   * already be on one of those rows — arrow down into a group, then fold it from its heading — where the
-   * browser answers a subtree turning `display: none` by dropping the focus to `<body>`, i.e. out of the menu
-   * and out of the roving model, with nothing on screen saying where it went (WCAG 2.2 SC 2.4.3).
+   * The same three classes the attach menu's tree header uses, deliberately — one header language for both
+   * popups. The back arrow is a real button with a spelled-out name, because an arrow is not a word: a
+   * speech-input user has nothing to say to a glyph and a screen reader nothing to read (WCAG 4.1.2, 2.5.3).
    */
-  function fold(header, open) {
-    var f = header.__ccFold;
-    if (!f) return;
-    unfolded[f.name] = open;
-    f.wrap.classList.toggle('open', open);
-    header.setAttribute('aria-expanded', open ? 'true' : 'false');
-    focusRow(header);
-    if (menu && CX.positionMenu) CX.positionMenu(menu, btn);
+  function groupHead(name) {
+    var back = h(
+      'button',
+      {
+        class: 'attach-back',
+        title: 'Back',
+        attrs: { type: 'button', role: 'menuitem', tabindex: '-1', 'aria-label': 'Back to all settings' },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            leaveGroup();
+          },
+        },
+      },
+      h('span', { text: '←', attrs: { 'aria-hidden': 'true' } })
+    );
+    back.__ccFocusId = 'b';
+    return h(
+      'div',
+      { class: 'attach-head' },
+      back,
+      h('span', { class: 'attach-title', text: name || 'Settings' })
+    );
+  }
+
+  /**
+   * Go into a section, and come back out of it.
+   *
+   * The focus is placed explicitly on both transitions and neither is decoration: the panel that had it is
+   * gone from the document, and a browser answers that by dropping the focus to `<body>` — out of the menu and
+   * out of the roving model, with nothing on screen saying where it went (WCAG 2.2 SC 2.4.3). Going in lands
+   * on the section's first row, which is what was pressed for; coming back lands on the ENTRY you came
+   * through, not on the top of the list, so a second section is one arrow key away.
+   */
+  function enterGroup(name) {
+    view = name;
+    slide = 'attach-from-right';
+    repaint();
+    focusRow(rows()[1] || rows()[0]);
+  }
+
+  function leaveGroup() {
+    var came = view;
+    view = null;
+    slide = 'attach-from-left';
+    repaint();
+    focusRow(rowForId('g' + SEP + came) || rows()[0]);
   }
 
   /** The last entry: leaves the page entirely, so unlike the settings it closes the menu behind it. */
@@ -405,17 +456,39 @@
   }
 
   /**
-   * The whole body: the groups, then a separator, then the door to the Settings page.
+   * The panel on screen: the list of sections, or one section's rows.
    *
-   * Groups are emitted in the order the host first mentions them, never in a list hardcoded here — which
+   * Sections are emitted in the order the host first mentions them, never in a list hardcoded here — which
    * group exists and what it is called is the host's to decide, and a fixed order would silently drop a new
-   * one. (`OPEN_FIRST` above is not that list: it is a default for a name we recognise, and an unrecognised
-   * name still gets its group, folded.)
+   * one.
+   *
+   * *Open Plugin Settings* is on the ROOT panel only. Inside a section it would be a way out of the page
+   * sitting where the way back is expected, one row from it.
    */
   function buildBody() {
     var frag = document.createDocumentFragment();
-    var list = items();
-    if (!list.length) {
+    var group = view != null ? currentGroup() : null;
+    if (group) {
+      // Everything the section holds, in one flat run under its header. `role="group"` carries the section's
+      // name to the rows rather than leaving it on the header alone, so a screen reader announces which
+      // section a row belongs to without the reader having to remember what they pressed.
+      var body = h('div', {
+        class: 'menu-group-items',
+        attrs: {
+          role: 'group',
+          'aria-label': group.name || 'Settings',
+          id: 'settings-group-' + ++groupSeq,
+        },
+      });
+      group.list.forEach(function (it) {
+        body.appendChild(settingRow(it, group.name));
+      });
+      frag.appendChild(groupHead(group.name));
+      frag.appendChild(body);
+      return frag;
+    }
+    var all = groups();
+    if (!all.length) {
       // Never an empty popup with no explanation. A disabled menu item rather than loose text: entries are
       // what menu navigation visits, so anything that is not one is text a screen-reader user never reaches.
       frag.appendChild(
@@ -426,18 +499,8 @@
         })
       );
     } else {
-      var order = [];
-      var byGroup = {};
-      list.forEach(function (it) {
-        var name = groupOf(it);
-        if (!Object.prototype.hasOwnProperty.call(byGroup, name)) {
-          byGroup[name] = [];
-          order.push(name);
-        }
-        byGroup[name].push(it);
-      });
-      order.forEach(function (name) {
-        frag.appendChild(section(name, byGroup[name]));
+      all.forEach(function (g) {
+        frag.appendChild(groupEntry(g));
       });
     }
     frag.appendChild(h('div', { class: 'menu-sep', attrs: { role: 'separator' } }));
@@ -456,7 +519,10 @@
    */
   function structureSig() {
     var list = items();
-    var sig = list.length + '|';
+    // WHICH PANEL is part of the structure: the same payload draws the list of sections or one section's
+    // rows, so without this a push landing after a drill-down would compare equal and the panel would never
+    // be redrawn.
+    var sig = (view == null ? '' : view) + '|' + list.length + '|';
     for (var i = 0; i < list.length; i++) {
       var it = list[i];
       var f = [groupOf(it), it.key, labelOf(it), isRadio(it) ? 'r' : 'c', it.deferred ? '1' : '0'];
@@ -474,18 +540,15 @@
   }
 
   /**
-   * The entries the keyboard may visit: everything except the rows of a folded group.
+   * The entries the keyboard may visit — every entry in the panel, because only one panel exists at a time.
    *
-   * A folded group's rows are `display: none`, so they are unreachable by pointer and unfocusable in a
-   * browser — but jsdom lays nothing out and neither does the roving tabindex, so the exclusion has to be a
-   * fact about the DOM rather than about the paint. Reading it off the wrapper's `open` class is that fact.
+   * It used to subtract the rows of a folded group, which is the one thing the drill-down removed rather than
+   * moved: a section that is not on screen is not in the DOM at all, so there is nothing to filter and no way
+   * for the roving tab stop to land on something invisible. Kept as its own function because every navigation
+   * path below asks it, and because the day a panel holds something unreachable this is where that is said.
    */
   function rows() {
-    return allRows().filter(function (row) {
-      var body = row.parentNode;
-      if (!body || !body.classList || !body.classList.contains('menu-group-items')) return true;
-      return body.parentNode.classList.contains('open');
-    });
+    return allRows();
   }
 
   /**
@@ -495,8 +558,8 @@
    * destroys and recreates every row, so whatever was focused inside is blurred — hence the states-only path
    * when nothing but a flag moved, and the focus restore by id when there is no way around a rebuild. The
    * popup is also re-positioned afterwards, because a row more or less changes its height and it hangs
-   * upwards from its anchor. What a rebuild does NOT reset is which groups are folded: that lives in
-   * `unfolded`, outside the DOM, precisely so it survives one.
+   * upwards from its anchor. What a rebuild does NOT reset is which panel is on screen: `view` lives outside
+   * the DOM, precisely so a push landing mid-section does not throw the reader back to the root.
    */
   function render() {
     if (!menu) return;
@@ -512,11 +575,27 @@
     var wanted = focusedId();
     drawnSig = sig;
     menu.textContent = '';
-    menu.appendChild(buildBody());
+    var body = h('div', { class: 'settings-body' + (slide ? ' ' + slide : '') });
+    body.appendChild(buildBody());
+    menu.appendChild(body);
+    slide = '';
     var target = rowForId(wanted) || rows()[0] || null;
     if (hadFocus) focusRow(target);
     else setRoving(target); // one entry stays tabbable, or Tab could not reach the menu at all
     if (CX.positionMenu) CX.positionMenu(menu, btn);
+  }
+
+  /**
+   * Redraw for a change this file made itself — going into a section, or coming back out.
+   *
+   * `render` skips when the signature is unchanged, which is right for a host push and wrong here: the
+   * signature carries `view`, so it does move, but the caller has already set the focus target it wants and
+   * must not have `render`'s own restore-by-id decide it instead. Dropping the stamp is what makes the next
+   * `render` unconditional, and the caller focuses after it returns.
+   */
+  function repaint() {
+    drawnSig = '';
+    render();
   }
 
   function syncStates() {
@@ -524,8 +603,8 @@
     items().forEach(function (it) {
       by[String(it.key)] = !!it.on;
     });
-    // Over EVERY row, not just the navigable ones: a folded group's rows are still on screen the moment it is
-    // unfolded, and a row skipped here would be unfolded showing the state it had when the group was closed.
+    // Over every row of the panel on screen. The sections that are NOT on screen hold no rows to update —
+    // they are not in the DOM — and their state is read off the payload when they are built.
     allRows().forEach(function (row) {
       if (row.__ccKey != null && Object.prototype.hasOwnProperty.call(by, row.__ccKey)) {
         applyState(row, by[row.__ccKey]);
@@ -574,13 +653,17 @@
   }
 
   /**
-   * The keyboard model `role="menu"` promises. Escape and Tab both leave, and both hand the focus back to the
-   * gear — Tab without swallowing the event, so the browser then carries on from a control that is still in
-   * the document rather than from the `<body>` a removed row leaves behind.
+   * The keyboard model `role="menu"` promises, with the drill-down's own two keys.
    *
-   * Right and Left unfold and fold, which is what a menu with regions in it does everywhere else. They act
-   * only on a heading: on an ordinary row there is nothing to open, and swallowing the press there would take
-   * the arrow key away from the caret handling the composer still owns.
+   * **Escape leaves ONE level**, which is the submenu behaviour of the ARIA menu pattern: inside a section it
+   * goes back to the list, and only at the list does it dismiss the popup and hand the focus back to the gear.
+   * Anything else makes the deepest panel the one place where the reader's habitual key throws away the whole
+   * navigation. Tab always leaves entirely, and without swallowing the event, so the browser carries on from a
+   * control still in the document rather than from the `<body>` a removed row leaves behind.
+   *
+   * **Right enters a section and Left comes back**, which is what a menu with submenus does everywhere else.
+   * Right acts only on a section entry: on a setting row there is nothing to enter, and swallowing the press
+   * there would take the arrow key away from the caret handling the composer still owns.
    */
   function onMenuKey(e) {
     if (e.key === 'Escape' || e.key === 'Esc') {
@@ -590,18 +673,23 @@
       // document-level Escape handler from turning a dismissal into an interrupt.
       e.preventDefault();
       e.stopPropagation();
-      close(true);
+      if (view != null) leaveGroup();
+      else close(true);
     } else if (e.key === 'ArrowDown' || e.key === 'Down') {
       e.preventDefault();
       step(1);
+    } else if (e.key === 'ArrowRight' || e.key === 'Right') {
+      var entry = document.activeElement;
+      if (!entry || entry.__ccFocusId == null || entry.__ccFocusId.charAt(0) !== 'g') return;
+      e.preventDefault();
+      enterGroup(entry.__ccFocusId.slice(2));
+    } else if (e.key === 'ArrowLeft' || e.key === 'Left') {
+      if (view == null) return;
+      e.preventDefault();
+      leaveGroup();
     } else if (e.key === 'ArrowUp' || e.key === 'Up') {
       e.preventDefault();
       step(-1);
-    } else if (e.key === 'ArrowRight' || e.key === 'Right' || e.key === 'ArrowLeft' || e.key === 'Left') {
-      var header = document.activeElement;
-      if (!header || !header.__ccFold) return;
-      e.preventDefault();
-      fold(header, e.key === 'ArrowRight' || e.key === 'Right');
     } else if (e.key === 'Home') {
       e.preventDefault();
       focusRow(rows()[0]);
@@ -625,6 +713,11 @@
       class: 'menu settings-menu',
       attrs: { role: 'menu', 'aria-label': 'Chat settings' },
     });
+    // Always at the list of sections, and never mid-section: see [view]. No slide on the first paint either —
+    // the popup is already appearing, and a panel sliding in inside something that is itself appearing reads
+    // as two animations for one gesture.
+    view = null;
+    slide = '';
     drawnSig = '';
     menu.addEventListener('keydown', onMenuKey);
     // On `document.body`, like the pill and attach menus and for the same reason: `#work` is a stacking
