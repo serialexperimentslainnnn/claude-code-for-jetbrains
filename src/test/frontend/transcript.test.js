@@ -7,19 +7,39 @@ function row(id, order, speaker, text, extra = {}) {
   return { id, order, speaker, text, state: 'FINISHED', elapsed: 0, ...extra };
 }
 
-describe('transcript — user prompts render verbatim', () => {
-  it('a USER row shows raw text via textContent, never Markdown', () => {
-    const win = loadFrontend(['app-transcript.js']);
-    const raw = '**bold** # heading `code` *italic*\n    indented';
-    win.cc.batch([row(1, 0, 'USER', raw)]);
+describe('transcript — a user prompt goes through the same parser as Claude’s', () => {
+  /**
+   * It rendered VERBATIM for three releases, and the reason it no longer does is what the plugin PUTS in that
+   * text: an attachment is folded into the prompt as `[@name](jb://open?file=…)`, so verbatim meant the user
+   * read the link syntax rather than the link — a wall of percent-encoded paths, reported as exactly that.
+   *
+   * The trade is stated in `buildUser` and asserted here so nobody has to rediscover it: markdown the USER
+   * typed is interpreted now, which is the defect 4.0.4 fixed by choosing verbatim. What is NOT traded is the
+   * payload — `__rawText` still holds what was typed, which is what Copy gives.
+   */
+  it('renders a USER row as Markdown, so an attachment link is a link', () => {
+    const win = loadFrontend(['app-transcript.js']); // vendored marked/DOMPurify → real markdown
+    win.cc.batch([row(1, 0, 'USER', 'Look at this\n\n[@certs/root.crt](jb://open?file=%2Ftmp%2Fx&line=1)')]);
 
     const body = win.document.querySelector('.msg.user .body');
     expect(body).not.toBeNull();
-    // Literal text preserved…
-    expect(body.textContent).toBe(raw);
-    // …and NOT parsed into markup (no <strong>/<em>/<h1> from marked).
-    expect(body.querySelector('strong, em, h1, code')).toBeNull();
-    expect(body.innerHTML).not.toContain('<strong>');
+    const link = body.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link.textContent).toBe('@certs/root.crt');
+    // The `jb://` scheme survives DOMPurify's URI filter — it is in the allow-list precisely so these open —
+    // and the visible text is the file, not the encoded path.
+    expect(link.getAttribute('href')).toBe('jb://open?file=%2Ftmp%2Fx&line=1');
+    expect(body.textContent).not.toContain('jb://');
+  });
+
+  it('interprets the markdown the user typed — the cost of the line above', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(1, 0, 'USER', '**bold** and `code`')]);
+    const body = win.document.querySelector('.msg.user .body');
+    expect(body.querySelector('strong')).not.toBeNull();
+    expect(body.querySelector('code')).not.toBeNull();
+    // …and what was typed is still in the payload, which is what the Copy button hands back.
+    expect(body.__rawText).toBe('**bold** and `code`');
   });
 });
 
@@ -501,7 +521,9 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
     win.cc.trimRows({ ids: [101, 102], total: 2 });
 
     const bodies = [...win.document.querySelectorAll('#conversation .msg .body')];
-    expect(bodies.map((b) => b.textContent)).toEqual(['third']);
+    // Trimmed, because every row is markdown now: a paragraph's `textContent` carries the newline marked
+    // leaves after `</p>`. This test is about WHICH rows survive, not about their whitespace.
+    expect(bodies.map((b) => b.textContent.trim())).toEqual(['third']);
     const notice = win.document.querySelector('.trim-notice');
     expect(notice).not.toBeNull();
     expect(notice.textContent).toContain('2 earlier rows were dropped');
