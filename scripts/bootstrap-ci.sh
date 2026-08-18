@@ -428,6 +428,29 @@ else
         warn "  gpg --local-user $fpr --quick-sign-key $ci_fpr"
       fi
     done
+    # --- publish the CAs where GitHub is not the publisher ---------------------------------------------
+    # The step that makes any of the above mean something to a stranger, and it is the one that was
+    # missing. Everything a verifier receives — the artifact, its signature, the bundle carrying the CAs
+    # — arrives from this repository, so the chain proves internal CONSISTENCY and says nothing about
+    # provenance: whoever can publish a release can publish a bundle that agrees with it. The endorsement
+    # only becomes evidence for someone holding the CA fingerprint from a channel this repository does
+    # not control.
+    #
+    # keys.openpgp.org is that channel, cheaply: it serves any key BY FINGERPRINT with no identity
+    # checks, so `gpg --recv-keys <CA fingerprint>` reaches an operator unrelated to GitHub, and the two
+    # copies of the CA either agree or the discrepancy is the story. It strips uids that are not
+    # email-verified, which costs nothing here — the fingerprint is the anchor, not the name.
+    #
+    # Uploading a public key is irreversible in practice, and deliberately unconditional anyway: a
+    # certification nobody can anchor is the failure this whole step exists to avoid, and re-uploading an
+    # unchanged key is a no-op.
+    for fpr in "${certifiers[@]}" "$ci_fpr"; do
+      if gpg --batch --keyserver hkps://keys.openpgp.org --send-keys "$fpr" >/dev/null 2>&1; then
+        info "published $fpr to keys.openpgp.org"
+      else
+        warn "could not publish $fpr to keys.openpgp.org — no independent anchor for it yet."
+      fi
+    done
   fi
 
   info "wrote docs/trust-chain.asc  (CI signing key $ci_fpr)"

@@ -310,6 +310,22 @@ who could swap the key would also control — which is not a trust anchor, it is
 tautology. With it, the chain terminates at a key whose private half is in
 hardware and has never been on a computer.
 
+**And the chain still needs an anchor this repository does not publish.** Being
+certified by hardware makes the bundle internally consistent; it does not make it
+*this project's* bundle, because everything a verifier holds — artifact,
+signature and chain — arrived from the same place. The two CAs are therefore also
+published on **keys.openpgp.org**, which is operated by nobody involved here and
+serves a key by fingerprint with no identity check:
+
+```sh
+gpg --keyserver hkps://keys.openpgp.org --recv-keys E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 318BBEFF6E5DD5A03A8280518DAB773C3796B834
+```
+
+Two copies of the same CA from two unrelated publishers either agree, or the
+disagreement is the finding. That keyserver strips uids it has not verified by
+email, which costs nothing: the fingerprint is the anchor, not the name.
+
 It also buys the one thing a bare key cannot: **a revocation lever.** If the CI
 key is ever exposed, the maintainer revokes the certification from hardware,
 withdrawing the endorsement immediately — without depending on anyone noticing
