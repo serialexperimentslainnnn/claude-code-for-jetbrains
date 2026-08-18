@@ -48,8 +48,20 @@ describe('tab bar', () => {
   const subCapsule = () => bar().querySelector('.subtab-capsule:not(.branch-capsule)');
   /** The THIRD row's capsule — what the agent you opened started. Null while no branch is open. */
   const branchCapsule = () => bar().querySelector('.branch-capsule');
-  const branchPills = () => Array.from(branchCapsule() ? branchCapsule().querySelectorAll('.pill-wrap') : []);
-  const branchLabels = () => branchPills().map((p) => p.querySelector('.pill-label').textContent);
+  /** Every branch row, in the order they are drawn: one per open level, outermost first. */
+  const branchCapsules = () => Array.from(bar().querySelectorAll('.branch-capsule'));
+  /** Every pill in every branch row — used by `subPill`, which finds a pill wherever it lives. */
+  const branchPills = () =>
+    branchCapsules().reduce((all, cap) => all.concat(Array.from(cap.querySelectorAll('.pill-wrap'))), []);
+  /** The labels of one branch row, by index; the rows nest, so `0` is the outermost. */
+  const branchLabels = (level) => {
+    const cap = branchCapsules()[level || 0];
+    return cap
+      ? Array.from(cap.querySelectorAll('.pill-wrap')).map((p) => p.querySelector('.pill-label').textContent)
+      : [];
+  };
+  /** Who each open row belongs to, read off its `aria-label` — the row's own account of itself. */
+  const branchOwners = () => branchCapsules().map((c) => c.getAttribute('aria-label'));
   /**
    * A TAB is the `.pill-wrap`: the chat's own `<button class="pill">` plus its close as a SIBLING.
    *
@@ -136,13 +148,15 @@ describe('tab bar', () => {
 
   it('a subagent is not in the chat’s row: it appears under the agent that invoked it', () => {
     // The whole of the hierarchy decision. `b` hangs off `a` and `c` off `b`; the chat's row carries only
-    // `a`, and opening `a` is what reveals the two of them.
+    // `a`, and opening `a` reveals ITS children — one level, not the whole subtree.
     expect(subLabels()).not.toContain('Dependencias de desarrollo');
 
     click(subPill('Inventario de dependencias').querySelector('.pill'));
 
     expect(bar().querySelectorAll('.tab-row').length).toBe(3);
-    expect(branchLabels()).toEqual(['Dependencias de desarrollo', 'Dependencias sin usar']);
+    expect(branchLabels()).toEqual(['Dependencias de desarrollo']);
+    // `c` is NOT here: it is `b`'s child, and it gets its own row when `b` is opened.
+    expect(branchLabels()).not.toContain('Dependencias sin usar');
     // The chat's row is untouched by the drill-down: it still lists what the CHAT started.
     expect(subLabels()).toEqual(['Chat', 'Inventario de dependencias', 'BT: npm run dev']);
   });
@@ -161,37 +175,72 @@ describe('tab bar', () => {
     expect(branchCapsule().getAttribute('aria-label')).toBe('Started by Inventario de dependencias');
   });
 
-  it('moving around INSIDE a branch does not reshuffle it, and never opens a fourth row', () => {
-    // The reason the branch row is the whole subtree rather than "the children of what you are looking at".
-    // With the latter, clicking `b` would replace the row with `[c]` — the strip moves under the click you
-    // just made — and `b` itself would then appear in no row at all, so the bar could no longer say where
-    // you are. Here the row is fixed by the BRANCH, so only the accent moves.
+  it('opening a subagent opens ITS OWN row below, and the row above does not move', () => {
+    // ONE LEVEL PER ROW, as deep as the tree goes. Selecting `b` adds a row for `b`'s children rather than
+    // replacing the row `b` is in — which is what keeps the two properties the old flattened row was chosen
+    // for: the strip you clicked in stays put, and `b` still appears in a row, so the bar can say where you
+    // are.
     click(subPill('Inventario de dependencias').querySelector('.pill'));
-    const before = branchLabels();
+    const before = branchLabels(0);
 
     click(subPill('Dependencias de desarrollo').querySelector('.pill'));
     expect(sent.pop()).toEqual({ type: 'selectAgent', agentId: 'b' });
-    expect(branchLabels()).toEqual(before);
-    expect(bar().querySelectorAll('.tab-row').length).toBe(3);
+    expect(branchLabels(0)).toEqual(before); // the row holding `b` is untouched
+    expect(bar().querySelectorAll('.tab-row').length).toBe(4);
+    expect(branchLabels(1)).toEqual(['Dependencias sin usar']);
     expect(subtab()).toBe('Dependencias de desarrollo');
-    // `b` has a child of its own. It gets no row: the branch is `a`'s, and `c` is already in it.
-    expect(branchLabels()).toContain('Dependencias sin usar');
-    // ...and `a` is still marked as the owner of the row even though its transcript is not the one on screen.
+    // Each row says whose children it holds, which is the only thing distinguishing two rows of pills to
+    // anyone not looking at the indent.
+    expect(branchOwners()).toEqual([
+      'Started by Inventario de dependencias',
+      'Started by Dependencias de desarrollo',
+    ]);
+    // `a` is still marked as owning a row even though its transcript is not the one on screen…
     expect(subPill('Inventario de dependencias').classList.contains('branch-open')).toBe(true);
     expect(subPill('Inventario de dependencias').classList.contains('selected')).toBe(false);
+    // …and so is `b`, whose row is the one that just appeared.
+    expect(subPill('Dependencias de desarrollo').querySelector('.pill').getAttribute('aria-expanded')).toBe(
+      'true'
+    );
   });
 
-  it('a node three levels deep is reachable, and announced as a subagent', () => {
-    // Depth costs one click to open the branch, and no more however deep it goes — the bar stays at three
-    // rows and nothing in the tree becomes unreachable.
+  it('a leaf opens no row of its own, so nothing empties under the click', () => {
     click(subPill('Inventario de dependencias').querySelector('.pill'));
+    click(subPill('Dependencias de desarrollo').querySelector('.pill'));
     click(subPill('Dependencias sin usar').querySelector('.pill'));
 
     expect(sent.pop()).toEqual({ type: 'selectAgent', agentId: 'c' });
     expect(subtab()).toBe('Dependencias sin usar');
     // The kind and the state are in the accessible name, the way every other view says them.
     expect(subtabName()).toBe('Subagent (Dependencias sin usar)  ·  completed');
-    expect(bar().querySelectorAll('.tab-row').length).toBe(3);
+    // `c` started nothing, so the rows are still the two that were there — no blank strip, and the pill does
+    // not claim it could open one.
+    expect(bar().querySelectorAll('.tab-row').length).toBe(4);
+    expect(branchLabels(1)).toEqual(['Dependencias sin usar']);
+    expect(subPill('Dependencias sin usar').querySelector('.pill').getAttribute('aria-expanded')).toBeNull();
+  });
+
+  it('the depth is not capped: a fourth level gets a fourth row', () => {
+    // The report this changed: the bar stopped at three rows, so a subagent of a subagent had nowhere to
+    // open and the tree looked two levels deep however deep it really was.
+    win.cc.tabs({
+      chats: CHATS,
+      tree: TREE.concat([
+        { id: 'd', parent: 'c', label: 'Cuarto nivel', type: 'Explore', status: 'running' },
+        { id: 'e', parent: 'd', label: 'Quinto nivel', type: 'Explore', status: 'running' },
+      ]),
+      tasks: [],
+    });
+    click(subPill('Inventario de dependencias').querySelector('.pill'));
+    click(subPill('Dependencias de desarrollo').querySelector('.pill'));
+    click(subPill('Dependencias sin usar').querySelector('.pill'));
+    click(subPill('Cuarto nivel').querySelector('.pill'));
+
+    // Two fixed rows plus one per open level, and the deepest row holds the deepest work.
+    expect(bar().querySelectorAll('.tab-row').length).toBe(6);
+    expect(branchLabels(3)).toEqual(['Quinto nivel']);
+    expect(branchOwners()[3]).toBe('Started by Cuarto nivel');
+    expect(subtab()).toBe('Cuarto nivel');
   });
 
   it('the branch row goes away when you go back to the chat', () => {
@@ -851,9 +900,11 @@ describe('tab bar', () => {
       // `done` where the dashboard said `completed`, so one task had two colours and two CSS rules.
       const dotOf = (name) => subPill(name).querySelector('.pill-dot');
       expect(dotOf('Inventario de dependencias').className).toBe('pill-dot running');
-      // ...and the branch row paints from the same vocabulary, which is the half a row drawn by a second
-      // code path would get wrong.
+      // ...and every branch row paints from the same vocabulary, however deep it is — which is the half a
+      // row drawn by a second code path would get wrong.
       click(subPill('Inventario de dependencias').querySelector('.pill'));
+      expect(dotOf('Dependencias de desarrollo').className).toBe('pill-dot running');
+      click(subPill('Dependencias de desarrollo').querySelector('.pill'));
       expect(dotOf('Dependencias sin usar').className).toBe('pill-dot completed');
       // An unknown word is painted as it arrives rather than mapped onto one of ours: the host owns the
       // vocabulary, and a page that "corrects" it is how the two views drifted apart in the first place.
@@ -986,17 +1037,33 @@ describe('tab bar', () => {
       expect(subLabels()).toContain('Nuevo');
     });
 
-    it('a subagent appearing inside the OPEN branch repaints it and gets its own pill', () => {
+    it('a subagent appearing inside an OPEN row repaints it and gets its own pill', () => {
       click(subPill('Inventario de dependencias').querySelector('.pill'));
-      const before = branchCapsule();
+      click(subPill('Dependencias de desarrollo').querySelector('.pill'));
+      const before = branchCapsules()[1];
       win.cc.tabs({
         chats: CHATS,
         tree: TREE.concat([{ id: 'd', parent: 'b', label: 'Nieto', type: 'Explore', status: 'running' }]),
         tasks: TASKS,
       });
-      expect(branchCapsule()).not.toBe(before);
-      expect(branchLabels()).toContain('Nieto');
-      // Three rows still: a grandchild joins the branch it belongs to, it does not open one of its own.
+      expect(branchCapsules()[1]).not.toBe(before);
+      expect(branchLabels(1)).toContain('Nieto');
+      // The row count is unchanged: `d` is another of `b`'s children, and `b`'s row is already open. A level
+      // appears when one is OPENED, never because the tree grew somewhere already on screen.
+      expect(bar().querySelectorAll('.tab-row').length).toBe(4);
+    });
+
+    it('a subagent appearing under an agent whose row is CLOSED does not repaint the bar', () => {
+      // The other direction, and the one that carries the traffic: on a session running dozens, most pushes
+      // are about work in a branch nobody has opened. It must not be drawn, so it must not be signed either.
+      click(subPill('Inventario de dependencias').querySelector('.pill'));
+      const before = branchCapsules()[0];
+      win.cc.tabs({
+        chats: CHATS,
+        tree: TREE.concat([{ id: 'd', parent: 'c', label: 'Bisnieto', status: 'running' }]),
+        tasks: TASKS,
+      });
+      expect(branchCapsules()[0]).toBe(before);
       expect(bar().querySelectorAll('.tab-row').length).toBe(3);
     });
 
@@ -1087,6 +1154,7 @@ describe('tab bar', () => {
       // Both rows, because both are wired by the same call and a copy of it in one of them would rot in the
       // one nobody demonstrates on a small project.
       click(subPill('Inventario de dependencias').querySelector('.pill'));
+      click(subPill('Dependencias de desarrollo').querySelector('.pill'));
       const seen = [];
       win.Element.prototype.scrollIntoView = function () {
         seen.push(this.className);

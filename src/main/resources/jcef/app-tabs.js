@@ -18,21 +18,26 @@
  * dozens this exists for, a strip mixing a chat's own agents with somebody else's subagents says nothing
  * about who started what, and reads as one undifferentiated run of pills.
  *
- * What is here now is **THREE ROWS AT MOST, and exactly one level of hierarchy**: the chats · the agents and
- * background tasks the CHAT started · and, when you open one of those agents, everything IT started. Two
- * decisions make that bounded rather than a tree in disguise.
+ * What is here now is **two fixed rows plus ONE ROW PER OPEN LEVEL**: the chats · the agents and background
+ * tasks the CHAT started · then, for each agent you open on the way down, the agents IT started.
  *
- * **The branch row holds the whole subtree of the agent you opened, not the children of what you are looking
- * at.** Moving inside a branch therefore moves nothing: the row you are reading stays as it is, the pill you
- * pick simply takes the accent. The alternative empties the row whenever you open a leaf and refills it with
- * a different set when you open its sibling — and at depth 2 it draws the selection's children while the
- * selection itself appears in no row at all, so the bar stops being able to say where you are. See
- * `app-tabs-base.js` `openBranch`.
+ * **One level per row, as deep as the tree goes.** It was one row holding the whole subtree of the depth-1
+ * ancestor, flattened, which bounded the bar at three rows — and that bound was the defect: a subagent of a
+ * subagent was visible in that row but selecting it opened nothing, so the hierarchy stopped at two levels
+ * however deep the work really went. Depth is not bounded by the protocol, and an agent that spawns agents
+ * that spawn agents is the session this feature exists for.
  *
- * **So there is never a fourth row**, whatever the depth: a subagent five levels down is a pill in its
- * branch's row like any other, told apart by its accessible name (`Subagent (…)`). The bar's height is a
- * function of what you opened, never of how deep the tree went — the invariant every earlier design failed.
- * The full shape of the work is the Workloads diagram, which has the room to draw it.
+ * The two properties the flattened row was chosen for are kept, and by construction rather than by care.
+ * **The row you clicked in does not move**: picking a sibling changes which of ITS children are drawn below,
+ * never the row that holds it, because that row is the children of the same parent either way. **Nothing
+ * empties under the pointer**: a leaf starts no row, so opening one leaves every row above it as it was
+ * instead of blanking the last one. See `app-tabs-base.js` `openBranches`.
+ *
+ * What it costs is height, and the cost is bounded by what the READER opened rather than by the tree: rows
+ * appear one per press and go when you step back out. Each is named after the agent whose children it holds
+ * (`aria-label`), because an indent says nothing to anyone not looking at the screen and nothing at all when
+ * two rows sit at the same one. The whole shape of the work at once is still the Workloads diagram, which has
+ * the room to draw it.
  *
  * **What the host sends, and what this owns.** The host sends what EXISTS: the chat list, the agent tree flat
  * (`{id, parent, label, status, type}`) and the background tasks. This module owns what is SHOWN — which
@@ -147,10 +152,22 @@
   }
 
   /**
-   * What each row was last AIMED at — the open chat's id, and `kind:id` of the open subtab (`''` for the
-   * chat's own transcript). Null until the first draw, which is why the first draw centres.
+   * What each row was last AIMED at — the open chat's id, `kind:id` of the open subtab (`''` for the chat's
+   * own transcript), and one slot per branch row, keyed by the agent whose children it holds. Absent until
+   * the first draw, which is why the first draw centres.
+   *
+   * `Object.create(null)`, because branch slots are built from ids the binary chose: on a plain object an
+   * agent called `constructor` would find a function on the prototype and the row would never re-centre.
    */
-  var centred = { chat: null, sub: null, branch: null };
+  var centred = Object.create(null);
+
+  /** Whether one of the open rows holds [agentId]'s children — which is what the pill announces. */
+  function ownsARow(branches, agentId) {
+    for (var i = 0; i < branches.length; i++) {
+      if (branches[i].rootId === agentId) return true;
+    }
+    return false;
+  }
 
   /**
    * Fits [capsule] out as a row that can be READ: the wheel translated, the row grabbable, focus kept in
@@ -206,8 +223,14 @@
     var priorScroll = priorCapsule ? priorCapsule.scrollLeft : 0;
     var priorSubs = rows.querySelector('.subtab-capsule');
     var priorSubScroll = priorSubs ? priorSubs.scrollLeft : 0;
-    var priorBranch = rows.querySelector('.branch-capsule');
-    var priorBranchScroll = priorBranch ? priorBranch.scrollLeft : 0;
+    // One offset per branch row, keyed by the agent whose children that row holds — NOT by position. Opening
+    // a deeper level inserts a row below the ones already there, and a positional read would hand row N's
+    // offset to row N+1, which is the reader's place applied to somebody else's row.
+    var priorBranchScroll = Object.create(null);
+    Array.prototype.forEach.call(rows.querySelectorAll('.branch-capsule'), function (el) {
+      var owner = el.getAttribute('data-branch');
+      if (owner) priorBranchScroll[owner] = el.scrollLeft;
+    });
     while (rows.firstChild) rows.removeChild(rows.firstChild);
     host = rows;
 
@@ -234,8 +257,8 @@
     }
 
     // 2. What the CHAT started: its own agents, then its background tasks (`chatWork`, app-tabs-base.js).
-    //    Top level only — a subagent lives in row 3, under the agent that invoked it.
-    var branch = T.openBranch();
+    //    Top level only — a subagent lives in a row below, under the agent that invoked it.
+    var branches = T.openBranches();
     var work = T.chatWork();
     if (work.length) {
       // The chat itself leads the row, so "back to the conversation" is always a target and always in the same
@@ -251,11 +274,10 @@
       ];
       work.forEach(function (w) {
         // Three states, and the third is the point: no attribute when this pill opens nothing, `false` when
-        // it could, `true` when its row is the one below. Row 3 belongs to whichever agent `openBranch`
-        // resolved — which is an ANCESTOR of the open subtab, not necessarily the subtab itself, so an agent
-        // stays marked as open while you read one of its subagents.
+        // it could, `true` when one of the rows below is ITS children. An agent stays marked as open while
+        // you read something further down its branch, because its row is still on screen.
         var expandable = w.kind === 'agent' && w.hasKids;
-        subPills.push(subtabPill(w, expandable ? !!branch && branch.rootId === w.id : null));
+        subPills.push(subtabPill(w, expandable ? ownsARow(branches, w.id) : null));
       });
       // No modifier class on the ROW: `.subtab-capsule` is what carries the difference and what the CSS and
       // the tests both key on, and a second class that nothing styles is a class that goes stale unnoticed.
@@ -264,32 +286,42 @@
       wireRow(subs, priorSubScroll, 'sub', T.selected ? T.selected.kind + ':' + T.selected.id : '');
     }
 
-    // 3. The OPEN BRANCH: everything the agent you opened started, at every depth (`openBranch`). Absent
-    //    whenever there is nothing to put in it — you are in the chat, or in an agent that started nothing —
-    //    because a row that takes height and says nothing is worse than no row.
+    // 3. The OPEN BRANCH, one row per level: the children of each agent open above it, down the path to
+    //    whatever you are reading (`openBranches`). There are as many rows as the tree is deep, because
+    //    depth is not bounded by the protocol and an agent that spawns agents that spawn agents is the
+    //    session this feature exists for. Absent whenever there is nothing to put in a row — you are in the
+    //    chat, or in an agent that started nothing — because a row that takes height and says nothing is
+    //    worse than no row.
     //
-    //    It is the same capsule as row 2 (`subtab-capsule`, so it reads at the same size) plus one class for
-    //    the indent that says it belongs to the pill above it. The whole subtree, not one level, so moving
-    //    around inside a branch never reshuffles the row you are reading — see `openBranch` for why that
-    //    beats "the children of what you are looking at", and for why there is never a fourth row.
+    //    Each is the same capsule as row 2 (`subtab-capsule`, so they all read at the same size) plus the
+    //    class for the indent that says it belongs to the row above it.
     //
-    //    `aria-label` names the owner, because indentation is not information: without it a screen-reader
-    //    user meets a second unlabelled run of tabs with no way to tell whose they are.
-    if (branch) {
+    //    `aria-label` names the owner of each row, because indentation is not information: without it a
+    //    screen-reader user meets several unlabelled runs of tabs with no way to tell whose they are. It is
+    //    also what tells two rows apart when they hold agents with the same label.
+    //
+    //    The scroll offsets are kept PER ROW, keyed by the agent whose children the row holds rather than by
+    //    position: opening a deeper level inserts a row below and must not hand row N's offset to row N+1.
+    branches.forEach(function (branch) {
       var branchPills = branch.items.map(function (w) {
-        return subtabPill(w, null);
+        return subtabPill(w, w.hasKids ? ownsARow(branches, w.id) : null);
       });
       var kids = h(
         'div',
         {
           class: 'tab-capsule subtab-capsule branch-capsule',
-          attrs: { 'aria-label': 'Started by ' + branch.rootLabel },
+          attrs: { 'aria-label': 'Started by ' + branch.rootLabel, 'data-branch': branch.rootId },
         },
         branchPills
       );
       host.appendChild(h('div', { class: 'tab-row' }, kids));
-      wireRow(kids, priorBranchScroll, 'branch', branch.rootId + '/' + (T.selected ? T.selected.id : ''));
-    }
+      wireRow(
+        kids,
+        priorBranchScroll[branch.rootId] || 0,
+        'branch:' + branch.rootId,
+        branch.rootId + '/' + (T.selected ? T.selected.id : '')
+      );
+    });
 
     T.bar().hidden = !chatPills.length && !work.length;
 

@@ -382,14 +382,18 @@ body.vibe .composer-card:focus-within {
   font-size: 11.5px;
 }
 
-/* ── the branch row: what the agent you opened started ───────────────────────
-   The third and last row. It carries `.subtab-capsule` too, deliberately — it is the same kind of thing at
-   the same size, and one register for "a subtab" is what stops the bar reading as three unrelated strips —
-   plus this class for the one thing that differs: it is INSIDE the pill above it.
+/* ── the branch rows: what each agent you opened started ─────────────────────
+   One per open level, and there can be several (`openBranches`, app-tabs-base.js). Each carries
+   `.subtab-capsule` too, deliberately — they are the same kind of thing at the same size, and one register for
+   "a subtab" is what stops the bar reading as a stack of unrelated strips — plus this class for the one thing
+   that differs: they are INSIDE the pill above them.
 
-   **The indent is the whole of the hierarchy on screen**, so it is paired with `aria-label` on the capsule
-   (`Started by …`, set in app-tabs.js): a left margin says nothing to anyone not looking at it, and an
-   unlabelled second run of tabs is unnavigable by keyboard or screen reader.
+   **Every branch row takes the SAME indent, on purpose.** A stair, one step per level, is the obvious
+   alternative and it is not free: the margin and the `max-width` below are one arithmetic pair (see the next
+   paragraph), so a per-level indent means computing both in JS, where they can drift apart — and the failure
+   mode of drifting is a row that overflows where nothing can scroll to it. What actually distinguishes the
+   rows is what they hold and the `aria-label` each carries (`Started by …`, set in app-tabs.js), which is also
+   the only thing that says it to anyone not looking at the screen. Indentation is not information.
 
    `max-width` is reduced by exactly the margin. Every container from `#tabsbar` down bounds its width so the
    overflow lands in the capsule's own `overflow-x`, where the wheel and the drag can reach it; a margin added

@@ -124,7 +124,7 @@
    * The SECOND row: the agents the CHAT started, then its background tasks.
    *
    * Top level only — a subagent belongs under the agent that invoked it, and reaching it means opening that
-   * agent (see [openBranch]). Flattening every depth into this row is what put a chat's whole tree in one
+   * agent (see [openBranches]). Flattening every depth into this row is what put a chat's whole tree in one
    * strip, which is unreadable at the dozens this feature exists for and says nothing about who started what.
    *
    * **Background tasks stay HERE, at the chat's level, whoever started them.** A task is not a conversation:
@@ -133,7 +133,7 @@
    * that agent would make a live task's output unreachable whenever its owner's branch is closed, and the
    * output is the entire point of the row. Its owner is still on the card in the Workloads diagram.
    *
-   * Each entry is `{kind:'agent'|'task', id, node, depth}`, shaped like [openBranch]'s so one pill builder
+   * Each entry is `{kind:'agent'|'task', id, node, depth}`, shaped like [openBranches]'s so one pill builder
    * draws both rows.
    */
   function chatWork() {
@@ -157,45 +157,71 @@
   }
 
   /**
-   * The THIRD row: everything under the branch you have open, or `null` when there is no third row.
+   * The rows BELOW the chat's own: one per open level, each holding the children of the agent open above it.
    *
-   * **The branch is the DEPTH-1 ANCESTOR of the open subtab, and its whole subtree is the row** — not just
-   * the immediate children of whatever is selected. That is the decision, and the alternative is what makes
-   * it one: a row of "the children of what you are looking at" empties the moment you open a leaf, and
-   * re-fills with a different set the moment you open its sibling, so the strip you were reading reshuffles
-   * under the click you just made. Worse, at depth 2 it would draw the selection's children while the
-   * selection itself appeared in no row at all — the bar would stop being able to say where you are.
+   * **ONE LEVEL PER ROW, and as many rows as the tree is deep.** It used to be a single row holding the whole
+   * subtree of the depth-1 ancestor, flattened — which made a sub-subagent visible but gave it no row of its
+   * own, so selecting one opened nothing and the bar stopped at three rows however deep the work went. Depth
+   * is not bounded by the protocol and an agent that spawns agents that spawn agents is the session this
+   * feature exists for, so the bar follows it down.
    *
-   * Holding the branch fixed while you move inside it costs nothing on screen and buys three properties: the
-   * bar is **at most three rows** however deep the tree goes and there is never a fourth (the invariant four
-   * earlier designs were thrown away for), the row does not move when you pick something in it, and
-   * **nothing becomes unreachable** — every descendant of the open agent is one click away, at any depth.
+   * The rows are the PATH from the depth-1 ancestor to the open subtab, inclusive, and a node contributes a
+   * row only when it started something. Two properties fall out of that, and they are the ones the flattened
+   * row was chosen for in the first place:
+   *  - **the row you clicked in does not move.** Picking a sibling changes which of ITS children are drawn
+   *    below, never the row that holds it, because that row is the children of the same parent either way;
+   *  - **nothing empties under the pointer.** A leaf starts no row, so opening one leaves every row above it
+   *    exactly as it was rather than replacing the last one with a blank strip.
    *
-   * Returns `null` for a selection that is not an agent, for one the payload no longer carries, and for an
-   * agent that started nothing: an empty row that still takes height is worse than no row.
+   * Returns `[]` for a selection that is not an agent, for one the payload no longer carries, and for a
+   * selected agent that started nothing — a row that takes height and says nothing is worse than no row.
    */
-  function openBranch() {
-    if (!T.selected || T.selected.kind !== 'agent') return null;
+  function openBranches() {
+    if (!T.selected || T.selected.kind !== 'agent') return [];
     var all = walkTree();
-    var here = null;
-    var i;
-    for (i = 0; i < all.length; i++) {
-      if (all[i].id === T.selected.id) here = all[i];
+    var byId = Object.create(null);
+    all.forEach(function (e) {
+      byId[e.id] = e;
+    });
+    var here = byId[T.selected.id];
+    if (!here) return [];
+
+    // Up to the top, then read back down. The seen-set is the cycle guard: the parent links come from the
+    // binary, and a malformed one must shorten the path rather than hang the page.
+    var path = [];
+    var seen = Object.create(null);
+    var cur = here;
+    while (cur && !seen[cur.id]) {
+      seen[cur.id] = true;
+      path.unshift(cur);
+      cur = cur.node.parent != null ? byId[cur.node.parent] : null;
     }
-    if (!here) return null;
-    var items = [];
-    var rootNode = null;
-    for (i = 0; i < all.length; i++) {
-      if (all[i].root !== here.root) continue;
-      if (all[i].depth === 1) rootNode = all[i].node;
-      else items.push({ kind: 'agent', id: all[i].id, node: all[i].node, depth: all[i].depth });
-    }
-    if (!items.length) return null;
-    return {
-      rootId: here.root,
-      rootLabel: (rootNode && rootNode.label) || 'Agent',
-      items: items,
-    };
+
+    var kidsOf = Object.create(null);
+    all.forEach(function (e) {
+      var parent = e.node.parent != null && byId[e.node.parent] ? e.node.parent : '';
+      (kidsOf[parent] = kidsOf[parent] || []).push(e);
+    });
+
+    var rows = [];
+    path.forEach(function (e) {
+      var kids = kidsOf[e.id] || [];
+      if (!kids.length) return;
+      rows.push({
+        rootId: e.id,
+        rootLabel: e.node.label || 'Agent',
+        items: kids.map(function (k) {
+          return {
+            kind: 'agent',
+            id: k.id,
+            node: k.node,
+            depth: k.depth,
+            hasKids: !!(kidsOf[k.id] && kidsOf[k.id].length),
+          };
+        }),
+      });
+    });
+    return rows;
   }
 
   T.send = send;
@@ -205,5 +231,5 @@
   T.pruneSelection = pruneSelection;
   T.isSelected = isSelected;
   T.chatWork = chatWork;
-  T.openBranch = openBranch;
+  T.openBranches = openBranches;
 })();
