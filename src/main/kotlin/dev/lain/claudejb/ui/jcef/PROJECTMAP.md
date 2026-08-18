@@ -45,8 +45,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefAccountData.firstPresent` | fun | `JcefAccountData.kt:96` | The first candidate that carries something, or null. |
 | `JcefBridge` | object | `JcefBridge.kt:26` | The **inbound pure half** of the JCEF bridge: it parses the frontend's messages (`window.__ccSend`) into a typed [Msg]. |
 | `JcefBridge.SCOPE_GIT` | val | `JcefBridge.kt:45` | The scope naming the conversation embedded in the Git view, when a request card belongs to it. |
-| `JcefBridge.jsString` | fun | `JcefBridge.kt:351` | A string as a JS expression: a JSON string literal is a valid JavaScript string literal, and the serializer's escaping … |
-| `JcefBridge.parse` | fun | `JcefBridge.kt:361` | Parses one `window.__ccSend` payload. |
+| `JcefBridge.jsString` | fun | `JcefBridge.kt:367` | A string as a JS expression: a JSON string literal is a valid JavaScript string literal, and the serializer's escaping … |
+| `JcefBridge.parse` | fun | `JcefBridge.kt:377` | Parses one `window.__ccSend` payload. |
 | `JcefCardPayload` | object | `JcefCardPayload.kt:21` | The request-card half of the outbound (Kotlin → JS) payloads: the permission cards the frontend renders, including the … |
 | `JcefCardPayload.permissionJson` | fun | `JcefCardPayload.kt:24` | One pending permission as a card the frontend renders (Accept/Reject/View-diff, plan, or AskUserQuestion). |
 | `JcefCardPayload.permissionsJson` | fun | `JcefCardPayload.kt:95` |  |
