@@ -250,8 +250,15 @@ anchor, it is a tautology. With it, the chain terminates in hardware. And it is 
 you have: if the CI key leaks you revoke the endorsement from the YubiKey, which no one holding the leaked
 key can undo. The procedure is in [`../SECURITY.md`](../SECURITY.md).
 
-Never import the **private** half into your keyring. It belongs in exactly one place — the environment
-secret. Keeping it out is what stops it quietly becoming a second maintainer identity.
+`bootstrap-ci.sh` also keeps the **private** half in your keyring, and the passphrase beside it encrypted
+to the two CAs. That is custody, not convenience: a GitHub environment secret is **write-only** — nothing
+can read back what was uploaded — so a key living only there can never be inspected, re-signed with, or
+revoked using its own revocation certificate. The thing that stops it becoming a second maintainer
+identity is not its absence from disk but what certifies it: it is an *artifact* key, endorsed by the CAs
+as such, and `SECURITY.md` states plainly what its signature does and does not claim.
+
+Doing it by hand instead, import `public.asc` only — you would have the private block on your screen at
+that point, and a copy in the shell history is not custody, it is a leak.
 
 ---
 
