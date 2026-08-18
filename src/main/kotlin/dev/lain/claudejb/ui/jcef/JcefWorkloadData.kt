@@ -93,19 +93,24 @@ internal object JcefWorkloadData {
      * Every row carries its `agentId`, which is what the window's link sends back to jump to that tab.
      *
      * ---
-     * `[{chatId, title, selected, tree:[…], tasks:[…]}]` — one entry per open chat.
+     * `[{chatId, title, selected, tree:[…], tasks:[…]}]` — **one entry per tab handed in, faithfully**.
      *
      * Each entry reuses the very same builders the single-session payload uses, so a node means the same
      * thing whichever chat it came from and there is no second serialisation to drift.
      *
-     * ONE ENTRY PER SESSION. A tab pinned to a subagent is a second tab over the same panel — a view of one
-     * agent's transcript, not another workload — so the strip lists that session twice and the diagram drew
-     * the chat, its agents and its tasks twice over. Keyed by session identity, first tab wins (the chat's
-     * own tab comes before anything pinned out of it).
+     * **Nothing is deduplicated here, and that is a decision rather than an omission.** This used to key by
+     * session identity and keep the first tab, because a subtab pinned as a tab of its own put a SECOND tab
+     * over the same session in the strip and the diagram drew that chat, its agents and its tasks twice. The
+     * pinned view is gone and the strip now guarantees one tab per session (`ChatTabsPanel`, pinned by
+     * `ToolWindowWiringContractTest`), so the filter can no longer fire — and reinstating it would be worse
+     * than useless: it would silently absorb a duplicate whose real symptom is invisible too (a close
+     * disposing the `claude` process another tab is painting), turning the one place that state would show
+     * itself into the place that hides it. The diagram is a faithful projection of the strip; if it ever
+     * draws a chat twice, the strip is what is wrong.
      */
     fun workloadsJson(workloads: List<JcefSessionData.Workload>, windowMinutes: Int, nowMillis: Long) =
         buildJsonArray {
-            workloads.distinctBy { it.session }.forEach { w ->
+            workloads.forEach { w ->
                 val shown = visible(w.session, windowMinutes, nowMillis)
                 addJsonObject {
                     put("chatId", w.chatId)
