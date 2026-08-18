@@ -96,21 +96,43 @@ object CommandRules {
      *  - **`$HOME`/`~`** expansion (via [GuardPaths.expandEnv]);
      *  - **base64 payloads** long enough to be a command (`echo <b64> | base64 -d | sh`) → decoded and appended,
      *    so a hidden `nc`/`curl`/key path inside the blob is matched too.
+     *
+     * **Each step below is guarded by a plain `in` check on the character it needs.** Every one of these regexes
+     * requires a specific character to match at all — `$` for the IFS/assignment steps, one of `\`/`'`/`"`/`` ` ``
+     * for the quote/escape steps — so on a command with none of them the `replace` call is provably a no-op and
+     * skipping it changes nothing it would have produced. This is what makes an ordinary command (`git status`,
+     * `npm test`, `ls -la`) cheap: none of those characters appear, so only the harmless no-op [GuardPaths.expandEnv]
+     * call and the base64 scan below still run. **The base64 scan is NOT gated the same way, and cannot be**: a
+     * pure base64 blob (`A-Za-z0-9+/=`) contains none of `\`/`$`/`'`/`"`/`` ` `` either, so gating it on those
+     * characters would skip decoding exactly the payloads this step exists to catch. Perf-only; revisit once
+     * phase 5's timings exist — if it bought nothing, revert it.
      */
     fun deobfuscate(command: String): String {
         var s = command
-        // Line continuations first, so a command split across lines becomes one line.
-        s = s.replace("\\\n", "").replace("\\\r\n", "")
-        // $IFS (with or without braces, optionally $'...') → a plain space.
-        s = s.replace(Regex("""\$\{?IFS\}?"""), " ").replace(Regex("""\$'\\(?:x09|011|t)'"""), " ")
-        // Delete empty quote pairs and stray quotes/backticks used purely to break up tokens.
-        s = s.replace("''", "").replace("\"\"", "").replace("``", "")
-        // A backslash before a normal (non-space) char is a no-op in the shell for our purposes: drop it.
-        s = s.replace(Regex("""\\([A-Za-z0-9._/~-])"""), "$1")
-        // Now collapse the remaining quotes/backticks that wrap fragments (`"cat"` → cat, `'id'_rsa` → id_rsa).
-        s = s.replace(Regex("""["'`]"""), "")
-        // Resolve trivial `name=value` assignments, then substitute `$name`/`${name}` with the value.
-        s = substituteAssignments(s)
+        if ('\\' in s) {
+            // Line continuations first, so a command split across lines becomes one line.
+            s = s.replace("\\\n", "").replace("\\\r\n", "")
+        }
+        if ('$' in s) {
+            // $IFS (with or without braces, optionally $'...') → a plain space.
+            s = s.replace(Regex("""\$\{?IFS\}?"""), " ").replace(Regex("""\$'\\(?:x09|011|t)'"""), " ")
+        }
+        if ('\'' in s || '"' in s || '`' in s) {
+            // Delete empty quote pairs and stray quotes/backticks used purely to break up tokens.
+            s = s.replace("''", "").replace("\"\"", "").replace("``", "")
+        }
+        if ('\\' in s) {
+            // A backslash before a normal (non-space) char is a no-op in the shell for our purposes: drop it.
+            s = s.replace(Regex("""\\([A-Za-z0-9._/~-])"""), "$1")
+        }
+        if ('\'' in s || '"' in s || '`' in s) {
+            // Now collapse the remaining quotes/backticks that wrap fragments (`"cat"` → cat, `'id'_rsa` → id_rsa).
+            s = s.replace(Regex("""["'`]"""), "")
+        }
+        if ('=' in s) {
+            // Resolve trivial `name=value` assignments, then substitute `$name`/`${name}` with the value.
+            s = substituteAssignments(s)
+        }
         // Expand $HOME/~ etc.
         s = GuardPaths.expandEnv(s, null)
         // Decode any base64 blob long enough to be a hidden command, and append it so its contents get matched.
