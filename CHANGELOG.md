@@ -210,6 +210,21 @@ working — or update the IDE.
   agent is a view of its chat, never a second chat, so there is no longer any arrangement in which two tabs
   share one conversation; the same defect was also what drew a chat twice in the Workloads diagram.
 
+### Security
+- **The release signing keys were rotated, and what vouches for them now travels with the release.** The
+  key that signs the `vX.Y.Z` tag and the `.asc` beside each download is new, and it is certified by two
+  hardware keys whose private halves have never existed as a file. Everything you need to check that
+  arrives as one attached file, `trust-chain.asc` — the signing key and both certifying keys together,
+  because a chain is imported whole or it is not imported at all. Verifying is `gpg --import
+  trust-chain.asc` followed by the same `gpg --verify` and `git verify-tag` as before, and the full
+  procedure is in [`SECURITY.md`](SECURITY.md).
+- **The single public key that used to sit in the repository is gone**, and it is worth being exact about
+  why rather than quietly replacing it: it endorsed nothing a reader could follow — the keys that had
+  certified it no longer exist — and it was not even the key that signed 5.1.1, having been replaced in
+  the tree after that release went out. A key file that verifies nothing is worse than none, because
+  nobody re-checks it and everybody believes it. Each release now carries the chain that was current when
+  it was cut, so a release stays verifiable after the key that signed it has been retired.
+
 ### Internal
 
 Repository and build only — none of it changes the plugin you install.

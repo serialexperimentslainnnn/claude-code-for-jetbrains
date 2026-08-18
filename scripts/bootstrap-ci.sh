@@ -223,13 +223,20 @@ else
   # the token serial), which on this repository is the root key and the intermediate CA. A fingerprint
   # pasted into this script goes stale the first time a key is rotated and says nothing when it does;
   # a derived list cannot, and every certification is verified individually below.
+  #
+  # `$15 != "+"` is what makes that test mean what it says, and without it the filter matched EVERY key.
+  # GnuPG writes the token's serial into field 15 for a card-held key and a literal `+` for one whose
+  # secret half is an ordinary file on disk — so `$15 != ""` is true for all of them. On this keyring
+  # that silently widened two certifiers to five, three of them personal identities that must never
+  # certify anything for a public repository. The question is "is there a serial", not "is the field
+  # populated", and the two only look alike until a second key exists.
   mapfile -t certifiers < <(gpg --list-secret-keys --with-colons \
-    | awk -F: '$1=="sec" && $15!="" { getline; if ($1=="fpr") print $10 }')
+    | awk -F: '$1=="sec" && $15!="" && $15!="+" { getline; if ($1=="fpr") print $10 }')
 
   if [ ${#certifiers[@]} -eq 0 ]; then
     warn "no hardware-held key in your keyring — the CI key cannot be certified by a CA."
     warn "the exported key will carry no endorsement; users can only take its fingerprint on faith."
-    cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
+    cp "$tmp/gpg/public.asc" docs/trust-chain.asc
   else
     gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
     warn "TOUCH YOUR YUBIKEY once per certifier — ${#certifiers[@]} of them."
@@ -241,22 +248,45 @@ else
       gpg --batch --yes --local-user "$fpr" --quick-sign-key "$ci_fpr" \
         || warn "certification with $fpr failed (cancelled, or that YubiKey was not present)"
     done
-    # Export AFTER certifying: the exported block then carries the signatures on the uid.
-    gpg --armor --export "$ci_fpr" > docs/ci-signing-key.asc
+    # ONE file holding the CAs and the leaf they certify, and that is assurance rather than packaging.
+    # A certification is only followable by someone who already holds the CERTIFIER's public key, so
+    # publishing the CI key alone ships an endorsement nobody can check — which reads, to anybody
+    # verifying, exactly like no endorsement at all. Split across three files it becomes three imports,
+    # and the one people skip is the one carrying the assurance.
+    #
+    # Exported AFTER certifying, so the leaf's block carries the signatures on its uid. Certifiers
+    # first and leaf last, one `--export` each: a single call listing several keys emits them in
+    # KEYRING order, which is not argument order, and a chain that has to be read bottom-up is a chain
+    # nobody reads.
+    { for fpr in "${certifiers[@]}"; do gpg --armor --export "$fpr"; done
+      gpg --armor --export "$ci_fpr"; } > docs/trust-chain.asc
+
+    # Verified as a FILE, never as a keyring query, and the distinction is the entire point of the
+    # check. An export is precisely where a certification vanishes: a signature made with
+    # `--quick-lsign-key` is LOCAL — it lives in the keyring and is stripped on export — so asking gpg
+    # about the keyring reports a chain the user will never receive. Reading the bytes back through a
+    # throwaway GNUPGHOME asks the only question that matters: does what is about to be committed
+    # actually chain, for somebody who has nothing but this file?
+    chain_home="$tmp/chain-verify"; mkdir -p "$chain_home"; chmod 700 "$chain_home"
+    GNUPGHOME="$chain_home" gpg --batch --quiet --import docs/trust-chain.asc 2>/dev/null
     for fpr in "${certifiers[@]}"; do
-      if gpg --check-sigs --with-colons "$ci_fpr" \
-           | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m {found=1} END {exit !found}'; then
-        info "verified: the certification by $fpr is in docs/ci-signing-key.asc"
+      have_key=$(GNUPGHOME="$chain_home" gpg --list-keys --with-colons 2>/dev/null \
+        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f {print "y"; exit}')
+      have_sig=$(GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$ci_fpr" 2>/dev/null \
+        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m {print "y"; exit}')
+      if [ "$have_key" = y ] && [ "$have_sig" = y ]; then
+        info "docs/trust-chain.asc: $fpr is present, and its certification of the CI key survived"
       else
-        warn "MISSING: no certification by $fpr. Re-run with that YubiKey present:"
+        [ "$have_key" = y ] || warn "docs/trust-chain.asc does not carry the CA $fpr at all."
+        [ "$have_sig" = y ] || warn "no certification by $fpr survived the export — was it an lsign?"
+        warn "Re-run with that YubiKey present, then re-export:"
         warn "  gpg --local-user $fpr --quick-sign-key $ci_fpr"
-        warn "  gpg --armor --export $ci_fpr > docs/ci-signing-key.asc"
       fi
     done
   fi
 
-  info "wrote docs/ci-signing-key.asc  (fingerprint $ci_fpr)"
-  warn "COMMIT docs/ci-signing-key.asc — without the public key nobody can verify a release."
+  info "wrote docs/trust-chain.asc  (CI signing key $ci_fpr)"
+  warn "COMMIT docs/trust-chain.asc — without it nobody can verify a release."
 
   # --- register the CI key on the GitHub ACCOUNT --------------------------------------------------------
   # This step did not exist, and its absence is the whole reason v5.0.0 shipped with an unverified tag.
@@ -265,8 +295,13 @@ else
   # It does nothing for the "Verified" badge, which is a different mechanism entirely: GitHub marks a
   # signature verified only when the tagger email, an email in a uid of a key REGISTERED ON THE ACCOUNT,
   # and a verified account email all agree. Certification is not registration, and the two were conflated.
+  #
+  # Registered from the SINGLE-key export, never from docs/trust-chain.asc: `gh gpg-key add` posts one
+  # armored key, so handing it a bundle either registers the first block or is rejected outright —
+  # and the first block is a CA, which is emphatically not the key that signs the tag. The endorsement
+  # is irrelevant here anyway; GitHub reads the uid's email and nothing else.
   if gh gpg-key list >/dev/null 2>&1; then
-    if gh gpg-key add docs/ci-signing-key.asc >/dev/null 2>&1; then
+    if gh gpg-key add "$tmp/gpg/public.asc" >/dev/null 2>&1; then
       info "registered the CI public key on the GitHub account"
     else
       info "GitHub already knows this key (or rejected it) — verifying below"
@@ -283,7 +318,7 @@ else
   else
     warn "gh lacks the GPG scope, so the key was NOT registered on your account."
     warn "Without this the release tag will show as unverified. Run:"
-    warn "  gh auth refresh -s write:gpg_key && gh gpg-key add docs/ci-signing-key.asc"
+    warn "  gh auth refresh -s write:gpg_key && gh gpg-key add <(gpg --armor --export $ci_fpr)"
   fi
 fi
 
@@ -374,8 +409,8 @@ say "Done"
 cat <<EOF
    Remaining, and neither can be done for you:
 
-   1. Commit the public key, or releases cannot be verified:
-        git add docs/ci-signing-key.asc && git commit -m "chore(release): publish the CI artifact signing key"
+   1. Commit the trust chain, or releases cannot be verified:
+        git add docs/trust-chain.asc && git commit -m "chore(release): publish the release trust chain"
 
    2. Smoke-test the pipeline before a real release depends on it:
         git checkout -b test/ci-smoke

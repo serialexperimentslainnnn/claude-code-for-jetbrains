@@ -121,7 +121,12 @@ secrets.yaml
 .env
 .env.*
 
-# The ONE key file that must be committed: the CI signing key's PUBLIC half. Without it in the
-# repository nobody can verify a release, which is the whole point of signing one. Below the
-# secrets block on purpose — last match wins, so this exception survives `*.asc` above.
-!/docs/ci-signing-key.asc
+# The ONE key file that must be committed: `docs/trust-chain.asc`, holding the PUBLIC halves of the
+# two hardware CAs and of the CI signing key they certify. Without it nobody can verify a release,
+# which is the whole point of signing one. Below the secrets block on purpose — last match wins, so
+# this exception survives `*.asc` above.
+#
+# One named file rather than an un-ignored `docs/trust-*.asc`, and the difference matters: a glob
+# here would silently commit whatever lands under that prefix, a PRIVATE block exported to the wrong
+# filename included. A leak has to stay an explicit mistake.
+!/docs/trust-chain.asc

@@ -342,8 +342,13 @@ jobs:
           ---
 
           **Verifying this release.** Both the `.asc` files and the tag are signed by the project's **CI
-          signing key** (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware
-          key — so the chain terminates in a key that has never been on a computer.
+          signing key**, and everything needed to check it is in the one file attached here as
+          `trust-chain.asc`: that key's public half, plus the two hardware CAs that certify it — so the
+          chain terminates in keys whose private halves have never been on a computer.
+
+          One file rather than three because a chain is imported whole or not at all. A certification you
+          have no way to follow is indistinguishable from one nobody made, which is exactly the assurance
+          the two CA keys carry.
 
           What the signatures do NOT assert is that a human pressed a button: the release is cut
           automatically from the merge into `main`, with no approval step and no required reviewer. What
@@ -354,7 +359,11 @@ jobs:
           commit that is not reachable from `main` or a version number that has already been released.
 
           ```sh
-          gpg --import docs/ci-signing-key.asc
+          gpg --import trust-chain.asc
+          # The CI key is the LAST block in that file — the CAs come first, and the awk below takes the
+          # last one deliberately. Then: endorsed by both of them, not merely asserted by a file.
+          gpg --check-sigs "$(gpg --show-keys --with-colons trust-chain.asc \
+                              | awk -F: '$1=="pub"{getline; if ($1=="fpr") f=$10} END{print f}')"
           gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
           git verify-tag <tag>                        # this workflow cut this release from main
           ```
@@ -421,8 +430,8 @@ jobs:
 
       # --- GPG-sign the exact bytes that were published -------------------------------------------
       # The key is already imported: it was needed above to sign the tag, and it is the same key by
-      # design — one CI signing key backs both claims, and `docs/ci-signing-key.asc` is the single
-      # public half a user needs to check either of them.
+      # design — one CI signing key backs both claims, and `docs/trust-chain.asc` is the single file a
+      # user needs to check either of them.
       - name: Sign the artifact
         env:
           PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
@@ -440,11 +449,28 @@ jobs:
           for f in "$NAME" "$NAME.sha256"; do gpg --verify "$f.asc" "$f"; done
           sha256sum -c "$NAME.sha256"
 
+      # --- the trust chain travels with the release ------------------------------------------------
+      #
+      # A signature is worth what the reader's access to the key is worth, and "clone the repository to
+      # fetch the key" asks them to trust the same tree the artifact came from. So the chain rides along
+      # as an asset: one file carrying the CI signing key that made these signatures and the two hardware
+      # CAs that certify it — without which the certification is present and unfollowable, which is the
+      # same thing as absent to anyone verifying.
+      #
+      # Attaching it per release is also what keeps an OLD release verifiable. Rotating the CI key
+      # OVERWRITES `docs/trust-chain.asc` in the tree, so the retired key survives beside the CAs that
+      # vouched for it only on the releases it actually signed — which is where someone verifying one of
+      # them is already standing. `cp` failing on a missing file is the intended behaviour: a release
+      # without its chain is worse than no release, because nothing on the page says the chain is missing.
+      - name: Attach the trust chain
+        run: cp docs/trust-chain.asc dist/
+
       # --- Attach the artifacts and take the release out of draft ---------------------------------
       #
-      # Last, and only now: the draft became a real release the moment it has the four files a user is
-      # told to verify — the signed zip, its checksum, and a detached signature for each. Undrafting
-      # earlier would publish a release whose download links 404 for the length of a build.
+      # Last, and only now: the draft became a real release the moment it has the files a user is told to
+      # verify — the signed zip, its checksum, a detached signature for each, and the trust chain that
+      # makes those signatures checkable. Undrafting earlier would publish a release whose download
+      # links 404 for the length of a build.
       #
       # `--clobber` so re-running this job on an existing tag replaces the assets instead of failing on
       # a name collision. That is the documented recovery path when a publish fails after the tag was

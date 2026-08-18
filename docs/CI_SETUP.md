@@ -170,16 +170,28 @@ gh secret set GPG_SIGNING_KEY --env marketplace --repo "$REPO"
 gh secret set GPG_SIGNING_PASSPHRASE --env marketplace --repo "$REPO"
 ```
 
-Then **certify it with your YubiKey**, and publish the certified public half:
+Then **certify it with the two hardware CAs**, and publish the whole chain in one file:
 
 ```sh
 CI_FPR=<fingerprint printed by the script>
-gpg --import public.asc                                    # PUBLIC half only
-gpg --local-user "$(git config user.signingkey)" --quick-sign-key "$CI_FPR"   # touch the YubiKey
-gpg --armor --export "$CI_FPR" > docs/ci-signing-key.asc   # export AFTER signing
-git add docs/ci-signing-key.asc
-git commit -m "chore(release): publish the CI artifact signing key"
+ROOT_FPR=E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3
+INT_FPR=318BBEFF6E5DD5A03A8280518DAB773C3796B834
+gpg --import public.asc                                     # PUBLIC half only
+gpg --local-user "$ROOT_FPR" --quick-sign-key "$CI_FPR"     # Root, YubiKey 27263482
+gpg --local-user "$INT_FPR"  --quick-sign-key "$CI_FPR"     # Intermediate, YubiKey 32861026
+{ gpg --armor --export "$ROOT_FPR" "$INT_FPR"               # export AFTER signing
+  gpg --armor --export "$CI_FPR"; } > docs/trust-chain.asc  # CI key LAST — see below
+git add docs/trust-chain.asc
+git commit -m "chore(release): publish the release trust chain"
 ```
+
+`--quick-sign-key`, never `--quick-lsign-key`: a **local** certification is stripped on export, so the
+bundle would carry the CAs and no endorsement at all — and it looks identical to a correct one until
+someone else imports it. `./scripts/bootstrap-ci.sh` does all of the above and then re-imports its own
+output into a throwaway keyring to check the signatures survived, which is the only way to find out.
+
+The CI key goes **last** in the file on purpose: it is the leaf, so anything reading the bundle for "the
+key that signed this release" takes the last public block, and `release.yml` does exactly that.
 
 The certification is not ceremony. Without it, a user is asked to trust a fingerprint printed in a file
 **inside the repository an attacker who could swap the key would also control** — which is not a trust
