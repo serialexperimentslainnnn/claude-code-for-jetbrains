@@ -85,7 +85,22 @@ object CredentialPaths {
 
     // ── glob engine ──────────────────────────────────────────────────────────────────────────────────────
 
-    internal fun compile(glob: String, home: String?): Matcher {
+    /**
+     * `compile` was recompiling every glob from scratch on every `can_use_tool` — ~180 of them (the built-ins
+     * plus a user's extras), on the single thread that reads the binary's entire stdout. A `Bash` call naming
+     * 20 tokens meant 180 fresh `Regex` compilations before a single match was tried. The pair `(glob, home)`
+     * is the only input [buildMatcher] reads (via [GuardPaths.normalize], which is pure), so the result is
+     * cacheable outright — never stale, because there is nothing to invalidate. Unbounded on purpose: `home`
+     * is one value for the life of the process and the glob set is fixed plus a handful of user extras, so the
+     * key space is small and constant, not something that grows with traffic. Perf-only; revisit once phase 5's
+     * timings exist — if it bought nothing, revert it.
+     */
+    private val compiled = java.util.concurrent.ConcurrentHashMap<Pair<String, String?>, Matcher>()
+
+    internal fun compile(glob: String, home: String?): Matcher =
+        compiled.computeIfAbsent(glob to home) { buildMatcher(glob, home) }
+
+    private fun buildMatcher(glob: String, home: String?): Matcher {
         val expanded = GuardPaths.normalize(glob, home)
         val sb = StringBuilder()
         var i = 0

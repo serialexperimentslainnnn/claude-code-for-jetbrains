@@ -51,10 +51,18 @@ object GuardPaths {
     fun normalize(path: String, home: String?): String {
         val expanded = expandEnv(path.trim(), home)
         val unc = startsWithDoubleSeparator(expanded)
-        val collapsed = expanded.replace('\\', '/').replace(Regex("/{2,}"), "/")
+        val collapsed = expanded.replace('\\', '/').replace(MULTI_SEPARATOR, "/")
         val result = if (unc) "/$collapsed" else collapsed
         return if (result.length > 1) result.trimEnd('/') else result
     }
+
+    /**
+     * [normalize] runs on every path candidate, every glob (inside [CredentialPaths.compile]) and every home/
+     * project root — a fresh `Regex("/{2,}")` per call was one avoidable compilation on the thread that reads
+     * the binary's entire stdout. The pattern never varies, so one compiled instance serves every call.
+     * Perf-only; revisit once phase 5's timings exist — if it bought nothing, revert it.
+     */
+    private val MULTI_SEPARATOR = Regex("/{2,}")
 
     /**
      * The UNC prefix, as written: two backslashes, or the forward-slash mirror every Unix-side tool accepts.

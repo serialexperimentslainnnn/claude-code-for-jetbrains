@@ -88,6 +88,18 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     /** Last observed process liveness, so [onStateChanged] can spot a restart. EDT-confined. */
     private var wasRunning = false
 
+    /**
+     * The last payload each push helper actually sent, so a state fire that changed nothing does not cross the
+     * bridge again. Mirrors the page's own `app-tabs-guard.js`/`renderIfShown()` skip on this side: `pushSession`/
+     * `pushSettingsMenu`/`pushMetaState` fire on every state change — several times a turn — and are mostly
+     * identical between two adjacent fires (a quota tick that moved neither cost nor context, a state change that
+     * did not touch the settings menu's own fields). EDT-confined like the pushes themselves, so no synchronisation
+     * is needed. Perf-only; revisit once phase 5's timings exist — if it bought nothing, revert it.
+     */
+    private var lastSessionJson: String? = null
+    private var lastSettingsMenuJson: String? = null
+    private var lastMetaState: Pair<String, String>? = null
+
     /** The two onboarding cards' host side (install-the-binary + sign-in), kept OFF this class on purpose. */
     internal val onboarding = OnboardingController(project, session, host::exec)
 
@@ -261,16 +273,20 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
      * used: changing the model from the pill moves the value this menu draws.
      */
     internal fun pushSettingsMenu() {
-        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state, session)
+        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state, session).toString()
+        if (items == lastSettingsMenuJson) return
+        lastSettingsMenuJson = items
         host.exec("window.cc.settingsMenu && window.cc.settingsMenu({\"items\":$items})")
     }
 
     /** The composer's own state: the meta document, then the live one. */
     internal fun pushMetaState() {
-        host.exec(
-            "window.cc.meta && window.cc.meta(" + JcefState.metaJson(session) + ");" +
-                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage) + ")",
-        )
+        val meta = JcefState.metaJson(session)
+        val state = JcefState.stateJson(session, feed.usage)
+        val current = meta to state
+        if (current == lastMetaState) return
+        lastMetaState = current
+        host.exec("window.cc.meta && window.cc.meta($meta);" + "window.cc.state && window.cc.state($state)")
     }
 
     /**
@@ -296,7 +312,9 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
      * REFUSES to run on the EDT — it logs and hands back an empty list rather than freezing the IDE — so the
      * read happens on a pooled thread and [pushSession] runs back on the EDT with the result.
      * [GitIntegration.refresh] owns both hops and collapses overlapping requests, which is what makes it safe
-     * to call this on every turn edge.
+     * to call this on every turn edge. Its own same-payload skip is [pushSession]'s: this function builds no
+     * JSON of its own, so there is nothing here to compare — a refresh that changed nothing still reaches
+     * [pushSession], which is where the repeat is caught.
      */
     internal fun pushGit() = GitIntegration.getInstance(project).refresh(::pushSession)
 
@@ -317,6 +335,8 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
             // drawing an empty repository over one that simply has not been read yet.
             git = GitIntegration.getInstance(project).snapshot(),
         )
+        if (json == lastSessionJson) return
+        lastSessionJson = json
         // The host→web half of the data-flow trace: this is EXACTLY what the dashboard receives. An empty
         // panel with a full CC-TRACE control reply means the loss is between the session cache and here.
         LOG.debug("CC-TRACE pushSession ${json.take(TRACE_MAX)}")

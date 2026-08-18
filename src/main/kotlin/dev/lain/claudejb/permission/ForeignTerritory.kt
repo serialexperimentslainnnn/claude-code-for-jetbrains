@@ -50,16 +50,39 @@ object ForeignTerritory {
     internal data class ForeignHit(val path: String, val reason: SensitiveGuard.ForeignReason)
 
     internal fun foreignHit(paths: List<String>, policy: SensitiveGuard.Policy): ForeignHit? {
-        val ownRoots = listOfNotNull(
-            policy.projectRoot?.let { GuardPaths.normalize(it, policy.home) },
-            policy.home?.let { GuardPaths.normalize(it, null) },
-        )
-        val guarded = policy.guardedRoots.map { GuardPaths.normalize(it, policy.home) }.filter { it.isNotBlank() }
+        val (ownRoots, guarded) = normalizedRoots(policy)
         return paths.asSequence()
             .filterNot { p -> ownRoots.any { GuardPaths.under(p, it) } } // our own territory is never foreign
             .mapNotNull { p -> foreignReasonFor(p, policy, guarded)?.let { ForeignHit(p, it) } }
             .firstOrNull()
     }
+
+    private data class RootsKey(val projectRoot: String?, val home: String?, val guardedRoots: List<String>)
+
+    private data class NormalizedRoots(val ownRoots: List<String>, val guarded: List<String>)
+
+    /**
+     * `ownRoots`/`guarded` are pure functions of [policy]'s roots, and `SettingsSensitivePolicy` builds a fresh
+     * `Policy` on every `can_use_tool` while the project root, home and guarded-mount set change on the order of
+     * once a session — every call was re-normalising the same handful of strings. Keyed on the three inputs that
+     * actually vary, not on `policy` itself (a fresh data-class instance every call would never hit the cache).
+     * Unbounded on purpose: the key space is one project root, one home and one mount list per running IDE, not
+     * something that grows with traffic. Perf-only; revisit once phase 5's timings exist — if it bought nothing,
+     * revert it.
+     */
+    private val rootsCache = java.util.concurrent.ConcurrentHashMap<RootsKey, NormalizedRoots>()
+
+    private fun normalizedRoots(policy: SensitiveGuard.Policy): NormalizedRoots =
+        rootsCache.computeIfAbsent(RootsKey(policy.projectRoot, policy.home, policy.guardedRoots)) {
+            NormalizedRoots(
+                ownRoots = listOfNotNull(
+                    policy.projectRoot?.let { GuardPaths.normalize(it, policy.home) },
+                    policy.home?.let { GuardPaths.normalize(it, null) },
+                ),
+                guarded = policy.guardedRoots.map { GuardPaths.normalize(it, policy.home) }
+                    .filter { it.isNotBlank() },
+            )
+        }
 
     /** Why [path] counts as foreign territory, or null when it does not. First rule that matches wins. */
     private fun foreignReasonFor(
