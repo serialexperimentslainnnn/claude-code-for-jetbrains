@@ -268,12 +268,21 @@ def host_list(declaration: str, entry: re.Pattern[str]) -> list[str]:
     that decides it. Globbing the directory would return the same files in whatever order the filesystem
     offered, which means nothing and would look authoritative anyway, and it would go on listing a file the
     host had already dropped.
+
+    **Line comments are stripped before the closing bracket is found, and that is the whole reason this
+    helper is not two lines.** The list is commented — a `//` note explaining why an entry sits where it
+    does is exactly the kind of thing that belongs beside a declared order — and a `)` inside one of those
+    notes ends the list early. Nothing catches it: the generator writes a shorter map, cheerfully, and the
+    map then describes a subset of what the page actually loads. `src/test/frontend/helpers/load.js` reads
+    this same declaration and already strips comments for this reason; two readers of one list disagreeing
+    is precisely what copying it from a single place is supposed to prevent.
     """
     source = JCEF_HOST.read_text(encoding="utf-8")
     start = source.find(f"val {declaration} = listOf(")
     if start < 0:
         raise SystemExit(f"gen-projectmap: could not find {declaration} in {JCEF_HOST}")
-    entries = entry.findall(source[start : source.index(")", start)])
+    uncommented = re.sub(r"//[^\n]*", "", source[start:])
+    entries = entry.findall(uncommented[: uncommented.index(")")])
     if not entries:
         raise SystemExit(f"gen-projectmap: {declaration} in {JCEF_HOST} listed nothing")
     return entries

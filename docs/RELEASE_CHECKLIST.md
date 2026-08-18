@@ -114,6 +114,12 @@ gates instead of records.
       (`Added`, `Changed`, `Fixed`, `Security`).
 - [ ] [`../RELEASE_NOTES.md`](../RELEASE_NOTES.md) updated with a
       user-facing narrative for the new version.
+- [ ] **Both dates re-checked immediately before the merge.** They are stamped
+      by hand while the notes are written and the release happens at the merge,
+      so a PR that sits ships a date that is already wrong — and the
+      `## [x.y.z]` block goes out **verbatim** as the GitHub Release body.
+      Known defect, with its exit, in
+      [ADR 0001 §4](adr/0001-release-process.md).
 - [ ] `change-notes` renders cleanly in the Marketplace HTML — verify by
       running `./gradlew patchPluginXml` and inspecting
       `build/patchedPluginXmlFiles/plugin.xml` (the `<change-notes>` tag

@@ -144,8 +144,9 @@ request will be visible as a 30s watchdog warning.
 ## Leftover diff tabs
 
 Diffs opened for review are real editor tabs, not modal dialogs, so they
-remain until you close them. Use **Close All Diffs** in the Claude Code tool
-window's title bar, or the standard close shortcut on each one.
+remain until you close them. Close them the way you close any editor tab — the
+standard close shortcut, or right-click ▸ **Close All Tabs**. The plugin also
+closes the ones it opened when the session that opened them goes away.
 
 ## The chat never loads, or `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp`
 
@@ -163,6 +164,68 @@ show.
   remote-development setups ship without it.
 - The stack trace names `JcefHost.<init>`; anything else with the same symptom belongs in an
   issue, with the log.
+
+## An IDE popup opens but ignores the mouse (Linux / Wayland)
+
+⚙ ▸ *Git Operations* ▸ *Branches* — or any other popup the IDE owns — appears
+and then discards every click, while the keyboard still drives it.
+
+**This is not the plugin, and there is nothing in it to change.** The intuition
+it invites is that a tool window made of an embedded browser has captured the
+pointer, and three separate facts have to be false for that to be possible:
+
+- The chat's browser runs **off-screen** (`JBCefOsrComponent`), so it is a Swing
+  component painted by Java2D. It owns no native surface for a popup to be
+  attached to, or for a compositor to hand a pointer grab to.
+- A Wayland popup's parent is resolved **structurally, not from focus**:
+  `WLComponentPeer.getToplevelFor` walks the AWT container chain and returns the
+  first `Window` that is not itself a popup, and `AbstractPopup.show` forces
+  `SwingUtilities.getRoot(owner)` on Wayland. A child component can never be the
+  answer, so the parent is the project frame however the browser is rendered.
+- The plugin installs no global `AWTEventListener` and no `IdeEventQueue`
+  dispatcher, so it cannot consume a click addressed to something else.
+
+Moving focus out of the chat before invoking the action therefore changes
+nothing. The one thing that *does* change a popup's owner is **undocking the
+tool window**: `AbstractPopup.getTargetWindow` returns a `FloatingDecorator`
+early, so a floating tool window — not the project frame — becomes the popup's
+parent toplevel. Dock it back if it is floating.
+
+What to do, in order:
+
+1. Open the chat's **Git** button and press *Branches* there. It is the same
+   platform action (`Git.Branches`; the gear menu and the Git view read one
+   catalogue, so they cannot offer different things), invoked with no menu popup
+   to unwind first. If it works here and not from the gear, the compositor is
+   mishandling the gear's popup chain and this button is the standing way round
+   it.
+2. If it fails there too, the popup path is broken for the whole IDE rather than
+   for this plugin, and the way out is to leave the native Wayland toolkit:
+   **Help ▸ Edit Custom VM Options…**, add
+
+   ```
+   -Dawt.toolkit.name=XToolkit
+   ```
+
+   and restart. Since 2026.1 the launcher passes `-Dawt.toolkit.name=auto`,
+   which selects `sun.awt.wl.WLToolkit` whenever the session is Wayland; the
+   line above pins the X11 toolkit and the IDE runs under XWayland. What it
+   costs is crisp *fractional* scaling — nothing at an integer scale factor.
+   Confirm which toolkit is live in `idea.log`: the startup banner prints
+   `toolkit: sun.awt.wl.WLToolkit` or `toolkit: sun.awt.X11.XToolkit`.
+
+**Upstream.** No JetBrains ticket matches this symptom exactly, so there is no
+number to quote as *the* bug. The open meta issues for it are
+[JBR-563](https://youtrack.jetbrains.com/issue/JBR-563) and
+[IJPL-55086](https://youtrack.jetbrains.com/issue/IJPL-55086) ("mouse clicks are
+blocked" on Linux). The nearest exact precedent,
+[IDEA-353169](https://youtrack.jetbrains.com/issue/IDEA-353169) — KDE Plasma 6
+on Wayland, clicks on toolbars, dialogs and popups ignored while the editor and
+the keyboard stayed fine — was closed *Third Party Problem* when a plugin's
+global AWT listener turned out to be eating the events, so disabling
+third-party plugins is worth doing before filing anything. Native Wayland
+support itself is tracked under
+[JBR-3206](https://youtrack.jetbrains.com/issue/JBR-3206).
 
 ## Tool window does not appear
 

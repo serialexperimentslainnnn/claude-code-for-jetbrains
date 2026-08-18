@@ -21,9 +21,9 @@ the Settings page is a platform `Configurable`.
 
 | File | What it decides |
 |---|---|
-| `ClaudeToolWindowFactory.kt` | The tool window, the title-bar buttons and the ⚙ menu. Resolved per project. `activePanel(project)` is the only door onto the chat on screen for callers outside this package. |
-| `ChatTabsPanel.kt` | The `CardLayout` that holds each chat's panel. A **pinned** tab is a second panel over an existing chat's session (`ChatTab.isPinnedView`): closing it must not dispose the session, and closing the chat closes its pinned views first. |
-| `TabSessionCommands.kt` | Restore, rename, fork, reopen — and `gitChat()`, the find-or-create of the Git tab. |
+| `ClaudeToolWindowFactory.kt` | The tool window and the ⚙ menu — **no title actions at all**: the six that were there are buttons in the page now. Resolved per project. `activePanel(project)` is the only door onto the chat on screen for callers outside this package, and the strip is found by TYPE among the contents, never through `selectedContent`. |
+| `ChatTabsPanel.kt` | The `CardLayout` that holds each chat's panel. **One tab per session, one session per tab** — an agent and a background task are transcripts switched inside a chat's own browser, never tabs — which is what lets the factory's close handler dispose a `claude` process without asking. Pinned views made that false once and are gone. |
+| `TabSessionCommands.kt` | Restore, rename, fork, reopen. **Not** the Git conversation: that one has no tab (see `GitChatFeed.kt`) and its find-or-create is `ChatSessionManager.gitChatOrCreate()`. |
 
 **The chat panel and its collaborators**
 
@@ -46,17 +46,19 @@ the Settings page is a platform `Configurable`.
 |---|---|
 | `ClaudeSettingsConfigurable.kt` | The platform `Configurable`. Thin: it composes the sections. |
 | `SettingsSection.kt` | The seam. **The interface, not another section** — it is what makes the `Settings*Section.kt` glob one file longer than the page has sections. |
-| `Settings{Model,Executable,Provider,Tools,Mcp,Security,Advanced}Section.kt` | One section each. |
+| `Settings{Model,Security,Provider,Forge,Executable,Tools,Mcp,Advanced}Section.kt` | One section each, listed in the order they are drawn. `SettingsForgeSection` is the odd one: its field is **not** a `ClaudeSettings.State` field at all — the token lives in the PasswordSafe under its host (`forge/ForgeTokens`) — so it is outside the "every persisted field is claimed by exactly one section" contract, and an EMPTY field **clears** the token rather than meaning "leave it alone". |
 
 **Git — three categories, and they are not interchangeable**
 
 | File | What it decides |
 |---|---|
-| `GitContextActions.kt` | **Read.** Git context in the ⚙ menu only — there is deliberately no Git Log title-bar button; that slot belongs to `GitPromptedActions.toolbarAction`. |
-| `GitPromptedActions.kt` | **The agent writes.** Bounded prompts into the Git chat; the plugin runs no `git`. |
+| `GitContextActions.kt` | **Read.** Git context in the ⚙ menu **only** — deliberately no Git Log button anywhere else. The one Git control outside this menu is the chat's own `Git` button, which opens the repository view; history is already discoverable here. |
+| `GitPromptedActions.kt` | **The agent writes.** Bounded prompts into the Git conversation; the plugin runs no `git`. Each prompt is *a command plus a list of things not to do*, and the prohibitions are the load-bearing half. |
 | `GitIdeMenu.kt` | **The platform writes.** The IDE's own action objects, resolved by id — not wrappers. |
 | `GitActionCatalog.kt` | The one list both the page and the executor read, so a button cannot be labelled one thing and do another. |
-| `GitIntegration.kt` | The project service behind the Git view: dispatching a catalogue entry by its kind. |
+| `GitIntegration.kt` | The project service behind the Git view: dispatching a catalogue entry by its kind. `gitInit` is the ONE command the plugin spawns itself. |
+| `GitChatConversation.kt` | **The project's ONE Git conversation, and the only thing that listens to it.** The session, its turn state, its cards and the payload every page draws — one per project, never per panel. It listens to `ChatSessionManager` too, so a Git chat created by the gear menu's fallback door is not one it never hears about. Created on first *use*; merely *looking* only attaches. |
+| `GitChatFeed.kt` | **One page's window onto that conversation — the placement, and nothing else.** The `exec` to paint into, the last string painted (so an unchanged repaint costs nothing) and `show()`, which is per-panel because navigating is a thing that happens to the page whose button was pressed. Everything under its own `cc.gitChat` namespace, and **nothing in it may write to the panel's own `cc.state`, `cc.batch` or `cc.permissions`**. |
 
 **Everything else**
 
@@ -82,9 +84,9 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `BackgroundTaskView` | object | `BackgroundTaskView.kt:21` | What a background task's tab shows, as transcript rows. |
 | `BackgroundTaskView.entries` | fun | `BackgroundTaskView.kt:23` |  |
 | `ChatAgentTabs` | class | `ChatAgentTabs.kt:19` | The tab bar this page draws, and everything reached from it: which agents are open, which the user closed, revealing … |
-| `ChatBridgeRouter` | class | `ChatBridgeRouter.kt:27` | Everything the web app sends back, routed to whoever owns it. |
+| `ChatBridgeRouter` | class | `ChatBridgeRouter.kt:30` | Everything the web app sends back, routed to whoever owns it. |
 | `ChatEditReview` | class | `ChatEditReview.kt:16` | Reviewing and undoing an edit: the read-only diff a permission card shows, and the restore behind a completed one. |
-| `ChatTabsPanel` | class | `ChatTabsPanel.kt:34` | Holds the chats and switches between them. |
+| `ChatTabsPanel` | class | `ChatTabsPanel.kt:47` | Holds the chats and switches between them. |
 | `ChatTheme` | object | `ChatTheme.kt:19` | The host's view of the **IDE theme** (light/dark): the surface behind the chat page comes from the platform ([UIUtil]) … |
 | `ChatTheme.BG` | val | `ChatTheme.kt:34` |  |
 | `ChatTheme.vibeMode` | var | `ChatTheme.kt:40` | 🌈 **Vibe Mode** (a gag toggle): when on, [ACCENT] becomes the rainbow accent. |
@@ -95,19 +97,21 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ClaudeToolWindowFactory` | class | `ClaudeToolWindowFactory.kt:34` | Registers the right-anchored "Claude Code" tool window. |
 | `GitActionCatalog` | object | `GitActionCatalog.kt:22` | What the Git view can do, as data — **one catalogue, read by both the payload and the executor.** The page draws a … |
 | `GitActionCatalog.ACTIONS` | val | `GitActionCatalog.kt:108` | Every action, in view order. |
-| `GitActionCatalog.byId` | fun | `GitActionCatalog.kt:169` | Looks an action up by the id the page sent back. |
-| `GitActionCatalog.isCommitHash` | fun | `GitActionCatalog.kt:190` | True when [hash] has the SHAPE of a Git object name: hexadecimal, [MIN_HASH_LENGTH]–[MAX_HASH_LENGTH] long. |
-| `GitActionCatalog.applicable` | fun | `GitActionCatalog.kt:195` | The subset that applies to the given repository state, in view order. |
-| `GitActionCatalog.commitActions` | fun | `GitActionCatalog.kt:212` | The subset drawn on each commit of the history rail, in view order. |
-| `GitActionCatalog.ideActions` | fun | `GitActionCatalog.kt:215` | The subset the IDE runs itself, in view order — what [GitIdeMenu] turns into a submenu. |
+| `GitActionCatalog.byId` | fun | `GitActionCatalog.kt:179` | Looks an action up by the id the page sent back. |
+| `GitActionCatalog.isCommitHash` | fun | `GitActionCatalog.kt:200` | True when [hash] has the SHAPE of a Git object name: hexadecimal, [MIN_HASH_LENGTH]–[MAX_HASH_LENGTH] long. |
+| `GitActionCatalog.applicable` | fun | `GitActionCatalog.kt:205` | The subset that applies to the given repository state, in view order. |
+| `GitActionCatalog.commitActions` | fun | `GitActionCatalog.kt:222` | The subset drawn on each commit of the history rail, in view order. |
+| `GitActionCatalog.ideActions` | fun | `GitActionCatalog.kt:225` | The subset the IDE runs itself, in view order — what [GitIdeMenu] turns into a submenu. |
+| `GitChatConversation` | class | `GitChatConversation.kt:51` | The project's ONE Git conversation, and the only thing that listens to it. |
+| `GitChatFeed` | class | `GitChatFeed.kt:27` | One page's window onto the project's Git conversation — **the placement, and nothing else**. |
 | `GitContextActions` | object | `GitContextActions.kt:45` | The tool window's Git entries: where this project's checkout stands, and the two doors into the IDE's own Git UI. |
 | `GitContextActions.gearEntries` | fun | `GitContextActions.kt:51` | The gear-menu entries, in menu order. |
-| `GitContextActions.menuText` | fun | `GitContextActions.kt:68` | The "recent commits" label. |
-| `GitContextActions.popupTitle` | fun | `GitContextActions.kt:75` | The chooser's title: the branch (or the detached-HEAD wording) and the revision `HEAD` points at. |
-| `GitContextActions.commitRow` | fun | `GitContextActions.kt:89` | One commit on one line: `a1b2c3d Subject · Author · 3d ago · 4 files`. |
-| `GitIdeMenu` | object | `GitIdeMenu.kt:41` | The Git operations the IDE already does better than we ever would — **as the IDE's own actions**. |
-| `GitIdeMenu.gearEntry` | fun | `GitIdeMenu.kt:44` | The submenu, for the tool window's gear. |
-| `GitIntegration` | class | `GitIntegration.kt:70` | The Git view's **runtime**: it collects what the view draws, and it runs what a button on it asks for. |
+| `GitContextActions.menuText` | fun | `GitContextActions.kt:70` | The "recent commits" label. |
+| `GitContextActions.popupTitle` | fun | `GitContextActions.kt:77` | The chooser's title: the branch (or the detached-HEAD wording) and the revision `HEAD` points at. |
+| `GitContextActions.commitRow` | fun | `GitContextActions.kt:91` | One commit on one line: `a1b2c3d Subject · Author · 3d ago · 4 files`. |
+| `GitIdeMenu` | object | `GitIdeMenu.kt:51` | The Git operations the IDE already does better than we ever would — **as the IDE's own actions**. |
+| `GitIdeMenu.gearEntry` | fun | `GitIdeMenu.kt:54` | The submenu, for the tool window's gear. |
+| `GitIntegration` | class | `GitIntegration.kt:71` | The Git view's **runtime**: it collects what the view draws, and it runs what a button on it asks for. |
 | `GitPromptedActions` | object | `GitPromptedActions.kt:35` | The Git entries that **change** something — and the plugin runs none of them. |
 | `GitPromptedActions.gearEntries` | fun | `GitPromptedActions.kt:45` |  |
 | `GitPromptedActions.commitPrompt` | fun | `GitPromptedActions.kt:78` | Stage and commit, with the message left to the agent — the one thing it is better placed to write than the IDE is, … |
@@ -153,7 +157,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `noteLabel` | fun | `SettingsSection.kt:66` | A small, **width-bounded** HTML note. |
 | `csvSet` | fun | `SettingsSection.kt:70` |  |
 | `CheckboxGroup` | class | `SettingsSection.kt:74` | A row/grid of checkboxes backed by a comma-separated value — the GUI form of a list option. |
-| `SettingsSecuritySection` | class | `SettingsSecuritySection.kt:12` | The deterministic tool-call lock's five per-rule switches (see `permission/SensitiveGuard.kt`). |
+| `SettingsSecuritySection` | class | `SettingsSecuritySection.kt:12` | The deterministic tool-call lock's six per-rule switches (see `permission/SensitiveGuard.kt`). |
 | `SettingsToolsSection` | class | `SettingsToolsSection.kt:17` | Setting sources, the allowed/disallowed tool grids, and the revocable "Always allow" list — all pick-from-checkboxes, … |
 | `TabSessionCommands` | class | `TabSessionCommands.kt:29` | The conversation commands behind the tool window's gear menu — restore, rename, fork, reopen — and how a past session … |
 
@@ -168,7 +172,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
   the Git button stays visible with no repository, because the entry that matters there is the one that
   creates one.
 - Gear entries hide themselves. **A feature whose only door is the ⚙ menu is a feature nobody finds**; that is
-  why the actions that matter also have a title-bar button.
+  why the actions that matter also have a button in the chat's own action row — which is where all six of
+  them live now, the tool window having no title actions at all.
 - **The plugin runs no `git`.** It prompts the agent, or it invokes the platform's action. Both routes put the
   change in front of the user before it happens.
 - A prompted action's text is a **pure function, pinned by a test**: each is a command plus a list of things
@@ -189,8 +194,25 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 - **A platform action id that gets renamed is silently *skipped*** — one fewer menu item and no error
   anywhere. `GitIdeMenu`'s ids are pinned by a test whose second assertion checks Git4Idea is actually loaded,
   because without it every id resolves to null and the first assertion proves nothing.
-- **The Git chat's forced approval is wired per session, not per turn**, so there is no window in which the
-  forcing lapses. Its failure mode is silent: a prompted `git push` would simply run.
+- **The Git conversation's forced approval is wired per session, not per turn**, so there is no window in
+  which the forcing lapses. Its failure mode is silent: a prompted `git push` would simply run. Its cards
+  therefore travel with it into the Git view — a view that showed the conversation but not the card would be
+  one you cannot finish anything from.
+- **Two `ClaudeSession`s reach one browser** (`GitChatFeed`), and only one of them owns the page's own
+  namespaces. Writing the Git conversation's transcript, turn state or cards through `cc.state`/`cc.batch`/
+  `cc.permissions` overwrites the chat the user is actually reading, from a panel that is not theirs.
+- **The Git conversation is the PROJECT's; a panel owns only where it is painted.** One session was always
+  true — what was per-panel was the *subscription*, and a page attached only as a side effect of ACTING on
+  the chat, so a page that merely looked at the Git view drew an empty pane over a running conversation and
+  read as a brand-new one. `GitChatConversation` holds the session, the listeners and the payload; a `View`
+  is handed the WHOLE conversation on attach and again on every change. **Never move conversation state back
+  into a per-panel field** — the defect returns with the next field somebody adds. Its symmetric error is
+  worse: a detaching panel must not end the conversation the other tabs are looking at.
+- **A gesture that ends in a nullable chain fails with no exception, no log and nothing on screen.** Three
+  orderings in `ClaudeToolWindowFactory` decide that and none is visible at the call site;
+  `ToolWindowWiringContractTest` scans the sources for them, because reaching any of them for real needs a
+  live IDE and a JCEF browser. It also pins the **one construction site for `JcefChatPanel`**: a second one
+  puts two tabs on one `claude` process, and the close handler disposes it without asking.
 - `LinkResolver.isOpenable` (project or `$HOME`) is the **open** gate. It is deliberately looser than
   `DiffPresenter.isWithinRoot`, which is the **write** gate. Do not unify them.
 - The obvious platform hook for a generated commit message does not fit: `commitMessageProvider` is

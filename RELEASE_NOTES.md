@@ -1,4 +1,4 @@
-## v5.5.0 — 2026-08-14
+## v5.5.0 — 2026-08-18
 
 **This release requires IntelliJ Platform 2025.3.1 or newer, and it is not optional.** From build 262 the IDE
 ships its embedded browser as a separate bundled plugin, and a plugin that does not declare a dependency on it
@@ -16,9 +16,14 @@ receiving updates — or update the IDE: 2025.3.1 shipped in December 2025.
 
 **Every agent gets its own tab, with its own transcript.** A session running agents under agents used to put
 all of it in one place: consecutive "Thought process" rows belonging to different agents, interleaved, with no
-way to follow any single one. The bar under the chats shows what you are reading and keeps the whole tree —
-agents, their agents, background tasks — one hover away. Closing a tab hides a view; it destroys nothing, and
-the card that started it opens it again.
+way to follow any single one. A second row under the chats now lists everything the open chat started —
+agents, the agents they started, background tasks — all of it visible at once rather than behind a menu, and
+scrollable the same way the chats are. Opening one swaps what the conversation area shows. Closing it hides a
+view; it destroys nothing, and the card that started it opens it again.
+
+**And the chat tabs are all one width**, so the row above reads as a strip instead of an accordion of long and
+short titles, and nothing reflows when you pick one. A long name ellipsises with the whole of it in the
+tooltip, and selecting a chat centres it — which is what makes ordinary use need no scrolling at all.
 
 **Everything that is running, in one diagram.** The Agents, Subagents and Background tasks lists were three
 views of the same tree, so finding out whether an agent had spawned anything meant switching view and losing
@@ -29,11 +34,39 @@ somewhere you can go.
 it finishes — which is exactly when its output is worth reading — so the row, the tab and everything it had
 printed used to vanish at that instant. Both now survive, and they come back after a restart.
 
-**A chat is named after what you asked it**, instead of being "Chat 3" for the rest of its life: the first
-thing you actually typed, one line, cut on a word. A name you set yourself still wins, and so does a title the
-binary generates if it ever writes one — this is the fallback under both. It applies in three places at once,
-so they cannot disagree: the tab you are using, the tabs restored when the IDE starts, and the list behind
-"Open Previous Session…".
+**A chat names itself**, instead of being "Chat 3" for the rest of its life. At the end of the first turn
+Claude is asked to title the conversation, and the title is kept *with* the conversation — so it survives a
+restart and is never asked for a second time. Until it arrives the tab shows the first thing you actually
+typed, one line, cut on a word. A name you set yourself always wins, whenever you set it. All three of these
+go through the same place, so they cannot disagree: the tab you are using, the tabs restored when the IDE
+starts, and the list behind "Open Previous Session…".
+
+**Everything worth changing mid-conversation is behind the wrench on the composer.** *Chat settings*, in ten
+collapsible groups: model, effort and permission mode — the same controls as the pills beside them, acting on
+the chat you are in, so the two can never tell you different things — plus the chat toggles, the six rules of the security lock, setting sources, your allowed,
+disallowed and always-allowed tools, and the two MCP switches. Anything that can only take effect the next
+time a chat starts says so above its group rather than looking as though it did nothing.
+
+**"Always allow" no longer has to be earned one card at a time.** You can grant it in that menu for any of
+Claude's built-in tools, without waiting for the tool to ask first. It does not widen the deterministic
+security lock: a credential file, a dangerous command, the system temp folder and anything outside your
+project still stop and ask you, for an always-allowed tool exactly as for any other.
+
+**And the button rows never run off the edge again.** In a narrow tool window whatever does not fit is
+collected behind a `⋮` at the end of the row rather than being painted somewhere you cannot reach. Send is
+never collected, and never shrinks to make room for anything.
+
+**The line above the prompt box lines up.** Status, model and working directory, your account, the plan bars
+and their reset times are five rows sharing one grid of four equal columns at one size, so the figures sit
+under each other instead of drifting row by row. Too narrow for four, and **Show more** folds the last two
+columns away across all five rows at once — a bar and its own reset time can never be separated.
+
+**Attach ▸ Files… and Directory… browse your project inside the menu now**, as a tree that unfolds where you
+are, rather than opening a file dialog on top of the IDE. Pick as many as you like and press *Done*; marking a
+folder marks everything under it and tells you how many that is *before* you commit to it. It offers what the
+IDE considers yours — your `.gitignore` and the project's excluded folders are honoured, so `build/` and
+`node_modules/` are simply not in the list — and where a folder is too large to offer whole, it says so
+instead of quietly attaching part of it.
 
 **Your branch is in the ⚙ menu, and so is your recent history.** The tool window's gear menu now names the
 branch you have checked out in its own label, so *which branch is Claude working on* is answered without
@@ -45,15 +78,18 @@ an IDE with the Git plugin disabled, or in a project that is not a Git working c
 not there.
 
 **And now Git can change things — because the plugin asks Claude to, and never does it itself.** There is a
-**Git** button in the tool window's title bar; it opens a chat tab of its own, so none of this plumbing lands in
-the conversation you are working in. On a project that is not a repository yet, opening it asks to create one
+**Git** button in the chat's own button row; it opens the repository view, which holds a conversation of its
+own *about* the repository — so none of this plumbing lands in the chat you are working in, and none of it
+makes you leave that chat either. On a project that is not a repository yet, opening it asks to create one
 right away — `git init -b main`, so you start on `main` rather than on whatever Git still defaults to. The same
 menu offers **Initialize Git Repository**, **Commit Changes with Claude** and **Revert This File with Claude**,
 and none of them runs a command: each writes a prompt and lets the agent do the work, which means the command
 appears in front of you in an approval card *before* it runs, and you can answer back — *"squash those two"*,
-*"not that file"* — instead of getting one shot at a button. That tab is always approved by hand, whatever
-permission mode you are in and whatever you have marked "Always allow": the plugin started the turn, so it does
-not inherit permissions you granted for your own work.
+*"not that file"* — instead of getting one shot at a button. That conversation is always approved by hand,
+whatever permission mode you are in and whatever you have marked "Always allow": the plugin started the turn,
+so it does not inherit permissions you granted for your own work. It only starts the first time you open the
+Git view, never before — it is a second `claude` process with its own cost, and nobody should pay for one
+they do not use.
 
 **Everything else Git is under ⚙ ▸ Git Operations, and those buttons are the IDE's own.** Branches and new
 branch, pull, fetch, push, merge, rebase, stash, unstash and the commit dialog — the real dialogs, with their
@@ -68,6 +104,19 @@ to the state you are actually in — *Initialize* only on a project without a re
 only while a changed file is the one in front of you. The buttons come from the same catalogue the plugin
 dispatches on, so a button cannot be labelled one thing and do another. On an IDE with the Git plugin disabled
 the view is simply not drawn.
+
+**That history is one graph with branch lanes**, not a commit list beside a separate branch map — two pictures
+of the same history asked you to hold both at once. Every line and every fork in it comes from real parents
+and real refs; nothing is guessed, and where a line continues past the oldest commit shown it says so rather
+than stopping in mid-air. It reads every branch, remote branch and tag rather than only the one you have
+checked out, because a fork you can see only one side of cannot be drawn at all. Colour never carries anything
+on its own: a branch is a text tag on its row, and a merge says the word.
+
+**And GitHub and GitLab answer for the branch you are on** — the pull or merge requests open from it, and its
+most recent CI run, beside the rest of the repository picture. It is read-only and entirely opt-in: nothing
+appears, and nothing asks you to configure anything, until you paste an access token under Settings ▸ Claude
+Code ▸ **Git forge**. That token goes into your OS keychain and is kept **per server**, so a company GitLab and
+gitlab.com are two separate credentials and one can never be sent to the other; emptying the field revokes it.
 
 **Diff History is gone.** The **Restore** you actually use was never in it — it is on the edit's own card in the
 transcript, and it stays there. The panel was a second, worse door onto the same thing, and it hid the chat tabs
@@ -148,9 +197,17 @@ your project — and it is not a security control: nothing in it softens a rule 
 
 **Fixes:** with many chats open the tabs could not be scrolled at all (a vertical wheel does not move a
 horizontal row); the loading screen covered the chat tabs, so you could not switch chats while one was
-starting; a chat pinned to a subagent was drawn twice in the diagram; a nested subagent showed as running for
+starting; `/btw` never showed you an answer at all — a side question is answered alongside the conversation
+and the transcript deliberately ignores anything that is not the main run, so the reply was dropped every
+time, and it now arrives as a note under your question, with the note saying so if there is no answer;
+opening a new chat looked like the plugin reloading, because the tab was shown before its page existed and
+you watched the whole interface assemble itself; a button pressed while your chats were being restored did
+nothing whatsoever, *New chat* among them; closing an agent's tab could shut down the chat that started it,
+leaving that conversation on screen over a dead process and dropping it from the chats restored next
+startup — which was also what drew a chat twice in the diagram; a nested subagent showed as running for
 ever; agents that were working showed as failed while a chat was being restored, and every agent of every past
-session came back red; hovering a tab showed the agents of whichever chat you were in rather than that one's;
+session came back red; hovering a tab showed the agents of whichever chat you were in rather than that one's,
+and that row is no longer hidden behind a hover at all;
 a restored chat showed the binary's own bookkeeping — task notifications, the caveat preamble, a `/compact` —
 as things you had said; every agent was also listed as a background task, a second nameless row whose
 "output" was pages of the agent's own internal records; the same finished task was green in one view and grey

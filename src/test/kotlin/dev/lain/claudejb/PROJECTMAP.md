@@ -30,6 +30,7 @@ level because its subject is the whole of `src/main`.
 | `JcefDependencyContractTest` | Using `com.intellij.ui.jcef` without declaring it hard, at a full build number. Mutation-checked. |
 | `InitOrderContractTest` | A property declared below the `init` block that uses it — **in a top-level class body only**. The scan keys on a four-space indent, so the same defect inside a nested class is not pinned. |
 | `NoFileDeletionContractTest` | The plugin deleting a file it has no business deleting. |
+| `EdtProcessTeardownContractTest` | The EDT waiting for `claude` to die. Every door into the kill needs a real spawn, so no driven test can see which thread it ran on. |
 | `GitReadOnlyContractTest` · `GitApiContractTest` · `GitDependencyContractTest` | A write path in `git/`, an internal or removed platform API, a mis-declared optional dependency. |
 | `TranscriptCapContractTest` | The host cap and the page cap drifting apart. |
 | `SecretStoreIsolationContractTest` | A test JVM reaching a real credential store. |
@@ -57,6 +58,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `EditorContextProviderTest` | class | `context/EditorContextProviderTest.kt:12` | Pure-JVM coverage of the project-free helper on [EditorContextProvider]: the extension→lang map that tags a pasted … |
 | `FilePickerHelperTest` | class | `context/FilePickerHelperTest.kt:11` | Pure-JVM coverage of [FilePickerHelper.displayName] (the project-root-relative label promoted out of … |
 | `ImageAttachmentsTest` | class | `context/ImageAttachmentsTest.kt:21` | Pure-JVM coverage of [ImageAttachments]: the extension→media-type map, [ImageAttachments.imageFromFile] reading a real … |
+| `ProjectTreeTest` | class | `context/ProjectTreeTest.kt:25` | Pure-JVM coverage of the rules behind the attach menu's in-place project browser: the containment gate … |
 | `DiffPresenterIsWithinRootTest` | class | `diff/DiffPresenterIsWithinRootTest.kt:18` | Directly exercises [DiffPresenter.isWithinRoot] — the canonicalize-and-prefix containment check used to confine … |
 | `DiffPresenterTest` | class | `diff/DiffPresenterTest.kt:22` | Unit tests for [DiffPresenter]'s pure reconstruction logic — proposedContent (and the private applyEdit it drives) … |
 | `DiffTabCleanupWiringTest` | class | `diff/DiffTabCleanupWiringTest.kt:23` | Pins the `plugin.xml` wiring of [DiffTabCleanup]. |
@@ -71,8 +73,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `DriftDetectorTest` | class | `drift/DriftDetectorTest.kt:13` | Offline unit tests for the pure drift extraction/diff logic — fed hand-written `.d.ts` and NDJSON fixtures so they're … |
 | `DriftLiveCheck` | class | `drift/DriftLiveCheck.kt:28` | The live half of drift detection: **updates both tools to latest first** (`npm update` for the vendored SDK, `claude … |
 | `ProtocolSurface` | class | `drift/ProtocolSurface.kt:24` | A minimal, *regular* slice of the Claude Agent SDK / binary protocol surface that can be extracted reliably from two … |
-| `SurfaceDelta` | class | `drift/ProtocolSurface.kt:132` | Added/removed members between two surfaces along one axis. |
-| `surfaceDelta` | fun | `drift/ProtocolSurface.kt:137` | [new] minus [old] (added) and [old] minus [new] (removed) — order-independent set diff. |
+| `SurfaceDelta` | class | `drift/ProtocolSurface.kt:139` | Added/removed members between two surfaces along one axis. |
+| `surfaceDelta` | fun | `drift/ProtocolSurface.kt:144` | [new] minus [old] (added) and [old] minus [new] (removed) — order-independent set diff. |
 | `known` | fun | `forge/ForgeAnswerAssertions.kt:12` | Unwraps a [ForgeAnswer] that the test expects to be [ForgeAnswer.Known], failing with the actual reason when it is not. |
 | `ForgeHttpTest` | class | `forge/ForgeHttpTest.kt:17` | The status-code triage and the transport's two refusals. |
 | `ForgeSecrecyTest` | class | `forge/ForgeSecrecyTest.kt:23` | **The access token exists in exactly one place: the value of one request header.** Everything else in the package is a … |
@@ -87,18 +89,20 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `GitReadOnlyContractTest` | class | `git/GitReadOnlyContractTest.kt:35` | **The Git integration is read-only, and this is what makes that true rather than merely written down.** The decision … |
 | `GitRemoteInfoTest` | class | `git/GitRemoteInfoTest.kt:16` | The remote-URL parse, on a bare JVM: no IDE, no repository, no network. |
 | `AgentLifecycleSettleHeadlessTest` | class | `headless/AgentLifecycleSettleHeadlessTest.kt:54` | **A `system/task_updated` ends the agent it is about, even though it does not name it.** The message carries a … |
+| `AttachmentTrayBatchHeadlessTest` | class | `headless/AttachmentTrayBatchHeadlessTest.kt:18` | Pinning a batch is ONE operation on the page, not one per file. |
 | `AuthGateCredentialHeadlessTest` | class | `headless/AuthGateCredentialHeadlessTest.kt:33` | Headless: [AuthGate.heldCredential] answers **held / none / unknown**, and the third answer is the one that carries … |
 | `ChatSessionManagerHeadlessTest` | class | `headless/ChatSessionManagerHeadlessTest.kt:12` | Headless: the [ChatSessionManager] project service owns the set of open chat tabs. |
+| `ChatTabsCloseHeadlessTest` | class | `headless/ChatTabsCloseHeadlessTest.kt:37` | Closing ONE tab closes one tab, and it does it **now**. |
 | `ClaudeSessionEventSurfacingHeadlessTest` | class | `headless/ClaudeSessionEventSurfacingHeadlessTest.kt:20` | Headless: the binary->host events surfaced in 3.3.0 reach session state / the transcript, driven through the … |
 | `ClaudeSessionTokenAccountingHeadlessTest` | class | `headless/ClaudeSessionTokenAccountingHeadlessTest.kt:15` | Headless: token accounting of [ClaudeSession] WITHOUT starting the binary, driven through the … |
 | `ClaudeSettingsConfigurableHeadlessTest` | class | `headless/ClaudeSettingsConfigurableHeadlessTest.kt:19` | Headless: the Settings page builds, resets, detects modifications, and applies without starting any process. |
 | `ClaudeSettingsHeadlessTest` | class | `headless/ClaudeSettingsHeadlessTest.kt:13` | Headless: the [ClaudeSettings] project service holds launch defaults and the "Always allow" tool set. |
 | `CredentialsVaultHeadlessTest` | class | `headless/CredentialsVaultHeadlessTest.kt:26` | Headless: [CredentialsVault] moves the binary's credentials file into the IDE's PasswordSafe and back. |
 | `DiffLifecycleManagerTest` | class | `headless/DiffLifecycleManagerTest.kt:17` | Headless: [DiffLifecycleManager] owns snapshot capture, the auto-opened diff registry and the write-safe VFS refresh … |
-| `GitChatRoutingHeadlessTest` | class | `headless/GitChatRoutingHeadlessTest.kt:22` | Headless: where a Git action's turn goes, and whether opening the chat it goes to takes the user with it. |
+| `GitChatRoutingHeadlessTest` | class | `headless/GitChatRoutingHeadlessTest.kt:46` | Headless: where a Git action's turn goes. |
 | `GitIdeMenuHeadlessTest` | class | `headless/GitIdeMenuHeadlessTest.kt:22` | Headless: **every action id the Git submenu offers still resolves, and the submenu is the catalogue.** The first part … |
 | `JcefMetaPayloadHeadlessTest` | class | `headless/JcefMetaPayloadHeadlessTest.kt:24` | The `cc.meta` payload carries every key the boot card actually reads. |
-| `JcefSessionDataWorkloadsHeadlessTest` | class | `headless/JcefSessionDataWorkloadsHeadlessTest.kt:18` | The Workloads diagram draws each chat ONCE. |
+| `JcefSessionDataWorkloadsHeadlessTest` | class | `headless/JcefSessionDataWorkloadsHeadlessTest.kt:30` | The Workloads diagram is a **faithful projection of the tab strip**: one node per open chat, in the strip's own order, … |
 | `OpenedDiffsServiceHeadlessTest` | class | `headless/OpenedDiffsServiceHeadlessTest.kt:8` | Headless: the [OpenedDiffsService] project service tracks the diff tabs the plugin opened. |
 | `RollbackManagerHeadlessTest` | class | `headless/RollbackManagerHeadlessTest.kt:23` | Headless: [RollbackManager.revertEdit] is what a transcript card's **Restore** falls back to when the binary cannot … |
 | `SecretStoreHeadlessTest` | class | `headless/SecretStoreHeadlessTest.kt:16` | Headless: [SecretStore] over a store of this test's own ([SecretStore.storeOverride]). |
@@ -121,12 +125,14 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `PermissionBrokerMatrixTest` | class | `permission/PermissionBrokerMatrixTest.kt:26` | Matrix coverage of [PermissionBroker.handle]: the cross-product of {permissionMode} x {tool} x {withinRoot} x … |
 | `PermissionBrokerTest` | class | `permission/PermissionBrokerTest.kt:22` | Tests the [PermissionBroker]'s decision wiring through its injected lambdas (no process, no UI). |
 | `SensitiveGuardTest` | class | `permission/SensitiveGuardTest.kt:27` | The deterministic sensitive-data lock ([SensitiveGuard]) — exhaustive on purpose: this is enforcement code the model … |
-| `SensitiveGuardEvasionTest` | class | `permission/SensitiveGuardTest.kt:487` |  |
-| `SensitiveGuardResolverPerformanceTest` | class | `permission/SensitiveGuardTest.kt:574` | Regression coverage for a live incident: [SensitiveGuard.Policy.pathResolver] (`File(x).canonicalPath`, a blocking, … |
+| `SensitiveGuardEvasionTest` | class | `permission/SensitiveGuardTest.kt:603` |  |
+| `SensitiveGuardResolverPerformanceTest` | class | `permission/SensitiveGuardTest.kt:690` | Regression coverage for a live incident: [SensitiveGuard.Policy.pathResolver] (`File(x).canonicalPath`, a blocking, … |
+| `SensitiveGuardUncShapeTest` | class | `permission/SensitiveGuardUncShapeTest.kt:39` | Which spellings the guard is willing to read as a **network share**, and which it must not — the third incident in one … |
 | `ApiKeyApprovalTest` | class | `process/ApiKeyApprovalTest.kt:32` | [ApiKeyApproval] and [ConsoleApiKey] both write to `~/.claude.json` — **the user's own CLI config, shared with every … |
 | `BinaryInstallTest` | class | `process/BinaryInstallTest.kt:18` | [BinaryInstall]: the install-method catalogue and the "is this really the claude binary?" validation. |
 | `ClaudeBinaryLocatorTest` | class | `process/ClaudeBinaryLocatorTest.kt:20` | Exercises [ClaudeBinaryLocator.locate] focusing on the [override] branch (PATH-independent, safe to unit-test) and the … |
 | `CredentialsVaultEnvTest` | class | `process/CredentialsVaultEnvTest.kt:27` | The two pure halves of [CredentialsVault]: what a vaulted blob becomes in the child process's environment … |
+| `EdtProcessTeardownContractTest` | class | `process/EdtProcessTeardownContractTest.kt:36` | **The thread that repaints never waits for `claude` to die.** Only the source can state this, which is why it is a … |
 | `EnvScriptLoaderTest` | class | `process/EnvScriptLoaderTest.kt:9` | Unit tests for [EnvScriptLoader.parse]. |
 | `LoginOutputParserTest` | class | `process/LoginOutputParserTest.kt:15` | Pins [LoginOutputParser] against the real, ANSI-laden output that `claude auth login` streams over a PTY (captured … |
 | `NoFileDeletionContractTest` | class | `process/NoFileDeletionContractTest.kt:38` | **This plugin deletes exactly one file: `~/.claude/.credentials.json`, when it harvests it into the safe. |
@@ -168,7 +174,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SessionLauncherTest` | class | `session/SessionLauncherTest.kt:15` | Pure unit tests for [SessionLauncher.buildArgs] (and [SessionLauncher.binaryPermissionMode]). |
 | `SessionStoreTest` | class | `session/SessionStoreTest.kt:15` | Tests [SessionStore]'s security-relevant, filesystem-independent behaviour: the path-traversal guard (a non-UUID … |
 | `SessionTimerContractTest` | class | `session/SessionTimerContractTest.kt:20` | **Every repeating timer a session owns must retire on its own AND be stopped when the session is disposed.** Both … |
-| `SessionTitleReaderTest` | class | `session/SessionTitleReaderTest.kt:13` | Tests [SessionTitleReader.pickTitle]'s pure title-selection logic over raw JSONL lines (no filesystem): ai-title is … |
+| `SessionTitleReaderTest` | class | `session/SessionTitleReaderTest.kt:18` | Tests [SessionTitleReader]'s pure title selection over raw JSONL lines (no filesystem): ai-title is used, a `/rename` … |
 | `SessionTranscriptReaderParseTest` | class | `session/SessionTranscriptReaderParseTest.kt:18` | What a RESTORED conversation looks like, pinned against the binary's own JSONL. |
 | `SessionTranscriptReaderTest` | class | `session/SessionTranscriptReaderTest.kt:13` | Tests [SessionTranscriptReader.parseEntries]'s pure JSONL→transcript mapping (no filesystem): user/assistant text, … |
 | `StatusLineFormatterTest` | class | `session/StatusLineFormatterTest.kt:7` | Pure tests for the live reasoning-token status suffix (coarse bucketing, blank at zero). |
@@ -189,18 +195,20 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `GitActionCatalogTest` | class | `ui/GitActionCatalogTest.kt:26` | The Git action catalogue, pinned where it is a contract with something that cannot check it back. |
 | `GitContextActionsTest` | class | `ui/GitContextActionsTest.kt:15` | The wording of the gear menu's Git entries — pure, no platform, no repository — plus the two contracts that matter … |
 | `GitPromptedActionsTest` | class | `ui/GitPromptedActionsTest.kt:21` | The prompts the Git integration sends, pinned. |
-| `IdeActionApiContractTest` | class | `ui/IdeActionApiContractTest.kt:40` | Pins **how [GitIntegration] invokes a platform action**, and pins that none of that API is deprecated. |
+| `IdeActionApiContractTest` | class | `ui/IdeActionApiContractTest.kt:48` | Pins **how [GitIntegration] invokes a platform action**, and pins that none of that API is deprecated. |
 | `InfoDialogsTest` | class | `ui/InfoDialogsTest.kt:14` | Pure logic of [InfoDialogs]: the binary-version and effective-settings formatting. |
 | `InitOrderContractTest` | class | `ui/InitOrderContractTest.kt:38` | A class-body property must be declared BEFORE the `init` block that can reach it. |
 | `JcefDependencyContractTest` | class | `ui/JcefDependencyContractTest.kt:30` | **The plugin must declare the JCEF plugin as a dependency, because the whole UI IS that browser.** THE INCIDENT THIS … |
 | `LinkGateTest` | class | `ui/LinkGateTest.kt:20` | The security gate behind jump-to-code ([LinkResolver.isOpenable]) plus the `~` expansion and path display that feed it. |
 | `PageStateRecoveryContractTest` | class | `ui/PageStateRecoveryContractTest.kt:28` | **The state the page needs in order to exist has to survive a load that failed, and be reposted on the one that … |
 | `ReviewPromptTest` | class | `ui/ReviewPromptTest.kt:15` | The review-ask policy ([ReviewPrompt]) — pure, so the guarantees are pinned without an IDE. |
+| `ToolWindowWiringContractTest` | class | `ui/ToolWindowWiringContractTest.kt:20` | **A gesture must not end in a nullable chain that quietly evaluates to nothing.** Three orderings in the tool window's … |
 | `JcefAccountDataTest` | class | `ui/jcef/JcefAccountDataTest.kt:20` | The dashboard account card's fallback chain, on the pure JVM: which of the four sources answers for Email and … |
 | `JcefBridgeTest` | class | `ui/jcef/JcefBridgeTest.kt:18` | Pure-JVM coverage of the INBOUND half of the JCEF bridge — every `window.__ccSend` message `type` → a typed … |
-| `JcefGitDataTest` | class | `ui/jcef/JcefGitDataTest.kt:26` | Pure-JVM coverage of the Git view's payload: the shape the page is promised, the two ways it degrades when there is no … |
+| `JcefGitDataTest` | class | `ui/jcef/JcefGitDataTest.kt:28` | Pure-JVM coverage of the Git view's payload: the shape the page is promised, the two ways it degrades when there is no … |
 | `JcefModelLabelTest` | class | `ui/jcef/JcefModelLabelTest.kt:12` | The model-label logic ([JcefModelLabels.modelDisplayLabel] / [JcefModelLabels.deriveModelLabel]) — pure, so tested … |
 | `JcefPayloadTest` | class | `ui/jcef/JcefPayloadTest.kt:32` | Pure-JVM coverage of the OUTBOUND half of the JCEF bridge — [JcefTranscriptPayload] (transcript rows, agent … |
+| `JcefSettingsMenuTest` | class | `ui/jcef/JcefSettingsMenuTest.kt:27` | The composer's ⚙ menu, tested on the pure half. |
 | `LoopbackPageServerTest` | class | `ui/jcef/LoopbackPageServerTest.kt:23` | Pure-JVM coverage of the loopback fallback that serves the chat document in Remote Development. |
 | `PageArrivalTest` | class | `ui/jcef/PageArrivalTest.kt:20` | Whether a finished load actually delivered the chat page — the question [pageArrived] answers and `onLoadEnd` does not. |
 | `PageRouteTest` | class | `ui/jcef/PageRouteTest.kt:19` | The order in which the chat page is attempted, and the fact that the attempts run out. |

@@ -166,6 +166,16 @@ Update **both** files with the new version and today's date:
   user-facing; `build.gradle.kts` extracts the latest section via
   `latestReleaseNotesHtml()` for `patchPluginXml.changeNotes`.
 
+**The date is stamped by hand here, and it is the one field that goes stale
+while you work.** Both headings ship as written — the `## [x.y.z]` block becomes
+the GitHub Release body **verbatim** (step 8) — but the release happens at the
+merge, whose timing nothing in either file can know. If the release PR sits for
+a few days, what you typed in this step is no longer the release date. **Re-stamp
+both headings immediately before the merge in step 8.** Recorded as a known
+defect with its exit in [ADR 0001 §4](adr/0001-release-process.md): the fix is
+for `release.yml` to stamp the date when it cuts the tag, since that job is the
+only actor that knows it.
+
 ### 5. Commit
 
 ```bash

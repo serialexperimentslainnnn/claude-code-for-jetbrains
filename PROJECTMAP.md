@@ -1,8 +1,8 @@
 # Map of Claude Code Native
 
-> Generated 2026-08-14 against `8933592`. **The whole 5.5.0 release is uncommitted**, so the working tree is
-> ahead of that SHA and `git ls-files` alone misses most of it — `git status` is the authority on what
-> changed. If anything here contradicts the repo, **the repo wins**: fix the line and move on.
+> Generated 2026-08-18 against `93bcea8`. 5.5.0 is **not released and not fully committed**: part of it sits
+> in the working tree, so `git status` is the authority on what changed and `git ls-files` alone misses the
+> untracked files. If anything here contradicts the repo, **the repo wins**: fix the line and move on.
 >
 > This is the **root** of a distributed map. Every substantial directory carries its own `PROJECTMAP.md` with
 > the symbols that live there, generated from the code. Read this file, then the local map of the directory
@@ -45,7 +45,8 @@ and diffs, which stay native through the IDE's `DiffManager`.
 | The agent tree or background tasks | `session/AgentRegistry.kt`, `session/BackgroundTaskRegistry.kt` → [map](src/main/kotlin/dev/lain/claudejb/session/PROJECTMAP.md) | The **bare** agent id is the identity — `agent-<id>.jsonl` is a filename, not an id |
 | A setting | `settings/ClaudeSettings.kt` + the owning `ui/Settings<X>Section.kt` | Persisted into the **PasswordSafe**; mutate through `update {}` or it does not survive a restart |
 | Anything Git | READ `git/` → [map](src/main/kotlin/dev/lain/claudejb/git/PROJECTMAP.md) · WRITE `ui/GitPromptedActions.kt` · HAND-OFF `ui/GitIdeMenu.kt` | **Reads are the plugin's, writes are asked of Claude, dialogs are the IDE's** — which is what keeps `git/` read-only by construction |
-| Attachments, @-mentions, clipboard | `context/` → [map](src/main/kotlin/dev/lain/claudejb/context/PROJECTMAP.md) | The pure halves are split out so they can be tested; only the process spawn is not |
+| Pull requests or CI status for this branch | `forge/` → [map](src/main/kotlin/dev/lain/claudejb/forge/PROJECTMAP.md) | GitHub / GitLab over HTTP, read-only. **One token per HOST** in the PasswordSafe (`ForgeTokens`), never per provider; `ForgeService` is the only entry point and refuses the EDT; a `Silent` answer omits the card rather than nagging |
+| Attachments, @-mentions, clipboard | `context/` → [map](src/main/kotlin/dev/lain/claudejb/context/PROJECTMAP.md) | The pure halves are split out so they can be tested; only the process spawn is not. `ProjectTree` is the attach menu's in-place project browser: confined by `DiffPresenter.isWithinRoot`, listed from the IDE's index and **never from a disk walk** |
 | An editor action or context-menu item | `src/main/kotlin/dev/lain/claudejb/actions/` | Registered in `src/main/resources/META-INF/plugin.xml`; the action classes are listed there, not counted here |
 | A JVM test | `src/test/kotlin/` → [map](src/test/kotlin/dev/lain/claudejb/PROJECTMAP.md) | Unit · contract · headless · integration, all inside the one `test` task |
 | A frontend test | `src/test/frontend/` → [map](src/test/frontend/PROJECTMAP.md) | vitest + jsdom over the **real** inlined modules |
@@ -69,6 +70,7 @@ and diffs, which stay native through the IDE's `DiffManager`.
 │   │   ├── actions/          editor and context-menu AnActions, registered in plugin.xml
 │   │   ├── context/          → src/main/kotlin/dev/lain/claudejb/context/PROJECTMAP.md
 │   │   ├── diff/             → src/main/kotlin/dev/lain/claudejb/diff/PROJECTMAP.md
+│   │   ├── forge/            → src/main/kotlin/dev/lain/claudejb/forge/PROJECTMAP.md
 │   │   ├── git/              → src/main/kotlin/dev/lain/claudejb/git/PROJECTMAP.md
 │   │   ├── permission/       → src/main/kotlin/dev/lain/claudejb/permission/PROJECTMAP.md
 │   │   ├── process/          → src/main/kotlin/dev/lain/claudejb/process/PROJECTMAP.md
@@ -98,7 +100,8 @@ and diffs, which stay native through the IDE's `DiffManager`.
 | `src/main/kotlin/dev/lain/claudejb/permission/` | What may run without asking: the `can_use_tool` broker plus the deterministic sensitive-data lock, split one file per seam. | [map](src/main/kotlin/dev/lain/claudejb/permission/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/diff/` | Presenting a proposed edit for review, selecting hunks, snapshotting and rolling back an applied one. | [map](src/main/kotlin/dev/lain/claudejb/diff/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/git/` | Read-only Git context. `GitGateway` is the only file naming a `git4idea` type in code, so an unsatisfied optional dependency degrades to "no Git surface". | [map](src/main/kotlin/dev/lain/claudejb/git/PROJECTMAP.md) |
-| `src/main/kotlin/dev/lain/claudejb/context/` | What the user can attach: @-mentions, files, selections, images, clipboard. | [map](src/main/kotlin/dev/lain/claudejb/context/PROJECTMAP.md) |
+| `src/main/kotlin/dev/lain/claudejb/forge/` | Read-only questions to GitHub and GitLab about the checked-out branch — open pull/merge requests, the latest CI run. Building and parsing are pure and unit-tested over recorded JSON; `ForgeHttp.fetch` is the one impure step. One access token per **host** in the PasswordSafe. | [map](src/main/kotlin/dev/lain/claudejb/forge/PROJECTMAP.md) |
+| `src/main/kotlin/dev/lain/claudejb/context/` | What the user can attach: @-mentions, files, selections, images, clipboard — plus `ProjectTree`, the attach menu's in-place project browser. | [map](src/main/kotlin/dev/lain/claudejb/context/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/settings/` | Persistence: one serialized document in the IDE PasswordSafe, the launch env derived from it, and the one-shot adoption of the legacy project file. | [map](src/main/kotlin/dev/lain/claudejb/settings/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/ui/` | Everything Swing is still allowed to be — tool window, tabs, menus, dialogs, the Settings page — plus the assembler that drives the web view and its collaborators. | [map](src/main/kotlin/dev/lain/claudejb/ui/PROJECTMAP.md) |
 | `src/main/kotlin/dev/lain/claudejb/ui/jcef/` | The host side of the web view: the browser and page delivery, the pure bridge, and one JSON builder per card. | [map](src/main/kotlin/dev/lain/claudejb/ui/jcef/PROJECTMAP.md) |
@@ -204,8 +207,9 @@ On this machine only: node needs `OPENSSL_CONF=/dev/null`, and `claude` is a sys
   host calls and no module implements) and `bridge-inbound.test.js` (a message type the bridge parses and the
   page never sends · a `cc.<name>` neither side calls). **Nothing gates class MEMBERS, and nothing gates
   reachability along a PATH** — a collaborator that is called, but not from every route that should reach it,
-  compiles, tests and ships. Closing a tab, restarting a session, restoring one and pinning a second view of
-  it are four different routes, and each is a place a call site was left behind.
+  compiles, tests and ships. Opening a chat, restoring one at startup, forking one and the Git chat opening
+  itself from a button outside the tool window are four different routes onto the same panel, and each is a
+  place a call site has been left behind before.
 - **The plugin running in the IDE is not this working tree, so behaviour observed through the IDE is evidence
   about the INSTALLED build until `git diff HEAD` says otherwise.** There is no hot reload here: a build is
   produced, installed by hand and validated. A defect reproduced in the IDE — a refused permission, a stale
@@ -235,9 +239,15 @@ On this machine only: node needs `OPENSSL_CONF=/dev/null`, and `claude` is a sys
   `unsafe-inline` is a no, and so is loading an asset by URL. **`appNames` and `CSS_PARTS` are ordered
   contracts**: there is no module system in the page, files meet through `window.cc`/`window.CC`, and a file
   omitted from `appNames` is silently not served.
-- `src/main/resources/jcef/shell.html` — `#boot` and `#auth-card` are children of `#conversation`, inside the `#work`
-  wrapper alongside `#dock` and `#palette`. That nesting is the point: hoisting either back up to `#app`
-  re-covers the chat tabs and the composer while a chat starts.
+- `src/main/resources/jcef/shell.html` — `#boot` and `#auth-card` are **siblings of `#conversation` and
+  children of `#work`**, sharing the first cell of its grid exactly as `.dashboard` does. Both halves of that
+  are load-bearing and each was learned by getting it wrong. Hoisting either up to `#app` re-covers the chat
+  tabs and the composer while a chat starts; putting either back INSIDE `#conversation` makes it a child of
+  `cc.clear()`, which empties that element on every switch between a chat, an agent and a task — so the first
+  clear deletes the screen from the document for good, and a tab that later loses its binary, its login or
+  its process shows nothing at all, silently (`renderBoot`/`renderAuth` look their element up and return when
+  it is absent). `boot.test.js` pins the parentage, survival across a `cc.clear()`, and "`#empty` is the only
+  child that survives a clear" — the general form of the defect.
 - **KDoc must not contain a literal `/*`** — Kotlin block comments nest, and it produces "unclosed comment".
 - **The plugin deletes exactly one file, ever** (the legacy credentials file, and only after the safe has
   accepted a copy). `NoFileDeletionContractTest` fails the build if a second deletion appears.
@@ -257,7 +267,15 @@ On this machine only: node needs `OPENSSL_CONF=/dev/null`, and `claude` is a sys
   workflow cuts the tag from `build.gradle.kts`, and published tags are immutable.
 - **A branch ruleset references a check by its job's display name.** Renaming a CI job does not fail the
   gate — it silently stops applying.
-- The whole 5.5.0 release is **uncommitted**. Treat any history operation as destructive.
+- **Part of 5.5.0 is still uncommitted**, including untracked files. Treat any history operation — a reset, a
+  checkout, a stash, a clean — as destructive until `git status` is empty.
+- **One tab per session, one session per tab.** An agent, a subagent and a background task are transcripts
+  switched inside a chat's own browser, never tabs of their own, which is the only reason
+  `ClaudeToolWindowFactory`'s `closed` handler may dispose a `claude` process without asking. A second
+  `JcefChatPanel` over a live session brings back a close that kills the chat that spawned it, leaves that
+  chat's tab painting a dead process and drops it from the restorable set — `ToolWindowWiringContractTest`
+  fails the build on a second construction site, which is where the invariant can still be broken; the close
+  path is only where it shows.
 
 ## Out of the map
 
