@@ -1,5 +1,7 @@
 /*
- * app-core-diagram.js — the node diagram (Workloads, and the subtab popup).
+ * app-core-diagram.js — the node diagram behind the Workloads view.
+ *
+ * Owns: the node diagram behind the Workloads view.
  *
  * One subject: laying out a tree of running work as cards + connectors, and the viewport you drag and zoom
  * it in. Split out of app-core.js; loads right after it and only extends window.CC.
@@ -10,7 +12,7 @@
   var CC = window.CC || (window.CC = {});
 
   // ---------------------------------------------------------------------------
-  // Node diagram (Workloads, and the subtab popup)
+  // Node diagram (the Workloads view)
   // ---------------------------------------------------------------------------
   /**
    * A tree diagram that DESCENDS: one node per row, each child a small step to the right of its parent, with
@@ -18,9 +20,9 @@
    *
    * **Why not a column per depth.** The first version put each level in its own column, which is the classic
    * org-chart shape and the wrong one here: a node was 208px wide and every level cost another 264px, so a
-   * three-level tree was wider than the tool window and unusable in a popup. Descending costs INDENT (18px)
-   * per level instead of a whole column, so depth is nearly free and the thing that grows is the height —
-   * which is the axis you can actually scroll and drag.
+   * three-level tree was wider than the tool window, which is the one dimension there is none of. Descending
+   * costs INDENT (18px) per level instead of a whole column, so depth is nearly free and the thing that grows
+   * is the height — which is the axis you can actually scroll and drag.
    *
    * **The geometry is COMPUTED, never measured.** Every coordinate here is arithmetic on the tree, and the
    * connectors are drawn from those same numbers. That is what makes it right at every moment: the tab bar's
@@ -34,31 +36,62 @@
    * the caller decides where to put it and how big the viewport is.
    */
   var NODE_H = 32;
-  var COL_GAP = 26; // horizontal space between one level and the next — where the connector lives
+  // Horizontal space between one level and the next — where the connector lives. Deliberately unchanged when
+  // the cards were halved: it is the width of a channel a curve has to be legible in, which is an absolute
+  // quantity and not a fraction of a card. Narrower cards make it proportionally MORE visible, so the tree
+  // reads as more separated, not as more sparse.
+  var COL_GAP = 26;
   var ROW_GAP = 10; // vertical space between two cards on the same level
-  var NODE_MIN = 170;
-  var NODE_MAX = 460;
+  /**
+   * The floor, and it is DERIVED rather than chosen: 36px of a card exists before a single character of its
+   * label does — 4px of borders (1 + a 3px state edge), 18px of padding, the 7px state dot and the 7px gap
+   * after it — and below roughly eight characters a label is an ellipsis with a hint attached. 36 + 8 × 7.1
+   * (the per-character estimate below) ≈ 93, rounded to 96.
+   *
+   * Half of the old 170 would be 85, which lands under that: it buys about six characters, i.e. `Agent…`,
+   * and every card at the floor would be the same size and say nothing — a column of identical blanks is not
+   * a smaller diagram, it is a diagram with the labels taken out.
+   */
+  var NODE_MIN = 96;
+  /**
+   * The cap, halved from 460 on the same reasoning that made 460 wrong in the first place — see `widthFor`.
+   */
+  var NODE_MAX = 230;
 
   /**
    * How wide a card needs to be for its own text — computed from the STRING, never measured from the DOM.
    *
    * A single fixed width was the wrong answer in both directions: `Agent (Inventario de dependencias)` was
-   * cut to `Agent (In…` while `Chat 3` wasted two thirds of its slot. 6.6px per character is a close enough
-   * average for this size of the UI font, and the clamp keeps a very long title from taking over the canvas
-   * — that one still ellipsizes, and its tooltip carries the full text.
+   * cut to `Agent (In…` while `Chat 3` wasted two thirds of its slot. Sizing to the text fixes both; the
+   * clamp decides how far that is allowed to go.
+   *
+   * **The cap is 230, and long labels therefore ellipsize.** That is a reversal, and the reason it is right
+   * is the one the previous cap ignored: a 460px card is not a node, it is a ROW. Four of them fill a tool
+   * window edge to edge, so the diagram becomes a list drawn with connectors — and a graph that cannot show
+   * two columns at once is not showing you a graph, whatever each individual card manages to say. At half
+   * that, several levels are on screen together and the SHAPE of the work is readable, which is the only
+   * thing this view offers that the transcript does not. The full text is never lost: it is in the button's
+   * `title`, which every card already sets from `n.title || n.label`.
+   *
+   * **The per-character coefficients are not a size decision and are not tuned here.** 7.1px for the label
+   * at 12.5px and 5.8px for the meta at 9.5px are estimates of how much space that text OCCUPIES; lowering
+   * them to squeeze cards would stop the width corresponding to the content, and the clipping would then
+   * land in a different place on every card for no reason a reader could predict. The way to make cards
+   * narrower is the cap, which is a decision about the diagram, and it is the only thing that moved.
    */
   function widthFor(node) {
     var label = (node.label == null ? '' : String(node.label)).length;
     var meta = (node.meta == null ? '' : String(node.meta)).length;
     var action = node.action ? 46 : 0;
-    // Sized so the label FITS rather than ellipsizes: a diagram whose every card says `Agent (Inventario…` is
-    // a diagram of nothing. Wider cap, and the per-character estimate matches the 12.5px UI font.
     var px = 38 + Math.round(label * 7.1) + Math.round(meta * 5.8) + action;
     return Math.max(NODE_MIN, Math.min(NODE_MAX, px));
   }
 
   /**
-   * How a node names itself: `Agent (…)`, `Subagent (…)`, `Background Task (…)`.
+   * What a node is CALLED: `Agent (…)`, `Subagent (…)`, `Background Task (…)`.
+   *
+   * **This is the spoken form, and it never abbreviates.** It is what reaches a `title` and an accessible
+   * name, so it is read aloud — see [diagramShown] for the form that is only ever looked at.
    *
    * WHAT it is comes first and the title second, because the title is the model's own sentence about the
    * job ("Inventario de dependencias") and says nothing about what kind of thing is running it. It also
@@ -73,6 +106,27 @@
     if (kind === 'task') return 'Background Task (' + text + ')';
     if (kind === 'agent') return (depth > 1 ? 'Subagent (' : 'Agent (') + text + ')';
     return text;
+  };
+
+  /**
+   * What a node SHOWS, which may abbreviate what it is called.
+   *
+   * **A background task is `BT: npm run dev`.** Written out it is `Background Task (npm run dev)` — 29
+   * characters against 15, and a diagram card is sized from its label (`widthFor`) and capped at
+   * [NODE_MAX] 230px, so the long form ran past the cap on every task and ellipsised away the only part that
+   * identifies it: the command. The prefix is 4 characters and buys back the whole title.
+   *
+   * **`BT:` must never reach an accessible name** — a screen reader spells an unknown pair of capitals out,
+   * so the name stays [diagramLabel]'s. That split is the entire reason these are two functions and not a
+   * changed one: a single abbreviating label would have been read aloud as "bee tee", and a caller that
+   * wanted the long form would have had to rebuild it, which is the third copy that drifts.
+   *
+   * Everything that is not a task shows exactly what it is called: an agent's kind is the useful half of its
+   * name in a diagram, and it is short enough to keep.
+   */
+  CC.diagramShown = function (kind, depth, label) {
+    if (kind === 'task') return 'BT: ' + (label == null ? '' : String(label));
+    return CC.diagramLabel(kind, depth, label);
   };
 
   CC.diagram = function (roots) {
@@ -277,7 +331,12 @@
           // flicker; the animation itself is fine, it was being born again every second.
           animationDelay: n.status === 'running' ? '-' + (nowMs() % 1300) + 'ms' : null,
         },
-        attrs: { type: 'button', title: n.title || n.label },
+        // [n.name] is the SPOKEN name, set only by a node whose visible label abbreviates (a background
+        // task: `BT: …` on screen, `Background Task (…)` to a screen reader — see `CC.diagramShown`).
+        // Without it the name is computed from the card's own text, which is exactly how the abbreviation
+        // would have been read aloud. Absent, the computed name is right and nothing is overridden: an
+        // explicit name on every card would silently drop `.dg-meta` from it.
+        attrs: { type: 'button', title: n.title || n.label, 'aria-label': n.name || null },
         on: { click: n.onPick || function () {} },
       },
       n.status ? CC.h('span', { class: 'dg-dot ' + n.status, attrs: { 'aria-hidden': 'true' } }) : null,

@@ -46,11 +46,15 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val tabs = ChatTabsPanel()
         tabs.onEvents(
             selected = { tab -> tab?.session?.let { manager.setActive(it) } },
-            // A PINNED tab is a second view of a chat, not a chat: closing it closes the view. Removing the
-            // session here would dispose the `claude` process of the chat that spawned the agent — leaving its
-            // own tab open over a dead session, and dropping it from the restorable set. The chat's own close
-            // takes its pinned views with it (see ChatTabsPanel.close), so nothing is left behind either way.
-            closed = { tab -> if (!tab.isPinnedView) tab.session?.let { manager.remove(it) } },
+            // Unconditional, and it is allowed to be: a tab IS a chat, and no second tab ever holds this
+            // session ([ChatTabsPanel] — one construction site for a chat panel, one caller of `add`). An
+            // agent and a background task are transcripts switched inside the chat's own browser, never tabs,
+            // so there is no close that can reach a process something else is still painting. When one could
+            // — a subtab pinned as a tab of its own, over the SAME session — this line ran a condition, and
+            // the release before it did not: closing the agent's tab disposed the `claude` process of the
+            // chat that had spawned it, left that chat's tab open over a dead session, and dropped it from
+            // the restorable set. The condition is gone because the state it guarded against is.
+            closed = { tab -> tab.session?.let { manager.remove(it) } },
         )
         // ONE content, holding the whole strip. Not closeable: closing it would take every chat with it, and
         // the tool window would be left showing nothing with no way back.
@@ -66,20 +70,44 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         // Restore/rename/fork/reopen are the user's CONVERSATIONS, not this tool window: they live in their
         // own collaborator and are handed the one thing only the factory knows — how to open a tab.
         val commands = TabSessionCommands(project, tabs) { session, select -> openChat(project, tabs, session, select) }
-        commands.restoreOrCreate()
         // The one door onto the tab-level commands for callers outside this file: the composer's own action
         // buttons, and the Git view's buttons, which reach them from whichever chat is drawing them.
+        //
+        // Published BEFORE anything is opened, and that order is the point. `restoreOrCreate` reads the
+        // session history on a pooled thread and comes back to the EDT to build the tabs, so the strip is on
+        // screen and taking gestures for the whole of it — while every one of them reaches this field through
+        // a `?.` and does nothing when it is still null: a *New chat* pressed during the restore, and the
+        // replacement chat [ChatTabsPanel.replaceLastChat] owes the user when the last one is closed. Assigning
+        // first costs nothing, because `restoreOrCreate` only ever calls back into [openChat] and never reads
+        // the field it is being handed to.
         tabs.commands = commands
+        commands.restoreOrCreate()
 
         // NO title actions. New chat, Stop, Commands, Git, Close diffs and Log out were six Swing `AnAction`s
         // here — the last piece of this UI that was not the browser, in a strip that cannot share the page's
-        // accent, type scale or transitions, and as far from the composer as the tool window allows. They are
-        // rows of the composer now (`app-composer-actions.js`), which is where every one of them is used.
-        // What is left above is the platform's own: the gear and the hide button.
+        // accent, type scale or transitions, and as far from the composer as the tool window allows. Five of
+        // the six are rows of the composer now (`app-composer-actions.js`), which is where they are used;
+        // Close diffs is not, and has no button anywhere — its slot in that row is *Close this chat*, because
+        // a bin beside "New chat" is read as deleting the chat and was reported as broken three times over.
+        // `DiffTabCleanup` still closes them on its own schedule. What is left above is the platform's own:
+        // the gear and the hide button.
         toolWindow.setAdditionalGearActions(buildGearGroup(project, tabs, commands))
     }
 
-    /** Starts [session]'s process, then adds a tab for it and wires it, selecting it unless told not to. */
+    /**
+     * Starts [session]'s process, then adds a tab for it and wires it, selecting it unless told not to.
+     *
+     * The tab appears at once and is only SHOWN once its page can draw — see the comment on the selection
+     * below for why those are two different moments.
+     *
+     * **What that does not buy, so nobody reads more into it than is there.** Every chat is still its own
+     * `JBCefBrowser` with its own copy of the document: the memory is the same, the start-up cost is the same,
+     * and it is still paid on the press. What changed is only WHERE it is paid — off screen instead of in
+     * front of the user. So a press on a busy machine still takes as long as the page takes; the tool window
+     * simply keeps showing the chat they were in until there is another one to show. The fix that removes the
+     * cost rather than hiding it is one browser with the transcript switched under it, the way agent tabs
+     * already work ([JcefChatPanel.transcript]), and it is a different piece of work.
+     */
     private fun openChat(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, select: Boolean = true) {
         // Launch the binary FIRST, before building the tab. `start()` only dispatches — it hands the blocking
         // work (env resolution sources a login shell, then the spawn) to a pooled thread and returns — so doing
@@ -109,7 +137,27 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         //
         // Not selecting is the Git chat opening itself behind a button press the user made somewhere else; the
         // tab is there, badged when its turn wants attention, and they go to it when they choose to.
-        if (select) tabs.select(tab)
+        //
+        // WHEN it is selected is the other half, and it is what "New chat reloads the whole plugin" was. Nothing
+        // reloads: `JcefHost` starts delivering its document from its own constructor, so a brand-new chat put on
+        // screen immediately is a browser with nothing in it yet, and the user watches the entire UI — the CSS
+        // block and every hash-pinned script — assemble itself in front of them. The tab pill still appears on the
+        // press ([ChatTabsPanel.add] pushes the chat list), so the gesture is acknowledged at once; only the SWITCH
+        // waits for the page to announce itself. `whenWebReady` runs the block anyway if that never happens, because
+        // a *New chat* that opens nothing is worse than one that opens a page mid-build.
+        if (select) {
+            panel.host.whenWebReady {
+                // Still the tab to show? Two things can have happened while the page was coming up, and being
+                // LAST in the strip answers both. The tab may be gone — a chat can be closed before its page is
+                // up, and a closed tab is not in the list at all, so this block cannot show a disposed panel.
+                // And another chat may have been asked for since: tabs are appended in the order they were
+                // requested, so anything but the last one is a selection the user has already superseded.
+                // Restoring several chats at once is exactly that case — each defers its own switch, and
+                // without this the one selected would be whichever browser happened to finish last, rather
+                // than the last one restored.
+                if (tabs.all().lastOrNull() === tab) tabs.select(tab)
+            }
+        }
     }
 
     /**
@@ -217,9 +265,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     }
 
     // NB the six title-bar `AnAction`s that used to live here — New Chat, Log out, Interrupt, Commands, Git
-    // and Close All Diffs — are gone, not disabled: they are buttons on the composer now
-    // (`app-composer-actions.js`), and a class nobody registers is exactly the kind of thing this repository
-    // keeps rediscovering months later.
+    // and Close All Diffs — are gone, not disabled. Five became buttons on the composer
+    // (`app-composer-actions.js`); Close All Diffs has no successor. A class nobody registers is exactly the
+    // kind of thing this repository keeps rediscovering months later, which is why they are deleted rather
+    // than left unregistered.
 
     companion object {
         /** The id this plugin registers its tool window under (`plugin.xml`), and looks it up by. */
@@ -233,12 +282,19 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
          * `selectedContent.component` to a `JcefChatPanel` — which is what `actions/` did — is a cast that can
          * never succeed. It compiled, it returned null, and the actions silently took their fallback branch.
          *
+         * Found by TYPE among the contents, never through the SELECTED one. There is exactly one content and
+         * it is the strip, so selection decides nothing here — asking for it only adds a way to answer null:
+         * a `ContentManager` with nothing selected (its content not yet installed, or a selection the platform
+         * is in the middle of moving) would take [activePanel], [chatTabs], [contextComponent], [newChat] and
+         * [showGitView] down with it, and every one of those ends in a `?.` that fails silently. Looking for
+         * the component we put there cannot be wrong for a reason that has nothing to do with us.
+         *
          * Null when the tool window has never been opened: its content, and therefore every chat, is built by
          * [createToolWindowContent]. Callers that need a chat must [ToolWindow.activate] first and ask again.
          */
         private fun tabsPanel(project: Project): ChatTabsPanel? {
             val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return null
-            return toolWindow.contentManager.selectedContent?.component as? ChatTabsPanel
+            return toolWindow.contentManager.contents.firstNotNullOfOrNull { it.component as? ChatTabsPanel }
         }
 
         /** The chat panel currently on screen — see [tabsPanel] for when this is null. */
@@ -254,13 +310,23 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         internal fun chatTabs(project: Project): ChatTabsPanel? = tabsPanel(project)
 
         /**
-         * A REAL component inside the tool window, for building a platform action's data context.
+         * A REAL component inside the tool window, for building a platform action's **data context**.
          *
          * `SimpleDataContext.getProjectContext(project)` carries one key. A platform action resolves its
          * target from the context it is given and disables itself when it cannot — and a disabled action
          * invoked through `ActionUtil.performAction` does nothing, silently. Handing it the component the
-         * user actually pressed from lets `DataManager` fill in everything the platform would normally have,
-         * and gives a popup somewhere to anchor.
+         * user actually pressed from lets `DataManager` fill in everything the platform would normally have.
+         *
+         * **It is not an anchor, and reading it as one sends the next popup report to the wrong file.** An
+         * action that opens a popup decides where that popup goes itself and does not look in the data
+         * context for something to hang off: `Git.Branches` is `git4idea.ui.branch.GitBranchesAction`, whose
+         * `actionPerformed` ends in `showCenteredInCurrentWindow(project)` — centred on the focused
+         * component's outermost window, or else the project frame. Nothing handed in here can move it.
+         *
+         * **And this hierarchy has no Swing surface to anchor to even if one were wanted.** The strip is a
+         * `BorderLayout` around a single `CardLayout` whose cards are chat panels, and a chat panel is a
+         * browser: the tab row is drawn by the page. Every pixel of this component is the JCEF window, so
+         * "pick a component the browser does not cover" has no answer inside the tool window.
          */
         fun contextComponent(project: Project): JComponent? = tabsPanel(project)
 

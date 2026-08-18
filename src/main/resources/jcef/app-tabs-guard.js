@@ -1,12 +1,21 @@
 /* app-tabs-guard.js — the flicker guard, whole.
  *
- * One subject, and it is kept in ONE file on purpose: what the bar has drawn, as a string, plus the slot
- * holding the last one. `render` compares the combined signature unconditionally and stamps it LAST; the tree
- * panel stamps it too, because a hover opens and closes that panel without going through `render`. Those
- * pieces only make sense together — split across files, the next person changes one of the three stamps and
- * the flicker comes back under the pointer, which is exactly the bug this guard exists to stop.
+ * Owns: the flicker guard, whole.
  *
- * Two mutation-checked regression tests pin the behaviour (see tabs.test.js).
+ * One subject, and it is kept in ONE file on purpose: what the bar has drawn, as a string, plus the slot
+ * holding the last one. `render` compares the signature unconditionally and stamps it LAST. The two pieces
+ * only make sense together — split across files, the next person changes one and the flicker comes back under
+ * the pointer, which is exactly the bug this guard exists to stop.
+ *
+ * **The signature has to describe everything the bar draws, and nothing else.** Too little and the skip lies:
+ * a row the signature does not mention is drawn once and then frozen for the rest of the session, so an agent
+ * that finished keeps its running colour and one that started never gets a pill. Too much and the skip never
+ * fires: the host pushes the whole bar several times a turn, and folding in a field the row does not paint
+ * means a rebuild per push — which, at the dozens of pills this row exists for, is the cost the guard was
+ * written to remove. So the rule for changing either file is one sentence: **if the row starts drawing
+ * something, it starts appearing here; if it stops drawing something, it stops appearing here.**
+ *
+ * Regression tests pin both directions (see tabs.test.js).
  */
 (function () {
   'use strict';
@@ -40,81 +49,63 @@
    * The host pushes the whole bar on every agent event, several times a turn, and almost all of those
    * pushes change nothing you can see: an agent's transcript grew, a token landed. Rebuilding the DOM
    * anyway is what made the row flicker under the pointer, and it cost a full rebuild per event.
+   *
+   * Four things are drawn and therefore four things are described:
+   *  1. the CHAT tabs — the title, whether it is the open one, and whether it is asking for attention;
+   *  2. WHICH subtab is open, because that pill wears the accent and is the only one carrying a close;
+   *  3. the SUBTAB row — the chat's own agents and its background tasks, read through `T.chatWork`;
+   *  4. the BRANCH row, when one is open — which agent it belongs to (the row exists at all only because of
+   *     that, and its `aria-label` names it) and everything in it, read through `T.openBranch`.
+   *
+   * Both rows are read through the functions that RENDER them, never re-derived here. A second traversal
+   * would eventually disagree with the first, and a signature describing a different row than the one on
+   * screen is worse than no signature: the skip would be lying rather than merely blunt.
+   *
+   * **What is deliberately NOT here is the rest of the tree.** A subagent inside a branch nobody has opened
+   * is not drawn, so its status moving must not repaint the bar — that is most of the traffic on a session
+   * running dozens. It enters the signature the moment its branch does, through `openBranch`, and leaves
+   * again when the branch closes.
    */
-  function signature() {
+  function drawnSignature() {
     var parts = T.state.chats.map(function (chat) {
-      var work = chat.selected ? T.hasWork() : (chat.tree || []).length > 0 || (chat.tasks || []).length > 0;
-      return [chat.id, chat.title, !!chat.selected, !!chat.attention, chat.pinned || '', work].join(SEP);
+      return [chat.id, chat.title, !!chat.selected, !!chat.attention].join(SEP);
     });
-    if (T.selected) {
-      var node = T.selected.kind === 'agent' ? T.nodeById(T.selected.id) : T.taskById(T.selected.id);
-      parts.push(
-        node
-          ? [T.selected.kind, T.selected.id, node.label || '', node.status || '', !!node.running].join(SEP)
-          : [T.selected.kind, T.selected.id, 'gone'].join(SEP)
-      );
+    // The open subtab by identity only: its label and its state are already described by its own entry below,
+    // and `render` prunes a selection whose subject the payload dropped before it asks for this.
+    parts.push(T.selected ? T.selected.kind + SEP + T.selected.id : '');
+    T.chatWork().forEach(function (w) {
+      parts.push(entry(w));
+    });
+    var branch = T.openBranch();
+    parts.push(branch ? branch.rootId + SEP + branch.rootLabel : '');
+    if (branch) {
+      branch.items.forEach(function (w) {
+        parts.push(entry(w));
+      });
     }
-    // The SUBTAB ROW, which is drawn whenever the chat on screen has started anything.
-    //
-    // Without it the row is frozen: the skip below is unconditional, so a push that only moves an agent's
-    // status would look identical to the last one and never repaint — an agent that finished would keep its
-    // running colour for the rest of the session, and one that started would never get a pill at all. What is
-    // drawn has to be described, and this row is drawn.
-    //
-    // Read through `T.workOrder`, the same walk the row itself renders from: a second traversal here would
-    // eventually disagree with that one, and a signature that describes a different row is worse than none.
-    T.workOrder().forEach(function (w) {
-      var n = w.node;
-      parts.push([w.kind, w.id, w.depth, n.label || '', n.type || '', n.status || '', !!n.running].join(SEP));
-    });
     return parts.join(SEP);
   }
 
   /**
-   * What the OPEN panel draws, as a string — the other half of [signature], and empty while nothing is open.
+   * One drawn pill, as the fields that decide how it looks: identity, text, state — and whether it can be
+   * opened into a branch, which the pill announces (`aria-expanded`) and which therefore counts as drawn.
    *
-   * The skip in [render] used to be waived outright whenever a panel was open, reasoning that the panel shows
-   * the tree and the tree does change on the pushes being filtered. The reasoning is right and the guard was
-   * far too blunt: with the pointer resting on a tab, EVERY push rebuilt the whole bar and then re-anchored
-   * and reopened the panel underneath the cursor — several times a second on a session with agents running,
-   * which is the flicker that was reported. The answer is not to skip less, it is to DESCRIBE more: fold in
-   * what the panel renders, and an identical push becomes a no-op whether the menu is open or not, while a
-   * genuine change still repaints it.
-   *
-   * Covers the whole tree of the panel's chat rather than only the `rootId` subtree on screen: it is one pass
-   * over a list the payload already carries, and narrowing it would mean reimplementing `openTree`'s
-   * parent/owner traversal a second time — two walks that have to agree is how a stale panel gets shipped.
-   * Which row is `selected` needs nothing here: which subtab is open is already in [signature].
+   * `hasKids` is a BOOLEAN on purpose. It flips once, when an agent's first subagent appears, and that really
+   * does change the row; every later change inside a closed branch leaves it alone, which is what keeps a
+   * session running dozens from repainting the bar on work nobody is looking at.
    */
-  function panelSignature() {
-    if (!T.openPanel) return '';
-    var foreign = null;
-    if (T.openPanel.chatId != null) {
-      for (var ci = 0; ci < T.state.chats.length; ci++) {
-        var chat = T.state.chats[ci];
-        if (chat && chat.id === T.openPanel.chatId && !chat.selected) foreign = chat;
-      }
-    }
-    var nodes = foreign ? foreign.tree || [] : T.state.tree;
-    var tasks = foreign ? foreign.tasks || [] : T.state.tasks;
-    // The root row itself: which agent it is pinned to, whose chat, and that chat's title — the panel prints
-    // the title as its top row when it is showing a tab you are only hovering.
-    var parts = [T.openPanel.rootId || '', T.openPanel.chatId == null ? '' : T.openPanel.chatId];
-    if (foreign) parts.push(foreign.title || '');
-    nodes.forEach(function (n) {
-      if (!n) return;
-      parts.push([n.id, n.parent || '', n.label || '', n.type || '', n.status || '', !!n.running].join(SEP));
-    });
-    tasks.forEach(function (t) {
-      if (!t) return;
-      parts.push([t.id, t.owner || '', t.label || '', t.type || '', t.status || '', !!t.running].join(SEP));
-    });
-    return parts.join(SEP);
-  }
-
-  /** Everything currently drawn: the bar AND its open panel. */
-  function drawnSignature() {
-    return signature() + SEP + panelSignature();
+  function entry(w) {
+    var n = w.node;
+    return [
+      w.kind,
+      w.id,
+      w.depth,
+      n.label || '',
+      n.type || '',
+      n.status || '',
+      !!n.running,
+      !!w.hasKids,
+    ].join(SEP);
   }
 
   /** The last drawn signature, so an identical push is a no-op instead of a rebuild. */

@@ -1,15 +1,17 @@
 /* app-tabs-base.js — the tab bar's shared state and lookups.
  *
- * One subject: what the bar KNOWS — the last payload from the host, which subtab is open, whether a tree panel
- * is up, and the handful of questions the other files ask about all three.
+ * Owns: the tab bar's shared state and lookups.
+ *
+ * One subject: what the bar KNOWS — the last payload from the host, which subtab is open, and the handful of
+ * questions the other files ask about both.
  *
  * The namespace is `CC.tabbar` (there is no module system here, so that object IS the interface between these
  * scripts) and not `CC.tabs`: the method the host calls is `cc.tabs`, and two objects one letter apart
  * (`cc` / `CC`) each holding a `tabs` is a trap rather than an interface.
  *
  * Load order inside the family is deliberate: this file FIRST (it creates the namespace and the state every
- * other file reads), then the flicker guard, the tree panel, the pill and the scroller, then `app-tabs.js`
- * LAST — it owns `render` and the two Kotlin-facing methods, and reaches for all of them.
+ * other file reads), then the flicker guard, the pill and the scroller, then `app-tabs.js` LAST — it owns
+ * `render` and the Kotlin-facing methods, and reaches for all of them.
  */
 (function () {
   'use strict';
@@ -29,9 +31,6 @@
   /** What is on screen: `null` (the chat itself), or `{kind:'agent'|'task', id}`. */
   T.selected = null;
 
-  /** The open tree panel: `{el, anchor}`. At most one, like every other popup on the page. */
-  T.openPanel = null;
-
   function bar() {
     return document.getElementById('tabsbar');
   }
@@ -50,10 +49,6 @@
     return null;
   }
 
-  // NB the tree is walked through `parent` links, and a background task through its `owner` — the two fields
-  // the host already sends. `openTree` builds its own `childrenOfIn`/`tasksOfIn` over WHICHEVER chat is being
-  // shown (this one, or the tab you are hovering), which is why there is no module-level version any more.
-
   /** Drops a selection whose subject is no longer in the payload. */
   function pruneSelection() {
     if (!T.selected) return;
@@ -70,74 +65,137 @@
     return !!T.selected && T.selected.kind === kind && T.selected.id === id;
   }
 
-  /** How deep an agent hangs: 1 = the chat's own. Walks the parent links, guarded against a malformed loop. */
-  function depthOf(node) {
-    var depth = 1;
-    var cur = node;
-    var guard = 0;
-    while (cur && cur.parent && guard++ < 64) {
-      cur = nodeById(cur.parent);
-      if (cur) depth++;
-    }
-    return depth;
-  }
-
-  /** True when this chat has started anything at all — i.e. when there is a tree to show. */
-  function hasWork() {
-    return T.state.tree.length > 0 || T.state.tasks.length > 0;
-  }
-
   /**
-   * The selected chat's work in the order the SUBTAB ROW draws it: every agent depth-first, so a subagent
-   * follows the agent that started it, then the background tasks.
+   * ONE walk of the agent tree, depth-first, and the only one. Everything either row draws is a filter of it.
    *
-   * ONE walk, exported, because two things need it — the row itself and the flicker guard's signature — and
-   * two traversals that have to agree is how a row that never refreshes ships: the guard would describe an
-   * order the row does not draw, an identical-looking signature would skip the repaint, and an agent that
-   * finished would keep its running colour forever. Same trap `openTree` names about its own children/tasks
-   * lookups, answered the same way.
+   * Each entry is `{id, node, depth, root}`. [depth] is 1 for an agent the chat itself started and one more
+   * per level below, which is what makes `CC.diagramLabel` say `Agent (…)` at the top and `Subagent (…)`
+   * under it. [root] is the DEPTH-1 ANCESTOR — itself for a depth-1 agent — and it is the whole reason this
+   * function returns what it does: it turns "which branch is this in?" into a field comparison, for the row
+   * that draws a branch and for the guard that has to describe it, without either walking the tree again.
+   * Two traversals that have to agree is how a row that never refreshes ships.
    *
-   * Each entry is `{kind:'agent'|'task', id, node, depth}`. [depth] follows [depthOf]: 1 = the chat's own, so
-   * `CC.diagramLabel` says `Agent (…)` there and `Subagent (…)` below it, exactly as the tree panel and the
-   * Workloads diagram do.
+   * **Linear, not quadratic.** The children are indexed once instead of re-filtering the whole payload per
+   * node. The guard calls this on EVERY push from the host — several times a turn — and the session this
+   * feature exists for runs dozens of agents, so an `O(n²)` walk here is paid on pushes that change nothing.
+   *
+   * `Object.create(null)` for both maps: the keys are ids from the binary, and a plain object would answer
+   * `known['constructor']` with a function.
    */
-  function workOrder() {
-    var out = [];
-    var seen = {};
-    var known = {};
+  function walkTree() {
+    var known = Object.create(null);
+    var kids = Object.create(null);
     T.state.tree.forEach(function (n) {
       if (n && n.id) known[n.id] = n;
     });
     // A parent the payload does not carry is treated as no parent at all: the retention window drops nodes by
     // age, so a live child of an expired parent is a real case, and hanging it at the top level is what keeps
     // it VISIBLE. Dropping it would hide running work behind a bookkeeping detail.
-    function childrenOf(id) {
-      return T.state.tree.filter(function (n) {
-        if (!n || !n.id) return false;
-        var parent = n.parent == null || !known[n.parent] ? null : n.parent;
-        return parent === id;
-      });
-    }
-    function walk(id, depth) {
-      childrenOf(id).forEach(function (n) {
+    T.state.tree.forEach(function (n) {
+      if (!n || !n.id) return;
+      var parent = n.parent == null || !known[n.parent] ? '' : n.parent;
+      (kids[parent] = kids[parent] || []).push(n);
+    });
+
+    var out = [];
+    var seen = Object.create(null);
+    function walk(id, depth, root) {
+      (kids[id] || []).forEach(function (n) {
         if (seen[n.id]) return; // a malformed parent link must not loop
         seen[n.id] = true;
-        out.push({ kind: 'agent', id: n.id, node: n, depth: depth });
-        walk(n.id, depth + 1);
+        var branch = depth === 1 ? n.id : root;
+        out.push({ id: n.id, node: n, depth: depth, root: branch });
+        walk(n.id, depth + 1, branch);
       });
     }
-    walk(null, 1);
-    // Whatever a cycle in the parent links kept out of the walk. An agent the host sent and the bar refuses to
-    // draw is the worse failure: the row is how you reach its transcript at all.
+    walk('', 1, null);
+    // Whatever a cycle in the parent links kept out of the walk, hoisted to the top level. An agent the host
+    // sent and the bar refuses to draw is the worse failure: a row is how you reach its transcript at all,
+    // and inside a cycle there is no depth-1 ancestor for a branch row to hang it from.
     T.state.tree.forEach(function (n) {
       if (!n || !n.id || seen[n.id]) return;
       seen[n.id] = true;
-      out.push({ kind: 'agent', id: n.id, node: n, depth: 1 });
-    });
-    T.state.tasks.forEach(function (t) {
-      if (t && t.id) out.push({ kind: 'task', id: t.id, node: t, depth: 1 });
+      out.push({ id: n.id, node: n, depth: 1, root: n.id });
     });
     return out;
+  }
+
+  /**
+   * The SECOND row: the agents the CHAT started, then its background tasks.
+   *
+   * Top level only — a subagent belongs under the agent that invoked it, and reaching it means opening that
+   * agent (see [openBranch]). Flattening every depth into this row is what put a chat's whole tree in one
+   * strip, which is unreadable at the dozens this feature exists for and says nothing about who started what.
+   *
+   * **Background tasks stay HERE, at the chat's level, whoever started them.** A task is not a conversation:
+   * it has no transcript and nothing under it, it is the plugin's own record of a running process, and it
+   * routinely outlives the agent that spawned it — which is why the registry exists at all. Filing it under
+   * that agent would make a live task's output unreachable whenever its owner's branch is closed, and the
+   * output is the entire point of the row. Its owner is still on the card in the Workloads diagram.
+   *
+   * Each entry is `{kind:'agent'|'task', id, node, depth}`, shaped like [openBranch]'s so one pill builder
+   * draws both rows.
+   */
+  function chatWork() {
+    var all = walkTree();
+    // Which of these started something. It is what the pill announces as `aria-expanded`, so a screen-reader
+    // user is told which agents can be opened into a branch BEFORE clicking one — and it is a boolean, so
+    // the churn of statuses inside a closed branch still moves nothing the bar draws.
+    var branched = Object.create(null);
+    all.forEach(function (e) {
+      if (e.depth > 1) branched[e.root] = true;
+    });
+    var out = [];
+    all.forEach(function (e) {
+      if (e.depth !== 1) return;
+      out.push({ kind: 'agent', id: e.id, node: e.node, depth: 1, hasKids: !!branched[e.id] });
+    });
+    T.state.tasks.forEach(function (t) {
+      if (t && t.id) out.push({ kind: 'task', id: t.id, node: t, depth: 1, hasKids: false });
+    });
+    return out;
+  }
+
+  /**
+   * The THIRD row: everything under the branch you have open, or `null` when there is no third row.
+   *
+   * **The branch is the DEPTH-1 ANCESTOR of the open subtab, and its whole subtree is the row** — not just
+   * the immediate children of whatever is selected. That is the decision, and the alternative is what makes
+   * it one: a row of "the children of what you are looking at" empties the moment you open a leaf, and
+   * re-fills with a different set the moment you open its sibling, so the strip you were reading reshuffles
+   * under the click you just made. Worse, at depth 2 it would draw the selection's children while the
+   * selection itself appeared in no row at all — the bar would stop being able to say where you are.
+   *
+   * Holding the branch fixed while you move inside it costs nothing on screen and buys three properties: the
+   * bar is **at most three rows** however deep the tree goes and there is never a fourth (the invariant four
+   * earlier designs were thrown away for), the row does not move when you pick something in it, and
+   * **nothing becomes unreachable** — every descendant of the open agent is one click away, at any depth.
+   *
+   * Returns `null` for a selection that is not an agent, for one the payload no longer carries, and for an
+   * agent that started nothing: an empty row that still takes height is worse than no row.
+   */
+  function openBranch() {
+    if (!T.selected || T.selected.kind !== 'agent') return null;
+    var all = walkTree();
+    var here = null;
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (all[i].id === T.selected.id) here = all[i];
+    }
+    if (!here) return null;
+    var items = [];
+    var rootNode = null;
+    for (i = 0; i < all.length; i++) {
+      if (all[i].root !== here.root) continue;
+      if (all[i].depth === 1) rootNode = all[i].node;
+      else items.push({ kind: 'agent', id: all[i].id, node: all[i].node, depth: all[i].depth });
+    }
+    if (!items.length) return null;
+    return {
+      rootId: here.root,
+      rootLabel: (rootNode && rootNode.label) || 'Agent',
+      items: items,
+    };
   }
 
   T.send = send;
@@ -146,7 +204,6 @@
   T.taskById = taskById;
   T.pruneSelection = pruneSelection;
   T.isSelected = isSelected;
-  T.depthOf = depthOf;
-  T.hasWork = hasWork;
-  T.workOrder = workOrder;
+  T.chatWork = chatWork;
+  T.openBranch = openBranch;
 })();

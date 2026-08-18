@@ -21,31 +21,32 @@ import kotlinx.serialization.json.put
  * bar; each renders the same list and marks its own entry. Switching chats swaps browsers, and because both
  * pages paint the same bar the swap is invisible.
  *
- * The tree is sent FLAT — `{agentId, parent, label, status}` — and the levels are derived in the page from
+ * **Only the SELECTED chat's work travels.** The bar's second row is the open chat's agents, subagents and
+ * background tasks; nothing on screen asks what another chat started. Each chat used to carry its own `tree`
+ * and `tasks` as well, so that hovering a tab you were not in could open that chat's subtree — the panel that
+ * did was removed with the `⋮`, and what was left was a full serialisation of every open session's agent tree
+ * on every agent event, several times a turn, for fields the page no longer reads. The whole picture is the
+ * dashboard's Workloads diagram ([JcefSessionData]), which asks for it when it is on screen.
+ *
+ * The tree is sent FLAT — `{id, parent, label, status, type}` — and the levels are derived in the page from
  * whichever agent is selected. That is deliberate: which levels are open is a view state that changes on
  * every click, and round-tripping it through the host would make a click cost a repaint of the host's own
  * model. The host owns what EXISTS; the page owns what is SHOWN.
  */
 object JcefTabsData {
 
-    /**
-     * One chat in the bar. [id] is the strip's own handle, opaque to the page.
-     *
-     * [pinnedAgent] is set on a tab that was pinned to a subagent: the tab shows that agent's transcript, so
-     * its ⋮ must open THAT agent's subtree, not the whole chat's. Without it the page has no way to tell a
-     * pinned tab from an ordinary chat and shows the global tree — which is what a pinned tab is not about.
-     */
+    /** One chat in the bar. [id] is the strip's own handle, opaque to the page. */
     data class Chat(
         val id: String,
         val title: String,
         val selected: Boolean,
         val attention: Boolean = false,
-        val pinnedAgent: String? = null,
     )
 
     /**
      * [windowMinutes] and [nowMillis] are the retention window and the instant to measure it from, resolved
-     * once by the caller so that every chat in one push ages by the same instant.
+     * once by the caller so that every push ages its work by the same instant rather than by however long the
+     * serialisation took.
      */
     fun tabsJson(
         session: ClaudeSession,
@@ -53,30 +54,15 @@ object JcefTabsData {
         hiddenAgents: Set<String>,
         windowMinutes: Int,
         nowMillis: Long,
-        others: Map<String, ClaudeSession> = emptyMap(),
-    ): String = buildTabs(session, chats, WorkloadView(hiddenAgents, windowMinutes, nowMillis), others).toString()
-
-    /**
-     * Which workloads are visible at one instant: the retention window, the instant it is measured from, and
-     * the agents the user dismissed in this panel's own chat.
-     *
-     * One value rather than three parameters threaded side by side, because they are one fact. Every chat in a
-     * push is judged by the same window and the same instant, and [visible] is the single place that says so —
-     * the pair was previously restated at each of the two call sites that needed it.
-     */
-    private data class WorkloadView(
-        val hiddenAgents: Set<String>,
-        val windowMinutes: Int,
-        val nowMillis: Long,
-    ) {
-        fun visible(session: ClaudeSession) = JcefWorkloadData.visible(session, windowMinutes, nowMillis)
-    }
+    ): String =
+        buildTabs(session, chats, hiddenAgents, JcefWorkloadData.visible(session, windowMinutes, nowMillis))
+            .toString()
 
     private fun buildTabs(
         session: ClaudeSession,
         chats: List<Chat>,
-        view: WorkloadView,
-        others: Map<String, ClaudeSession>,
+        hiddenAgents: Set<String>,
+        shown: WorkloadWindow.Visible,
     ) = buildJsonObject {
         put(
             "chats",
@@ -87,27 +73,12 @@ object JcefTabsData {
                         put("title", chat.title)
                         put("selected", chat.selected)
                         put("attention", chat.attention)
-                        // A tab pinned to a subagent roots its own ⋮ at that agent, not at the chat.
-                        chat.pinnedAgent?.let { put("pinned", it) }
-                        // EVERY chat carries its own tree, not just the selected one: hovering a tab you are
-                        // not in has to show what THAT chat started. Its work does not pause because you are
-                        // reading a different tab, and having to select a chat to find out what it is doing
-                        // is the opposite of what a tab bar is for.
-                        //
-                        // `hiddenAgents` is deliberately NOT applied here — it is this panel's own record of
-                        // what the user dismissed in ITS chat, and it says nothing about anyone else's.
-                        others[chat.id]?.let { s ->
-                            val shown = view.visible(s)
-                            put("tree", treeJson(s, if (s === session) view.hiddenAgents else emptySet(), shown))
-                            put("tasks", tasksJson(s, shown))
-                        }
                     }
                 }
             },
         )
-        // The selected chat's tree, kept at the top level: it is what the bar's own rows are built from.
-        val shown = view.visible(session)
-        put("tree", treeJson(session, view.hiddenAgents, shown))
+        // The selected chat's tree, at the top level: it is what the bar's own rows are built from.
+        put("tree", treeJson(session, hiddenAgents, shown))
         put("tasks", tasksJson(session, shown))
     }
 
@@ -134,8 +105,9 @@ object JcefTabsData {
     /**
      * The background tasks, each with the agent that started it (null = this chat's own turns).
      *
-     * From the plugin's own registry rather than the binary's live set: that set is a level signal, so a
-     * finished task stops being listed and its tab would vanish at the moment its output is worth reading.
+     * From the plugin's own [BackgroundTaskRegistry] rather than the binary's live set: that set is a level
+     * signal, so a finished task stops being listed and its pill would vanish at the moment its output is
+     * worth reading.
      */
     private fun tasksJson(session: ClaudeSession, shown: WorkloadWindow.Visible) = buildJsonArray {
         session.backgroundTaskRegistry.all.filter { it.taskId in shown.tasks }.forEach { task ->
