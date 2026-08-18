@@ -154,26 +154,22 @@ else
   # not a nicety: this script exists to leave the pipeline configured end to end, so a prompt asking for
   # the path to a PEM would be a hole in precisely the thing it delivers.
   #
-  # The two halves of the CA come from deliberately different places, and neither is a guess:
+  # THE CA KEY NEVER LEAVES THE YUBIKEY. Both CAs live in PIV slot F9 — the root on one card, the
+  # intermediate on the other — key and certificate together, so the signature is produced ON the card
+  # and this script never holds, copies or shreds a CA private key. Two dead ends are worth naming so
+  # they are not rediscovered: `gpgsm` does NOT hold these keys (what its secret listing shows under
+  # `CN=The Oracle Intermediate CA` is the ISSUER field of the PIV leaf certificates it holds), and
+  # `~/pki/matrix/private/intermediate.key` is a DIFFERENT key — newer than what is on the cards, so
+  # signing with it would issue a certificate the root cannot verify.
   #
-  #   * the CA CERTIFICATES are read off the YubiKeys, PIV slot F9, which is where this PKI keeps them.
-  #     Both cards are read and neither is assumed to be either CA: the card whose F9 certificate is
-  #     self-issued is the root, the other is the intermediate. Nothing is written down here — not a
-  #     serial, not a DN, not a fingerprint — so a reissued PKI is picked up rather than contradicted;
-  #   * the CA PRIVATE KEY is the PKI's own intermediate key, READ where the PKI keeps it and never
-  #     copied, moved or rewritten. It cannot come from anywhere prettier, and the two candidates that
-  #     look like it are both dead ends: F9 is storage in this PKI, never a signer, and a PIV certificate
-  #     object has no private half to offer; and gpgsm does not hold this key either — what its secret
-  #     listing shows under the DN "The Oracle Intermediate CA" is the ISSUER field of the PIV leaf
-  #     certificates it holds, not the CA itself. That misreading is what made the first version of this
-  #     step die on `gpgsm: No secret key`.
+  # Nothing is written down here — not a serial, not a DN, not a fingerprint. Which card carries which CA
+  # is DERIVED: the card whose F9 certificate is self-issued is the root, the other is the intermediate.
+  # A reissued PKI is therefore picked up rather than contradicted.
   #
-  # Reading it is made safe by the check below rather than by trust: the key must be THE key for the
-  # certificate the card just handed over, compared as public halves, or nothing is issued. Nothing under
-  # the PKI is written, and build-matrix-pki.sh is never run — this asks the PKI for one leaf, it never
-  # creates, resets or reissues anything.
+  # Nothing under ~/pki is read or written and build-matrix-pki.sh is never run: this asks the PKI for
+  # one leaf, it never creates, resets or reissues anything.
   info "reading the CA certificates from PIV slot F9"
-  pki_root=""; pki_int=""
+  pki_root=""; pki_int=""; int_card=""
   while read -r serial; do
     [ -n "$serial" ] || continue
     f9="$tmp/f9-$serial.pem"
@@ -185,7 +181,7 @@ else
     if [ "$subj" = "$iss" ]; then
       pki_root=$f9; info "  root         $subj  (card $serial)"
     else
-      pki_int=$f9;  info "  intermediate $subj  (card $serial)"
+      pki_int=$f9; int_card=$serial; info "  intermediate $subj  (card $serial)"
     fi
   done < <(ykman list --serials 2>/dev/null)
 
@@ -198,18 +194,21 @@ else
 
   int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
            | awk -F'= ' '/commonName/{print $2; exit}')
-  int_key=${PKI_INTERMEDIATE_KEY:-$HOME/pki/matrix/private/intermediate.key}
-  [ -r "$int_key" ] || { echo "error: cannot read the intermediate CA key at $int_key" >&2; exit 1; }
+  info "issuing under: $int_cn  (card $int_card, on-card signature)"
 
-  # The pairing check, and it is the whole licence for reading a key off disk: the file must be the
-  # private half of the certificate the CARD produced. Compared as public keys, so a stale copy left over
-  # from a previous PKI — the one failure that would otherwise issue a certificate nobody's root can
-  # verify — stops here rather than three steps later.
-  openssl pkey -in "$int_key" -pubout       > "$tmp/int-key.pub" 2>/dev/null
-  openssl x509 -in "$tmp/int.crt" -noout -pubkey > "$tmp/int-crt.pub" 2>/dev/null
-  cmp -s "$tmp/int-key.pub" "$tmp/int-crt.pub" \
-    || { echo "error: $int_key is not the key for the '$int_cn' certificate on the card" >&2; exit 1; }
-  info "issuing under: $int_cn"
+  # The signer is a PKCS#11 URI, not a file. `libykcs11` is what exposes F9 — OpenSC's module publishes
+  # only the card-authentication slot — and it maps the attestation slot to id 25 (0x19), which is the
+  # one magic number here and the reason it is spelled out rather than hidden in a variable.
+  #
+  # The PIN is read once, written to the 0700 temp dir and handed over as `pin-source`, never as
+  # `pin-value`: a URI is an ARGUMENT, and arguments are world-readable in /proc. If the provider ignores
+  # it, openssl falls back to prompting on the terminal, which is a worse experience and not a leak.
+  ykcs11=${YKCS11_MODULE:-$(find /usr/lib64 /usr/lib -name 'libykcs11.so*' 2>/dev/null | head -1)}
+  [ -n "$ykcs11" ] || { echo "error: libykcs11 not found — install yubico-piv-tool" >&2; exit 1; }
+  export PKCS11_PROVIDER_MODULE="$ykcs11"
+  read_secret piv_pin "PIV PIN for card $int_card"
+  printf '%s' "$piv_pin" > "$tmp/piv-pin"; unset piv_pin
+  ca_key="pkcs11:serial=$int_card;id=%19;type=private;pin-source=file:$tmp/piv-pin"
 
   # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
   # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
@@ -236,12 +235,13 @@ EXT
   # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody has
   # in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
   # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
-  # The CA key is read in place and never copied: there is no second file to shred, and therefore no
-  # window in which a plaintext CA key exists anywhere it did not already exist.
-  openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
-    -CA "$tmp/int.crt" -CAkey "$int_key" \
+  # `-provider default` is listed explicitly: naming any provider replaces the default set, and without
+  # it the ordinary algorithms the rest of this call needs are gone.
+  openssl x509 -req -provider pkcs11 -provider default -in "$tmp/leaf.csr" -sha384 \
+    -CA "$tmp/int.crt" -CAkey "$ca_key" \
     -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
-    -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" 2>/dev/null
+    -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" \
+    || { echo "error: the card refused to sign — wrong PIN, or that CA card was removed" >&2; exit 1; }
 
   # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
   # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor inside the chain adds
@@ -255,6 +255,42 @@ EXT
   gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
   info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written outside $tmp"
   info "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -issuer -enddate | tr '\n' ' ')"
+
+  # A copy of what was issued goes into the LOCAL X.509 store (gpgsm, software-held — no YubiKey), and
+  # that is a deliberate exception to "no copy is kept" rather than a contradiction of it. The reason is
+  # the one thing a GitHub secret cannot do: it is write-only. Once these three are set nobody, including
+  # you, can read back what was uploaded — so without a local copy the certificate that signs the plugin
+  # exists in exactly one place you cannot inspect, and questions like "what is in CI right now" and "did
+  # this artifact come from that certificate" stop being answerable at all.
+  #
+  # The store is the right place for it and a file in a directory is not: the private half lands under
+  # gpg-agent's protection instead of sitting in plaintext, and it is a KEY, not a CA — losing it costs
+  # one re-run of this step, while the CAs that issued it never left their cards.
+  #
+  # Carried as PKCS#12 because that is the one container holding key, leaf and issuer together, and with
+  # the same random passphrase used above: pinentry asks once to unlock it and once to protect it, which
+  # is gpg-agent doing its job, not a manual step bolted on.
+  openssl pkcs12 -export -inkey "$tmp/leaf.key" -in "$tmp/leaf.crt" -certfile "$tmp/int.crt" \
+    -name "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -nameopt RFC2253)" \
+    -passin "file:$tmp/keypass" -passout "file:$tmp/keypass" -out "$tmp/leaf.p12" 2>/dev/null
+  if gpgsm --batch --import "$tmp/leaf.p12" 2>/dev/null; then
+    info "kept a copy of the issued certificate and key in the local gpgsm store"
+  else
+    warn "could not import the issued key into gpgsm — CI has it, you have no local copy."
+    warn "the certificate is reproducible by re-running this step; nothing is lost but the audit trail."
+  fi
+
+  # The card material and the PIN go NOW, not at the exit trap: everything above is done with them, and a
+  # file that is still needed cannot be deleted early — which makes "delete it here" a claim the rest of
+  # the step has to keep true. The trap remains as the backstop for the paths that exit before this line.
+  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/piv-pin" "$tmp/leaf.p12" \
+                  "$tmp/leaf.csr" "$tmp/leaf.ext" "$tmp/leaf.key" "$tmp/leaf.crt" \
+                  "$tmp/fullchain.crt" "$tmp/keypass"; do
+    [ -e "$leftover" ] || continue
+    shred -u "$leftover" 2>/dev/null || { : > "$leftover"; rm -f "$leftover"; }
+  done
+  unset ca_key PKCS11_PROVIDER_MODULE
+  info "card certificates, PIN and issued key wiped from $tmp"
   # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the user's
   # IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as "not
   # available yet" in the plugin-signing docs. So this key is only ever an upload credential and rotating
