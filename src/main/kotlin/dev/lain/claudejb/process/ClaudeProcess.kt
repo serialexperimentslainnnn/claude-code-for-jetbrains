@@ -5,6 +5,7 @@ import com.intellij.execution.process.KillableProcessHandler
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessOutputTypes
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.util.Key
 import dev.lain.claudejb.protocol.ClaudeEvent
@@ -164,12 +165,42 @@ class ClaudeProcess(
 
     fun isRunning(): Boolean = handler?.let { !it.isProcessTerminated } ?: false
 
-    /** Closes stdin (EOF) so the binary can shut down gracefully after finishing in-flight work. */
-    fun closeStdin() {
-        runCatching { synchronized(writeLock) { handler?.processInput?.close() } }
+    /**
+     * Ends the process: EOF on stdin so the binary can finish what it is doing, then the tree destroyed.
+     *
+     * **The teardown does not run on the caller's thread, and that is the whole reason this method exists.**
+     * Every caller reaches it from the UI — closing a tab, restarting a session, disposing one — and both
+     * halves are blocking I/O, which the platform's
+     * [threading model](https://plugins.jetbrains.com/docs/intellij/threading-model.html) puts off limits
+     * there. Closing stdin flushes a pipe, and it takes the same [writeLock] a producer already blocked on a
+     * full pipe is holding; destroying
+     * the process runs `KillableProcessHandler.destroyProcessImpl`, which flushes that pipe again and then —
+     * because the handler is built with `setShouldDestroyProcessRecursively(true)` — walks and signals the
+     * whole process TREE, which every OS answers by enumerating its process table. Seconds of it, on the
+     * thread that repaints. That is what a closed chat tab used to spend before it could redraw the tab bar:
+     * the pill of the chat that had just been closed stayed on screen, greyed, until the kill returned.
+     *
+     * Nothing waits for the result, and nothing needs to: the handler is dropped **before** the teardown is
+     * even scheduled, so from the first line on [isRunning] answers false and [writeLine] refuses, exactly as
+     * if the process were already gone. Calling it twice is a no-op.
+     */
+    fun terminate() {
+        val dying = handler ?: return
+        handler = null
+        val submitted = runCatching {
+            ApplicationManager.getApplication().executeOnPooledThread { endProcess(dying) }
+        }
+        // The pool is gone, which means the application itself is being disposed. Doing it inline blocks a
+        // shutdown thread; not doing it leaves a `claude` outliving the IDE that spawned it.
+        if (submitted.isFailure) {
+            log.warn("Pooled teardown unavailable, killing claude on ${Thread.currentThread().name}")
+            endProcess(dying)
+        }
     }
 
-    fun destroy() {
-        handler?.destroyProcess()
+    /** EOF first — it is what lets the binary exit on its own — then the tree. Never on the EDT: see [terminate]. */
+    private fun endProcess(dying: KillableProcessHandler) {
+        runCatching { synchronized(writeLock) { dying.processInput?.close() } }
+        dying.destroyProcess()
     }
 }

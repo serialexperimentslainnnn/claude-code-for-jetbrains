@@ -212,6 +212,24 @@ class ClaudeSession(
         private set
 
     /**
+     * Whether this process has already asked the binary to name the conversation.
+     *
+     * Set BEFORE the request goes out, so a refusal, a timeout or a blank answer costs one attempt and not a
+     * request per turn for the rest of the session. The binary persists the title it generates, so the normal
+     * case never reaches here twice anyway — this bounds the abnormal one.
+     */
+    @Volatile private var titleGenerationAsked: Boolean = false
+
+    /**
+     * Whether the user has renamed this chat by hand.
+     *
+     * A generated title is asked for once and arrives whenever it arrives; a rename in that window must not
+     * be overwritten by it. What the user typed is never replaced by what a model wrote — the ordering of the
+     * two answers is not allowed to decide that.
+     */
+    @Volatile private var userRenamed: Boolean = false
+
+    /**
      * The most recent `rate_limit_event`, whichever window it described. Kept for the composer's quota pill,
      * which shows one number; [rateLimits] is the per-window view.
      */
@@ -962,7 +980,7 @@ class ClaudeSession(
         }
         // If a teardown raced in between the gen-check and now, destroy the freshly-spawned orphan.
         if (launchGen != generation) {
-            proc.destroy()
+            proc.terminate()
             if (process === proc) process = null
             return
         }
@@ -1069,8 +1087,9 @@ class ClaudeSession(
         // Default-cancel any pending MCP elicitation cards while the process is still alive, so the binary isn't
         // left waiting on an ElicitResult when the session is torn down.
         cancelPendingElicitations()
-        process?.closeStdin()
-        process?.destroy()
+        // EOF then kill, off this thread — `stop()` is reached from the EDT (the Stop button, a settings
+        // change that restarts, a tab closing), and neither half may run there. See [ClaudeProcess.terminate].
+        process?.terminate()
         process = null
         turnActive = false
         interrupting = false
@@ -1179,16 +1198,30 @@ class ClaudeSession(
         dev.lain.claudejb.context.FilePickerHelper.relativeWithinRoot(root, path) ?: path
 
     /**
-     * `/btw` — sends a quick side question *immediately*, even mid-turn, without interrupting the active turn.
-     * The binary accepts the message in streaming-input and answers it after the current turn finishes
-     * (verified empirically against claude 2.1.150). When idle it behaves like a normal send.
+     * `/btw` — a quick question answered *alongside* the conversation, even mid-turn, without becoming a turn
+     * in it.
+     *
+     * **Sent as the `side_question` control request, and that is the fix, not a refactor.** It used to be
+     * written as an ordinary `user` line and the answer was expected to turn up in the stream — where it is
+     * dropped: [TranscriptReconciler.belongsHere] discards every assistant block the binary does not label as
+     * the main run, which is the filter that keeps a subagent's output out of this transcript and which a side
+     * answer, by construction, is on the wrong side of. Relaxing that filter would re-open the interleaving it
+     * exists to prevent; asking through the channel that RETURNS the answer costs nothing and cannot lose it.
+     * It is also what `system/control_request_progress` reports the progress of — until now the plugin modelled
+     * the progress of a request it never sent.
+     *
+     * **A side question is not a turn**, so `turnActive` is left alone: the composer does not claim the session
+     * is working, no quota poll is armed for it, and a real turn running at the same time keeps its own state.
+     * The correlation and the watchdog come from [SessionControlClient] via [queries], so a binary that never
+     * answers ends as a stated non-answer rather than as silence.
      */
     fun sendSideQuestion(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         if (!isRunning()) {
-            // Cold start: the launch is async (process not up yet), so a direct write would be dropped. Fall back to
-            // the queue, which pump() flushes once the process is ready — behaving like a normal send when idle.
+            // Cold start: the launch is async (process not up yet), so there is nothing to ask yet. Fall back to
+            // the queue, which pump() flushes once the process is ready — on an idle chat a side question is
+            // just a question, and a normal send is the right thing.
             if (!start()) return
             edt {
                 queue.addLast(Outgoing(trimmed, emptyList(), trimmed))
@@ -1197,17 +1230,16 @@ class ClaudeSession(
             }
             return
         }
-        // pump() touches the (EDT-confined) queue, so run the whole body on the EDT.
+        // The transcript is EDT-confined, and so is the queue pump() touches.
         edt {
             transcript.add(Speaker.USER, "↪ $trimmed")
-            write(ControlProtocol.userMessage(trimmed))
-            if (!turnActive) {
-                turnActive = true
-                startQuotaPolling()
-                ensureAgentRevivalPoll()
-                fireState()
+            queries.askSideQuestion(trimmed) { answer ->
+                // On the EDT. The SYSTEM speaker and the mirrored arrow are the transcript's existing grammar
+                // for "the binary said this, and it is not part of the conversation" — the same row a notice
+                // uses. Rendering it as ASSISTANT would put it in the turn it deliberately is not part of.
+                transcript.add(Speaker.SYSTEM, answer?.let { "↩ $it" } ?: SIDE_QUESTION_UNANSWERED)
             }
-            // Flush anything still queued from startup; the binary accumulates messages mid-turn.
+            // Flush anything still queued from startup.
             pump()
         }
     }
@@ -1387,11 +1419,17 @@ class ClaudeSession(
     private fun recordOpenAndTitle(id: String) {
         AppExecutorUtil.getAppExecutorService().execute {
             // The Git chat keeps its name (see [gitIntegration]): the fallback title is the first thing asked,
-            // which here is a git command and not what this tab is.
-            val resolved = if (gitIntegration) title else SessionTitleReader.readTitle(id) ?: title
-            if (resolved != title) {
-                title = resolved
-                edt { fireTitleChanged() }
+            // which here is a git command and not what this tab is. It is not offered a generated one either,
+            // for the same reason — the tab is called Git because that is what it is.
+            if (!gitIntegration) {
+                val resolved = SessionTitleReader.read(id)
+                if (resolved != null && resolved.text != title) {
+                    title = resolved.text
+                    edt { fireTitleChanged() }
+                }
+                // Nothing has NAMED this chat yet — it is showing its opening line. The binary can do better
+                // and it is one request away; see [askForGeneratedTitle].
+                if (resolved?.authored != true) askForGeneratedTitle(resolved?.prompt)
             }
             // Every chat that HAS a tab. The Git conversation is drawn inside the Git view and has none, so
             // recording it here would make the next startup open one for it — undoing the whole point of it
@@ -1401,6 +1439,43 @@ class ClaudeSession(
                     .filterNot { it.gitIntegration }
                     .mapNotNull { it.sessionId },
             )
+        }
+    }
+
+    /**
+     * Asks the binary to name this conversation — once, off the critical path, and never at the cost of the
+     * name it already has.
+     *
+     * **Why the binary and not us.** Naming a conversation is a model's job, and the model is already up: the
+     * `generate_session_title` control request runs inside the live session, so there is no second process, no
+     * credential and no prompt of our own. It persists the answer in its own session file, which is why this
+     * costs one request per chat *ever* rather than one per start — the next launch reads it back as an
+     * authored title (`SessionTitle.authored`) and never gets here.
+     *
+     * **When.** At the end of a turn, from [recordOpenAndTitle]. Not earlier: before the first turn there is
+     * no session id, no prompt on disk and nothing to summarise. Not later than the first turn either — a tab
+     * whose name settles two turns in is a tab the user has already learned to find by position.
+     *
+     * **What it cannot do:** name a subagent. The request carries no agent id and acts on the session that
+     * answers it, so a subtab's title stays what the parent model wrote for it in
+     * `subagents/agent-<id>.meta.json` — which is already model-authored text (see [AgentMeta.label]), and is
+     * the same kind of text this request takes as input.
+     *
+     * Fail-safe by construction: [titleGenerationAsked] is set before the request leaves, so a refusal, a
+     * watchdog timeout or a blank answer costs one attempt and leaves the fallback standing, silently.
+     */
+    private fun askForGeneratedTitle(prompt: String?) {
+        val description = prompt?.takeIf { it.isNotBlank() } ?: return
+        if (titleGenerationAsked) return
+        titleGenerationAsked = true
+        queries.requestGeneratedTitle(description) { generated ->
+            // On the EDT (SessionQueries hops). Cut to tab size by the same rule as the fallback: the length
+            // of a title is not the model's to decide.
+            val named = generated?.let { SessionTitleReader.asTitle(it) } ?: return@requestGeneratedTitle
+            // A rename that landed while this was in flight is the user's word on the matter, and it stands.
+            if (userRenamed || named == title) return@requestGeneratedTitle
+            title = named
+            fireTitleChanged()
         }
     }
 
@@ -1704,11 +1779,17 @@ class ClaudeSession(
         return ok
     }
 
-    /** Renames the current session (E5): tells the binary, updates the tab title, notifies listeners. */
+    /**
+     * Renames the current session (E5): tells the binary, updates the tab title, notifies listeners.
+     *
+     * This is the top of the order of authority, and [userRenamed] is what keeps it there: a generated title
+     * still in flight when the user types one must not land on top of it.
+     */
     fun renameSession(title: String) {
         val trimmed = title.trim()
         if (trimmed.isBlank()) return
         if (isRunning()) write(ControlProtocol.renameSessionRequest(ControlProtocol.newRequestId(), trimmed))
+        userRenamed = true
         this.title = trimmed
         edt { fireTitleChanged() }
     }
@@ -2581,9 +2662,11 @@ class ClaudeSession(
         // Default-cancel any pending MCP elicitation cards while the process is still alive (mirrors stop()).
         cancelPendingElicitations()
         diffs.clearReviewDiffs()
-        // EOF first (lets the binary exit cleanly) then destroy the tree — same order as stop().
-        process?.closeStdin()
-        process?.destroy()
+        // EOF then destroy the tree, and NOT on this thread. `dispose()` is what a closed tab runs
+        // ([ChatTabsPanel.close] → [ChatSessionManager.remove]), i.e. the EDT, and killing a process tree
+        // there is what made closing a chat freeze the IDE — see [ClaudeProcess.terminate]. Same one door as
+        // stop(), so the order can no longer be spelled out twice and drift.
+        process?.terminate()
         process = null
         // Release any in-flight control callbacks so nothing is left waiting after the tab is gone.
         controlClient.failAll("process gone")
@@ -2622,6 +2705,14 @@ class ClaudeSession(
                 "renewed when a session starts, but a running one cannot pick up the new token — so this turn " +
                 "did not complete, and sending it again will fail the same way. Close this chat and open it " +
                 "again to continue."
+
+        /**
+         * What a `/btw` gets when the binary refuses it, answers nothing, or never answers at all.
+         *
+         * A question with no reply under it reads as a question the plugin forgot about, which is precisely the
+         * defect this path was rewritten to end. A stated non-answer is a worse answer and a better transcript.
+         */
+        const val SIDE_QUESTION_UNANSWERED = "↩ The side question was not answered."
 
         /** How long to wait for a reply to a host-initiated control request before failing it (watchdog). */
         const val CONTROL_TIMEOUT_SECONDS = 30L

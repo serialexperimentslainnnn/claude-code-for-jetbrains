@@ -69,6 +69,20 @@ class SessionQueries(
     fun requestBinaryVersion(onResult: (JsonObject?) -> Unit) = ask(Asks.BINARY_VERSION, onResult)
 
     /**
+     * Asks the binary to name this conversation from [description], and to persist the name in its own
+     * session file. Null when it refused, timed out, or answered blank — the caller keeps whatever it had.
+     */
+    fun requestGeneratedTitle(description: String, onResult: (String?) -> Unit) =
+        ask(Asks.generateTitle(description), onResult)
+
+    /**
+     * `/btw` — asks [question] alongside the conversation and hands back the answer. Null when the binary
+     * refused, timed out, or answered nothing.
+     */
+    fun askSideQuestion(question: String, onResult: (String?) -> Unit) =
+        ask(Asks.sideQuestion(question), onResult)
+
+    /**
      * Rewind tracked files to the state at [userMessageId] (a turn anchor). With [dryRun] the binary only
      * reports feasibility without touching files.
      */
