@@ -259,9 +259,9 @@ not on screen — a collapsed tool window, or another tab selected — so a limi
 another device, and the bars went on showing the last figure they happened to catch until something made you
 send a message. They now refresh every 30 seconds regardless of what you are looking at.
 
-**And the bars say how long each window has left** — `Reset time: 4h 18m`, right under each one. 90% with
-eight minutes to go and 90% with six hours to go are not the same situation, and until now only the
-dashboard told you which one you were in.
+**And the bars say how long each window has left** — `4h 18m`, right after each percentage, on that window's
+own line. 90% with eight minutes to go and 90% with six hours to go are not the same situation, and until now
+only the dashboard told you which one you were in.
 
 ## v5.1.0 — 2026-08-10
 

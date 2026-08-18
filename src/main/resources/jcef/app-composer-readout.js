@@ -117,16 +117,18 @@
       // not, because a window reported at 103% is exactly the number the user needs to see.
       var fill = h('i', { class: usageLevel(win.pct) });
       fill.style.width = Math.max(0, Math.min(100, win.pct)) + '%';
-      // How long the window has left, on its OWN line under the bar. A percentage without it says how much is
-      // spent but not whether that matters: 90% with eight minutes to go and 90% with six hours to go are
-      // different situations, and only the dashboard was answering that. Under the bar rather than beside it
-      // because the bar row is already three items wide per window — a fourth turned the countdown into the
-      // first thing to be squeezed out, which is the one case where it matters most.
+      // How long the window has left, BESIDE its own percentage rather than on a line of its own. A percentage
+      // without it says how much is spent but not whether that matters: 90% with eight minutes to go and 90%
+      // with six hours to go are different situations. It had a row to itself, under the bars, and that row
+      // cost the strip a whole line to repeat the word "Reset time:" three times — so the countdown is now the
+      // last item of its window's own line, where it reads as the qualifier it is, and the strip is one row
+      // shorter. The label it used to need is gone with the row: next to `72.0%`, `3h 2m` is unambiguous, and
+      // the spelled-out form is still in the cell's `title` for anyone who wants it.
       var reset = CC.resetInShort(win.resetsAt);
       // ONE cell holds the bar AND its countdown, which is what makes the two inseparable rather than merely
       // adjacent. Whatever hides a column — today the narrow-window fold, tomorrow something else — acts on
       // cells, so it cannot take a window's bar and leave the countdown that qualifies it, or the reverse: a
-      // "Reset time: 1h 30m" sitting under somebody else's bar is worse than no countdown at all.
+      // countdown belonging to somebody else's bar is worse than no countdown at all.
       var item = h(
         'div',
         {
@@ -138,15 +140,15 @@
           { class: 'ub-row' },
           h('span', { class: 'ub-label', text: label }),
           h('span', { class: 'ub-track' }, fill),
-          h('span', { class: 'ub-pct', text: pct })
+          h('span', { class: 'ub-pct', text: pct }),
+          // ALWAYS appended, and EMPTY when the window carries no reset time. The emptiness is the
+          // load-bearing half: a filler like `—` or `n/a` is a value, and the one reading anyone would give it
+          // here is "resets now". With no text the span produces no box at all, so it is absent content to a
+          // screen reader and nothing on screen — the countdown simply does not exist for that window, which
+          // is what it should say.
+          h('span', { class: 'ub-reset', text: reset })
         )
       );
-      // ALWAYS appended, and EMPTY when the window carries no reset time. The emptiness is the load-bearing
-      // half: a filler like `—` or `n/a` is a value, and the one reading anyone would give it here is
-      // "resets now". With no text the span produces no line box at all, so it is absent content to a screen
-      // reader and nothing on screen — the countdown line simply does not exist for that window, which is
-      // what it should say.
-      item.appendChild(h('span', { class: 'ub-reset', text: reset ? 'Reset time: ' + reset : '' }));
       host.appendChild(item);
       shown++;
     }
