@@ -106,6 +106,19 @@ object ForeignTerritory {
      * Getting this wrong is not a near miss: FOREIGN denies **every** caller regardless of trust and has no
      * override, so a misread comment or expression refuses an ordinary edit or an ordinary command outright.
      *
+     * **A third route into the same mistake is closed upstream, in [GuardPaths.normalize], and cannot be closed
+     * here.** A regex literal opens with a separator and an escape, so translating `\` to `/` manufactured a
+     * `//` prefix out of a value that never carried one; the prefix is now taken from the spelling the caller
+     * wrote. What that leaves behind is one spelling this rule genuinely cannot judge: a regex whose escapes are
+     * themselves doubled for a shell, `\\btype\\s*` and its relatives, is character-for-character a UNC host and
+     * share, and the raw form of a command must keep reaching this rule because that is the only form a
+     * `cmd.exe` or PowerShell UNC argument survives in (a POSIX shell's is covered by
+     * [CommandRules.deobfuscate]). **Do not close it with a legal-name test on the share.** Microsoft's reserved
+     * set (*Naming Files, Paths, and Namespaces*) makes the two characters that would discriminate `*` and `:`,
+     * and both are load-bearing elsewhere: `*` is an ordinary glob against a real share, and `:` opens an NTFS
+     * alternate data stream — so refusing a component that contains either would relax a genuine DENY and hand
+     * back a known Windows path-filter evasion, for a false positive one spelling wide.
+     *
      * The Win32 device / extended-length namespace (`\\?\UNC\server\share`, `\\?\C:\dir`, `\\.\pipe\x`) has no
      * hostname to check, and is kept foreign as a whole: `\\?\UNC\…` IS remote, and raw devices are not agentic
      * development either.
