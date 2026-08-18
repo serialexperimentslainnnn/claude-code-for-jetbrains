@@ -74,12 +74,12 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `JcefPlanData.planJson` | fun | `JcefPlanData.kt:21` |  |
 | `JcefSessionData` | object | `JcefSessionData.kt:56` | Serializes a [ClaudeSession] into the `cc.session` dashboard payload consumed by `app-session.js`. |
 | `JcefSessionData.sessionJson` | fun | `JcefSessionData.kt:87` | The dashboard payload. |
-| `JcefSettingsMenu` | object | `JcefSettingsMenu.kt:42` | The composer's ⚙ menu: the settings worth changing without leaving the chat. |
-| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:59` | The menu for [session]'s chat. |
-| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:62` | The menu, in the order it is drawn. |
-| `JcefSettingsMenu.apply` | fun | `JcefSettingsMenu.kt:87` | Applies [key] to the settings document, or answers false when this build does not know it. |
-| `JcefSettingsMenu.applyToSession` | fun | `JcefSettingsMenu.kt:103` | Mirrors a model / effort / permission-mode row onto the running session, and does nothing for any other key. |
-| `JcefSettingsMenu.alwaysAllowTool` | fun | `JcefSettingsMenu.kt:132` | `always:Bash` → `Bash`; null for any other key, and for a name outside [ToolNaming.BUILTIN_TOOLS]. |
+| `JcefSettingsMenu` | object | `JcefSettingsMenu.kt:48` | The composer's ⚙ menu: the settings worth changing without leaving the chat. |
+| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:65` | The menu for [session]'s chat. |
+| `JcefSettingsMenu.json` | fun | `JcefSettingsMenu.kt:68` | The menu, in the order it is drawn. |
+| `JcefSettingsMenu.apply` | fun | `JcefSettingsMenu.kt:93` | Applies [key] to the settings document, or answers false when this build does not know it. |
+| `JcefSettingsMenu.applyToSession` | fun | `JcefSettingsMenu.kt:109` | Mirrors a model / effort / permission-mode row onto the running session, and does nothing for any other key. |
+| `JcefSettingsMenu.alwaysAllowTool` | fun | `JcefSettingsMenu.kt:138` | `always:Bash` → `Bash`; null for any other key, and for a name outside [ToolNaming.BUILTIN_TOOLS]. |
 | `JcefState` | object | `JcefState.kt:24` | Serializes a [ClaudeSession]'s composer-relevant runtime state into the JSON payloads the JCEF web layer's … |
 | `JcefState.stateJson` | fun | `JcefState.kt:61` |  |
 | `JcefState.metaJson` | fun | `JcefState.kt:139` |  |

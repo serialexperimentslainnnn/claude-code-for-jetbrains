@@ -22,12 +22,14 @@ counting the seam as if it were a page.
 | `SettingsStore.kt` | Reading and writing that document to the safe. Serialization is generated, not hand-written. |
 | `SecretStore.kt` | Named secret slots in the PasswordSafe, and which of them are exposed to the process as environment. |
 | `Provider.kt` | The model providers and their base URLs. Each provider's API key is its own slot, so no provider can overwrite another's. |
-| `SettingsLaunchEnv.kt` | `effectiveLaunchEnv()` — the environment a launched process actually receives. |
-| `SettingsSensitivePolicy.kt` | The policy handed to `SensitiveGuard`: the credential globs, the guarded roots, the per-rule toggles. |
-| `SettingsExecutionTrust.kt` | The trust-on-open gate for a user-supplied source script or a custom stdio MCP server. |
+| `SettingsLaunchEnv.kt` | `effectiveLaunchEnv()` — the environment a launched process actually receives, and the pre-flight that judges the source script **before** it is sourced. |
+| `SettingsSensitivePolicy.kt` | The policy handed to `SensitiveGuard`: the credential globs, the guarded roots, the disabled-rule set, the declared proxy, the extra blocked domains, **the launch environment a `$VAR` is resolved against**, and the bounded reader scripts are analysed with. |
+| `SourceScriptAudit.kt` | Reads `sourceScript` and runs the guard's rules over it. A finding means it is **not sourced** — a `source` is not a preview, so a warning afterwards warns about something that already happened. |
+| `SettingsExecutionTrust.kt` | The trust-on-open gate for a user-supplied source script or a custom stdio MCP server. Answers *may this run*; `SourceScriptAudit` answers *what is in it*. |
 | `AlwaysAllowTools.kt` | The remembered per-tool approvals, and revoking them. |
-| `SafeAlarm.kt` | Scheduling that does not outlive what it belongs to. |
+| `SafeAlarm.kt` | Saying out loud that the IDE's password safe refused to keep what we asked it to keep — once per run, because it fails on every write. |
 | `LegacyProjectSettings.kt` · `LegacyPermissionMode.kt` | Reading the old `.idea/claude-code.xml` once. |
+| `LegacySecurityToggles.kt` | The one-release fold from the seven `securityBlock*` booleans into `disabledSecurityRules`. Idempotent by necessity — `update {}` applies its block twice — and it never prunes an id it does not recognise, since one can only come from a newer version. |
 | `LegacySettingsNotice.kt` | Telling the user their configuration moved. |
 
 <!-- MAP:GENERATED BEGIN -->
@@ -47,6 +49,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `LegacyPermissionMode.SAFE` | val | `LegacyPermissionMode.kt:29` | The mode a refused document ends up with: exactly the one a fresh install has. |
 | `LegacyPermissionMode.weakensSecurity` | fun | `LegacyPermissionMode.kt:52` | True when [wire] would make the plugin ask the user LESS than the default does — the only reason to refuse a value the … |
 | `LegacyProjectSettings` | class | `LegacyProjectSettings.kt:38` | Reads the settings where they used to live — `.idea/claude-code.xml` — and hands them over exactly once. |
+| `LegacySecurityToggles` | object | `LegacySecurityToggles.kt:28` | Adopts the seven `securityBlock*` booleans into [ClaudeSettings.State.disabledSecurityRules], once. |
+| `LegacySecurityToggles.adopt` | fun | `LegacySecurityToggles.kt:78` | Folds any `false` boolean into the disabled-rule set and retires it. |
 | `LegacySettingsNotice` | object | `LegacySettingsNotice.kt:23` | Says out loud that something in a project's old settings file was NOT adopted, and why. |
 | `LegacySettingsNotice.permissionModeRefused` | fun | `LegacySettingsNotice.kt:29` | Reports that [wire] was left out of the migration and the default is in force instead. |
 | `Provider` | class | `Provider.kt:17` | The LLM API provider the `claude` binary talks to. |
@@ -76,7 +80,10 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SettingsStore.mutate` | fun | `SettingsStore.kt:195` | Applies [delta] to what is STORED — read, change, write — and reports whether it reached the safe. |
 | `SettingsStore.loadOrNull` | fun | `SettingsStore.kt:215` | The stored settings, or null when the safe could not be read. |
 | `SettingsStore.migrateFrom` | fun | `SettingsStore.kt:241` | Adopts a legacy per-project state and writes it here, once. |
-| `SettingsStore.exists` | fun | `SettingsStore.kt:274` | Whether a configuration has ever been stored. |
+| `SettingsStore.exists` | fun | `SettingsStore.kt:281` | Whether a configuration has ever been stored. |
+| `SourceScriptAudit` | object | `SourceScriptAudit.kt:40` | Reads the user's environment script and judges it **before it is sourced**, with the same rules the guard applies to … |
+| `SourceScriptAudit.findingIn` | fun | `SourceScriptAudit.kt:57` | The reason this script must not be sourced, or null when it is clean (or absent, or unreadable). |
+| `SourceScriptAudit.refused` | fun | `SourceScriptAudit.kt:74` | Says out loud that the environment script was skipped, and why. |
 
 <!-- MAP:GENERATED END -->
 

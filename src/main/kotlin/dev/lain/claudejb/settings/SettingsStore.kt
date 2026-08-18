@@ -240,7 +240,14 @@ internal object SettingsStore {
     @Synchronized
     fun migrateFrom(legacy: ClaudeSettings.State): Boolean {
         if (exists()) return false // already migrated, or already configured here
-        val adoptable = withoutWeakenedSecurity(legacy)
+        // The legacy XML deserialises into this same State class, so the seven superseded security booleans
+        // arrive by field name and need the same fold the safe's own documents get in [decode].
+        //
+        // ON A COPY, ALWAYS. [withoutWeakenedSecurity] returns the CALLER'S object when it changes nothing, and
+        // that object belongs to a live `PersistentStateComponent` whose file is still on disk here: mutating it
+        // marks the component dirty and invites the platform to write `claude-code.xml` back out — resurrecting,
+        // with our own contents, the very file this migration exists to remove.
+        val adoptable = copyOf(withoutWeakenedSecurity(legacy)).also { LegacySecurityToggles.adopt(it) }
         if (encode(adoptable) == encode(ClaudeSettings.State())) {
             log.info("no legacy settings to migrate (the project carries none)")
             return false
@@ -299,4 +306,8 @@ internal object SettingsStore {
                 readFailed = true // do not let the next save consolidate defaults over this
                 ClaudeSettings.State()
             }
+            // Straight after decoding, so nothing downstream ever sees the superseded shape: the security rules
+            // used to be seven booleans and are now a set of disabled rule names. Idempotent, and it must be —
+            // see [LegacySecurityToggles].
+            .also { LegacySecurityToggles.adopt(it) }
 }

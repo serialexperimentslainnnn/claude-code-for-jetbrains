@@ -14,6 +14,13 @@
  * WHY IT IS STILL A MENU AND NOT THE SETTINGS PAGE IN A POPUP. Ten groups is around seventy rows, and seventy
  * rows behind a scrollbar in a narrow tool window is a worse Settings page, not a quicker one.
  *
+ * IT DRILLS DOWN ONE LEVEL PER PRESS, and one group goes two deep. A row may carry a `sub`, and today only the
+ * security rules do: eleven switches in one flat list is a wall, so they are drawn under their own category —
+ * which is the guard's own grouping, not one this file invents. Everything about that is the same gesture as the
+ * first level (same entry class, same header, same slide, same one-level-out on Escape and Left), because a
+ * second navigation language one press deeper is exactly what the last paragraph of this header refuses. The
+ * whole of the state is `view`, a scalar path: `null`, `group`, or `group␟sub`.
+ *
  * IT DRILLS DOWN, ONE SECTION AT A TIME, and it used to FOLD instead — which is the same idea and behaves
  * nothing like it. An accordion keeps every heading on screen and inserts the opened group's rows between
  * them, so opening `Permission mode` pushes the six groups under it down the screen, past the popup's cap and
@@ -115,10 +122,12 @@
   // reached: a 1.3px outline around a 3px jaw puts two hairlines within a pixel of each other and they merge
   // into a smudge, whereas a solid shape keeps the single feature that says "wrench" — an open U bite in a
   // head twice the width of its shaft — readable. The one negative space is the bite, and a negative space
-  // survives being scaled down where a line does not.
+  // survives being scaled down where a line does not. Drawn straight up (jaw at the top) and rotated -45°
+  // about the viewBox centre, which leans the head to the upper-left — the standard tools-icon tilt — without
+  // redrawing the path.
   var WRENCH =
     '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">' +
-    '<path d="M3.4 3.6 Q3.4 1.6 5.4 1.6 L6.2 1.6 L6.2 4.9 Q6.2 6.3 8 6.3 Q9.8 6.3 9.8 4.9 L9.8 1.6 ' +
+    '<path transform="rotate(-45 8 8)" d="M3.4 3.6 Q3.4 1.6 5.4 1.6 L6.2 1.6 L6.2 4.9 Q6.2 6.3 8 6.3 Q9.8 6.3 9.8 4.9 L9.8 1.6 ' +
     'L10.6 1.6 Q12.6 1.6 12.6 3.6 L12.6 5.4 Q12.6 8.4 9.9 8.9 L9.9 13.1 Q9.9 14.4 8 14.4 ' +
     'Q6.1 14.4 6.1 13.1 L6.1 8.9 Q3.4 8.4 3.4 5.4 Z"/></svg>';
 
@@ -139,42 +148,92 @@
     return it.group != null ? String(it.group) : '';
   }
 
+  /**
+   * The sub-level an entry declares, or `''` when it belongs to its group directly.
+   *
+   * Optional on the wire on purpose: a row with no `sub` behaves exactly as every row did before a third level
+   * existed, so the groups that do not need one are untouched rather than opted out.
+   */
+  function subOf(it) {
+    return it.sub != null ? String(it.sub) : '';
+  }
+
   /** `type` defaults to `check` when the host omits it — that default is part of the contract. */
   function isRadio(it) {
     return String(it.type || 'check') === 'radio';
   }
 
   /**
-   * The groups, in the order the host first mentions them, each with its rows.
+   * Bucket a list by a key, in the order the key is first mentioned.
    *
-   * Built from the payload on every read rather than cached: the host re-pushes the whole list, and a cache
-   * would be a second copy of what a group contains — which is exactly how the panel on screen and the panel
-   * the keyboard walks come to disagree. `hasOwnProperty` and not a truthiness test, because a group called
-   * `constructor` would otherwise find one on the prototype.
+   * `hasOwnProperty` and not a truthiness test, because a bucket called `constructor` would otherwise find one on
+   * the prototype.
    */
-  function groups() {
+  function bucket(list, keyOf) {
     var order = [];
-    var byGroup = {};
-    items().forEach(function (it) {
-      var name = groupOf(it);
-      if (!Object.prototype.hasOwnProperty.call(byGroup, name)) {
-        byGroup[name] = [];
+    var byKey = {};
+    list.forEach(function (it) {
+      var name = keyOf(it);
+      if (!Object.prototype.hasOwnProperty.call(byKey, name)) {
+        byKey[name] = [];
         order.push(name);
       }
-      byGroup[name].push(it);
+      byKey[name].push(it);
     });
     return order.map(function (name) {
-      return { name: name, list: byGroup[name] };
+      return { name: name, list: byKey[name] };
     });
   }
 
-  /** The rows of the section on screen, or `[]` when the root panel is. */
-  function currentGroup() {
-    var found = null;
-    groups().forEach(function (g) {
-      if (g.name === view) found = g;
+  /**
+   * The groups, in the order the host first mentions them, each with its rows — and, for a group whose rows
+   * declare one, its sub-levels.
+   *
+   * `direct` is the rows that named no sub. A group that mixes the two therefore draws its own rows first and its
+   * sub-entries under them, rather than hiding one kind: a row the host emitted and no panel shows is this
+   * repository's signature defect, and it costs three lines to make impossible here.
+   *
+   * Built from the payload on every read rather than cached: the host re-pushes the whole list, and a cache
+   * would be a second copy of what a group contains — which is exactly how the panel on screen and the panel
+   * the keyboard walks come to disagree.
+   */
+  function groups() {
+    return bucket(items(), groupOf).map(function (g) {
+      var bySub = bucket(g.list, subOf);
+      var direct = [];
+      var subs = [];
+      bySub.forEach(function (s) {
+        if (s.name === '') direct = s.list;
+        else subs.push(s);
+      });
+      return { name: g.name, list: g.list, direct: direct, subs: subs };
     });
-    return found;
+  }
+
+  /**
+   * The panel a view path names, or null when the path no longer resolves.
+   *
+   * The path is `group` or `group␟sub`, which keeps `view` a SCALAR — that is what lets `structureSig` stay a
+   * flat string and the whole skip-if-unchanged machinery keep working unmodified. Null is a real answer: a
+   * host push can retire the group you are reading, and the caller then falls back to the root panel instead of
+   * drawing a header with nothing under it.
+   */
+  function panelFor(path) {
+    var parts = String(path).split(SEP);
+    var g = null;
+    groups().forEach(function (x) {
+      if (x.name === parts[0]) g = x;
+    });
+    if (!g) return null;
+    if (parts.length < 2) {
+      return { group: g.name, title: g.name, path: g.name, rows: g.direct, subs: g.subs, list: g.list };
+    }
+    var s = null;
+    g.subs.forEach(function (x) {
+      if (x.name === parts[1]) s = x;
+    });
+    if (!s) return null;
+    return { group: g.name, title: s.name, path: path, rows: s.list, subs: [], list: s.list };
   }
 
   // ---- the button -----------------------------------------------------------
@@ -326,15 +385,20 @@
   }
 
   /**
-   * One section, as a row of the ROOT panel: press it and the popup becomes that section.
+   * One level down, as a row of the panel above it: press it and the popup becomes that panel.
+   *
+   * Used for BOTH a group on the root panel and a sub-level inside a group — same class, same role, same slide,
+   * because they are the same gesture and a second visual language for the second level would be exactly the
+   * drift this file's header paragraph exists to refuse. [path] is what tells them apart, and it is the whole of
+   * the state: `group`, or `group␟sub`.
    *
    * `aria-haspopup="menu"` and no `aria-expanded`, and the pair is the whole difference from the accordion it
    * replaces. `aria-expanded` on a heading promises a region that opens IN PLACE, under the heading, with the
    * rest of the menu still around it — which is what this stopped doing. What it does now is replace the
    * panel, so what it announces is that it leads somewhere.
    */
-  function groupEntry(g) {
-    var name = g.name || 'Settings';
+  function navEntry(path, label, list) {
+    var name = label || 'Settings';
     var row = h(
       'button',
       {
@@ -350,13 +414,13 @@
           click: function (e) {
             e.preventDefault();
             e.stopPropagation(); // never let this reach the document handler that dismisses the menu
-            enterGroup(g.name);
+            enterGroup(path);
           },
         },
       },
       h('span', { class: 'menu-item-label', text: name })
     );
-    if (isDeferred(g.list)) {
+    if (isDeferred(list)) {
       // TEXT inside the row, not a `title` and not a colour: it is part of the row's accessible name, so it
       // is heard as well as seen — and it is on the ENTRY, before you go in, because "these apply to new
       // chats" is what decides whether it is worth going in at all.
@@ -365,7 +429,9 @@
     // The chevron is CSS generated content, hidden from the tree: `aria-haspopup` already says it leads
     // somewhere, and a glyph read out as "black right-pointing pointer" says it worse.
     row.appendChild(h('span', { class: 'menu-group-caret', attrs: { 'aria-hidden': 'true' } }));
-    row.__ccFocusId = 'g' + SEP + g.name;
+    // The focus id carries the WHOLE path, so coming back out of a sub-level lands on the entry you went in
+    // through and not on its group's first row.
+    row.__ccFocusId = 'g' + SEP + path;
     return row;
   }
 
@@ -418,8 +484,8 @@
    * on the section's first row, which is what was pressed for; coming back lands on the ENTRY you came
    * through, not on the top of the list, so a second section is one arrow key away.
    */
-  function enterGroup(name) {
-    view = name;
+  function enterGroup(path) {
+    view = path;
     slide = 'attach-from-right';
     repaint();
     focusRow(rows()[1] || rows()[0]);
@@ -431,9 +497,16 @@
     refreshFromHost();
   }
 
+  /**
+   * Out ONE level: from a sub-level to its group, from a group to the root. Never all the way out in one press.
+   *
+   * That is the submenu behaviour of the ARIA menu pattern, and it is also what keeps Escape honest — the key
+   * that dismisses the popup at the root must not throw away two levels of navigation from inside one.
+   */
   function leaveGroup() {
-    var came = view;
-    view = null;
+    var came = String(view);
+    var cut = came.lastIndexOf(SEP);
+    view = cut < 0 ? null : came.slice(0, cut);
     slide = 'attach-from-left';
     repaint();
     focusRow(rowForId('g' + SEP + came) || rows()[0]);
@@ -473,31 +546,40 @@
    */
   function buildBody() {
     var frag = document.createDocumentFragment();
-    var group = view != null ? currentGroup() : null;
-    if (group) {
-      // Everything the section holds, in one flat run under its header. `role="group"` carries the section's
-      // name to the rows rather than leaving it on the header alone, so a screen reader announces which
-      // section a row belongs to without the reader having to remember what they pressed.
-      //
-      // ITS OWN CLASS, and never `.menu-group-items`. That one is the pill menus' accordion body: the
-      // stylesheet declares it `display: none` and reveals it only under a `.menu-group.open` ancestor, which
-      // this panel does not have and must not grow. Borrowed here, every section opened to a header with
-      // NOTHING under it — the rows were in the DOM, hidden by a rule belonging to a widget this menu stopped
-      // being. jsdom lays nothing out, so the tests were green throughout; that is why the contract for this
-      // is asserted against the stylesheet's TEXT (see settings-menu.test.js).
-      var body = h('div', {
-        class: 'settings-section-items',
-        attrs: {
-          role: 'group',
-          'aria-label': group.name || 'Settings',
-          id: 'settings-group-' + ++groupSeq,
-        },
+    var panel = view != null ? panelFor(view) : null;
+    if (panel) {
+      frag.appendChild(groupHead(panel.title));
+      if (panel.rows.length) {
+        // Everything this level holds directly, in one flat run under its header. `role="group"` carries the
+        // level's name to the rows rather than leaving it on the header alone, so a screen reader announces
+        // which section a row belongs to without the reader having to remember what they pressed.
+        //
+        // ITS OWN CLASS, and never `.menu-group-items`. That one is the pill menus' accordion body: the
+        // stylesheet declares it `display: none` and reveals it only under a `.menu-group.open` ancestor, which
+        // this panel does not have and must not grow. Borrowed here, every section opened to a header with
+        // NOTHING under it — the rows were in the DOM, hidden by a rule belonging to a widget this menu stopped
+        // being. jsdom lays nothing out, so the tests were green throughout; that is why the contract for this
+        // is asserted against the stylesheet's TEXT (see settings-menu.test.js).
+        var body = h('div', {
+          class: 'settings-section-items',
+          attrs: {
+            role: 'group',
+            'aria-label': panel.title || 'Settings',
+            id: 'settings-group-' + ++groupSeq,
+          },
+        });
+        panel.rows.forEach(function (it) {
+          // The GROUP name, not the panel's title: a radio group is the host's and can span sub-levels, so
+          // `clearGroup` has to resolve it by the same name the host used.
+          body.appendChild(settingRow(it, panel.group));
+        });
+        frag.appendChild(body);
+      }
+      // One level further down, when this level has one. Drawn after the direct rows so a mixed level reads
+      // top-to-bottom: what is here, then where else you can go.
+      panel.subs.forEach(function (s) {
+        frag.appendChild(navEntry(panel.path + SEP + s.name, s.name, s.list));
       });
-      group.list.forEach(function (it) {
-        body.appendChild(settingRow(it, group.name));
-      });
-      frag.appendChild(groupHead(group.name));
-      frag.appendChild(body);
       return frag;
     }
     var all = groups();
@@ -513,7 +595,7 @@
       );
     } else {
       all.forEach(function (g) {
-        frag.appendChild(groupEntry(g));
+        frag.appendChild(navEntry(g.name, g.name, g.list));
       });
     }
     frag.appendChild(h('div', { class: 'menu-sep', attrs: { role: 'separator' } }));
@@ -532,13 +614,16 @@
    */
   function structureSig() {
     var list = items();
-    // WHICH PANEL is part of the structure: the same payload draws the list of sections or one section's
-    // rows, so without this a push landing after a drill-down would compare equal and the panel would never
-    // be redrawn.
+    // WHICH PANEL is part of the structure: the same payload draws the list of sections, one section's
+    // sub-levels or one sub-level's rows, so without this a push landing after a drill-down would compare equal
+    // and the panel would never be redrawn. `view` is a scalar path (`group␟sub`) precisely so it can sit in a
+    // flat signature like this.
     var sig = (view == null ? '' : view) + '|' + list.length + '|';
     for (var i = 0; i < list.length; i++) {
       var it = list[i];
-      var f = [groupOf(it), it.key, labelOf(it), isRadio(it) ? 'r' : 'c', it.deferred ? '1' : '0'];
+      // `sub` decides which panel a row is drawn on, so a push that moved a row to another sub-level and
+      // changed nothing else has to be recognised as a structural change.
+      var f = [groupOf(it), subOf(it), it.key, labelOf(it), isRadio(it) ? 'r' : 'c', it.deferred ? '1' : '0'];
       sig += f.join(SEP) + '|';
     }
     return sig;

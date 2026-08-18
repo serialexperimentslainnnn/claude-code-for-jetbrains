@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.settings.ClaudeSettings
 import kotlinx.serialization.json.JsonObject
@@ -8,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -257,10 +259,6 @@ class JcefSettingsMenuTest {
     fun `the plain switches write their own field and nothing else`() {
         val state = ClaudeSettings.State()
 
-        assertTrue(write(state, "blockDangerous", false))
-        assertFalse(state.securityBlockDangerousCommands)
-        assertTrue(state.securityBlockCredentials)
-
         assertTrue(write(state, "ideMcp", true))
         assertTrue(state.ideMcpEnabled)
 
@@ -269,5 +267,49 @@ class JcefSettingsMenuTest {
 
         assertTrue(write(state, "reduceMotion", true))
         assertTrue(state.reduceMotion)
+    }
+
+    // ── the guard's rules: a verified `rule:` suffix, and the polarity is inverted ────────────────────────
+    // The row is ON when the rule is ENFORCED, and the stored field is the set of rules switched OFF — so an
+    // `on:false` ADDS to it. That inversion is the one thing about this group that can be got backwards, and
+    // getting it backwards means the menu disables the rule the user just switched on.
+
+    @Test
+    fun `turning a rule off adds it to the disabled set, and on takes it out again`() {
+        val state = ClaudeSettings.State()
+
+        assertTrue(write(state, "rule:TEMP_DIR", false))
+        assertEquals("TEMP_DIR", state.disabledSecurityRules)
+
+        assertTrue(write(state, "rule:CREDENTIALS", false))
+        // Canonical order, not toggle order: the Settings page rebuilds this same field from its checkboxes and
+        // compares the two spellings to decide whether anything was edited.
+        assertEquals("CREDENTIALS,TEMP_DIR", state.disabledSecurityRules)
+
+        assertTrue(write(state, "rule:TEMP_DIR", true))
+        assertEquals("CREDENTIALS", state.disabledSecurityRules)
+    }
+
+    @Test
+    fun `a rule id outside the catalogue is refused and writes nothing`() {
+        val state = ClaudeSettings.State().apply { disabledSecurityRules = "TEMP_DIR" }
+
+        assertFalse(write(state, "rule:NOT_A_RULE", false))
+        assertFalse(write(state, "rule:temp_dir", false)) // ids are exact: a wire format, not a label
+        assertEquals("TEMP_DIR", state.disabledSecurityRules)
+    }
+
+    @Test
+    fun `every rule of every category has a row, and each carries its category as its sub-level`() {
+        val rows = menu().filter { it.str("group") == "Security" }
+        assertEquals(SecurityRule.entries.size, rows.size)
+        rows.forEach { row ->
+            val rule = SecurityRule.from(row.str("key").removePrefix("rule:"))
+            assertNotNull(rule, row.toString())
+            assertEquals(rule!!.category.label, row.str("sub"))
+            assertEquals(rule.label, row.str("label"))
+            // Nothing disabled in a default state, so every row is ON — the empty set IS the hard lock.
+            assertTrue(row.bool("on"), row.str("key"))
+        }
     }
 }

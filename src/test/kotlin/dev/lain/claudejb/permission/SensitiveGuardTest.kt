@@ -27,13 +27,27 @@ import kotlin.system.measureTimeMillis
 class SensitiveGuardTest {
 
     private val home = "/home/me"
+
+    /**
+     * The scripts this fixture's [SensitiveGuard.Policy.fileReader] can serve, keyed by the path the guard will
+     * ask for (absolute, anchored at the project root).
+     *
+     * A reader is part of the fixture rather than an extra, because without one every `./gradlew` is a card: the
+     * guard's answer to a script it cannot read is ASK, on purpose, so "ordinary development never trips the lock"
+     * is only a true claim in the configuration the plugin actually ships — one that CAN read them.
+     */
+    private val scripts = mutableMapOf(
+        "/home/me/proj/gradlew" to "#!/bin/sh\nexec java -jar gradle/wrapper/gradle-wrapper.jar \"$@\"\n",
+    )
+
     private val policy = SensitiveGuard.Policy(
         globs = CredentialPaths.SENSITIVE_GLOBS,
         home = home,
         currentUser = "me",
         guardedRoots = listOf("/mnt/share", "/net/nfs"),
-        blockForeignWslMounts = false,
+        wslHost = false,
         projectRoot = "/home/me/proj",
+        fileReader = { path -> scripts[path] },
     )
 
     private fun read(path: String) = buildJsonObject { put("file_path", path) }
@@ -103,7 +117,7 @@ class SensitiveGuardTest {
 
     @Test
     fun `under WSL every mount other than mnt-c is foreign`() {
-        val wsl = policy.copy(blockForeignWslMounts = true, projectRoot = "/mnt/c/dev/proj")
+        val wsl = policy.copy(wslHost = true, projectRoot = "/mnt/c/dev/proj")
         assertEquals(Verdict.DENY, v("Read", read("/mnt/d/other/file"), wsl))
         assertEquals(Verdict.DENY, v("Read", read("/mnt/z/networkdrive/x"), wsl))
         assertEquals(Verdict.DENY, v("Read", read("/mnt/wsl/x"), wsl))
@@ -112,55 +126,64 @@ class SensitiveGuardTest {
     }
 
     @Test
-    fun `my own home and my own project are never foreign`() {
-        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/notes.md")))
+    fun `my own home and my own project are never foreign — but my home outside the project now asks`() {
+        // Never FOREIGN — own home is an exempt root for that rule. It is OUTSIDE_PROJECT now: closing exactly
+        // this gap (an agent reading anywhere in the user's own filesystem, unasked) is what that rule is for.
+        assertEquals(Verdict.ASK, v("Read", read("/home/me/notes.md")))
         assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/src/Foo.kt")))
     }
 
-    // ── provenance: the DESTINATION of a call is its path argument, never the text it carries ─────────────
-    // A tool input is walked leaf by leaf, so an `Edit`'s `old_string` is offered to the same rules as its
-    // `file_path`. It must not be judged as a location: prose, code and documentation legitimately NAME paths
-    // that belong to someone else, and FOREIGN denies every caller with no override — so reading a mention as a
-    // destination refuses an ordinary edit to a project file outright. A command is the deliberate asymmetry:
-    // there the path really does live inside the text, so that text is still tokenised and still judged.
+    // ── provenance: every string leaf is a location candidate, one exception only ────────────────────────
+    // A tool input is walked leaf by leaf ([ToolInputScanner.pathCandidates]) — `old_string`/`new_string`/
+    // `content` included — so an `Edit`'s replaced text is judged exactly like its `file_path`. The one
+    // exception is a command key, tokenised because the path there genuinely lives inside the text; there is
+    // no second exception for payload keys. A single-line value that names or contains a sensitive location
+    // therefore trips the rule that fits it, same as if it were the call's own destination.
 
     @Test
-    fun `an Edit that merely MENTIONS another user's home in its text is not foreign territory`() {
+    fun `an Edit whose text NAMES another user's home is foreign territory`() {
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/README.md")
             put("old_string", "logs are written to /home/bob/.cache/app")
             put("new_string", "logs are written to /home/bob/.cache/app (override with LOG_DIR)")
         }
-        assertEquals(Verdict.ALLOW, v("Edit", input))
+        assertEquals(Verdict.DENY, v("Edit", input))
     }
 
     @Test
-    fun `an Edit whose replaced text IS a foreign path is still not foreign — a quote is not a destination`() {
-        // The narrow half of the same bug, and the one an anchored recogniser cannot reach: a documentation line
-        // that consists of nothing but a path is a payload, not a location.
+    fun `an Edit whose replaced text IS a foreign path is foreign too`() {
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/README.md")
             put("old_string", "/home/bob/.cache/app")
             put("new_string", "/home/bob/.cache/app2")
         }
-        assertEquals(Verdict.ALLOW, v("Edit", input))
+        assertEquals(Verdict.DENY, v("Edit", input))
     }
 
     @Test
-    fun `a credential path quoted in replaced text is not a read of it either`() {
+    fun `a credential path quoted in replaced text still asks, the same as reading it`() {
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/docs/SETUP.md")
             put("old_string", "/home/me/.ssh/id_rsa")
             put("new_string", "~/.ssh/id_ed25519")
         }
-        assertEquals(Verdict.ALLOW, v("Edit", input))
+        assertEquals(Verdict.ASK, v("Edit", input))
     }
 
     @Test
-    fun `a Write whose CONTENT quotes a foreign path still writes only where file_path says`() {
+    fun `a Write whose CONTENT names a foreign path is foreign territory too`() {
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/notes.md")
             put("content", "see /home/bob/.ssh/id_rsa for the old key")
+        }
+        assertEquals(Verdict.DENY, v("Write", input))
+    }
+
+    @Test
+    fun `a multi-line blob is not walked as a candidate — only a single-line leaf is`() {
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/notes.md")
+            put("content", "line one mentions /home/bob/x\nline two does not")
         }
         assertEquals(Verdict.ALLOW, v("Write", input))
     }
@@ -230,6 +253,42 @@ class SensitiveGuardTest {
         assertEquals(Verdict.DENY, v("mcp__idea__execute_terminal_command", bash("gpg --export-secret-keys")))
     }
 
+    @Test
+    fun `an offensive tool name mentioned but not run does not trip the lock`() {
+        // Same failure class isUnc and substituteAssignments each cost a live incident over: a bare `\b(name)\b`
+        // match fires on the NAME anywhere in the text, not on the tool actually being invoked. G1 anchors the
+        // four "recognised offensive tooling" patterns to command-start position instead.
+        listOf(
+            "git commit -m 'add a parser for nmap output'",
+            "grep -rn hydra src/",
+            "cat notes-on-sqlmap.md",
+            "ls /opt/tools/hashcat-wordlists",
+        ).forEach { assertEquals(Verdict.ALLOW, v("Bash", bash(it)), it) }
+        // …and one that IS a card, for a reason that has nothing to do with the tool name it mentions: the `>`
+        // writes a file with no diff to review (SHELL_FILE_WRITE). Kept here, next to its neighbours, so the
+        // distinction is visible rather than looking like an inconsistency.
+        assertEquals(Verdict.ASK, v("Bash", bash("echo 'do not run msfconsole in prod' > README")))
+    }
+
+    @Test
+    fun `the same offensive tool actually run still ASKs or DENIES, anchored or not`() {
+        listOf(
+            "nmap -sV 10.0.0.0/24", "sudo nmap -sV 10.0.0.0/24", "/usr/bin/nmap -sV 10.0.0.0/24",
+            "cd /tmp && nmap -sV 10.0.0.0/24", "echo hi; nmap -sV 10.0.0.0/24", "echo hi | nmap -sV 10.0.0.0/24",
+            "sqlmap -u https://t", "hashcat -m 0 h.txt", "hydra -l root -P list ssh://h",
+        ).forEach { assertEquals(Verdict.ASK, v("Bash", bash(it)), it) }
+        assertEquals(Verdict.DENY, v("mcp__x__y", bash("nmap -sV 10.0.0.0/24")))
+    }
+
+    @Test
+    fun `a command carried under stdin, cmdline or entrypoint is still scanned`() {
+        // G4: COMMAND_KEY gained these three so an MCP exec tool spelling its argument this way is not a gap.
+        assertEquals(Verdict.ASK, v("Bash", buildJsonObject { put("stdin", "gpg --export-secret-keys") }))
+        assertEquals(Verdict.ASK, v("Bash", buildJsonObject { put("cmdline", "gpg --export-secret-keys") }))
+        assertEquals(Verdict.ASK, v("Bash", buildJsonObject { put("entrypoint", "gpg --export-secret-keys") }))
+        assertEquals(Verdict.DENY, v("mcp__x__y", buildJsonObject { put("stdin", "gpg --export-secret-keys") }))
+    }
+
     // ── what it must NOT do — or it gets switched off ────────────────────────────────────────────────────
 
     @Test
@@ -238,6 +297,9 @@ class SensitiveGuardTest {
             "Read" to read("/home/me/proj/src/main/kotlin/Foo.kt"),
             "Read" to read("/home/me/proj/README.md"),
             "Edit" to read("/home/me/proj/build.gradle.kts"),
+            // A build wrapper is a SCRIPT, so the guard reads it and judges what is inside; this one does nothing
+            // a rule objects to, so it runs unasked. That is the whole point of analysing instead of refusing —
+            // with no reader configured the honest answer would be a card, which is what `scripts` is here for.
             "Bash" to bash("./gradlew test"),
             "Bash" to bash("git status && git commit -m 'fix: env parsing'"),
             "Bash" to bash("npm run build"),
@@ -309,59 +371,69 @@ class SensitiveGuardTest {
         assertTrue(ForeignTerritory.isUnc("""\\file-srv_01.corp.example/share""")) // and carries -, _ and dots
         assertTrue(ForeignTerritory.isUnc("""\\?\UNC\server\share\x""")) // Win32 spelling of the same remote path
         assertFalse(ForeignTerritory.isUnc("/home/me/x"))
-        assertFalse(ForeignTerritory.isUnc("///etc")) // not a host
-        assertFalse(ForeignTerritory.isUnc("//server")) // a host with no share names no resource
+        assertFalse(ForeignTerritory.isUnc("///etc")) // third char is another separator — not a host at all
+        assertTrue(ForeignTerritory.isUnc("//server")) // no share required: a doubled separator + a non-blank,
+        // whitespace-free segment is enough — narrower recognisers exist and are not this one, by design.
     }
 
-    // ── real incident: an ordinary `//` line comment is not a UNC path ────────────────────────────────────
-    // A JS/C/Kotlin comment line ("// see below") starts with `//` just like `\\server\share` does after
-    // backslash normalization, and the old isUnc() only checked "third char isn't another slash", which a
-    // comment's leading space trivially satisfies. That misclassified an everyday Edit as FOREIGN territory — a
-    // DENY with no opt-out, even though Edit is a fully trusted agent tool (FOREIGN denies regardless of trust).
-    // Two independent things now stop it and both are worth keeping: the Edit's payload is no longer offered as
-    // a location at all, and the recogniser itself no longer reads a comment as a host — the second is what
-    // still holds for a comment reaching the rule from anywhere else, so it is asserted on its own below.
+    // A comment's own leading space is what keeps it out: the segment right after `//` is the whole rest of
+    // the string up to the next `/`, and a comment almost always puts a space there.
     @Test
-    fun `a line comment starting with slash-slash is not mistaken for a UNC path`() {
+    fun `a line comment starting with slash-slash is not mistaken for a UNC path, IF it has a space`() {
         assertFalse(ForeignTerritory.isUnc("// a plain comment explaining something"))
-        assertFalse(ForeignTerritory.isUnc("// jump-to-code links (jb://open)"))
+    }
+
+    // A comment with NO space after `//` — a license header, a directive, `//nolint` — reads exactly like a
+    // UNC share, and nothing here tells them apart. Edit is a trusted agent tool and FOREIGN denies every
+    // caller regardless of trust, so this is a hard block with no override on an ordinary source edit.
+    @Test
+    fun `a directive-style comment with no space after slash-slash reads as a UNC share`() {
+        assertTrue(ForeignTerritory.isUnc("//nolint:unused"))
+        val input = buildJsonObject {
+            put("file_path", "/home/me/proj/src/App.kt")
+            put("old_string", "//nolint:unused")
+            put("new_string", "//nolint:unused // reviewed")
+        }
+        assertEquals(Verdict.DENY, v("Edit", input))
     }
 
     @Test
-    fun `editing a comment line is ALLOWED, not denied as foreign territory`() {
+    fun `editing a spaced comment line asks — it is now an outside-project candidate, not foreign`() {
+        // "// jump-to-code links (jb://open)" is not UNC (the segment after // has whitespace), but its whole
+        // value starts with `/` and resolves nowhere under the project — Category.OUTSIDE_PROJECT, not FOREIGN.
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/src/App.kt")
             put("old_string", "// jump-to-code links (jb://open)")
             put("new_string", "// jump-to-code links (jb://open), revised")
         }
-        assertEquals(Verdict.ALLOW, v("Edit", input))
+        assertEquals(Verdict.ASK, v("Edit", input))
     }
 
-    // ── the same rule, one layer down: a `//` fragment of ORDINARY CODE is not a UNC path either ──────────
     // A command-shaped value is tokenised on shell separators — whitespace, quotes, `(`, `)`, `=`, `;`, `|` —
     // and every token is then judged as a path candidate. Integer division immediately after one of those
-    // separators therefore yields tokens made of `//` and an operand: `len(xs)//2` → `//2`, `xs[len(xs)//2]` →
-    // `//2]`, `sum(v)//len(v)` → `//len`. None names a host and a share, so none is remote — and getting this
-    // wrong is not a near miss, because FOREIGN denies every caller with no override and no way to override it.
+    // separators yields tokens made of `//` and an operand: `len(xs)//2` → `//2`, `xs[len(xs)//2]` → `//2]`.
+    // None of them contains whitespace, so [ForeignTerritory.isUnc] reads every one of them as a share — this
+    // is the mechanical, reproducible cost of the restored rule having no hostname-shape requirement: ordinary
+    // Python integer division inside a `Bash` call is now FOREIGN, DENY, no override, for every caller.
     @Test
-    fun `an integer-division fragment of a command is not mistaken for a UNC path`() {
-        assertFalse(ForeignTerritory.isUnc("//]"))
-        assertFalse(ForeignTerritory.isUnc("//${'$'}")) // `$` is not a hostname character, and there is no share
-        assertFalse(ForeignTerritory.isUnc("//2]"))
-        assertFalse(ForeignTerritory.isUnc("//2")) // no share
-        assertFalse(ForeignTerritory.isUnc("//len")) // no share, however hostname-shaped the first segment is
-        assertFalse(ForeignTerritory.isUnc("//TODO:fix/x")) // `:` is not a hostname character
+    fun `an integer-division fragment of a command now reads as a UNC share`() {
+        assertTrue(ForeignTerritory.isUnc("//2]"))
+        assertTrue(ForeignTerritory.isUnc("//2"))
+        assertTrue(ForeignTerritory.isUnc("//len"))
+        assertTrue(ForeignTerritory.isUnc("//${'$'}")) // `$` alone is still a non-blank, whitespace-free segment
+        assertTrue(ForeignTerritory.isUnc("//TODO:fix/x")) // `:` is whitespace-free too
     }
 
     @Test
-    fun `a command doing integer division is ALLOWED, not denied as foreign territory`() {
-        assertEquals(Verdict.ALLOW, v("Bash", bash("python3 -c \"print(xs[len(xs)//2])\"")))
-        assertEquals(Verdict.ALLOW, v("Bash", bash("python3 -c 'print(sum(v)//len(v))'")))
+    fun `a command doing integer division is now DENIED as foreign territory`() {
+        assertEquals(Verdict.DENY, v("Bash", bash("python3 -c \"print(xs[len(xs)//2])\"")))
+        assertEquals(Verdict.DENY, v("Bash", bash("python3 -c 'print(sum(v)//len(v))'")))
     }
 
     // The third member of that same family — a regex literal read as a network share — is one file over, in
     // [SensitiveGuardUncShapeTest]: it is a subject of its own, and this class is already at detekt's size
-    // ceiling.
+    // ceiling. Its own manufactured-`//`-prefix fix ([GuardPaths.normalize]) is untouched by any of the above,
+    // which is why those assertions still hold.
 
     // ── commandText: what the transcript renders as the call's own copyable code block ─────────────────────
 
@@ -415,26 +487,25 @@ class SensitiveGuardTest {
         assertEquals(Verdict.DENY, v("mcp__filesystem__read_file", read("/home/me/.ssh/id_rsa")))
     }
 
-    // ── per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security) ─────────────────────────────────────
-    // Defaults reproduce the original hard lock exactly (every toggle true). Disabling a rule NEVER silently
-    // ALLOWs a hit — detection always runs; it only downgrades the outcome to ASK, for every caller, so an
-    // untrusted (MCP/Skill) caller that used to be hard-denied now gets a card instead, never a free pass.
+    // ── per-rule enforcement (Settings ▸ Claude Code ▸ Security) ─────────────────────────────────────────────
+    // The DEFAULT is that nothing is disabled, so the default is the original hard lock exactly — and that is
+    // now a property of the empty set rather than of seven booleans somebody has to remember to add. Disabling a
+    // rule NEVER silently ALLOWs a hit — detection always runs; it only downgrades the outcome to ASK, for every
+    // caller, so an untrusted (MCP/Skill) caller that used to be hard-denied now gets a card instead.
 
     @Test
-    fun `defaults reproduce the original hard lock exactly`() {
+    fun `the default policy enforces every rule there is`() {
         val defaults = SensitiveGuard.Policy()
-        assertTrue(defaults.enforceCredentials)
-        assertTrue(defaults.enforceDangerousCommands)
-        assertTrue(defaults.enforceTempDirs)
-        assertTrue(defaults.enforceForeignOtherUserHome)
-        assertTrue(defaults.enforceForeignNetworkMounts)
-        assertTrue(defaults.enforceForeignWslMounts)
+        assertEquals(emptySet<SecurityRule>(), defaults.disabledRules)
+        // The point of storing the DISABLED set: this assertion cannot go stale when a rule is added, which is
+        // exactly what a per-rule `enforceX` boolean could not promise.
+        SecurityRule.entries.forEach { assertFalse(it in defaults.disabledRules, it.name) }
     }
 
     @Test
     fun `disabling the credential rule downgrades DENY to ASK for an untrusted caller, never to ALLOW`() {
         assertEquals(Verdict.DENY, v("mcp__x__y", read("/home/me/.ssh/id_rsa")))
-        val relaxed = policy.copy(enforceCredentials = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.CREDENTIALS))
         assertEquals(Verdict.ASK, v("mcp__x__y", read("/home/me/.ssh/id_rsa"), relaxed))
         // A trusted tool already asked either way — unaffected by this toggle.
         assertEquals(Verdict.ASK, v("Read", read("/home/me/.ssh/id_rsa"), relaxed))
@@ -443,17 +514,17 @@ class SensitiveGuardTest {
     @Test
     fun `disabling the dangerous-command rule downgrades DENY to ASK for an untrusted caller`() {
         assertEquals(Verdict.DENY, v("mcp__x__y", bash("mimikatz")))
-        val relaxed = policy.copy(enforceDangerousCommands = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.SECRET_DUMPING_COMMANDS))
         assertEquals(Verdict.ASK, v("mcp__x__y", bash("mimikatz"), relaxed))
     }
 
     @Test
     fun `disabling the foreign-other-user-home rule downgrades DENY to ASK for EVERY caller`() {
         assertEquals(Verdict.DENY, v("Read", read("/home/bob/notes.txt")))
-        val relaxed = policy.copy(enforceForeignOtherUserHome = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OTHER_USER_HOME))
         assertEquals(Verdict.ASK, v("Read", read("/home/bob/notes.txt"), relaxed))
         assertEquals(Verdict.ASK, v("mcp__x__y", read("/home/bob/notes.txt"), relaxed))
-        // The other two FOREIGN sub-rules are untouched by this toggle.
+        // The other two rules of the same category are untouched by this one.
         assertEquals(Verdict.DENY, v("Read", read("/mnt/share/data.csv"), relaxed))
     }
 
@@ -461,26 +532,34 @@ class SensitiveGuardTest {
     fun `disabling the foreign-network-mounts rule downgrades DENY to ASK for EVERY caller`() {
         assertEquals(Verdict.DENY, v("Read", read("/mnt/share/data.csv")))
         assertEquals(Verdict.DENY, v("Read", read("\\\\fileserver\\share\\secret.doc")))
-        val relaxed = policy.copy(enforceForeignNetworkMounts = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.NETWORK_MOUNT))
         assertEquals(Verdict.ASK, v("Read", read("/mnt/share/data.csv"), relaxed))
         assertEquals(Verdict.ASK, v("mcp__x__y", read("\\\\fileserver\\share\\secret.doc"), relaxed))
-        // The other two FOREIGN sub-rules are untouched by this toggle.
+        // The other two rules of the same category are untouched by this one.
         assertEquals(Verdict.DENY, v("Read", read("/home/bob/notes.txt"), relaxed))
     }
 
     @Test
     fun `disabling the foreign-WSL-mounts rule downgrades DENY to ASK for EVERY caller`() {
-        val wsl = policy.copy(blockForeignWslMounts = true, projectRoot = "/mnt/c/dev/proj")
+        val wsl = policy.copy(wslHost = true, projectRoot = "/mnt/c/dev/proj")
         assertEquals(Verdict.DENY, v("Read", read("/mnt/d/other/file"), wsl))
-        val relaxed = wsl.copy(enforceForeignWslMounts = false)
+        val relaxed = wsl.copy(disabledRules = setOf(SecurityRule.WSL_MOUNT))
         assertEquals(Verdict.ASK, v("Read", read("/mnt/d/other/file"), relaxed))
         assertEquals(Verdict.ASK, v("mcp__x__y", read("/mnt/d/other/file"), relaxed))
     }
 
     @Test
+    fun `disabling the outside-project rule downgrades DENY to ASK for an untrusted caller, never to ALLOW`() {
+        assertEquals(Verdict.DENY, v("mcp__x__y", read("/opt/other/lib.so")))
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OUTSIDE_PROJECT))
+        assertEquals(Verdict.ASK, v("mcp__x__y", read("/opt/other/lib.so"), relaxed))
+        assertEquals(Verdict.ASK, v("Read", read("/opt/other/lib.so"), relaxed))
+    }
+
+    @Test
     fun `reason() always names where to change the rule, whether enforced or downgraded`() {
         assertTrue(SensitiveGuard.evaluate("Read", read("/home/bob/x"), policy).reason!!.contains("Settings"))
-        val relaxed = policy.copy(enforceForeignOtherUserHome = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OTHER_USER_HOME))
         val downgradedReason = SensitiveGuard.evaluate("Read", read("/home/bob/x"), relaxed).reason!!
         assertTrue(downgradedReason.contains("Settings"))
         assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
@@ -531,11 +610,13 @@ class SensitiveGuardTest {
 
     @Test
     fun `a segment boundary is the rule — tmpfoo and a tmp folder of your own are not the system temp`() {
-        assertEquals(Verdict.ALLOW, v("Read", read("/tmpfoo/x")))
-        assertEquals(Verdict.ALLOW, v("Read", read("/var/tmpfoo/x")))
+        // TempDirs.isTemp() itself (pinned directly below, by segment) says none of these three are the system
+        // temp — but all three are also outside the project, which OUTSIDE_PROJECT now asks about regardless.
+        assertEquals(Verdict.ASK, v("Read", read("/tmpfoo/x")))
+        assertEquals(Verdict.ASK, v("Read", read("/var/tmpfoo/x")))
         // `/home/<someone-else>/tmp` IS denied, but as foreign territory — a different rule, proving nothing
-        // about this one. The case that has to stay allowed is the user's own `~/tmp`.
-        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/tmp/x")))
+        // about this one. The user's own `~/tmp`, outside the project, is OUTSIDE_PROJECT's ASK, not TEMP_DIR's.
+        assertEquals(Verdict.ASK, v("Read", read("/home/me/tmp/x")))
         assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/tmp/build.log")))
         assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/src/temp/Foo.kt")))
         assertEquals(Verdict.ALLOW, v("Bash", bash("./gradlew test --project-cache-dir tmp/cache")))
@@ -566,7 +647,7 @@ class SensitiveGuardTest {
     @Test
     fun `disabling the temp-directory rule downgrades DENY to ASK for an untrusted caller, never to ALLOW`() {
         assertEquals(Verdict.DENY, v("mcp__x__y", read("/tmp/stage.sh")))
-        val relaxed = policy.copy(enforceTempDirs = false)
+        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.TEMP_DIR))
         assertEquals(Verdict.ASK, v("mcp__x__y", read("/tmp/stage.sh"), relaxed))
         assertEquals(Verdict.ASK, v("Read", read("/tmp/stage.sh"), relaxed))
         // Detection ran regardless of the toggle, so the reason still names the switch that downgraded it.
@@ -595,6 +676,42 @@ class SensitiveGuardTest {
         assertFalse(TempDirs.isTemp("tmp/x")) // relative: anchored at the project root before it gets here
         assertFalse(TempDirs.isTemp("temp"))
         assertFalse(TempDirs.isTemp(""))
+    }
+
+    // ── rule 5: outside the project root ─────────────────────────────────────────────────────────────────
+    // The weakest claim of the five, checked last. It exists because Read — and every non-reviewable tool —
+    // is not covered by PermissionBroker's root-containment check, which only gates the reviewable WRITE
+    // tools: without this rule an agent could read anywhere on disk, outside the project, unasked.
+
+    @Test
+    fun `an absolute path outside the project asks the agent and denies a third party`() {
+        assertEquals(Verdict.ASK, v("Read", read("/opt/other/lib.so")))
+        assertEquals(Verdict.ASK, v("Write", read("/srv/shared/notes.txt")))
+        assertEquals(Verdict.DENY, v("mcp__fs__read", read("/opt/other/lib.so")))
+    }
+
+    @Test
+    fun `a path under the project root is never outside-project`() {
+        assertEquals(Verdict.ALLOW, v("Read", read("/home/me/proj/src/Foo.kt")))
+        assertEquals(Verdict.ALLOW, v("Write", read("/home/me/proj/build/out.txt")))
+    }
+
+    @Test
+    fun `a relative candidate is never outside-project — it resolves under the working directory`() {
+        assertEquals(Verdict.ALLOW, v("Read", read("src/Foo.kt")))
+        assertEquals(Verdict.ALLOW, v("Bash", bash("cat ../sibling/README.md")))
+    }
+
+    @Test
+    fun `with no open project there is nothing to be outside of`() {
+        val noProject = policy.copy(projectRoot = null)
+        assertEquals(Verdict.ALLOW, v("Read", read("/opt/other/lib.so"), noProject))
+    }
+
+    @Test
+    fun `a hit already caught by a stronger rule keeps that rule's wording, not outside-project's`() {
+        assertEquals(Verdict.DENY, v("Read", read("/home/bob/notes.txt"))) // FOREIGN wins
+        assertEquals(Verdict.ASK, v("Read", read("/home/me/.ssh/id_rsa"))) // CREDENTIAL wins
     }
 }
 
@@ -799,6 +916,21 @@ class SensitiveGuardResolverPerformanceTest {
         assertEquals(
             SensitiveGuard.Verdict.ASK,
             SensitiveGuard.evaluate("Read", read("/home/me/proj/innocent.txt"), policy).verdict,
+        )
+    }
+
+    @Test
+    fun `the resolver pool is bounded, not one thread per hung mount forever`() {
+        // G3: a cached pool spawns a new thread for every call whose resolver never returns (cancel() cannot
+        // stop a blocked native stat()), so a dead network mount leaked one idle daemon thread per evaluate()
+        // call for the life of the session. A fixed pool caps the leak at its size instead of letting it grow
+        // unbounded — verified directly against the executor rather than by trying to observe thread counts,
+        // which is exactly the kind of leak a behavioral test would not notice within a single test run.
+        val field = GuardPaths::class.java.getDeclaredField("resolverExecutor").apply { isAccessible = true }
+        val executor = field.get(GuardPaths) as java.util.concurrent.ThreadPoolExecutor
+        assertTrue(
+            executor.maximumPoolSize in 1..32,
+            "resolverExecutor.maximumPoolSize=${executor.maximumPoolSize} is not bounded to a small constant",
         )
     }
 }

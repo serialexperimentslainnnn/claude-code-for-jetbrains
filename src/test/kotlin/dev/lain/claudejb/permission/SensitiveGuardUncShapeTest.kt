@@ -44,7 +44,7 @@ class SensitiveGuardUncShapeTest {
         home = home,
         currentUser = "me",
         guardedRoots = listOf("/mnt/share", "/net/nfs"),
-        blockForeignWslMounts = false,
+        wslHost = false,
         projectRoot = "/home/me/proj",
     )
 
@@ -92,12 +92,16 @@ class SensitiveGuardUncShapeTest {
     @Test
     fun `ordinary source text that canonicalisation can path-shape stays allowed`() {
         listOf(
-            """sed -i 's/\bfoo\b/bar/g' src/App.kt""",
             """grep -P '\btype\s*:' src/""",
             """python3 -c 'print("a\tb\nc")'""",
             """echo 'C:\\Users\\me\\app'""",
             """rg '// TODO: drop this' src/""",
         ).forEach { assertEquals(Verdict.ALLOW, v("Bash", bash(it)), it) }
+        // `sed -i` belongs to this list for the reason the list exists — its regex is source text, not a path, and
+        // it must not be read as one — but it is no longer ALLOW, and not because of anything canonicalisation did:
+        // `-i` rewrites the file it reads, which is a write with no diff to review (SHELL_FILE_WRITE). A card, not
+        // the unoverridable refusal this test guards against, so the claim it is really making still holds.
+        assertEquals(Verdict.ASK, v("Bash", bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
     }
 
     // ── the half that matters: the fix withdraws no verdict from anything that is a path ──────────────────

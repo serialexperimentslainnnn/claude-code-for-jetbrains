@@ -96,7 +96,7 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `app-composer-boot.js` | the boot screen and the "Claude Code was not found" card. |
 | `app-composer-auth.js` | the sign-in card. |
 | `app-composer-actions.js` | the chat's own action buttons (new chat, commands, Git, close this chat, sign out) and the row the |
-| `app-composer-settings.js` | the ⚙ menu at the head of the controls row. |
+| `app-composer-settings.js` | the ⚙ menu at the head of the controls row. Drills down one level per press, and one group goes two deep: a row may carry an optional `sub`, which today only the security rules do (eleven switches in a flat list is a wall, so they sit under their own category). The whole of that state is `view`, a scalar path — `null`, `group`, or `group␟sub` — which is what keeps `structureSig` a flat string and the skip-if-unchanged machinery unmodified. A row without a `sub` behaves exactly as every row did before the level existed. |
 | `app-composer.js` | cc.state(s), cc.meta(m), cc.openPalette(), cc.focusInput() |
 | `app-permissions.js` | the permission cards. |
 | `app-session-base.js` | the dashboard family's shared plumbing. |
@@ -209,8 +209,8 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.composer.renderAuth` | `app-composer-auth.js:104` |
 | `CC.composer.buildActionRows` | `app-composer-actions.js:82` |
 | `CC.composer.viewsRow` | `app-composer-actions.js:173` |
-| `CC.composer.mountSettingsButton` | `app-composer-settings.js:226` |
-| `cc.settingsMenu` | `app-composer-settings.js:805` |
+| `CC.composer.mountSettingsButton` | `app-composer-settings.js:285` |
+| `cc.settingsMenu` | `app-composer-settings.js:890` |
 | `CC.composer.ensureBuilt` | `app-composer.js:265` |
 | `CC.composer.autosize` | `app-composer.js:325` |
 | `cc.state` | `app-composer.js:489` |
