@@ -137,18 +137,24 @@ different places, and neither is written down anywhere in the script:
   cards are read and neither is assumed to be either CA — the card whose `F9` certificate is *self-issued*
   is the root, the other is the intermediate. No serial, no DN and no fingerprint is hardcoded, so a
   reissued PKI is picked up rather than contradicted.
-- **The CA private key comes from `gpgsm`**, GnuPG's X.509 store. It cannot come from `F9`: that slot is
-  storage in this PKI, never a signer, and a PIV certificate object has no private half to offer. `gpgsm`
-  can export a key but cannot *issue* one — GnuPG is not a CA — so it lands in the temp dir for exactly
-  one `openssl` call and is shredded immediately, not at the exit trap. The name it is asked for is read
-  off the certificate the card just handed over, so the two halves cannot drift apart.
+- **The CA private key is the PKI's own intermediate key**, read in place (`PKI_INTERMEDIATE_KEY`,
+  default `~/pki/matrix/private/intermediate.key`) and never copied, moved or rewritten — so there is no
+  second plaintext copy to shred and no window in which one exists. The two candidates that *look* like
+  better sources are both dead ends: `F9` is storage in this PKI and never a signer, and a PIV
+  certificate object has no private half; and `gpgsm` does not hold this key either — what its secret
+  listing shows under `CN=The Oracle Intermediate CA` is the **issuer** field of the PIV leaf
+  certificates it holds, not the CA itself.
 
-The PKI's own working directory is neither read nor written, and `build-matrix-pki.sh` is never run: the
-script asks the PKI for one leaf, it never creates, resets or reissues anything.
+  Reading a key off disk is licensed by a check, not by trust: it must be the private half of the
+  certificate **the card just produced**, compared as public keys, or nothing is issued. That is what
+  stops a stale copy from a previous PKI issuing a certificate no root can verify.
+
+The PKI's own working directory is never written, and `build-matrix-pki.sh` is never run: the script asks
+the PKI for one leaf, it never creates, resets or reissues anything.
 
 ```sh
 ykman --device "$serial" piv certificates export f9 -      # per card; public read, no PIN, no touch
-gpgsm --armor --export-secret-key-p8 "$intermediate_cn"    # shredded immediately after the sign
+openssl pkey -in "$int_key" -pubout | cmp - <(openssl x509 -in int.crt -noout -pubkey)   # or abort
 
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out leaf.key
 openssl req -new -key leaf.key -sha384 -out leaf.csr \
