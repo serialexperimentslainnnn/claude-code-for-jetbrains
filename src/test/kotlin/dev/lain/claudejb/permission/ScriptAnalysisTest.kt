@@ -45,20 +45,23 @@ class ScriptAnalysisTest {
     }
 
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
-    private fun v(tool: String, cmd: String, p: SensitiveGuard.Policy = policy()) =
-        SensitiveGuard.evaluate(tool, bash(cmd), p).verdict
 
-    private fun why(tool: String, cmd: String, p: SensitiveGuard.Policy = policy()) =
-        SensitiveGuard.evaluate(tool, bash(cmd), p).reason.orEmpty()
+    // No tool name: the guard's verdict does not take one any more (see `SensitiveGuard.evaluate`), so a caller
+    // cannot be varied here even in a test — the property that used to be asserted per caller is now structural.
+    private fun v(cmd: String, p: SensitiveGuard.Policy = policy()) =
+        SensitiveGuard.evaluate(bash(cmd), p).verdict
+
+    private fun why(cmd: String, p: SensitiveGuard.Policy = policy()) =
+        SensitiveGuard.evaluate(bash(cmd), p).reason.orEmpty()
 
     // ── the point of the rule: a clean script costs nothing ──────────────────────────────────────────────
 
     @Test
     fun `a script that trips no rule runs unasked`() {
         script("gradlew", "#!/bin/sh\nexec java -jar gradle/wrapper/gradle-wrapper.jar \"$@\"\n")
-        assertEquals(Verdict.ALLOW, v("Bash", "./gradlew build"))
-        assertEquals(Verdict.ALLOW, v("Bash", "bash ./gradlew test"))
-        assertEquals(Verdict.ALLOW, v("Bash", "sh gradlew --version"))
+        assertEquals(Verdict.ALLOW, v("./gradlew build"))
+        assertEquals(Verdict.ALLOW, v("bash ./gradlew test"))
+        assertEquals(Verdict.ALLOW, v("sh gradlew --version"))
     }
 
     @Test
@@ -74,7 +77,7 @@ class ScriptAnalysisTest {
             exec "${'$'}JAVACMD" -classpath "${'$'}APP_HOME/lib/*" org.apache.maven.wrapper.MavenWrapperMain "$@"
             """.trimIndent(),
         )
-        assertEquals(Verdict.ALLOW, v("Bash", "./mvnw -q test"))
+        assertEquals(Verdict.ALLOW, v("./mvnw -q test"))
     }
 
     // ── and the point of reading it: the payload is judged, with its own wording ──────────────────────────
@@ -82,11 +85,13 @@ class ScriptAnalysisTest {
     @Test
     fun `a sourced script that dumps a key is refused AS a key dump, naming the script`() {
         val s = script("setup.sh", "#!/bin/sh\ncat $home/.ssh/id_rsa\n")
-        val reason = why("Bash", "source ./setup.sh")
-        assertEquals(Verdict.ASK, v("Bash", "source ./setup.sh"))
+        val reason = why("source ./setup.sh")
+        // DENY, not a card: the rule is enforced, and an enforced rule is a wall for every caller alike — the
+        // second assertion here used to be the same call from an MCP name, which no longer differs (the verdict
+        // takes no caller at all now, so the distinction is unrepresentable rather than merely untested).
+        assertEquals(Verdict.DENY, v("source ./setup.sh"))
         assertTrue(reason.contains("credentials or key material"), reason)
         assertTrue(reason.contains(s.fileName.toString()), reason)
-        assertEquals(Verdict.DENY, v("mcp__x__y", "source ./setup.sh"))
     }
 
     @Test
@@ -101,13 +106,13 @@ class ScriptAnalysisTest {
             "evil.sh",
             "sudo bash ./evil.sh",
             "cd /tmp && bash $project/evil.sh",
-        ).forEach { assertEquals(Verdict.ASK, v("Bash", it), it) }
+        ).forEach { assertEquals(Verdict.DENY, v(it), it) }
     }
 
     @Test
     fun `a python script that reads a credential is judged the same way`() {
         script("tool.py", "import os\nprint(open(os.path.expanduser('$home/.aws/credentials')).read())\n")
-        assertEquals(Verdict.ASK, v("Bash", "python3 tool.py"))
+        assertEquals(Verdict.DENY, v("python3 tool.py"))
     }
 
     // ── recursion, and the bound that ends it ────────────────────────────────────────────────────────────
@@ -117,8 +122,8 @@ class ScriptAnalysisTest {
         script("a.sh", "#!/bin/sh\nsource ./b.sh\n")
         script("b.sh", "#!/bin/sh\nsource ./c.sh\n")
         script("c.sh", "#!/bin/sh\ncat $home/.ssh/id_ed25519\n")
-        val reason = why("Bash", "./a.sh")
-        assertEquals(Verdict.ASK, v("Bash", "./a.sh"))
+        val reason = why("./a.sh")
+        assertEquals(Verdict.DENY, v("./a.sh"))
         assertTrue(reason.contains("credentials or key material"), reason)
     }
 
@@ -127,30 +132,29 @@ class ScriptAnalysisTest {
         // Six links: within the bound nothing is found, so the only honest answer is that the call is built not to
         // be analysable — and that is a refusal, not a card.
         (0..6).forEach { i -> script("s$i.sh", "#!/bin/sh\nsource ./s${i + 1}.sh\n") }
-        assertEquals(Verdict.DENY, v("Bash", "./s0.sh"))
-        assertEquals(Verdict.DENY, v("mcp__x__y", "./s0.sh"))
-        assertTrue(why("Bash", "./s0.sh").contains("nested deeper"))
+        assertEquals(Verdict.DENY, v("./s0.sh"))
+        assertTrue(why("./s0.sh").contains("nested deeper"))
     }
 
     @Test
     fun `a script that sources itself terminates, and blocks`() {
         script("loop.sh", "#!/bin/sh\nsource ./loop.sh\n")
-        assertEquals(Verdict.DENY, v("Bash", "./loop.sh"))
+        assertEquals(Verdict.DENY, v("./loop.sh"))
     }
 
     // ── what the guard cannot read ───────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a script that does not exist yet is opaque, so it is a card`() {
-        assertEquals(Verdict.ASK, v("Bash", "./not-written-yet.sh"))
-        assertTrue(why("Bash", "./not-written-yet.sh").contains("could not read"))
+        assertEquals(Verdict.DENY, v("./not-written-yet.sh"))
+        assertTrue(why("./not-written-yet.sh").contains("could not read"))
     }
 
     @Test
     fun `with no reader configured every script is opaque — the fail-closed default`() {
         script("clean.sh", "#!/bin/sh\necho hello\n")
         val blind = policy().copy(fileReader = null)
-        assertEquals(Verdict.ASK, v("Bash", "./clean.sh", blind))
+        assertEquals(Verdict.DENY, v("./clean.sh", blind))
     }
 
     // ── the two halves meet: a variable resolving to a script the guard then reads ────────────────────────
@@ -159,14 +163,14 @@ class ScriptAnalysisTest {
     fun `a script named through a resolvable variable is read, not merely flagged as a variable`() {
         script("run.sh", "#!/bin/sh\ncat $home/.ssh/id_rsa\n")
         val env = mapOf("TOOL" to "$project/run.sh")
-        assertTrue(why("Bash", "bash \$TOOL", policy(env)).contains("credentials or key material"))
+        assertTrue(why("bash \$TOOL", policy(env)).contains("credentials or key material"))
     }
 
     @Test
     fun `a write followed by a source is caught at the source, which is the laundering path`() {
         // The write itself is a card (SHELL_FILE_WRITE); this pins the SECOND call, which used to be invisible.
         script("staged.sh", "#!/bin/sh\ngpg --export-secret-keys > /tmp/k.asc\n")
-        val reason = why("Bash", "source ./staged.sh")
+        val reason = why("source ./staged.sh")
         assertTrue(reason.contains("expose secrets") || reason.contains("credentials"), reason)
     }
 }

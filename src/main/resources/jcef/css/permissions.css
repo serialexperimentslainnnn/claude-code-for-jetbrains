@@ -32,6 +32,94 @@
   color: var(--dim);
   font-size: 12px;
 }
+
+/* ── Guard alert ──────────────────────────────────────────────────────────────────────────────────────────
+   A card that is here because `SensitiveGuard` has something to say about this call, and NOT because the
+   permission mode would have asked anyway. Since an ENFORCED rule denies outright, this treatment is what the
+   user sees for a rule they switched OFF — the guard reporting what it would otherwise have stopped. That is
+   the state that most deserves to be unmistakable: the lock is open, by their own decision, and this card is
+   the only place that says so.
+
+   The pulse is the attention-getter and carries no information of its own; the badge text, the rule id and the
+   reason do. That split is what lets the motion be switched off below without the card losing anything. */
+.perm-card.perm-guard {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  border-left-color: var(--danger);
+  /* The entrance runs once, then the alert loops — both in ONE shorthand, because a second `animation`
+     declaration replaces this one rather than adding to it, and the card would stop rising. */
+  animation:
+    rise 0.24s var(--ease) both,
+    guard-alert 1.5s var(--ease) 0.24s infinite;
+}
+@keyframes guard-alert {
+  0%,
+  100% {
+    box-shadow: var(--shadow);
+  }
+  50% {
+    box-shadow:
+      var(--shadow),
+      0 0 0 3px color-mix(in srgb, var(--danger) 38%, transparent);
+  }
+}
+/* What the alert falls back TO once the host says motion is reduced. The blanket rule at the end of boot.css
+   flattens every animation on `body.reduced-motion`, and this one's end state is the un-haloed keyframe, so
+   without this line the card would quietly lose its red ring for exactly the users who cannot see it pulse.
+   Same shape, and the same reason, as `.pill-dot.running` in tabs.css: the STATE survives the animation. */
+body.reduced-motion .perm-card.perm-guard {
+  animation: none;
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px color-mix(in srgb, var(--danger) 34%, transparent);
+}
+
+.guard-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--danger);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 2px 7px;
+}
+/* Under forced-colors the system replaces background and colour, so the pill would dissolve into the card and
+   the alert would read as an ordinary head. `border` IS honoured there; that is what keeps it a badge. */
+@media (forced-colors: active) {
+  .guard-badge {
+    border-color: currentColor;
+  }
+}
+
+/* The rule, in the two vocabularies that matter: its exact id (what makes a false positive reportable) and
+   the row + category it is called in Settings ▸ Security (what makes the toggle findable). */
+.guard-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+.guard-rule-id {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+/* The guard's own sentence, verbatim — including the "disable this in Settings ▸ …" tail. Full contrast, not
+   `--dim`: it is the most important line on the card, not a caption under the command. */
+.guard-reason {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
 /* hunk-by-hunk partial acceptance */
 /* Read-only unified-diff block inside a reviewable permission card. */
 .perm-diff {

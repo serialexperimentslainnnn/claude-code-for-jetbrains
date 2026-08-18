@@ -41,14 +41,18 @@ import kotlinx.serialization.json.put
  *
  * ### The surfaces, by [SecurityCategory]
  *
- * **[SecurityCategory.SENSITIVE_DATA]** — [SecurityRule.CREDENTIALS] matches by shape, wherever the file sits, never
- * anchored to a specific home (see [CredentialPaths]); [SecurityRule.SECRET_DUMPING_COMMANDS] catches commands that
- * dump a secret at rest, exfiltrate a file, pipe the network into a shell, or invoke recognised offensive/LOLBIN
- * tooling (see [CommandRules]).
+ * **[SecurityCategory.SENSITIVE_DATA]** — [SecurityRule.CREDENTIALS] matches by shape, **wherever the file sits,
+ * the open project included**, and never anchored to a specific home (see [CredentialPaths]). That "wherever" is
+ * load-bearing and it is the one place the project root buys nothing: a `.env` or a service-account key inside a
+ * repository is the ordinary case rather than the exotic one, and the repository is precisely what the agent is
+ * allowed to write to, so "the user put it there themselves" is not something this code is in a position to assume.
+ * [SecurityRule.SECRET_DUMPING_COMMANDS] catches commands that dump a secret at rest, exfiltrate a file, pipe the
+ * network into a shell, or invoke recognised offensive/LOLBIN tooling (see [CommandRules]).
  *
  * **[SecurityCategory.FOREIGN_TERRITORY]** — another user's home, a network/removable mount, a foreign WSL drive:
- * not agentic development, but lateral movement. The only exemption is the open project's own root — see
- * [ForeignTerritory]. This is the one category that denies **every** caller (below).
+ * not agentic development, but lateral movement. Exempt inside the user's own home and inside the open project,
+ * because a hit here is entirely its LOCATION and that location is the workspace they opened — see
+ * [ForeignTerritory], and [classify] for why a place may be exempted and a threat may not.
  *
  * **[SecurityCategory.SYSTEM_INTEGRITY]** — [SecurityRule.SYSTEM_DEVICE]: the device that BACKS the filesystem, or
  * live memory, addressed directly. Nothing about ordinary development touches those nodes, so it is a stronger claim
@@ -62,8 +66,9 @@ import kotlinx.serialization.json.put
  * about danger:
  *  - [SecurityRule.TEMP_DIR]: `/tmp` and its equivalents, the one world-writable place outside the project and
  *    outside every review surface, so it is where an agent stages what is not meant to be looked at. Matched by
- *    SEGMENT (`/tmpfoo` and `~/tmp` are not it), and exempt inside the open project like the other location rules
- *    — see [TempDirs].
+ *    SEGMENT (`/tmpfoo` and `~/tmp` are not it), and exempt inside the open project — a place exemption, not a
+ *    threat one: a project that SITS under `/tmp` would otherwise deny its own every read and edit, while a `/tmp`
+ *    path outside it still trips. See [TempDirs].
  *  - [SecurityRule.SHELL_FILE_WRITE]: a `tee`, a `>` redirect or a `sed -i`. `Bash` is not in
  *    `DiffPresenter.REVIEWABLE_TOOLS`, so such a call mutates the filesystem with **zero review surface** — and
  *    that is as true inside the project as outside it, which is why this one rule is deliberately NOT exempted by
@@ -84,23 +89,26 @@ import kotlinx.serialization.json.put
  * delimited by slashes, or `Grep`'s own `pattern` argument, is absolute-LOOKING by pure coincidence of syntax, and
  * treating either as a location candidate turned an ordinary search into an unrelated "outside the project" card.
  *
- * ### Verdict, by trust of the CALLER — an allowlist, not a blacklist
- * The caller is trusted **only if it is one of the agent's own tools** ([AGENT_TOOLS]). Everything else — every MCP
- * server, every Skill, anything unrecognised — is third-party, because a blacklist of "bad" prefixes is exactly the
- * thing an attacker names their way around. By default this is a **hard lock**:
- *  - a **trusted** tool that trips any rule outside [SecurityCategory.FOREIGN_TERRITORY] → **ASK** (a card, every
- *    time, even under `bypassPermissions`): the user may authorise their own agent to read their own key, once,
- *    explicitly;
- *  - a **third-party** caller that trips one of those → **DENY**;
- *  - **anyone** who trips a [SecurityCategory.FOREIGN_TERRITORY] rule → **DENY**.
+ * ### The verdict IS the toggle, and nothing else — no caller is trusted
+ * **An enforced rule DENIES. A disabled rule ASKS. There is no third case, and who is calling does not enter into
+ * it.** The switch in Settings ▸ Claude Code ▸ Security is therefore the whole of the policy, and it says one thing
+ * in two directions:
+ *  - **rule enforced (the default) → DENY**, for every caller — the agent's own tools exactly like an MCP server or
+ *    a Skill, under `bypassPermissions` exactly like under `default`. There is no "authorise it just this once" in
+ *    the chat: the only key is the toggle, and it lives in Settings, where a decision of that weight is taken
+ *    deliberately rather than under the pressure of a stalled turn.
+ *  - **rule disabled → ASK**, for every caller, every time — never ALLOW. Detection ([classify]) runs
+ *    **unconditionally** whatever that set says, so switching a rule off does not stop the guard watching; it means
+ *    "I want to decide this one myself, every time". The card it produces is drawn as a red guard alert naming the
+ *    rule ([PendingPermission.guard]), so an open lock is never quiet.
  *
- * ### Per-rule enforcement (Settings ▸ Claude Code ▸ Security) — never a silent allow
- * Every [SecurityRule] enforces by default; what the user can switch off is listed in
- * [Policy.disabledRules], and an empty set — the default — is the original hard lock exactly. Detection
- * ([classify]) runs **unconditionally**, regardless of that set: turning a rule off never skips recognising a
- * match. What it changes is [evaluate]'s OUTCOME: a disabled rule's hit is **downgraded from DENY to ASK**, for
- * every caller, including third-party ones — never to ALLOW. So "disabling a rule" means "I want to decide this one
- * myself, every time", not "stop watching for this".
+ * **This replaced a caller-trust matrix, and the deletion is the point.** The guard used to hold an allowlist of the
+ * agent's own tool names, ask THEM for confirmation, and hard-deny everyone else. Two things were wrong with it.
+ * It made the meaning of a rule depend on which tool happened to carry the call, so one credential read was a card
+ * and an identical one a wall, decided by a name that arrives **on the wire** — the one input a guard against prompt
+ * injection should not be taking policy from. And the confirmation itself was the hole: an ASK on an enforced rule is
+ * an Accept button on a call the guard has just called dangerous, put in front of a user in the middle of their work,
+ * which is precisely the condition under which people click it. What is left is a lock with a documented key.
  *
  * Two things are tunable *without* a toggle, and both only **widen** the net: the sensitive-path list
  * ([Policy.globs] = the built-in [CredentialPaths.SENSITIVE_GLOBS] plus the user's extras) and the blocked-domain
@@ -127,8 +135,8 @@ import kotlinx.serialization.json.put
  * What is *heuristic* is **detection**, and only for shell strings. Matching a declared file path is exact; but
  * `cat $HOME/.ss''h/id_rsa`, a base64 round-trip, or a script that reads a key indirectly may not *match* a
  * pattern, and a symlink is not resolved. That is a gap in what we recognise — not a way to argue with a match
- * once made. Close it by widening the patterns, never by trusting the caller. (The [AGENT_TOOLS] allowlist is the
- * one trust decision, and it is a whitelist precisely so an attacker cannot name their way onto it.)
+ * once made. Close it by widening the patterns — there is no caller left to trust instead, and no mode, and no
+ * button (see the verdict section above: the tool's name decides nothing).
  *
  * PURE: no IDE, no filesystem, no OS sniffing. [Policy] carries everything (assembled on the IDE side from settings
  * + [dev.lain.claudejb.session.RemoteMounts]), so every rule is unit-testable — for security code, a requirement.
@@ -138,43 +146,13 @@ object SensitiveGuard {
     /** What to do with a tool call that trips the guard. */
     enum class Verdict { ALLOW, ASK, DENY }
 
-    /**
-     * The agent's OWN tools — the allowlist of trusted callers. Anything not in here (MCP, Skills, unknown) is
-     * third-party and denied by default when it trips the guard.
-     *
-     * Kept in sync with the binary's built-in tool set — cross-referenced against the vendored SDK's own schema
-     * (`node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`, `ToolInputSchemas`), which is the project's
-     * declared protocol source of truth. A REAL incident: this list had gone stale as the CLI grew its own
-     * orchestration surface (background tasks, cron, worktrees…), so those native, first-party tool calls were
-     * silently falling into the "third-party" branch and getting hard-DENIED instead of asking — indistinguishable,
-     * from the user's chair, from an MCP server being blocked. `Skill` and any `mcp__*`-prefixed name are
-     * DELIBERATELY excluded: a Skill's *content* is third-party (community/user-authored), same tier as MCP, by
-     * design — see the class doc's caller-trust matrix.
-     */
-    val AGENT_TOOLS: Set<String> = setOf(
-        "Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead",
-        "Glob", "Grep", "LS", "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch", "ExitPlanMode",
-        "EnterPlanMode", "EnterWorktree", "ExitWorktree",
-        "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop",
-        "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "SendMessage",
-        "ListMcpResources", "ReadMcpResourceDir", "ReadMcpResource", "RefreshMcpTools",
-        "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
-        "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
-        "ShowOnboardingRolePicker", "Workflow",
-        // Re-audited against `claude` 2.1.222 / SDK 0.3.222. Entries are only ever ADDED here, never removed:
-        // this is a TRUST allowlist, not an inventory. A name that no longer exists costs nothing, while a
-        // first-party name that is missing falls into the third-party branch and is hard-DENIED — the 4.4.0
-        // incident described above. NB the CLI can also retire a tool per-session (it ships distinct
-        // "is disabled for this session" / "is not available in this context" messages, and Glob/Grep do get
-        // withdrawn in some sessions), which is another reason absence here must never be inferred from one run.
-        "AskUserQuestion", "Mcp", "FileRead", "FileEdit", "FileWrite",
-        // ToolSearch was absent, and it is the one that mattered most: it is how the agent loads the schema of
-        // every DEFERRED tool (web, tasks, cron, worktrees), so on a session that defers them, the call that
-        // unlocks all the others was the one landing in the untrusted branch. Found by diffing this list
-        // against a live session's actual tool inventory rather than against the SDK's type names — those are
-        // not the runtime registry (the SDK calls them FileRead/FileEdit/FileWrite; the tools are Read/Edit/Write).
-        "ToolSearch",
-    )
+    // There was an `AGENT_TOOLS` allowlist of the agent's own tool names here, and an `isTrustedCaller` reading it.
+    // Both are gone with the caller-trust matrix (see the class doc): a rule's verdict no longer depends on which
+    // tool carries the call, so the list decided nothing and keeping a curated trust allowlist that grants no trust
+    // is worse than not having one — it reads, to the next person, as if some caller were still privileged.
+    // The list itself is recoverable from git if a future policy ever needs it again; it must not come back as
+    // dormant code. (`ReachabilityContractTest` would have failed the build over it anyway, which is the gate
+    // working: this repository's signature defect is exactly implemented-tested-unreachable.)
 
     /** Everything the guard needs to judge a call. Assembled by the IDE side; pure input here. */
     data class Policy(
@@ -243,15 +221,41 @@ object SensitiveGuard {
          */
         val fileReader: ((String) -> String?)? = null,
         /**
+         * Optional **name resolver**: does this single-label name resolve to an address on this network?
+         *
+         * It exists for one genuinely ambiguous case, and only that one. `//10.0.0.5/share` and
+         * `//files.corp.example/share` are network resources by FORM — an IP literal and a dotted name are not
+         * anything else. A bare label is not decidable that way: `\\server\share` is an ordinary Windows share on a
+         * corporate network, and `//noinspection`, `//TODO` or `//eslint-disable` are lines of source code that
+         * arrive inside an `Edit`'s payload. The format cannot tell them apart, so something has to ASK the network:
+         * a name that resolves is a host, and a host with a resource after it is a share.
+         *
+         * Injected for the same reason [pathResolver] and [fileReader] are — the guard is pure and does not do I/O —
+         * and it carries a stricter version of the same caller contract: it runs on whatever thread called
+         * [evaluate], which is the thread reading the binary's entire stdout, and a DNS lookup is *unbounded* by
+         * default. **The implementation owns the timeout and the cache**; see `SettingsSensitivePolicy`.
+         *
+         * **Null (the default, and every unit test that does not opt in) means a bare label is treated AS a host.**
+         * That is the fail-closed direction: with no way to ask, the guard does not get to assume the friendly
+         * reading. A resolver that cannot answer in time must return the same way, and does.
+         */
+        val hostResolver: ((String) -> Boolean)? = null,
+        // There was a `pathExists` probe here for one release-in-progress, so that
+        // [SecurityRule.OUTSIDE_PROJECT] would skip a destination with nothing existing on the way to it. It is
+        // gone, and the reasoning is Lain's and simpler than the code was: **a path that does not exist is not a
+        // reason to allow, it is a reason to refuse** — a call naming somewhere that is not there is either a
+        // mistake or a probe, and neither is work. Once that is the answer, the probe buys nothing at all: a
+        // destination outside the project is refused whether or not it exists, so the condition never changed an
+        // outcome. It cost a bounded syscall per candidate to compute an answer nobody used.
+        /**
          * The rules the user switched OFF in Settings ▸ Claude Code ▸ Security. Empty by default, and that default
          * is the security model: **enforcement is not a list anyone has to remember to extend**, so a rule added
          * to [SecurityRule] tomorrow is enforced the moment it exists.
          *
          * Turning one off **never silently ALLOWs** a call that trips it — detection ([classify]) always runs
-         * regardless; it only downgrades the OUTCOME from the hard block (DENY) to a permission card (ASK), for
-         * every caller, so disabling a rule is never quiet. A trusted agent tool already gets a card either way
-         * for everything outside [SecurityCategory.FOREIGN_TERRITORY], so for those rules this only ever changes
-         * what an untrusted (MCP/Skill) caller gets: DENY when enforced, ASK when not.
+         * regardless; it only downgrades the OUTCOME from the hard block (DENY) to a permission card (ASK). That
+         * card is the ONLY way a call the guard recognised ever runs, and it is drawn as a red guard alert naming
+         * this rule, so an open lock announces itself every single time it lets something through.
          */
         val disabledRules: Set<SecurityRule> = emptySet(),
         /** The declared `HTTP_PROXY`, if any — a **data gate** for [SecurityRule.PROXY_BYPASS] (see [ProxyRules]). */
@@ -263,24 +267,6 @@ object SensitiveGuard {
         /** The user's OWN blocked domains, **added** to [DangerousDomains.BLOCKED_DOMAINS], never replacing it. */
         val extraBlockedDomains: List<String> = emptyList(),
     )
-
-    // ── origin: trusted only if it is one of the agent's own tools ───────────────────────────────────────
-
-    /**
-     * True only for the agent's OWN tools. Everything else — MCP, Skills, unknown — is third-party.
-     *
-     * **A bare-name match, verified NOT to be a spoofing vector.** [AGENT_TOOLS] is a plain string set, so this
-     * looks naively vulnerable to an MCP server registering a tool named exactly `Read` and walking into the
-     * trusted branch by name collision. It isn't: the SDK's own published protocol (`sdk.d.ts`, `CanUseTool`'s
-     * `tool_name` — "Fully-qualified MCP tool name, e.g. `mcp__server__tool_name`") states the wire name of every
-     * MCP-provided tool is structurally prefixed `mcp__<server>__`, never bare — a server cannot suppress its own
-     * prefix, so `Read` on the wire is always the native tool. The one documented way to make a call ARRIVE under
-     * a bare first-party name while executing something else is `Options.toolAliases` (`{Bash: 'mcp__server__x'}`)
-     * — but that is a launch-time option set by whoever configures the SDK, not by the MCP server itself, and this
-     * plugin never sets it (`SessionLauncher.buildArgs` has no `toolAliases`). **This assumption breaks the day
-     * `toolAliases` support is added here** — re-verify this comment before wiring it up.
-     */
-    fun isTrustedCaller(toolName: String): Boolean = toolName in AGENT_TOOLS
 
     // ── the decision ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -298,27 +284,46 @@ object SensitiveGuard {
      * neither had a production caller, and paying for classification twice to answer one question is waste
      * the user experiences as latency on a permission card.
      */
-    data class Decision(val verdict: Verdict, val reason: String?)
+    data class Decision(
+        val verdict: Verdict,
+        val reason: String?,
+        /**
+         * Which rule tripped — null only on [Verdict.ALLOW], where nothing did.
+         *
+         * Carried as the enum rather than left implicit in [reason], because the permission card names the rule
+         * and the only other way to know it there would be to parse the prose back out. That parse would be a
+         * second, weaker copy of a classification that has already been made: the wording is written for a human
+         * and is free to change, so a card keyed on it would silently start saying "unknown rule" the day
+         * somebody improves a sentence. The consumer is `PendingPermission.guard` → the red guard-alert card.
+         */
+        val rule: SecurityRule? = null,
+    )
 
-    /** [Verdict] plus its explanation, in a single classification pass. */
-    fun evaluate(toolName: String, input: JsonObject, policy: Policy): Decision {
+    /**
+     * [Verdict] plus its explanation, in a single classification pass.
+     *
+     * **Takes no tool name, and that is the policy rather than a simplification.** It used to, in order to look the
+     * caller up in a trust allowlist; the verdict no longer asks who is calling (see the class doc), so a parameter
+     * for it would be one this function never reads — exactly the shape [classify]'s own doc warns about, which
+     * suggests the opposite of the actual design to everyone who reads the signature afterwards.
+     */
+    fun evaluate(input: JsonObject, policy: Policy): Decision {
         val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
-        return Decision(verdictFor(toolName, hit, policy), reasonFor(hit, policy))
+        return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule)
     }
 
-    private fun verdictFor(toolName: String, hit: Hit, policy: Policy): Verdict {
-        val enforced = isEnforced(hit, policy)
-        if (hit.rule.deniesEveryCaller) {
-            // Enforced (default): DENY for every caller, no exception — reaching into someone else's space, or
-            // structuring a call so it cannot be analysed. Disabled in Settings: downgraded to ASK for every
-            // caller instead — still a card every single time, never a silent allow.
-            return if (enforced) Verdict.DENY else Verdict.ASK
-        }
-        // Everything else: a trusted agent tool always gets a card regardless of the toggle — the toggle only ever
-        // changes an UNTRUSTED (MCP/Skill) caller's outcome: DENY when enforced, ASK when not.
-        if (!enforced) return Verdict.ASK
-        return if (isTrustedCaller(toolName)) Verdict.ASK else Verdict.DENY
-    }
+    /**
+     * **Enforced is a wall; disabled is a question.** The whole verdict, and there is deliberately nothing else in
+     * it — no caller, no permission mode, no per-call override.
+     *
+     * This was a four-branch decision over caller trust and a `deniesEveryCaller` flag, and collapsing it is the
+     * security change, not a tidy-up: an ASK on an ENFORCED rule was an Accept button on a call the guard had just
+     * classified as dangerous, so the strongest statement the plugin can make ended in a dialog the user clicks
+     * through while thinking about something else. The lever moved to the one place where it is a decision instead
+     * of a reflex — the toggle in Settings — and the outcome here follows it exactly.
+     */
+    private fun verdictFor(hit: Hit, policy: Policy): Verdict =
+        if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
 
     /**
      * Whether [hit]'s rule is currently enforced (vs. downgraded to ASK) per [policy].
@@ -352,10 +357,16 @@ object SensitiveGuard {
      * Classification + human reason, or null. **Order = severity**: the first hit wins the wording, so the
      * strongest claim is asked first and [SecurityRule.OUTSIDE_PROJECT] — the weakest — is asked last.
      *
-     * The **project root is the sanctioned zone**: a file the user brought into their own repo is theirs, under
-     * their responsibility, so a credential file *inside the project* is not blocked. Outside it, a credential is
-     * caught. FOREIGN territory is exempt inside the project too (you opened it on purpose), and so is the
-     * temporary directory when the project itself sits under one. The three rules that judge an ACTION rather than
+     * **The project root exempts a rule only when the exemption is about where the PROJECT is**, and that is the
+     * whole of it: FOREIGN territory and the temporary directory are exempt inside the project because they can
+     * only fire there when the project ITSELF sits in that space — under `/tmp`, in another user's home, on a
+     * network mount — which the user did deliberately and without which the plugin could not open that project at
+     * all. (The extreme form of that case is not an exemption but a refusal to launch: see
+     * [dev.lain.claudejb.session.RemoteMounts].) [SecurityRule.CREDENTIALS] is NOT exempt, because it judges what
+     * a file IS rather than where the project sits — a `.env` inside a repository is the ordinary case, and the
+     * repository is somewhere the agent can write.
+     *
+     * The three rules that judge an ACTION rather than
      * a place — a dangerous command, a shell file write, egress — are location-independent: running `mimikatz` is
      * dangerous whatever the working directory, and a `tee` has no diff to review wherever it lands.
      *
@@ -383,20 +394,25 @@ object SensitiveGuard {
             ToolInputScanner.pathCandidates(input, policy.home, policy.envValues),
             policy,
         )
-        val projRoot = policy.projectRoot?.let { GuardPaths.normalize(it, policy.home) }
-        val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(it, projRoot) }
+        // There used to be an `outsideProject` subset here, shared by the credential and temp-dir rules — one
+        // blanket "everything inside the project is exempt" list, which is how the credential rule came to inherit
+        // an exemption nobody would have written for it deliberately. Each rule states its own relationship to the
+        // root now, at the rule, and the split is a rule of thumb worth keeping: **exempt a PLACE, never a
+        // THREAT.** A project sitting under /tmp is a place; a private key inside that project is a threat, and it
+        // is a threat the AGENT can create, since the repository is exactly what it is allowed to write to.
+        val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
 
         // The severity ordering, in one place and in one expression, so it can be READ as an ordering. The three
-        // groups below are a split for the human and for the complexity budget — a chain of eleven early returns
+        // groups below are a split for the human and for the complexity budget — a chain of thirteen early returns
         // in one function is neither reviewable nor within detekt's limits — and the order across them is exactly
         // the order the rules are declared in.
-        return placeRules(paths, outsideProject, policy)
+        return placeRules(paths, policy)
             ?: actionRules(input, policy, depth)
-            ?: weakRules(input, outsideProject, projRoot, policy)
+            ?: weakRules(input, paths, projRoot, policy)
     }
 
     /** The strongest claims, and all three are about a PLACE: someone else's space, the disk itself, a key file. */
-    private fun placeRules(paths: List<String>, outsideProject: List<String>, policy: Policy): Hit? {
+    private fun placeRules(paths: List<String>, policy: Policy): Hit? {
         ForeignTerritory.foreignHit(paths, policy)?.let {
             return Hit(it.rule, "reaches outside your own space: ${it.path}")
         }
@@ -409,9 +425,22 @@ object SensitiveGuard {
             return Hit(SecurityRule.SYSTEM_DEVICE, "addresses a raw system device: $it")
         }
 
+        // Judged over EVERY candidate, the ones inside the open project included — this rule is deliberately not
+        // exempted by the project root, unlike the location rules in [weakRules].
+        //
+        // It was, and that exemption was a hole rather than a convenience. The reasoning behind it ("a file the
+        // user brought into their own repo is theirs, under their own responsibility") confuses two different
+        // questions. The temp-dir and foreign rules are exempt inside the project because the exemption is about
+        // WHERE THE PROJECT IS: they only fire at all when the project itself sits under `/tmp` or in another
+        // user's home, which the user did on purpose and without which the plugin could not open that project at
+        // all. This rule is about WHAT A FILE IS, and the answer does not change with the directory: a `.env`, a
+        // `credentials.json` or a service-account key inside a repository is the ordinary case, not the exotic one
+        // — and the repository is space the AGENT can write to, so "the user put it there" is not something this
+        // code is in a position to assume. A guard whose strongest rule switches itself off inside the one
+        // directory every call is aimed at is a guard for somewhere nobody works.
         val matchers = policy.globs.map { CredentialPaths.compile(it, policy.home) }
-        return outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
-            ?.let { Hit(SecurityRule.CREDENTIALS, "reads credentials or key material outside the project: $it") }
+        return paths.firstOrNull { p -> matchers.any { it.matches(p) } }
+            ?.let { Hit(SecurityRule.CREDENTIALS, "reads credentials or key material: $it") }
     }
 
     /** What the call DOES: where it talks to, what it runs, and what it would not let the guard see. */
@@ -463,11 +492,24 @@ object SensitiveGuard {
      */
     private fun weakRules(
         input: JsonObject,
-        outsideProject: List<String>,
+        paths: List<String>,
         projRoot: String?,
         policy: Policy,
     ): Hit? {
-        // Judged on `outsideProject` for the same reason the credential rule is (see [TempDirs]).
+        // Exempt inside the project, and this is the one shape of exemption that is not a hole: the finding here is
+        // ENTIRELY the location, and the location is the workspace the user opened. A project that sits under /tmp
+        // would otherwise deny its own every `Read` and `Edit` — that is not blocking a threat, it is blocking the
+        // work — while a /tmp path OUTSIDE the project still trips, which is the case the rule exists for.
+        // Computed here rather than in [classify] because exactly one rule wants it: a shared "outside the project"
+        // subset up there is how the credential rule silently inherited an exemption that was never meant for it.
+        // **Folded before the containment test, and that is the security half of this line.** "Inside the project"
+        // means inside the SUBTREE — the directory and everything genuinely under it — not "spelled with the
+        // project root at the front". `GuardPaths.normalize` does not collapse `..`, so
+        // `<root>/../../tmp/payload` passes a plain prefix test and would collect the exemption of a place it is
+        // not in. Same class of mistake as measuring a candidate's LENGTH before folding it, which this file
+        // learned once already: any test that decides something about a path has to be asked of the path's real
+        // form, and an exemption decides the most of all.
+        val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(GuardPaths.fold(it), projRoot) }
         TempDirs.tempHit(outsideProject)?.let {
             return Hit(SecurityRule.TEMP_DIR, "acts on the system temporary directory: $it")
         }
@@ -482,14 +524,15 @@ object SensitiveGuard {
         // projRoot is known. Checked against LOCATION candidates ONLY (file_path, path, uri, destination…) —
         // never a command's own tokens, which are code (a regex delimiter, a sed substitution, a bare flag),
         // not each one an argument naming where the call acts; testing them the same way turned an ordinary
-        // `grep -P '/pattern/'` into an unrelated "outside the project" card. Absolute only — a relative
-        // candidate resolves under the working directory — and folded first, so `../../etc/passwd` cannot
-        // spell its way past the check by outrunning `GuardPaths.under`'s plain string comparison.
+        // `grep -P '/pattern/'` into an unrelated "outside the project" card. Absolute only, since a relative
+        // candidate resolves under the working directory, which IS the project root.
+        //
+        // The four conditions — rooted, path-shaped, RESOLVED, and landing outside — are one function, in
+        // [GuardPaths.firstOutsideRoot], and the order is the point: resolving before deciding is what tells where a
+        // path GOES rather than how it is written, which folding `.`/`..` cannot (a symlink is invisible to it).
         if (projRoot == null) return null
-        return ToolInputScanner.locationCandidates(input, policy.home, policy.envValues)
-            .filter { GuardPaths.isAbsolute(it) }
-            .map { GuardPaths.fold(it) }
-            .firstOrNull { !GuardPaths.under(it, projRoot) }
+        val locations = ToolInputScanner.locationCandidates(input, policy.home, policy.envValues)
+        return GuardPaths.firstOutsideRoot(locations, projRoot, policy)
             ?.let { Hit(SecurityRule.OUTSIDE_PROJECT, "reaches outside the project: $it") }
     }
 

@@ -1,45 +1,39 @@
 package dev.lain.claudejb.permission
 
 /**
- * [SecurityRule.SYSTEM_DEVICE] — **raw system devices**: reading or writing the block device, physical
- * memory, or kernel-memory node directly, bypassing the filesystem and every permission check it would
- * normally apply.
+ * [SecurityRule.SYSTEM_DEVICE] — **system devices**: any node under `/dev`, the Windows device namespace
+ * (`\\.\…`), and another process's or the kernel's live memory. Addressing hardware directly, bypassing the
+ * filesystem and every permission check it would normally apply.
  *
  * ### Why this is worth a rule of its own
- * A path candidate that names `/dev/sda` or `/proc/1/mem` is not "a file the agent shouldn't read" in the
- * sense [CredentialPaths] means it — it is a request to read or write the device that BACKS the filesystem,
- * or another process's live memory. Nothing about ordinary agentic development touches these nodes; a hit
- * here is either a mistake with catastrophic blast radius (`dd` into the wrong block device) or a deliberate
- * attempt to read past filesystem permissions (`/dev/mem`, `/proc/<pid>/mem`) or to fingerprint/exfiltrate raw
- * disk contents a file-level scan would never surface.
+ * A path candidate that names `/dev/sda`, `/dev/nvidia0` or `/proc/1/mem` is not "a file the agent shouldn't
+ * read" in the sense [CredentialPaths] means it — it is a request to talk to the machine underneath the
+ * filesystem. **Nothing about agentic development names a device at all**, which is what makes this rule cheap
+ * to hold and total in scope: a hit is either a mistake with catastrophic blast radius (`dd` into the wrong
+ * block device), an attempt to read past filesystem permissions (`/dev/mem`, `/proc/<pid>/mem`), an attempt to
+ * reach hardware nobody asked it to reach (the GPU, the TPM, a USB bus, the microphone), or output being made to
+ * disappear (`/dev/null`). None of those is a thing to confirm; the rule covers the whole tree.
  *
- * ### The benign exemption, and why it has to exist
- * `/dev/null`, `/dev/zero`, `/dev/random`/`/dev/urandom`, `/dev/full`, and the three standard-stream nodes are
- * pseudo-devices with no persistent state and no way to read another process's or another user's data through
- * them — `2>/dev/null` and `< /dev/urandom` are ordinary shell idioms, not device access. Without this
- * allowlist every redirect to `/dev/null` in every command would be a card, which is exactly the "cries wolf"
- * failure [SensitiveGuard]'s own class doc warns about.
+ * ### There is no benign exemption, and there never needed to be one
+ * A `BENIGN_DEVICES` set used to sit here — `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/full`,
+ * the standard streams, `/dev/tty` — checked before the patterns, with a KDoc claiming that without it "every
+ * redirect to `/dev/null` in every command would be a card". **That claim was false and the set was dead code**:
+ * not one of those twelve names matches any entry in [DEVICE_PATTERNS], so the early return it performed could
+ * never change an outcome. It was deleted rather than kept as reassurance, because an exemption that looks
+ * load-bearing and is not is worse than none: it invites the next reader to widen it, and it hides the fact that
+ * the patterns were already precise. **If a pseudo-device ever does need exempting, the honest fix is a narrower
+ * pattern, not a list in front of it.**
  *
- * ### What deliberately is NOT covered
+ * ### Terminal and pseudo devices ARE covered
  * Terminal devices (`/dev/tty…`, `/dev/pts/…` — spelled with an ellipsis rather than a star, since a slash
- * followed by a star OPENS a nested block comment in Kotlin and leaves this KDoc unclosed) and non-raw disk
- * device NAMES that only ever appear as a mount
- * source in ordinary tooling output are left alone — this rule is about a call that NAMES the device as its
- * own target, not every string that happens to look like one. Matching is by SHAPE, not by an exhaustive
- * enumeration of every possible device node on every OS; widening it is a matter of adding a pattern, never of
- * trusting a caller.
+ * followed by a star OPENS a nested block comment in Kotlin and leaves this KDoc unclosed), the standard-stream
+ * nodes, the descriptor directory and the randomness sources are all matched, each for a reason recorded at its
+ * own pattern below. What is still NOT covered is a non-raw disk device NAME that only ever appears as a mount
+ * source in ordinary tooling output: this rule is about a call that NAMES a device as its own target, not every
+ * string that happens to look like one. Matching is by SHAPE, not by an exhaustive enumeration of every possible
+ * node on every OS; widening it is a matter of adding a pattern, never of exempting one in front of them.
  */
 object SystemDevices {
-
-    /**
-     * Provably inert: no persistent state, and no route through them to another user's or process's data.
-     * Compared against the lower-cased candidate so `/DEV/NULL` (case-insensitive filesystems, or an attacker
-     * hoping the check is case-sensitive) is exempted exactly like the canonical spelling.
-     */
-    private val BENIGN_DEVICES = setOf(
-        "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
-        "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2", "/dev/tty",
-    )
 
     /**
      * Raw devices, matched against a [GuardPaths.normalize]d candidate. Each pattern is anchored so it names
@@ -48,28 +42,44 @@ object SystemDevices {
      * rule, so an unanchored fragment would match ordinary paths that merely contain one of these words.
      */
     private val DEVICE_PATTERNS: List<Regex> = listOf(
-        // Direct physical/kernel memory, raw I/O ports, the kernel ring buffer — no partition scheme applies,
-        // so these are exact nodes, not prefixes.
-        Regex("""^/dev/(mem|kmem|port|kmsg)$""", RegexOption.IGNORE_CASE),
-        // Raw and partitioned block devices: the disk itself, not a filesystem mounted from it.
-        Regex(
-            """^/dev/(sd[a-z]+\d*|nvme\d+n\d+(p\d+)?|hd[a-z]+\d*|xvd[a-z]+\d*|vd[a-z]+\d*|mmcblk\d+(p\d+)?)$""",
-            RegexOption.IGNORE_CASE,
-        ),
-        Regex("""^/dev/mapper/""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/(loop|dm-)\d+$""", RegexOption.IGNORE_CASE),
-        // macOS: /dev/disk0, /dev/disk0s1, /dev/rdisk0 (the raw/character variant).
-        Regex("""^/dev/r?disk\d""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/input/""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/fb\d+$""", RegexOption.IGNORE_CASE),
+        // ── EVERY device node. One pattern, no enumeration, no exceptions. ───────────────────────────────
+        //
+        // This replaced a careful list of the dangerous ones — physical memory, block devices, mapper, loop,
+        // macOS disks, input, framebuffer — plus a `BENIGN_DEVICES` allowlist in front of it. Both are gone, and
+        // the reasoning is Lain's: **a model has no business reading, writing or otherwise naming a system device
+        // at all.** Not a disk, not memory, not the randomness source, not a terminal, and not the GPU — a call
+        // that opens `/dev/nvidia0` or `/dev/dri/renderD128` is not doing anything anyone asked for.
+        //
+        // Once that is the policy, enumerating the dangerous nodes is a **blacklist**, and a blacklist is exactly
+        // what you miss the next node with. The list that was here covered no GPU (`/dev/nvidia…`, `/dev/dri/…`,
+        // `/dev/kfd`), no virtualisation (`/dev/kvm`, `/dev/vhost-net`), no bus (`/dev/bus/usb/…`, `/dev/i2c-…`,
+        // `/dev/spidev…`), no sound or capture (`/dev/snd/…`, `/dev/video…`), no `/dev/watchdog`, no `/dev/hidraw…`
+        // — and, worst of the set, not `/dev/tcp/<host>/<port>`, which is bash opening a NETWORK SOCKET spelled as
+        // a file. Every one of those would have had to be remembered. `^/dev/` remembers all of them and every one
+        // that ships next year.
+        //
+        // The pseudo-devices are in scope for their own reasons, recorded because they are the ones that look
+        // harmless: `/dev/null` (and `/dev/zero`/`/dev/full`) is the idiom for making output disappear — bad
+        // practice on its own and an obfuscation primitive, since it hides from the transcript, the log and the
+        // reviewer at once, and a rule set whose job is finding problems must not accept the token whose purpose is
+        // that problems are not found; `/dev/urandom` is a device in exactly the sense `/dev/tpm` is, and "reading
+        // it is harmless" is not the same claim as "a call has any business naming it"; `/dev/stdin` is an
+        // injection surface in both directions, feeding the user's own shell or TTY as a source and writing files
+        // by an unreviewed route as a target; `/dev/stdout`, `/dev/stderr` and `/dev/fd/<n>` are a command's own
+        // output, which routinely carries sensitive data, redirected somewhere it is not expected; `/dev/tty…` and
+        // `/dev/pts/…` are the user's terminal, i.e. their screen and their keystrokes.
+        //
+        // **If something here has to be allowed, it is allowed in Settings by the user**, by switching
+        // [SecurityRule.SYSTEM_DEVICE] off — never by adding a name back in front of this pattern.
+        Regex("""^/dev(/|$)""", RegexOption.IGNORE_CASE),
+        // Windows' device namespace `\\.\…` — PhysicalDrive0, PIPE, COM1, and the rest — seen after
+        // GuardPaths.normalize turns it into its forward-slash form. `ForeignTerritory.isUnc` deliberately does NOT
+        // match it (`.` is not a hostname), so this is the rule that names it. NB `\\?\C:\…` is the extended-length
+        // LOCAL path prefix and is not a device: it is not matched here, and must not be.
+        Regex("""^//\./""", RegexOption.IGNORE_CASE),
         // /proc: another process's live memory, or the kernel's own.
         Regex("""^/proc/\d+/mem$""", RegexOption.IGNORE_CASE),
         Regex("""^/proc/(kcore|kmem|kallsyms)$""", RegexOption.IGNORE_CASE),
-        // Windows' raw device namespace, seen after GuardPaths.normalize turns `\\.\PhysicalDrive0` into its
-        // forward-slash form. (ForeignTerritory.isUnc already flags the same string as a UNC-shaped path first —
-        // see SensitiveGuard.classify's ordering — so this pattern is what names it correctly if that ever stops
-        // being true, not the only thing standing in front of it today.)
-        Regex("""^//\./physicaldrive\d+""", RegexOption.IGNORE_CASE),
     )
 
     /** The first candidate that names a raw system device, or null when none does. */
@@ -79,7 +89,6 @@ object SystemDevices {
      *  same double check every other location rule in this package applies (see [TempDirs.isTemp]). */
     fun isSystemDevice(path: String): Boolean {
         if (path.isBlank()) return false
-        if (path.lowercase() in BENIGN_DEVICES) return false
         return matches(path) || matches(GuardPaths.fold(path))
     }
 
