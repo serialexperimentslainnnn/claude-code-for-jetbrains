@@ -359,6 +359,10 @@ class SensitiveGuardTest {
         assertEquals(Verdict.ALLOW, v("Bash", bash("python3 -c 'print(sum(v)//len(v))'")))
     }
 
+    // The third member of that same family — a regex literal read as a network share — is one file over, in
+    // [SensitiveGuardUncShapeTest]: it is a subject of its own, and this class is already at detekt's size
+    // ceiling.
+
     // ── commandText: what the transcript renders as the call's own copyable code block ─────────────────────
 
     @Test

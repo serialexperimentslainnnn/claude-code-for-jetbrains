@@ -17,14 +17,52 @@ object GuardPaths {
 
     // ── normalisation ────────────────────────────────────────────────────────────────────────────────────
 
-    /** One canonical form: `\`→`/`, env/`~` expanded, `//`→`/` (UNC's leading `//` kept), trailing `/` dropped. */
+    /**
+     * One canonical form — and the UNC `//` prefix survives it only when the caller actually wrote a double
+     * separator. The rest: `\`→`/`, env and `~` expanded, repeated separators collapsed, trailing `/` dropped.
+     *
+     * **That the prefix is read off the WRITTEN separators rather than the translated ones is the security
+     * property, not a detail of ordering.** The flag used to be read off the string *after* `\` had become `/`, which
+     * cannot tell `\\host\share` from a slash followed by a backslash — so any value beginning that way was
+     * handed on wearing a UNC prefix it never had. A JavaScript or PCRE regex literal is exactly that shape (a
+     * `/` opens it and an escape follows): the literal `\btype\s*:\s*` between its slash delimiters became
+     * `//btype/s*:/s*`, whose first segment is hostname-shaped and whose second is non-empty, so
+     * [ForeignTerritory.isUnc] read it as a network share. That is a `NETWORK_MOUNT` hit — DENY for every
+     * caller, no trust exemption, no override — on a `Bash` call that only ran a search. Microsoft states the
+     * prefix as a definition rather than a convention: a name is fully qualified when it begins with "A UNC name
+     * of any format, which always start with two backslash characters" (*Naming Files, Paths, and Namespaces*,
+     * `learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file`). Slash-then-backslash is neither that nor
+     * its accepted forward-slash mirror.
+     *
+     * **This can only ever withdraw a prefix that was manufactured here; it can never relax a real path.** The
+     * flag changes for exactly two spellings — a slash followed by a backslash, and a backslash followed by a
+     * slash — and neither names a file anywhere: the same page makes `\` a reserved character *inside* a name,
+     * so `\btype` is not a Windows component, while on POSIX the string is a directory literally called
+     * `\btype`. Nor is any candidate DROPPED, which is the direction that would be dangerous — a dropped
+     * candidate is judged by no rule at all, so it is an ALLOW from every one of them at once. A value that
+     * really is a path merely loses a prefix it never had and is then judged by the rule that fits it:
+     * `/\home/bob/x` arrived as `//home/bob/x` and was refused as a network share — the right answer for the
+     * wrong reason, and unreachable by the anchored `ForeignTerritory.foreignHome` — and now arrives as
+     * `/home/bob/x`, which that rule refuses as what it is.
+     *
+     * Computed on the **env-expanded** form on purpose: a Windows home can itself be a UNC path, so `$HOME/x`
+     * has to be able to acquire the prefix from the value substituted into it.
+     */
     fun normalize(path: String, home: String?): String {
-        val expanded = expandEnv(path.trim(), home).replace('\\', '/')
-        val unc = expanded.startsWith("//")
-        val collapsed = expanded.replace(Regex("/{2,}"), "/")
+        val expanded = expandEnv(path.trim(), home)
+        val unc = startsWithDoubleSeparator(expanded)
+        val collapsed = expanded.replace('\\', '/').replace(Regex("/{2,}"), "/")
         val result = if (unc) "/$collapsed" else collapsed
         return if (result.length > 1) result.trimEnd('/') else result
     }
+
+    /**
+     * The UNC prefix, as written: two backslashes, or the forward-slash mirror every Unix-side tool accepts.
+     * **The two characters must be the same one** — a mixed pair is a single separator next to an escape, not a
+     * prefix, and reading it as one is what turned a regex literal into a network share (see [normalize]).
+     */
+    private fun startsWithDoubleSeparator(value: String): Boolean =
+        value.length >= 2 && (value[0] == '\\' || value[0] == '/') && value[1] == value[0]
 
     internal fun expandEnv(value: String, home: String?): String {
         var v = value
