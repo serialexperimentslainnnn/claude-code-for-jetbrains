@@ -87,6 +87,15 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
 
+        // Another IDE may have changed these since this process read them: the safe is application-wide and
+        // the in-memory copy is loaded once. Re-read, then push to EVERY chat — the settings are global, so a
+        // refresh asked for from one page and applied to that page alone would leave the same switch reading
+        // differently depending on which tab you opened it from. The read is off the EDT and the push is
+        // ordered behind whatever this process has already queued, so it can never show a value we changed and
+        // have not written yet.
+        JcefBridge.Msg.SettingsRefresh ->
+            ClaudeSettings.getInstance(panel.project).reload { JcefChatPanel.pushSettingsMenuToAll() }
+
         JcefBridge.Msg.OpenSettings ->
             ShowSettingsUtil.getInstance().showSettingsDialog(panel.project, ClaudeSettingsConfigurable::class.java)
     }

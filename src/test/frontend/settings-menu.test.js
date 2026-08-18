@@ -133,6 +133,15 @@ function harness() {
   const q = {
     win,
     sent,
+    /**
+     * What the menu sent MINUS the refreshes.
+     *
+     * `settingsRefresh` rides on the same channel and is emitted by opening the popup and by stepping into a
+     * section, so a bare `sent` mixes "the user changed something" with "the page asked whether anything had
+     * changed elsewhere". The tests about what a press SENDS mean the first, and are read through this; the
+     * refreshes have a test of their own, which is the only place they are asserted.
+     */
+    toggles: () => sent.filter((m) => m && m.type !== 'settingsRefresh'),
     gear: () => win.document.querySelector('.settings-btn'),
     menu: () => win.document.querySelector('.settings-menu'),
     /** Every entry of the panel on screen — which, since the drill-down, is every entry there is. */
@@ -404,6 +413,30 @@ describe('the sections', () => {
     expect(q.row('Block network')).toBeTruthy();
   });
 
+  it('asks the host to re-read the stored settings on open and on entering a section', () => {
+    // The settings live in the IDE's PasswordSafe, which is application-wide, and the host's copy is loaded
+    // once per service: with two IDEs open, everything this menu shows is the truth as of whenever this
+    // process last read it. Stale is not merely old here — a toggle is a read-modify-write over the stored
+    // document, so flipping a stale row flips the value it DISPLAYS rather than the value stored.
+    //
+    // The refreshes are counted from a fresh harness, because `beforeEach` has already opened the menu once.
+    const fresh = harness();
+    fresh.win.cc.settingsMenu(payload());
+    expect(fresh.sent).toEqual([]);
+
+    fresh.gear().click();
+    expect(fresh.sent).toEqual([{ type: 'settingsRefresh' }]);
+    // Drawn FIRST and refreshed after: waiting on a keychain read before painting would make the gear feel
+    // broken, and the answer arrives as an ordinary push that redraws only what changed.
+    expect(fresh.entry('Model')).toBeTruthy();
+
+    fresh.enter('Security');
+    expect(fresh.sent).toEqual([{ type: 'settingsRefresh' }, { type: 'settingsRefresh' }]);
+    // …and once per step in, not once per press inside the section: what is on screen was just re-read.
+    fresh.row('Sandbox commands').click();
+    expect(fresh.sent.filter((m) => m.type === 'settingsRefresh')).toHaveLength(2);
+  });
+
   it('a deferred section says so in text, on the entry, before you go in', () => {
     // A launch flag that reads as a live switch is exactly the defect this note closes, and a note carried
     // only by a colour or only by a `title` closes it for half the readers. It is a child of the button, so
@@ -513,7 +546,7 @@ describe('what a press sends', () => {
   it('toggling a switch sends the key and the NEW value, and flips the row at once', () => {
     q.enter('Security');
     q.row('Sandbox commands').click();
-    expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'sandbox', on: true }]);
+    expect(q.toggles()).toEqual([{ type: 'settingsToggle', key: 'sandbox', on: true }]);
     // Optimistic on purpose: a switch that does nothing until a round trip completes reads as broken, and
     // the host's next push is authoritative either way.
     expect(q.row('Sandbox commands').getAttribute('aria-checked')).toBe('true');
@@ -523,7 +556,7 @@ describe('what a press sends', () => {
   it('toggling an ON switch sends off', () => {
     q.enter('Security');
     q.row('Block credential files').click();
-    expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'blockCredentials', on: false }]);
+    expect(q.toggles()).toEqual([{ type: 'settingsToggle', key: 'blockCredentials', on: false }]);
   });
 
   it('choosing a radio unchecks its group on screen and sends exactly ONE message', () => {
@@ -532,8 +565,8 @@ describe('what a press sends', () => {
     // means, and several toggles racing for one gesture.
     q.enter('Model');
     q.row('Sonnet').click();
-    expect(q.sent).toEqual([{ type: 'settingsToggle', key: 'model:sonnet', on: true }]);
-    expect(q.sent.filter((m) => m.on === false)).toEqual([]);
+    expect(q.toggles()).toEqual([{ type: 'settingsToggle', key: 'model:sonnet', on: true }]);
+    expect(q.toggles().filter((m) => m.on === false)).toEqual([]);
     expect(q.row('Sonnet').getAttribute('aria-checked')).toBe('true');
     expect(q.row('Sonnet').classList.contains('selected')).toBe(true);
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('false');
@@ -549,7 +582,7 @@ describe('what a press sends', () => {
   it('choosing the radio that is already chosen sends nothing', () => {
     q.enter('Model');
     q.row('Opus 5').click();
-    expect(q.sent).toEqual([]);
+    expect(q.toggles()).toEqual([]);
     expect(q.row('Opus 5').getAttribute('aria-checked')).toBe('true');
   });
 
@@ -559,11 +592,11 @@ describe('what a press sends', () => {
     q.enter('Model');
     q.row('Sonnet').click();
     q.row('Opus 5').click();
-    expect(q.sent.map((m) => m.key)).toEqual(['model:sonnet', 'model:opus[1m]']);
+    expect(q.toggles().map((m) => m.key)).toEqual(['model:sonnet', 'model:opus[1m]']);
     q.back().click();
     q.enter('Setting sources');
     q.row('user').click();
-    expect(q.sent[2].key).toBe('source:user');
+    expect(q.toggles()[2].key).toBe('source:user');
   });
 
   it('the choice survives a reopen, so the stash was updated and not only the screen', () => {
@@ -586,7 +619,7 @@ describe('what a press sends', () => {
     q.back().click();
     q.enter('Effort');
     q.row('Low').click();
-    expect(q.sent.length).toBe(2);
+    expect(q.toggles().length).toBe(2);
     expect(q.menu()).toBeTruthy();
   });
 
@@ -606,7 +639,7 @@ describe('what a press sends', () => {
 
   it('Open Plugin Settings asks the host and closes behind itself', () => {
     q.body().lastElementChild.click();
-    expect(q.sent).toEqual([{ type: 'openSettings' }]);
+    expect(q.toggles()).toEqual([{ type: 'openSettings' }]);
     expect(q.menu()).toBeNull();
     // No focus return here, unlike Escape: this entry hands the user to another window, and dragging the
     // caret back to the gear first would take it away from wherever that window puts it.

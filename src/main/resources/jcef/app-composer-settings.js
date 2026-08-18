@@ -423,6 +423,12 @@
     slide = 'attach-from-right';
     repaint();
     focusRow(rows()[1] || rows()[0]);
+    // Ask again on the way in. The rows drawn a moment ago came from this process's copy, and these settings
+    // are application-wide: another IDE may have changed them since. Asking HERE and not only on open is what
+    // makes a section you are about to read show the stored truth rather than the truth at the time you
+    // pressed the gear — which matters more than it sounds, because a toggle is a read-modify-write over the
+    // stored document, so flipping a stale row would flip the value it displays and not the value stored.
+    refreshFromHost();
   }
 
   function leaveGroup() {
@@ -737,6 +743,22 @@
     btn.setAttribute('aria-expanded', 'true');
     if (CX.positionMenu) CX.positionMenu(menu, btn);
     focusRow(rows()[0]);
+    // Drawn from the last push, then refreshed. In that order deliberately: the popup opens immediately with
+    // what we have — waiting on a keychain read over D-Bus before painting would make the gear feel broken —
+    // and the answer arrives as an ordinary push, which redraws only what actually changed.
+    refreshFromHost();
+  }
+
+  /**
+   * Ask the host to re-read the stored settings and push them back.
+   *
+   * The settings live in the IDE's PasswordSafe, which is application-wide, and the host's in-memory copy is
+   * loaded once per service: with two IDEs open, everything this menu shows is the truth as of whenever this
+   * process last read it. The page cannot read the safe and must not try to guess — it asks, and the host
+   * answers through the one channel that already exists.
+   */
+  function refreshFromHost() {
+    CC.send({ type: 'settingsRefresh' });
   }
 
   function close(returnFocus) {

@@ -126,6 +126,22 @@ object JcefBridge {
          */
         data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
+        /**
+         * The ⚙ menu is being looked at: re-read the stored settings and push them back.
+         *
+         * **The settings are application-wide and the in-memory copy is loaded once**, so another IDE's change
+         * is invisible here until something asks. The page asks at the two moments the reader is about to
+         * believe what it says — opening the popup, and stepping into a section — because those are the moments
+         * a stale switch becomes a wrong answer rather than merely an old one, and because a write from this
+         * menu is a read-modify-write over the stored document ([dev.lain.claudejb.settings.SettingsStore]):
+         * a toggle flipped from a stale row would flip the value it is shown, not the value that is stored.
+         *
+         * It carries nothing. What to re-read is not the page's business — it asks for the current truth and
+         * the host decides what that is — and the answer arrives as an ordinary `cc.settingsMenu` push, which
+         * the page skips when nothing it draws has changed.
+         */
+        object SettingsRefresh : Settings
+
         /** The last row of that menu: the real Settings page, for everything the popup deliberately omits. */
         object OpenSettings : Settings
 
@@ -397,6 +413,7 @@ object JcefBridge {
         "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
         "changeProvider" -> Msg.ChangeProvider(f.text("id"))
         "settingsToggle" -> Msg.SettingsToggle(f.text("key"), f.bool("on"))
+        "settingsRefresh" -> Msg.SettingsRefresh
         "openSettings" -> Msg.OpenSettings
         else -> null
     }
