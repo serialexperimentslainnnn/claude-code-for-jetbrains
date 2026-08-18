@@ -387,12 +387,9 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     fun showCommandPalette() = host.exec("window.cc.openPalette && window.cc.openPalette()")
 
-    /**
-     * Signs out — the same route the dashboard's account row takes, so there is exactly ONE logout sequence.
-     * It is delicate (stop the process first, then clear, then start into a session with no identity) and
-     * lives commented in [OnboardingController.logout]; this is a delegate, never a second copy of it.
-     */
-    fun requestLogout() = onboarding.logout()
+    // NB there was a `requestLogout()` delegate here, for the tool window's Swing *Log out* action. That action
+    // went with the title bar in 5.5.0 and nothing replaced the delegate, because nothing needed to: the page's
+    // own button sends `logout`, which `OnboardingController` handles directly. One logout sequence, one door.
 
     /** Pins the current editor file as a removable attachment chip (editor "Add … to Claude Context"). */
     fun mentionCurrentFile() = tray.addCurrentFile()
