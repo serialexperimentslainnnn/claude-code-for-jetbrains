@@ -130,3 +130,5 @@ secrets.yaml
 # here would silently commit whatever lands under that prefix, a PRIVATE block exported to the wrong
 # filename included. A leak has to stay an explicit mistake.
 !/docs/trust-chain.asc
+PROJECTMAP.md
+**/PROJECTMAP.md
