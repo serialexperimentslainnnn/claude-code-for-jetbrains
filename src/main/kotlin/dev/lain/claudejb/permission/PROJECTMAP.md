@@ -43,29 +43,27 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `CommandRules` | object | `CommandRules.kt:17` | Rule family 3 of [SensitiveGuard] — **dangerous commands**: commands that dump a secret at rest, exfiltrate a file, … |
 | `CommandRules.DANGEROUS_COMMANDS` | val | `CommandRules.kt:20` |  |
 | `CommandRules.dangerousCommand` | fun | `CommandRules.kt:71` |  |
-| `CommandRules.deobfuscate` | fun | `CommandRules.kt:100` | Best-effort shell de-obfuscation: peel the cheap tricks an attacker uses to slip a command or a path past a … |
+| `CommandRules.deobfuscate` | fun | `CommandRules.kt:110` | Best-effort shell de-obfuscation: peel the cheap tricks an attacker uses to slip a command or a path past a … |
 | `CredentialPaths` | object | `CredentialPaths.kt:15` | Rule family 1 of [SensitiveGuard] — **credentials and key material**: the blacklist of files worth stealing, and the … |
 | `CredentialPaths.SENSITIVE_GLOBS` | val | `CredentialPaths.kt:18` |  |
-| `CredentialPaths.compile` | fun | `CredentialPaths.kt:88` |  |
+| `CredentialPaths.compile` | fun | `CredentialPaths.kt:100` |  |
 | `ForeignTerritory` | object | `ForeignTerritory.kt:16` | Rule family 2 of [SensitiveGuard] — **foreign territory**: another user's home (`/home/<not-me>`, `/Users/<not-me>`, … |
 | `ForeignTerritory.foreignHit` | fun | `ForeignTerritory.kt:52` |  |
-| `ForeignTerritory.foreignHome` | fun | `ForeignTerritory.kt:78` | Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). |
-| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:126` | `\\server\share` / `//server/share` — remote by construction, on any OS. |
+| `ForeignTerritory.foreignHome` | fun | `ForeignTerritory.kt:101` | Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). |
+| `ForeignTerritory.isUnc` | fun | `ForeignTerritory.kt:149` | `\\server\share` / `//server/share` — remote by construction, on any OS. |
 | `GuardPaths` | object | `GuardPaths.kt:16` | The **path phase** of [SensitiveGuard]: one canonical textual form for every candidate, containment against a root, … |
 | `GuardPaths.normalize` | fun | `GuardPaths.kt:51` | One canonical form — and the UNC `//` prefix survives it only when the caller actually wrote a double separator. |
-| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:67` |  |
-| `GuardPaths.under` | fun | `GuardPaths.kt:97` | Containment, on normalized forms: is [path] the root itself or something under it? |
-| `GuardPaths.fold` | fun | `GuardPaths.kt:164` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
-| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:234` | Each candidate, plus — when a resolver is configured — its canonical real path. |
+| `GuardPaths.expandEnv` | fun | `GuardPaths.kt:75` |  |
+| `GuardPaths.under` | fun | `GuardPaths.kt:105` | Containment, on normalized forms: is [path] the root itself or something under it? |
+| `GuardPaths.fold` | fun | `GuardPaths.kt:172` | `a/./b` → `a/b`, `a/b/../c` → `a/c`. |
+| `GuardPaths.expandWithResolved` | fun | `GuardPaths.kt:242` | Each candidate, plus — when a resolver is configured — its canonical real path. |
 | `PendingPermission` | class | `PermissionBroker.kt:17` | A tool request awaiting the user's decision. |
 | `ElicitationCard` | class | `PermissionBroker.kt:55` | The data for an MCP elicitation card (carried on a [PendingPermission]). |
 | `PermissionBroker` | class | `PermissionBroker.kt:71` | Decides `can_use_tool` requests. |
 | `SensitiveGuard` | object | `SensitiveGuard.kt:94` | A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for, or … |
 | `SensitiveGuard.AGENT_TOOLS` | val | `SensitiveGuard.kt:119` | The agent's OWN tools — the allowlist of trusted callers. |
 | `SensitiveGuard.isTrustedCaller` | fun | `SensitiveGuard.kt:199` | True only for the agent's OWN tools. |
-| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:218` | [Verdict] plus its explanation, in a single classification pass. |
-| `SensitiveGuard.verdict` | fun | `SensitiveGuard.kt:224` | The verdict for a tool call. |
-| `SensitiveGuard.reason` | fun | `SensitiveGuard.kt:261` | The one-line reason a call tripped the guard (for the card / transcript), or null. |
+| `SensitiveGuard.evaluate` | fun | `SensitiveGuard.kt:220` | [Verdict] plus its explanation, in a single classification pass. |
 | `TempDirs` | object | `TempDirs.kt:90` | Rule family 4 of [SensitiveGuard] — **the system temporary directory**: `/tmp` and the other spellings of the same … |
 | `TempDirs.tempHit` | fun | `TempDirs.kt:117` | The first candidate that names the temporary directory, or null when none does. |
 | `TempDirs.isTemp` | fun | `TempDirs.kt:126` | Is [path] the system temporary directory, or something inside it? |
@@ -81,8 +79,8 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 
 - **A new rule is a new file, not a branch** in `SensitiveGuard`. The verdict file stays a verdict.
 - **Detection runs unconditionally.** The per-rule settings toggles downgrade an *outcome* from `DENY` to
-  `ASK` — never to `ALLOW`. A disabled rule still produces a card every single time, and `reason()` always
-  names the Settings path that produced the downgrade.
+  `ASK` — never to `ALLOW`. A disabled rule still produces a card every single time, and `evaluate()`'s
+  `Decision.reason` always names the Settings path that produced the downgrade.
 - **`forceAsk` is checked before the mode and before `isRemembered`**, and that order is the point: it only
   ever downgrades an approval to a card. It cannot allow anything that would otherwise have been asked, and a
   guard `DENY` stays a `DENY`.
@@ -155,7 +153,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
   unconditionally, so traversal laundering does not depend on any of this. Symlinks do. And that half **adds**
   a spelling, never replaces one: folding `..` is sound only when no segment on the way is a link, so
   substituting the folded form could lose a match, while judging both can only add one.
-- **A crash in `verdict()` leaves the `can_use_tool` unanswered and the turn hangs.** That is the failure mode
+- **A crash in `evaluate()` leaves the `can_use_tool` unanswered and the turn hangs.** That is the failure mode
   to design against: it is silent, and it looks like the model stopped rather than like a plugin defect. It has
   happened — a shell-assigned value containing `$` reached `String.replace` as a replacement template and threw.
 - **Resolution runs on the thread that reads the binary's entire stdout.** A synchronous `stat()` there froze

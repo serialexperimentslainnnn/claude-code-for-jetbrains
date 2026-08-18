@@ -103,7 +103,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `GitIdeMenuHeadlessTest` | class | `headless/GitIdeMenuHeadlessTest.kt:22` | Headless: **every action id the Git submenu offers still resolves, and the submenu is the catalogue.** The first part … |
 | `JcefMetaPayloadHeadlessTest` | class | `headless/JcefMetaPayloadHeadlessTest.kt:24` | The `cc.meta` payload carries every key the boot card actually reads. |
 | `JcefSessionDataWorkloadsHeadlessTest` | class | `headless/JcefSessionDataWorkloadsHeadlessTest.kt:30` | The Workloads diagram is a **faithful projection of the tab strip**: one node per open chat, in the strip's own order, … |
-| `OpenedDiffsServiceHeadlessTest` | class | `headless/OpenedDiffsServiceHeadlessTest.kt:8` | Headless: the [OpenedDiffsService] project service tracks the diff tabs the plugin opened. |
+| `OpenedDiffsServiceHeadlessTest` | class | `headless/OpenedDiffsServiceHeadlessTest.kt:16` | Headless: [OpenedDiffsService] closes the diff tabs the plugin opened — **and only those**. |
 | `RollbackManagerHeadlessTest` | class | `headless/RollbackManagerHeadlessTest.kt:23` | Headless: [RollbackManager.revertEdit] is what a transcript card's **Restore** falls back to when the binary cannot … |
 | `SecretStoreHeadlessTest` | class | `headless/SecretStoreHeadlessTest.kt:16` | Headless: [SecretStore] over a store of this test's own ([SecretStore.storeOverride]). |
 | `SecretStoreIsolationHeadlessTest` | class | `headless/SecretStoreIsolationHeadlessTest.kt:37` | A test cannot see, or leave behind, another test's secrets. |
@@ -173,7 +173,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SessionHistoryTest` | class | `session/SessionHistoryTest.kt:11` | Tests [SessionHistory]'s pure open-session id (de)serialization without an Application/Project: ordered round-trip and … |
 | `SessionLauncherTest` | class | `session/SessionLauncherTest.kt:15` | Pure unit tests for [SessionLauncher.buildArgs] (and [SessionLauncher.binaryPermissionMode]). |
 | `SessionStoreTest` | class | `session/SessionStoreTest.kt:15` | Tests [SessionStore]'s security-relevant, filesystem-independent behaviour: the path-traversal guard (a non-UUID … |
-| `SessionTimerContractTest` | class | `session/SessionTimerContractTest.kt:20` | **Every repeating timer a session owns must retire on its own AND be stopped when the session is disposed.** Both … |
+| `SessionTimerContractTest` | class | `session/SessionTimerContractTest.kt:26` | **Every repeating timer a session owns must retire on its own AND be stopped when the session is disposed.** Both … |
 | `SessionTitleReaderTest` | class | `session/SessionTitleReaderTest.kt:18` | Tests [SessionTitleReader]'s pure title selection over raw JSONL lines (no filesystem): ai-title is used, a `/rename` … |
 | `SessionTranscriptReaderParseTest` | class | `session/SessionTranscriptReaderParseTest.kt:18` | What a RESTORED conversation looks like, pinned against the binary's own JSONL. |
 | `SessionTranscriptReaderTest` | class | `session/SessionTranscriptReaderTest.kt:13` | Tests [SessionTranscriptReader.parseEntries]'s pure JSONL→transcript mapping (no filesystem): user/assistant text, … |

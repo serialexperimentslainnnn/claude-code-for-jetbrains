@@ -20,6 +20,9 @@ to a collaborator. Adding behaviour here means adding it to the right collaborat
 | File | What it decides |
 |---|---|
 | `ClaudeSession.kt` | The orchestrator: process, queue, transcript, listeners, the `edt {}` dispatcher, and the `onEvent` dispatch. |
+| `PromptComposer.kt` | The pure half of `send`: wire text vs. display text, `@` mentions, relativisation. No IDE, no session. |
+| `SessionTitling.kt` | How a tab's title is decided: the binary's own session title, or — once — a generated one. |
+| `PollSchedule.kt` | The three background timers a live session runs (quota, output tail, agent revival) and their retirement rules. |
 | `SessionLauncher.kt` | The argv: `buildArgs` from an immutable `LaunchOptions` snapshot, plus the MCP config JSON. |
 | `SessionControlClient.kt` | Correlation by `request_id`, the watchdog, and failing every pending request on teardown. |
 | `ControlAsks.kt` | **The catalogue of questions asked of the binary.** One `Ask` per request: what to send, how to read the reply. |
@@ -165,6 +168,9 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `NoticeNarrator` | class | `NoticeNarrator.kt:16` | Everything the binary says that is not part of a turn: refusals, uploads, plugin installs, denials, recalled memories, … |
 | `PermissionCardManager` | class | `PermissionCardManager.kt:20` | Holds the queue of permission requests awaiting the user's Accept/Reject (rendered as inline chat cards), extracted … |
 | `PluginAgentIndex` | class | `PluginAgentIndex.kt:52` | What belongs to a **plugin** session: every agent, subagent and background task it started, each with its parent and … |
+| `PollSchedule` | class | `PollSchedule.kt:27` | Owns the three timers a live session runs, and the retirement rule for each — extracted out of `ClaudeSession` because … |
+| `PromptComposer` | object | `PromptComposer.kt:15` | The pure half of [ClaudeSession.send]: turns a raw prompt plus its attachments into what the queue actually needs — … |
+| `PromptComposer.compose` | fun | `PromptComposer.kt:21` | Assembles [Composed] from [text] and [attachments], relativising file mentions against [projectRoot]. |
 | `QuotaWarnings` | class | `QuotaWarnings.kt:17` | Telling the user their quota is running out, once per threshold. |
 | `RemoteMounts` | object | `RemoteMounts.kt:30` | Answers one question that turns out to be load-bearing: **is this path on a network / removable / foreign … |
 | `RemoteMounts.snapshot` | fun | `RemoteMounts.kt:54` | The host snapshot, computed once. |
@@ -200,6 +206,7 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SessionTitleReader.pick` | fun | `SessionTitleReader.kt:81` | Picks the session title from raw JSONL lines, in order of authority: the last non-blank `customTitle` (the user's own … |
 | `SessionTitleReader.pickTitle` | fun | `SessionTitleReader.kt:130` | Just the display text of [pick] — kept because most callers only paint it. |
 | `SessionTitleReader.asTitle` | fun | `SessionTitleReader.kt:139` | Any text as a tab-sized title: its first non-blank line, cut on a word boundary so it never ends mid-syllable. |
+| `SessionTitling` | class | `SessionTitling.kt:20` | How a chat's tab title is decided, once there is a session id to ask about: the binary's own session title first … |
 | `EntryDTO` | class | `SessionTranscriptReader.kt:21` | A flat transcript entry, decoded from the binary's own JSONL. |
 | `SessionRef` | class | `SessionTranscriptReader.kt:62` | Lightweight handle to a past session: its id, the binary-issued title, the file mtime (newest-first sort key), and … |
 | `SessionTranscriptReader` | object | `SessionTranscriptReader.kt:77` | Read-only reconstruction of a past conversation from the `claude` binary's transcript (the single source of truth — … |
@@ -281,9 +288,14 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 - **The bare agent id is the identity.** The file is `agent-<id>.jsonl` but the sidecar says
   `parentAgentId: "<id>"` unprefixed. Taking the filename as the identity collapses the whole tree into one
   level, and it looks like a rendering bug rather than a parsing one.
-- **A nested subagent has no `toolUseId`**, so nothing can settle it on its own; it inherits its parent's
-  ending because it cannot outlive the turn that spawned it. Anything that "fixes" a stuck RUNNING state by
-  inventing an id will resurrect this.
+- **A nested subagent has no `toolUseId`**, so no `task_notification` can settle it — but **its own transcript
+  can**, and that ordering is the rule: an ending of its own outranks its parent's, and the parent's ending only
+  settles a child that never closed a turn. Copying the parent's state outright is what made every finished
+  subagent report RUNNING for as long as its parent worked, which is what a subagent DOES; the tab dot, the Task
+  card and a Workloads row that never expires all read that same node. A RUNNING parent settles nothing — it is
+  only evidence that there is a live process behind the child. The stop instant for a child no `tool_use_id` can
+  key lives in `AgentRegistry.completedAtByAgent`, sealed where the ending is watched: stamping it at admission
+  with the run's start would put the agent outside the retention window the moment it finished.
 - **`SessionTranscriptReader.parseEntries` is the only JSONL parser and must stay so.** `AgentRegistry` reuses
   it deliberately: a second parser is exactly how the duplicated-thinking defect of 4.0.4 happened.
 - **An agent is not a background task.** `task_notification` fires for both; only a `tool_result` carrying a

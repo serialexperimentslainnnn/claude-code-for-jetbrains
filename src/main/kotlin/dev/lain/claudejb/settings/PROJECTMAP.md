@@ -55,21 +55,21 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `SecretStore` | object | `SecretStore.kt:24` | The plugin's credentials, in the IDE's PasswordSafe (OS keychain / KWallet / DPAPI / encrypted file — whatever the … |
 | `SecretStore.OAUTH_TOKEN` | val | `SecretStore.kt:27` | Env-var names the store manages. |
 | `SecretStore.API_KEY` | val | `SecretStore.kt:36` | The env-var name for an API key — a NAME only. |
-| `SecretStore.CREDENTIALS_JSON` | val | `SecretStore.kt:44` | NOT an env var: the full content of the binary's `.credentials.json`, held here AT REST. |
-| `SecretStore.ACCOUNT_PROFILE` | val | `SecretStore.kt:52` | The signed-in account (email, organization) — NOT a credential and NOT an auth mode, which is exactly why it is kept … |
-| `SecretStore.AUTH_STATUS` | val | `SecretStore.kt:64` | The last successful `claude auth status` reply, VERBATIM — the binary's own statement of who is signed in (`loggedIn`, … |
-| `SecretStore.ENV_VARS` | val | `SecretStore.kt:78` | The user's own environment variables for the child process, as the `KEY=value` block they typed. |
-| `SecretStore.SETTINGS_JSON` | val | `SecretStore.kt:95` | The plugin's whole configuration, as the JSON document [dev.lain.claudejb.settings.SettingsStore] builds. |
-| `SecretStore.storeOverride` | var | `SecretStore.kt:140` | The store a test has installed for itself, or null. |
-| `SecretStore.inert` | fun | `SecretStore.kt:150` | True when there is no store to talk to: a test JVM in which nothing has installed a [storeOverride]. |
-| `SecretStore.readCredential` | fun | `SecretStore.kt:163` | Reads one entry, from the installed test store, or the PasswordSafe, or nowhere. |
-| `SecretStore.writeCredential` | fun | `SecretStore.kt:170` | Writes (or, on a null [value], removes) one entry. |
-| `SecretStore.get` | fun | `SecretStore.kt:179` |  |
-| `SecretStore.set` | fun | `SecretStore.kt:186` | Stores [value] under [name] and CLEARS every sibling entry — the auth modes are exclusive, and a leftover credential … |
-| `SecretStore.setVerified` | fun | `SecretStore.kt:211` | Stores [value] and READS IT BACK. |
-| `SecretStore.clear` | fun | `SecretStore.kt:216` |  |
-| `SecretStore.clearAll` | fun | `SecretStore.kt:220` |  |
-| `SecretStore.envOverlay` | fun | `SecretStore.kt:236` | What the launch env should gain from the safe: every stored credential whose name the explicit env does NOT already … |
+| `SecretStore.CREDENTIALS_JSON` | val | `SecretStore.kt:52` | NOT an env var: the full content of the binary's `.credentials.json`, held here AT REST. |
+| `SecretStore.ACCOUNT_PROFILE` | val | `SecretStore.kt:60` | The signed-in account (email, organization) — NOT a credential and NOT an auth mode, which is exactly why it is kept … |
+| `SecretStore.AUTH_STATUS` | val | `SecretStore.kt:72` | The last successful `claude auth status` reply, VERBATIM — the binary's own statement of who is signed in (`loggedIn`, … |
+| `SecretStore.ENV_VARS` | val | `SecretStore.kt:86` | The user's own environment variables for the child process, as the `KEY=value` block they typed. |
+| `SecretStore.SETTINGS_JSON` | val | `SecretStore.kt:103` | The plugin's whole configuration, as the JSON document [dev.lain.claudejb.settings.SettingsStore] builds. |
+| `SecretStore.storeOverride` | var | `SecretStore.kt:148` | The store a test has installed for itself, or null. |
+| `SecretStore.inert` | fun | `SecretStore.kt:158` | True when there is no store to talk to: a test JVM in which nothing has installed a [storeOverride]. |
+| `SecretStore.readCredential` | fun | `SecretStore.kt:171` | Reads one entry, from the installed test store, or the PasswordSafe, or nowhere. |
+| `SecretStore.writeCredential` | fun | `SecretStore.kt:178` | Writes (or, on a null [value], removes) one entry. |
+| `SecretStore.get` | fun | `SecretStore.kt:187` |  |
+| `SecretStore.set` | fun | `SecretStore.kt:194` | Stores [value] under [name] and CLEARS every sibling entry — the auth modes are exclusive, and a leftover credential … |
+| `SecretStore.setVerified` | fun | `SecretStore.kt:219` | Stores [value] and READS IT BACK. |
+| `SecretStore.clear` | fun | `SecretStore.kt:224` |  |
+| `SecretStore.clearAll` | fun | `SecretStore.kt:228` |  |
+| `SecretStore.envOverlay` | fun | `SecretStore.kt:244` | What the launch env should gain from the safe: every stored credential whose name the explicit env does NOT already … |
 | `SettingsStore` | object | `SettingsStore.kt:31` | Where the plugin's settings live: **the IDE's PasswordSafe**, as one JSON document. |
 | `SettingsStore.load` | fun | `SettingsStore.kt:51` | Reads the settings from the safe, adopting a pre-existing settings FILE the first time. |
 | `SettingsStore.save` | fun | `SettingsStore.kt:148` | Writes the whole configuration into the OS credential store, as one document. |

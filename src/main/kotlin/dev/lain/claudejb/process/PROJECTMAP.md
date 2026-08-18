@@ -55,10 +55,10 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `ApiKeyApproval.inert` | fun | `ApiKeyApproval.kt:115` | Refuses to touch the developer's real `~/.claude.json` from a test JVM — the same rule, and the same hard-won reason, … |
 | `ApiKeyApproval.readConfig` | fun | `ApiKeyApproval.kt:123` | `~/.claude.json` parsed, or null when it is absent or not readable JSON. |
 | `ApiKeyApproval.writeConfig` | fun | `ApiKeyApproval.kt:126` | Writes [root] back over `~/.claude.json`, pretty-printed like the CLI does. |
-| `AuthCli` | object | `AuthCli.kt:36` | The binary's non-interactive auth surface: `claude auth status`, plus the refresh-token `auth login`. |
-| `AuthCli.status` | fun | `AuthCli.kt:73` | Null when the probe could not run or its output was not parseable — "unknown", never "logged out". |
-| `AuthCli.stored` | fun | `AuthCli.kt:89` | The last `auth status` reply the safe holds, or null. |
-| `AuthCli.loginFromRefreshToken` | fun | `AuthCli.kt:120` | **Non-interactive** `claude auth login`, driven entirely by a refresh token in the environment — no browser, no TTY, … |
+| `AuthCli` | object | `AuthCli.kt:37` | The binary's non-interactive auth surface: `claude auth status`, plus the on-disk-refresh `auth login` … |
+| `AuthCli.status` | fun | `AuthCli.kt:74` | Null when the probe could not run or its output was not parseable — "unknown", never "logged out". |
+| `AuthCli.stored` | fun | `AuthCli.kt:90` | The last `auth status` reply the safe holds, or null. |
+| `AuthCli.refreshUsingOwnFiles` | fun | `AuthCli.kt:147` | Runs `auth login` for a binary that has been given **its own credentials file back** (see … |
 | `BinaryInstall` | object | `BinaryInstall.kt:16` | Everything the "Claude Code was not found" boot card needs: the install commands the host can run for the user, and … |
 | `BinaryInstall.methods` | fun | `BinaryInstall.kt:36` | The install routes for the CURRENT platform, primary first. |
 | `BinaryInstall.method` | fun | `BinaryInstall.kt:169` |  |
@@ -80,11 +80,12 @@ indexed, and neither are extensions: they are called on their receiver, not on t
 | `CredentialsVault.hasUsableToken` | fun | `CredentialsVault.kt:212` | Whether the vault holds an access token that can authenticate a session **right now**. |
 | `CredentialsVault.canRenew` | fun | `CredentialsVault.kt:227` | Whether the vaulted blob can be turned back into a live access token without the user. |
 | `CredentialsVault.needsRenewal` | fun | `CredentialsVault.kt:237` | An identity that exists but is not usable as it stands — exactly the case [renew] exists for. |
-| `CredentialsVault.renew` | fun | `CredentialsVault.kt:261` | Mints a fresh credential from the vaulted refresh token, by running the binary's own non-interactive `auth login` … |
-| `CredentialsVault.renewalEnv` | fun | `CredentialsVault.kt:289` | The environment the non-interactive renewal runs under. |
-| `CredentialsVault.subscriptionType` | fun | `CredentialsVault.kt:311` | The plan name recorded in the vaulted blob (`max`, `pro`, …), or null. |
-| `CredentialsVault.harvest` | fun | `CredentialsVault.kt:336` | Moves the credentials file into the safe and deletes it. |
-| `CredentialsVault.clear` | fun | `CredentialsVault.kt:366` | Wipes both halves: the safe entry and any file on disk. |
+| `CredentialsVault.renew` | fun | `CredentialsVault.kt:262` | Brings the vaulted credential back to life. |
+| `CredentialsVault.refreshEnv` | fun | `CredentialsVault.kt:283` | The environment the refresh run gets: the settings env **minus the access token**. |
+| `CredentialsVault.renewOnDisk` | fun | `CredentialsVault.kt:330` | Renewal by giving the binary **its own file back** for the length of one call: plant, refresh, harvest, delete. |
+| `CredentialsVault.subscriptionType` | fun | `CredentialsVault.kt:404` | The plan name recorded in the vaulted blob (`max`, `pro`, …), or null. |
+| `CredentialsVault.harvest` | fun | `CredentialsVault.kt:429` | Moves the credentials file into the safe and deletes it. |
+| `CredentialsVault.clear` | fun | `CredentialsVault.kt:473` | Wipes both halves: the safe entry and any file on disk. |
 | `EnvScriptLoader` | object | `EnvScriptLoader.kt:18` | Sources a user-provided script and captures the environment it produces, so the `claude` process can inherit the same … |
 | `EnvScriptLoader.load` | fun | `EnvScriptLoader.kt:26` |  |
 | `EnvScriptLoader.parse` | fun | `EnvScriptLoader.kt:72` | Keeps only well-formed `KEY=VALUE` lines (KEY has no whitespace); ignores multi-line value spillover. |

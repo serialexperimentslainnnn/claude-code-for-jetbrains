@@ -153,8 +153,8 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `cc.batch` | `app-transcript.js:404` |
 | `cc.clear` | `app-transcript.js:457` |
 | `cc.trimRows` | `app-transcript.js:544` |
-| `CC.transcript.builderFor` | `app-transcript-rows.js:130` |
-| `cc.toggleReasoning` | `app-transcript-rows.js:173` |
+| `CC.transcript.builderFor` | `app-transcript-rows.js:137` |
+| `cc.toggleReasoning` | `app-transcript-rows.js:180` |
 | `CC.transcript.toolIconSvg` | `app-transcript-tools.js:45` |
 | `CC.transcript.buildTool` | `app-transcript-tools.js:62` |
 | `CC.transcript.applyToolElapsed` | `app-transcript-tools.js:159` |
@@ -209,8 +209,8 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `CC.composer.renderAuth` | `app-composer-auth.js:104` |
 | `CC.composer.buildActionRows` | `app-composer-actions.js:82` |
 | `CC.composer.viewsRow` | `app-composer-actions.js:173` |
-| `CC.composer.mountSettingsButton` | `app-composer-settings.js:205` |
-| `cc.settingsMenu` | `app-composer-settings.js:683` |
+| `CC.composer.mountSettingsButton` | `app-composer-settings.js:226` |
+| `cc.settingsMenu` | `app-composer-settings.js:805` |
 | `CC.composer.ensureBuilt` | `app-composer.js:265` |
 | `CC.composer.autosize` | `app-composer.js:325` |
 | `cc.state` | `app-composer.js:489` |
@@ -259,24 +259,24 @@ after it. Changing this order means changing `JcefHost.appNames`, which is where
 | `cc.closeDashboard` | `app-session.js:599` |
 | `CC.tabbar.state` | `app-tabs-base.js:29` |
 | `CC.tabbar.selected` | `app-tabs-base.js:32` |
-| `CC.tabbar.send` | `app-tabs-base.js:201` |
-| `CC.tabbar.bar` | `app-tabs-base.js:202` |
-| `CC.tabbar.nodeById` | `app-tabs-base.js:203` |
-| `CC.tabbar.taskById` | `app-tabs-base.js:204` |
-| `CC.tabbar.pruneSelection` | `app-tabs-base.js:205` |
-| `CC.tabbar.isSelected` | `app-tabs-base.js:206` |
-| `CC.tabbar.chatWork` | `app-tabs-base.js:207` |
-| `CC.tabbar.openBranch` | `app-tabs-base.js:208` |
-| `CC.tabbar.drawn` | `app-tabs-guard.js:112` |
-| `CC.tabbar.drawnSignature` | `app-tabs-guard.js:114` |
+| `CC.tabbar.send` | `app-tabs-base.js:227` |
+| `CC.tabbar.bar` | `app-tabs-base.js:228` |
+| `CC.tabbar.nodeById` | `app-tabs-base.js:229` |
+| `CC.tabbar.taskById` | `app-tabs-base.js:230` |
+| `CC.tabbar.pruneSelection` | `app-tabs-base.js:231` |
+| `CC.tabbar.isSelected` | `app-tabs-base.js:232` |
+| `CC.tabbar.chatWork` | `app-tabs-base.js:233` |
+| `CC.tabbar.openBranches` | `app-tabs-base.js:234` |
+| `CC.tabbar.drawn` | `app-tabs-guard.js:114` |
+| `CC.tabbar.drawnSignature` | `app-tabs-guard.js:116` |
 | `CC.tabbar.pill` | `app-tabs-pill.js:101` |
 | `CC.tabbar.scrollLeftTo` | `app-tabs-scroll.js:127` |
 | `CC.tabbar.dragToScroll` | `app-tabs-scroll.js:128` |
 | `CC.tabbar.wheelToScroll` | `app-tabs-scroll.js:129` |
 | `CC.tabbar.keepFocusVisible` | `app-tabs-scroll.js:130` |
-| `CC.tabbar.showChat` | `app-tabs.js:76` |
-| `CC.tabbar.showAgent` | `app-tabs.js:77` |
-| `CC.tabbar.showTask` | `app-tabs.js:78` |
+| `CC.tabbar.showChat` | `app-tabs.js:81` |
+| `CC.tabbar.showAgent` | `app-tabs.js:82` |
+| `CC.tabbar.showTask` | `app-tabs.js:83` |
 
 ## Cascade order — `JcefHost.CSS_PARTS`, and it is a contract too
 
