@@ -11,7 +11,7 @@
 // **Workloads replaced three views.** Agents, Subagents and Background tasks were three windows onto one
 // tree: to see whether an agent had spawned anything you switched view, lost the parent, and read a
 // breadcrumb to work out where you were. One already-expanded tree answers all three questions at once.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('dashboard views', () => {
   let win;
@@ -127,12 +127,37 @@ describe('dashboard views', () => {
   it('a node says WHAT it is before it says its title', () => {
     openView('workloads');
     const text = nodes();
-    // `Agent (…)` / `Subagent (…)` / `Background Task (…)`: the model's title is a sentence about the job
-    // and says nothing about what kind of thing is running it — and the transcript card that spawned the
-    // work is already labelled this way, so the same work must not have two names.
+    // `Agent (…)` / `Subagent (…)`: the model's title is a sentence about the job and says nothing about
+    // what kind of thing is running it — and the transcript card that spawned the work is already labelled
+    // this way, so the same work must not have two names.
     expect(text.some((t) => t.startsWith('Agent (Translate the docs)'))).toBe(true);
     expect(text.some((t) => t.startsWith('Subagent (Check links)'))).toBe(true);
-    expect(text.some((t) => t.startsWith('Background Task (npm run dev)'))).toBe(true);
+  });
+
+  it('a background task is SHOWN `BT:` and CALLED `Background Task (…)`', () => {
+    // Two names for one card, and both halves are load-bearing.
+    //
+    // Written out, the kind was longer than the job: `Background Task (npm run dev)` is 29 characters, a card
+    // is sized from its visible label (`widthFor`) and capped at 230px, so every task ran past the cap and
+    // ellipsised away the only part that identifies it — the command. `BT:` costs four characters and gives
+    // the whole title back.
+    //
+    // The accessible name does NOT abbreviate: a screen reader spells an unknown pair of capitals out, so it
+    // keeps the written-out kind (WCAG 4.1.2). That is why the card carries an explicit `aria-label` at all —
+    // without one the name is computed from the card's own text, which is exactly the abbreviation.
+    openView('workloads');
+    const card = Array.from(panel().querySelectorAll('.dg-card.task')).find((c) =>
+      c.textContent.includes('npm run dev')
+    );
+    expect(card).toBeTruthy();
+    expect(card.textContent.startsWith('BT: npm run dev')).toBe(true);
+    expect(card.getAttribute('aria-label')).toBe('Background Task (npm run dev)');
+    // The same rule in the other direction: an AGENT abbreviates nothing, so it needs no override and must
+    // not have one — an explicit name there would silently drop `.dg-meta` (its type) from what is announced.
+    const agent = Array.from(panel().querySelectorAll('.dg-card.agent')).find((c) =>
+      c.textContent.includes('Translate the docs')
+    );
+    expect(agent.hasAttribute('aria-label')).toBe(false);
   });
 
   it('is a left-to-right tree: children RIGHT of their parent, and the parent centred on them', () => {
@@ -165,6 +190,143 @@ describe('dashboard views', () => {
     // One connector per child, and they exist at all: a `color-mix()` over 100% once made the stroke invalid,
     // so every path was there and none of them painted.
     expect(panel().querySelectorAll('.dg-edges path').length).toBe(3);
+  });
+
+  /**
+   * How wide a node is — and the ONLY assertions here written as absolute numbers.
+   *
+   * Everything else about this layout is pinned as a relation (children right of their parent, a parent
+   * centred on them, siblings disjoint) precisely so that changing a constant cannot make the contract red
+   * for no reason. These three are the exception because here the number IS the requirement: the cards were
+   * asked to be half as wide, and a relation cannot express "half as wide" — it holds just as well at 460,
+   * which is the value that was wrong. A cap nobody pins is a cap that drifts back.
+   *
+   * Why 230 rather than a wider one: a 460px card is not a node, it is a row. Four of them fill the tool
+   * window edge to edge, so a graph that cannot show two columns at once stops being a graph. Why 96 rather
+   * than half of the old floor: 36px of a card exists before its first character (4px of borders, 18px of
+   * padding, the 7px state dot and the 7px gap after it), so 85 would buy about six characters and every
+   * card at the floor would say `Agent…` — a column of identical blanks is a diagram with the labels taken
+   * out. Both numbers live in `widthFor`, with the arithmetic written next to them.
+   */
+  describe('how wide a node is', () => {
+    const sheet = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    /** A rule's body. Anchored to a line start: a selector is a suffix of every longer one ending in it. */
+    const rule = (selector) => {
+      const at = sheet.indexOf('\n' + selector + ' {');
+      if (at < 0) throw new Error('no rule for ' + selector);
+      return sheet.slice(sheet.indexOf('{', at) + 1, sheet.indexOf('}', at));
+    };
+    /** The flex-shrink a rule declares, written either as the `flex` shorthand or on its own longhand. */
+    const shrinkOf = (selector) => {
+      const body = rule(selector);
+      const found = /flex-shrink:\s*([\d.]+)/.exec(body) || /flex:\s*[\d.]+\s+([\d.]+)/.exec(body);
+      if (!found) throw new Error('no flex-shrink declared on ' + selector);
+      return Number(found[1]);
+    };
+    const widths = () =>
+      Array.from(panel().querySelectorAll('.dg-card')).map((c) => parseFloat(c.style.width));
+    const cardFor = (text) =>
+      Array.from(panel().querySelectorAll('.dg-card')).find((c) => c.textContent.includes(text));
+
+    it('caps a long label at 230px instead of letting one card own the canvas', () => {
+      win.cc.session({
+        workloads: [
+          {
+            chatId: '1',
+            title: 'Chat 1',
+            selected: true,
+            tree: [
+              {
+                agentId: 'a',
+                label: 'Translate the entire documentation set into Spanish',
+                type: 'general-purpose',
+              },
+            ],
+            tasks: [],
+          },
+        ],
+      });
+      openView('workloads');
+      // Sized to its text, that agent would want ~540px. It gets 230 and ellipsizes — `.dg-label` carries
+      // `text-overflow`, and the whole string stays reachable in the card's `title`.
+      const agent = cardFor('Translate the entire documentation set into Spanish');
+      expect(parseFloat(agent.style.width)).toBe(230);
+      expect(agent.getAttribute('title')).toBeTruthy();
+      expect(Math.max(...widths())).toBeLessThanOrEqual(230);
+    });
+
+    it('never draws a card narrower than 96px, however little it has to say', () => {
+      // A chat node is the bare case: its label is the title verbatim, with no meta and no action, so it is
+      // the only node that can reach the floor at all.
+      win.cc.session({
+        workloads: [
+          {
+            chatId: '1',
+            title: 'C',
+            selected: true,
+            tree: [{ agentId: 'a', label: 'D', type: '' }],
+            tasks: [],
+          },
+        ],
+      });
+      openView('workloads');
+      // Sized to its text this one would be 45px. The floor is what it gets, and it is asserted exactly:
+      // a `>= 96` alone would still pass if the floor quietly stopped applying and the text happened to be
+      // long enough.
+      expect(parseFloat(cardFor('C').style.width)).toBe(96);
+      expect(Math.min(...widths())).toBeGreaterThanOrEqual(96);
+    });
+
+    /**
+     * The case the cap created, and the one that must not come back.
+     *
+     * A running task carries a meta AND a Stop button, so at 230px its contents are in deficit — they were
+     * not at 460, which is why `.dg-meta` could be `flex: 0 0 auto` and nobody noticed. An item that refuses
+     * to shrink does not politely stay wide: it pushes its own text out through the card's rounded border,
+     * over the connector behind it. So the meta gives way and the action does not — a Stop button that
+     * shrinks is a Stop button you cannot hit.
+     *
+     * Flexbox has no notion of "shrink in this order", so it is expressed as factors: negative space is
+     * distributed in proportion to each item's base size times its shrink factor, and `min-width: 0` is what
+     * lets an item go below its min-content width at all (without it the automatic minimum stops the shrink
+     * before the ellipsis is ever reached).
+     */
+    it('fits a node that has both a meta and an action, by shrinking the meta and never the action', () => {
+      win.cc.session({
+        workloads: [
+          {
+            chatId: '1',
+            title: 'Chat 1',
+            selected: true,
+            tree: [],
+            tasks: [
+              {
+                id: 't1',
+                desc: 'reindex the entire monorepo and rebuild every cache',
+                type: 'long-running-shell-command',
+                running: true,
+                status: 'running',
+              },
+            ],
+          },
+        ],
+      });
+      openView('workloads');
+      const task = panel().querySelector('.dg-card.task');
+      // The deficit is real: this card wants ~720px of content and is given 230.
+      expect(parseFloat(task.style.width)).toBe(230);
+      expect(task.querySelector('.dg-meta')).not.toBeNull();
+      expect(task.textContent).toContain('Stop');
+      expect(shrinkOf('.dg-meta')).toBeGreaterThan(0);
+      expect(rule('.dg-meta')).toMatch(/min-width:\s*0/);
+      expect(shrinkOf('.dg-action')).toBe(0);
+      // The label takes most of the deficit — it has by far the largest base size, and shrinking is
+      // proportional to it — and it is the right part to lose, being the one repeated whole in the tooltip.
+      // No `flex-shrink` is asserted on it: the default is already 1, and `min-width: 0` is the declaration
+      // that actually matters, since without it the ellipsis is never reached.
+      expect(rule('.dg-label')).toMatch(/min-width:\s*0/);
+      expect(rule('.dg-label')).toMatch(/text-overflow:\s*ellipsis/);
+    });
   });
 
   it('every node is a destination: a chat, an agent and a task each send the host somewhere', () => {

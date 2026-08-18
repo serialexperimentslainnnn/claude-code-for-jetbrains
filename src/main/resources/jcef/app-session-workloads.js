@@ -293,8 +293,11 @@
     return {
       id: t.id,
       kind: 'task',
-      // `Background Task (…)`, holding the model's description of the job or, failing that, the command.
-      label: CC.diagramLabel('task', 1, (t.desc != null && String(t.desc)) || type || 'background'),
+      // `BT: …` on screen and `Background Task (…)` to a screen reader, holding the model's description of
+      // the job or, failing that, the command. Two names, one owner (`CC.diagramShown` / `CC.diagramLabel`):
+      // the card is sized from its visible label and capped, and written out the kind ate the command.
+      label: CC.diagramShown('task', 1, (t.desc != null && String(t.desc)) || type || 'background'),
+      name: CC.diagramLabel('task', 1, (t.desc != null && String(t.desc)) || type || 'background'),
       meta: type || 'background task',
       // Named by the host, like every other state on the page (see JcefStatus).
       status: t.status || null,
