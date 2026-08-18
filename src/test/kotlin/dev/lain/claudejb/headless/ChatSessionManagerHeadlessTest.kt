@@ -35,6 +35,47 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         assertEquals(1, manager.all().size)
     }
 
+    /**
+     * REGRESSION: the fallback title numbered the chats ever CREATED, not the ones open.
+     *
+     * Closing the last chat opens a replacement (`ChatTabsPanel.replaceLastChat`), so a session spent closing
+     * and reopening one conversation climbed to `Chat 47` while never holding more than one — a number counting
+     * something the user cannot see. It is the lowest free number now.
+     */
+    fun `test the fallback title reuses the lowest number no open chat is using`() {
+        val first = manager.create()
+        assertEquals("Chat 1", first.title)
+        val second = manager.create()
+        assertEquals("Chat 2", second.title)
+
+        // Close them both and the numbering starts over, which is the reported bug.
+        manager.remove(first)
+        manager.remove(second)
+        assertEquals("Chat 1", manager.create().title)
+    }
+
+    fun `test a freed number is reused rather than skipped, so two chats never share a title`() {
+        val one = manager.create()
+        val two = manager.create()
+        val three = manager.create()
+        assertEquals(listOf("Chat 1", "Chat 2", "Chat 3"), manager.all().map { it.title })
+
+        // Closing from the MIDDLE is the case a count-based name gets wrong: `size + 1` would say "Chat 3"
+        // while `three` already holds it.
+        manager.remove(two)
+        val replacement = manager.create()
+        assertEquals("Chat 2", replacement.title)
+        assertEquals(manager.all().size, manager.all().map { it.title }.toSet().size)
+        assertTrue(one.title == "Chat 1" && three.title == "Chat 3")
+    }
+
+    fun `test a renamed chat frees its number, because the number only tells unnamed chats apart`() {
+        val first = manager.create()
+        assertEquals("Chat 1", first.title)
+        first.title = "Release notes"
+        assertEquals("Chat 1", manager.create().title)
+    }
+
     fun `test create marks the new session active`() {
         val first = manager.create()
         assertSame(first, manager.active)
