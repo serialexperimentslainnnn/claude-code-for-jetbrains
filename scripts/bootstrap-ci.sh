@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # --- preconditions -------------------------------------------------------------------------------------
-for bin in gh jq gpg gpgsm openssl; do
+for bin in gh jq gpg gpgsm openssl ykman; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
 done
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first" >&2; exit 1; }
@@ -150,108 +150,103 @@ else
   # against a dialog in front of everyone, which is why this step exists and why `signPlugin` is not
   # something to remove for the sake of holding no key material.
   #
-  # The one thing worth avoiding is a surprise during the FIRST automated publish, so if you still have
-  # the key 4.4.1 was signed with, reusing it removes that unknown. Otherwise just press Enter.
-  info "This is the Marketplace UPLOAD key. JetBrains re-signs the plugin, so rotating it is invisible to"
-  info "users, and no copy is kept on disk. Reuse an existing key only to keep the first CI publish boring."
-  info "Press Enter to have the local PKI issue one — that is the intended route."
-  read -r -p "   Path to an existing private.pem (Enter to issue from the local PKI): " pem
-  if [ -n "$pem" ]; then
-    read -r -p "   Path to the matching chain.crt: " crt
-    [ -r "$pem" ] || { echo "error: cannot read $pem" >&2; exit 1; }
-    [ -r "$crt" ] || { echo "error: cannot read $crt" >&2; exit 1; }
-    # An ENCRYPTED key is fine — signPlugin takes a passphrase (`password`, i.e. -key-pass) and decrypts
-    # it — but only if the passphrase asked for below is the one that opens THIS file. Handing over an
-    # encrypted PEM and then typing something else is the failure that surfaces at publish time, in CI,
-    # as an unhelpful parse error, so it is worth naming here rather than diagnosing there.
-    if grep -q 'ENCRYPTED' "$pem"; then
-      warn "$pem is encrypted — the passphrase prompt below must be ITS passphrase, not a new one."
+  # ISSUED here, every time, with no question asked and no file to hand over. That is the requirement and
+  # not a nicety: this script exists to leave the pipeline configured end to end, so a prompt asking for
+  # the path to a PEM would be a hole in precisely the thing it delivers.
+  #
+  # The two halves of the CA come from deliberately different places, and neither is a guess:
+  #
+  #   * the CA CERTIFICATES are read off the YubiKeys, PIV slot F9, which is where this PKI keeps them.
+  #     Both cards are read and neither is assumed to be either CA: the card whose F9 certificate is
+  #     self-issued is the root, the other is the intermediate. Nothing is written down here — not a
+  #     serial, not a DN, not a fingerprint — so a reissued PKI is picked up rather than contradicted;
+  #   * the CA PRIVATE KEY comes from gpgsm, GnuPG's X.509 store. It cannot come from F9: that slot is
+  #     storage in this PKI, never a signer, and a PIV certificate object has no private half to offer.
+  #     gpgsm can export a key but cannot ISSUE one — GnuPG is not a CA — so it exists as a file for
+  #     exactly one openssl call and is shredded immediately, not at the exit trap.
+  #
+  # The PKI's own working directory is neither read nor written and build-matrix-pki.sh is never run:
+  # this asks the PKI for one leaf, it never creates, resets or reissues anything.
+  info "reading the CA certificates from PIV slot F9"
+  pki_root=""; pki_int=""
+  while read -r serial; do
+    [ -n "$serial" ] || continue
+    f9="$tmp/f9-$serial.pem"
+    # Exporting a certificate is a public read: no PIN, no touch, nothing to approve.
+    ykman --device "$serial" piv certificates export f9 - > "$f9" 2>/dev/null || continue
+    grep -q 'BEGIN CERTIFICATE' "$f9" || continue
+    subj=$(openssl x509 -in "$f9" -noout -subject -nameopt RFC2253); subj=${subj#subject=}; subj=${subj# }
+    iss=$(openssl x509 -in "$f9" -noout -issuer  -nameopt RFC2253);  iss=${iss#issuer=};    iss=${iss# }
+    if [ "$subj" = "$iss" ]; then
+      pki_root=$f9; info "  root         $subj  (card $serial)"
+    else
+      pki_int=$f9;  info "  intermediate $subj  (card $serial)"
     fi
-    grep -q 'BEGIN.*PRIVATE KEY' "$pem" || { echo "error: $pem does not look like a PEM private key" >&2; exit 1; }
-    grep -q 'BEGIN CERTIFICATE'   "$crt" || { echo "error: $crt does not look like a certificate" >&2; exit 1; }
-    set_secret_from_file PRIVATE_KEY "$pem"
-    set_secret_from_file CERTIFICATE_CHAIN "$crt"
-    read_secret keypass "Passphrase for that key"
-    printf '%s' "$keypass" > "$tmp/keypass"; unset keypass
-    gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
-    info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD from the existing key"
-  else
-    # Issued by the local PKI, not self-signed. Where the CA material is read from is the whole design
-    # of this branch, so it is stated rather than implied: GPG's X.509 store (gpgsm) holds both CAs AND
-    # the intermediate's private half, so one tool answers for all three — the YubiKey PIV slots are not
-    # touched (F9 is storage there, never a signer) and nothing under the PKI's own working directory is
-    # read or written. This script never creates, resets or reissues the PKI; it only asks it for a leaf.
-    #
-    # Patterns are overridable because gpgsm matches on the DN and a store can hold more than one copy:
-    # if it ever answers "ambiguous", pass a fingerprint instead of renaming anything in the store.
-    ROOT_DN=${PKI_ROOT:-The Architect Root CA}
-    INT_DN=${PKI_INTERMEDIATE:-The Oracle Intermediate CA}
-    info "issuing from the local PKI via gpgsm: $INT_DN"
+  done < <(ykman list --serials 2>/dev/null)
 
-    # gpgsm concatenates every match. Take the FIRST armored block of each and do not agonise over which
-    # copy that is: the chain is verified against the root below, so a wrong pick fails loudly, before a
-    # single secret is written.
-    first_pem() { awk '/-----BEGIN/{f=1} f{print} /-----END/{if(f)exit}'; }
-    gpgsm --armor --export "$ROOT_DN" | first_pem > "$tmp/root.crt"
-    gpgsm --armor --export "$INT_DN"  | first_pem > "$tmp/int.crt"
-    grep -q 'BEGIN CERTIFICATE' "$tmp/root.crt" || { echo "error: gpgsm has no certificate for '$ROOT_DN'" >&2; exit 1; }
-    grep -q 'BEGIN CERTIFICATE' "$tmp/int.crt"  || { echo "error: gpgsm has no certificate for '$INT_DN'" >&2; exit 1; }
+  if [ -z "$pki_root" ] || [ -z "$pki_int" ]; then
+    echo "error: PIV slot F9 gave root=${pki_root:+found}${pki_root:-MISSING} intermediate=${pki_int:+found}${pki_int:-MISSING}" >&2
+    echo "       both CA YubiKeys must be plugged in. Nothing was changed." >&2
+    exit 1
+  fi
+  cp "$pki_root" "$tmp/root.crt"; cp "$pki_int" "$tmp/int.crt"
 
-    # The signing half. gpgsm can export it but cannot ISSUE — GnuPG is not a CA — so the key has to
-    # exist as a file for the one openssl call that signs the CSR. It exists for exactly that long: the
-    # shred is immediate and unconditional, not deferred to the exit trap.
-    info "gpg-agent will ask for the intermediate CA passphrase"
-    gpgsm --armor --export-secret-key-p8 "$INT_DN" > "$tmp/int.key"
-    grep -q 'BEGIN.*PRIVATE KEY' "$tmp/int.key" || { echo "error: gpgsm did not export a private key for '$INT_DN'" >&2; exit 1; }
+  # The name gpgsm is asked for is READ OFF the certificate the card just handed over, so the two halves
+  # of the intermediate cannot drift apart: whatever the card says the CA is, that is the key that signs.
+  int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
+           | awk -F'= ' '/commonName/{print $2; exit}')
+  info "issuing under: $int_cn  (gpg-agent will ask for its key)"
+  gpgsm --armor --export-secret-key-p8 "$int_cn" > "$tmp/int.key"
+  grep -q 'BEGIN.*PRIVATE KEY' "$tmp/int.key" \
+    || { echo "error: gpgsm holds no private key for '$int_cn' — cannot issue" >&2; exit 1; }
 
-    # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
-    # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
-    gpg --gen-random --armor 2 32 | tr -d '\n' > "$tmp/keypass"
-    # EC P-384 + SHA-384 — the shape this PKI issues in, and one marketplace-zip-signer supports natively
-    # (SignatureAlgorithm.ECDSA_WITH_SHA384). No RSA detour to keep a tool happy that does not need one.
-    # Passphrase read from a FILE, never from argv: process arguments are world-readable in /proc.
-    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
-      -aes-256-cbc -pass "file:$tmp/keypass" -out "$tmp/leaf.key" 2>/dev/null
-    openssl req -new -key "$tmp/leaf.key" -passin "file:$tmp/keypass" -sha384 \
-      -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key" \
-      -out "$tmp/leaf.csr" 2>/dev/null
+  # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
+  # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
+  gpg --gen-random --armor 2 32 | tr -d '\n' > "$tmp/keypass"
+  # EC P-384 + SHA-384 — the shape this PKI issues in, and one marketplace-zip-signer supports natively
+  # (SignatureAlgorithm.ECDSA_WITH_SHA384). No RSA detour to keep a tool happy that does not need one.
+  # Passphrase read from a FILE, never from argv: process arguments are world-readable in /proc.
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+    -aes-256-cbc -pass "file:$tmp/keypass" -out "$tmp/leaf.key" 2>/dev/null
+  openssl req -new -key "$tmp/leaf.key" -passin "file:$tmp/keypass" -sha384 \
+    -subj "/C=US/O=Zion/OU=Nebuchadnezzar/CN=Claude Code Native plugin upload key" \
+    -out "$tmp/leaf.csr" 2>/dev/null
 
-    # codeSigning, and only that. The PKI's own leaf profile is clientAuth/serverAuth — a TLS certificate
-    # — which is the wrong claim for a certificate that signs an artifact, so the profile is written here
-    # rather than borrowed. keyUsage is digitalSignature alone for the same reason.
-    cat > "$tmp/leaf.ext" <<'EXT'
-basicConstraints     = critical,CA:FALSE
-keyUsage             = critical,digitalSignature
-extendedKeyUsage     = codeSigning
-subjectKeyIdentifier = hash
+  # codeSigning, and only that. The PKI's own leaf profile is clientAuth/serverAuth — a TLS certificate —
+  # which is the wrong claim for one that signs an artifact, so the profile is written here rather than
+  # borrowed. keyUsage is digitalSignature alone for the same reason.
+  cat > "$tmp/leaf.ext" <<'EXT'
+basicConstraints       = critical,CA:FALSE
+keyUsage               = critical,digitalSignature
+extendedKeyUsage       = codeSigning
+subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid,issuer
 EXT
-    # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody
-    # has in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
-    # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
-    openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
-      -CA "$tmp/int.crt" -CAkey "$tmp/int.key" \
-      -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
-      -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" 2>/dev/null
-    shred -u "$tmp/int.key" 2>/dev/null || { : > "$tmp/int.key"; rm -f "$tmp/int.key"; }
+  # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody has
+  # in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
+  # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
+  openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
+    -CA "$tmp/int.crt" -CAkey "$tmp/int.key" \
+    -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
+    -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" 2>/dev/null
+  shred -u "$tmp/int.key" 2>/dev/null || { : > "$tmp/int.key"; rm -f "$tmp/int.key"; }
 
-    # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
-    # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor in the chain adds
-    # nothing a verifier can use, since it either already trusts that root or must not be told to.
-    cat "$tmp/leaf.crt" "$tmp/int.crt" > "$tmp/fullchain.crt"
-    openssl verify -CAfile "$tmp/root.crt" -untrusted "$tmp/int.crt" "$tmp/leaf.crt" >/dev/null \
-      || { echo "error: the issued certificate does not verify against '$ROOT_DN' — nothing was set" >&2; exit 1; }
+  # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
+  # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor inside the chain adds
+  # nothing a verifier can use, since it either already trusts that root or must not be told to.
+  cat "$tmp/leaf.crt" "$tmp/int.crt" > "$tmp/fullchain.crt"
+  openssl verify -CAfile "$tmp/root.crt" -untrusted "$tmp/int.crt" "$tmp/leaf.crt" >/dev/null \
+    || { echo "error: the issued certificate does not verify against the root — nothing was set" >&2; exit 1; }
 
-    set_secret_from_file PRIVATE_KEY "$tmp/leaf.key"
-    set_secret_from_file CERTIFICATE_CHAIN "$tmp/fullchain.crt"
-    gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
-    info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written outside $tmp"
-    info "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -issuer -enddate | tr '\n' ' ')"
-    # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the
-    # user's IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as
-    # "not available yet" in the plugin-signing docs. So this key is only ever an upload credential and
-    # rotating it is invisible — to users and to the Marketplace alike. Nothing to upload anywhere.
-  fi
+  gh secret set PRIVATE_KEY          --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/leaf.key"
+  gh secret set CERTIFICATE_CHAIN    --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/fullchain.crt"
+  gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
+  info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written outside $tmp"
+  info "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -issuer -enddate | tr '\n' ' ')"
+  # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the user's
+  # IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as "not
+  # available yet" in the plugin-signing docs. So this key is only ever an upload credential and rotating
+  # it is invisible — to users and to the Marketplace alike. Nothing to upload anywhere.
 fi
 
 # --- 4. CI artifact signing key (GPG) ------------------------------------------------------------------
@@ -304,6 +299,24 @@ else
   else
     gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
     warn "TOUCH YOUR YUBIKEY once per certifier — ${#certifiers[@]} of them."
+
+    # The CAs certify EACH OTHER first, and that is structure rather than decoration: a bundle whose
+    # blocks carry no signature between them is just three keys in a file, and a reader who trusts one CA
+    # has no path to the other. Both directions, deliberately — which of the two a reader already holds
+    # is not ours to decide, and GPG has no notion of issuer to derive an order from.
+    #
+    # A LOCAL signature is what would silently defeat this: gpg will not add a second certification from a
+    # key that has already signed, and an lsign is stripped on export — so the endorsement sits in the
+    # keyring and reaches nobody. That is exactly why the verification below reads the exported FILE and
+    # not the keyring, and why it prints the recovery when a link is missing.
+    for a in "${certifiers[@]}"; do
+      for b in "${certifiers[@]}"; do
+        [ "$a" = "$b" ] && continue
+        gpg --batch --yes --local-user "$a" --quick-sign-key "$b" >/dev/null 2>&1 \
+          || warn "$a did not certify $b (already signed, cancelled, or that card was absent)"
+      done
+    done
+
     for fpr in "${certifiers[@]}"; do
       uid=$(gpg --list-keys --with-colons "$fpr" | awk -F: '$1=="uid" {print $10; exit}')
       info "certifying $ci_fpr with $fpr ($uid)"
@@ -333,6 +346,26 @@ else
     # actually chain, for somebody who has nothing but this file?
     chain_home="$tmp/chain-verify"; mkdir -p "$chain_home"; chmod 700 "$chain_home"
     GNUPGHOME="$chain_home" gpg --batch --quiet --import docs/trust-chain.asc 2>/dev/null
+
+    # Asks the file whether one CA vouches for another. Same question as below, different subject: this
+    # one is what makes the bundle a CHAIN rather than a list.
+    survived() {  # $1 = signer fingerprint, $2 = signed fingerprint
+      GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$2" 2>/dev/null \
+        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m {print "y"; exit}'
+    }
+    for a in "${certifiers[@]}"; do
+      for b in "${certifiers[@]}"; do
+        [ "$a" = "$b" ] && continue
+        if [ "$(survived "$a" "$b")" = y ]; then
+          info "docs/trust-chain.asc: $a certifies $b"
+        else
+          warn "no certification by $a of $b survived the export — an lsign is the usual cause."
+          warn "  gpg --edit-key $b   → 'delsig' the local one, then:"
+          warn "  gpg --local-user $a --quick-sign-key $b"
+        fi
+      done
+    done
+
     for fpr in "${certifiers[@]}"; do
       have_key=$(GNUPGHOME="$chain_home" gpg --list-keys --with-colons 2>/dev/null \
         | awk -F: -v f="$fpr" '$1=="fpr" && $10==f {print "y"; exit}')

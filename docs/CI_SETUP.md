@@ -129,29 +129,26 @@ Two consequences, both the opposite of what the name suggests:
 Oracle Intermediate CA*, which chains to *The Architect Root CA* — the same trust chain the release
 signatures hang off, so the upload credential is not a stray anchor nobody can place.
 
-Where the CA material comes from is the load-bearing part: **`gpgsm`**, GnuPG's X.509 store, which holds
-both CA certificates and the intermediate's private half. The YubiKey PIV slots are not touched (`F9`
-is storage there, never a signer) and the PKI's own working directory is neither read nor written — this
-script asks the PKI for a leaf, it never creates, resets or reissues one.
+**There is nothing to hand over and nothing to prepare.** The step asks no question: plug both CA
+YubiKeys in and it issues, verifies and uploads. The two halves of the CA come from deliberately
+different places, and neither is written down anywhere in the script:
 
-Reusing an existing key instead:
+- **The CA certificates come off the YubiKeys, PIV slot `F9`**, which is where this PKI keeps them. Both
+  cards are read and neither is assumed to be either CA — the card whose `F9` certificate is *self-issued*
+  is the root, the other is the intermediate. No serial, no DN and no fingerprint is hardcoded, so a
+  reissued PKI is picked up rather than contradicted.
+- **The CA private key comes from `gpgsm`**, GnuPG's X.509 store. It cannot come from `F9`: that slot is
+  storage in this PKI, never a signer, and a PIV certificate object has no private half to offer. `gpgsm`
+  can export a key but cannot *issue* one — GnuPG is not a CA — so it lands in the temp dir for exactly
+  one `openssl` call and is shredded immediately, not at the exit trap. The name it is asked for is read
+  off the certificate the card just handed over, so the two halves cannot drift apart.
 
-```sh
-gh secret set PRIVATE_KEY          --env marketplace --repo "$REPO" < private.pem
-gh secret set CERTIFICATE_CHAIN    --env marketplace --repo "$REPO" < chain.crt
-gh secret set PRIVATE_KEY_PASSWORD --env marketplace --repo "$REPO"   # paste, Ctrl-D
-```
-
-An **encrypted** `PRIVATE_KEY` is fine — `signPlugin` takes the passphrase and decrypts it — but only if
-`PRIVATE_KEY_PASSWORD` is the passphrase for *that* file. A mismatch surfaces at publish time, in CI, as
-an opaque parse error.
-
-What the bootstrap script does instead, in a temp dir it then shreds:
+The PKI's own working directory is neither read nor written, and `build-matrix-pki.sh` is never run: the
+script asks the PKI for one leaf, it never creates, resets or reissues anything.
 
 ```sh
-gpgsm --armor --export             "The Architect Root CA"     > root.crt   # first block
-gpgsm --armor --export             "The Oracle Intermediate CA" > int.crt   # first block
-gpgsm --armor --export-secret-key-p8 "The Oracle Intermediate CA" > int.key # shredded immediately after
+ykman --device "$serial" piv certificates export f9 -      # per card; public read, no PIN, no touch
+gpgsm --armor --export-secret-key-p8 "$intermediate_cn"    # shredded immediately after the sign
 
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -out leaf.key
 openssl req -new -key leaf.key -sha384 -out leaf.csr \
@@ -170,13 +167,14 @@ Four details there are decisions rather than defaults:
 - **`extendedKeyUsage = codeSigning`**, written here rather than borrowed: the PKI's own leaf profile is
   `clientAuth,serverAuth`, i.e. a TLS certificate, which is the wrong claim for one that signs an
   artifact.
-- **`openssl verify` runs before any secret is set.** `gpgsm` matches on the DN and a store can hold
-  more than one copy of a CA, so the export takes the first block and lets the verification catch a
-  wrong pick — loudly, and before anything is written. (If `gpgsm` ever answers *ambiguous*, pass a
-  fingerprint through `PKI_ROOT` / `PKI_INTERMEDIATE` rather than renaming anything in the store.)
+- **`openssl verify` runs before any secret is set**, so a wrong CA — a stale card, a half-reissued PKI —
+  fails loudly instead of publishing.
 - **Ten years**, rather than JetBrains' example one or the PKI's own 1095 days: an expiring upload key
   breaks publishing on a date nobody has in a calendar, and expiry protects nothing here, since the
   certificate is not a trust anchor for any user.
+
+`PRIVATE_KEY` is stored **encrypted**, with `PRIVATE_KEY_PASSWORD` as the matching passphrase — a random
+32 bytes that is never displayed, because its only consumer is the CI job that reads it from the secret.
 
 `CERTIFICATE_CHAIN` is **leaf then issuer**, with the root deliberately left out: a self-signed anchor in
 the chain adds nothing a verifier can use, since it either already trusts that root or must not be told
