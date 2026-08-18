@@ -5,7 +5,6 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Project-level owner of the open chat tabs. Each tab is one [ClaudeSession] (one `claude` process);
@@ -30,7 +29,6 @@ class ChatSessionManager(private val project: Project) : Disposable {
 
     private val sessions = CopyOnWriteArrayList<ClaudeSession>()
     private val listeners = CopyOnWriteArrayList<Listener>()
-    private val counter = AtomicInteger(0)
 
     @Volatile
     var active: ClaudeSession? = null
@@ -42,7 +40,37 @@ class ChatSessionManager(private val project: Project) : Disposable {
     fun removeListener(listener: Listener) = listeners.remove(listener)
 
     /** Creates a fresh chat (does not start the process — the caller wires UI then calls [ClaudeSession.start]). */
-    fun create(): ClaudeSession = register(ClaudeSession(project, "Chat ${counter.incrementAndGet()}"))
+    @Synchronized
+    fun create(): ClaudeSession = register(ClaudeSession(project, nextChatTitle()))
+
+    /**
+     * The fallback title a new chat gets: `Chat <n>`, where **n is the lowest number no OPEN chat is using**.
+     *
+     * It was a monotonic counter, and that is the reported bug: closing the last chat opens a replacement
+     * ([dev.lain.claudejb.ui.ChatTabsPanel.replaceLastChat]), so a session spent closing and reopening one chat
+     * climbed to `Chat 47` while never having more than one — a number that counts nothing the user can see.
+     * The count of chats ever created is not a fact about the chat in front of them.
+     *
+     * Lowest-free rather than `sessions.size + 1`, because the size says nothing about which names are taken:
+     * with `Chat 1` and `Chat 2` open, closing the first and adding one would produce a second `Chat 2`, and two
+     * identical pills in the row are indistinguishable — which is exactly the confusion this whole area is
+     * already being debugged for.
+     *
+     * It reads the LIVE titles, so a number is freed by a rename or by the model naming that chat
+     * ([SessionTitleReader]) as well as by a close. That is the intended reading: the number exists only to tell
+     * unnamed chats apart, so a chat that has a real name is not holding one.
+     *
+     * `@Synchronized` on [create] rather than an atomic, because this is a check-then-act over [sessions] and a
+     * thread-safe list does not make a pair of operations one — the same reason [gitChatOrCreate] holds the lock.
+     */
+    private fun nextChatTitle(): String {
+        val taken = sessions.mapNotNullTo(HashSet()) { session ->
+            session.title.removePrefix(CHAT_TITLE_PREFIX).takeIf { it != session.title }?.toIntOrNull()
+        }
+        var n = 1
+        while (n in taken) n++
+        return "$CHAT_TITLE_PREFIX$n"
+    }
 
     /**
      * The Git integration's chat, if one exists.
@@ -143,6 +171,9 @@ class ChatSessionManager(private val project: Project) : Disposable {
     companion object {
         /** What the Git integration's tab is called. Fixed, and pinned as such by [ClaudeSession.gitIntegration]. */
         const val GIT_CHAT_TITLE = "Git"
+
+        /** The fallback title's prefix — written once, because [nextChatTitle] both builds it and parses it back. */
+        private const val CHAT_TITLE_PREFIX = "Chat "
 
         fun getInstance(project: Project): ChatSessionManager = project.service()
     }
