@@ -33,8 +33,10 @@ class OpenedDiffsService(private val project: Project) {
         files.remove(file)
     }
 
-    /** How many of our diff tabs are currently tracked as open. Drives action presentation (greyed when 0). */
-    fun openCount(): Int = files.size
+    // NB `openCount()` lived here to grey out the tool window's *Close diffs* action when there was nothing to
+    // close. That action went in 5.5.0 (it was read as deleting the chat, and its last consumer, the page's
+    // `openDiffs` state field, went with it), so the count had no reader left. The service's job is
+    // [closeAll]; how many tabs are pending is not a question anybody asks.
 
     /** Closes every diff tab the plugin opened (and forgets them). EDT only — touches the editor. */
     fun closeAll() {
