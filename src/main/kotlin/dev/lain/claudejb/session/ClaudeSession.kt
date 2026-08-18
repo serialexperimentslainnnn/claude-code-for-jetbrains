@@ -1942,7 +1942,17 @@ class ClaudeSession(
      */
     private fun surfaceAuthFailure(failureText: String, display: String) {
         when (LoginDetection.resolve(failureText, auth::canRenewCredential)) {
-            AuthFailure.EXPIRED -> transcript.add(Speaker.SYSTEM, EXPIRED_TOKEN_NOTICE)
+            // RENEW NOW, rather than trusting the next launch to notice. That is what this branch used to do —
+            // write the notice and rely on `AuthGate.renew` at the next start — and it could not work for the
+            // case that actually happens: `AuthGate.renew` is gated on the blob's own `expiresAt`, so a token
+            // the SERVER revoked while the clock still called it valid was never renewed by anybody. The user
+            // was left with `401 … has been revoked` and no way out but signing in by hand. See
+            // [AuthGate.renewRejected], which skips the clock and keeps only the "can this be renewed at all"
+            // question.
+            AuthFailure.EXPIRED -> {
+                transcript.add(Speaker.SYSTEM, EXPIRED_TOKEN_NOTICE)
+                renewRejectedCredential()
+            }
 
             // A missing identity: surface it and raise the sign-in card, since /login cannot run inside the
             // TTY-less stream-json session.
@@ -1952,6 +1962,31 @@ class ClaudeSession(
             }
 
             AuthFailure.NONE -> transcript.add(Speaker.ERROR, display)
+        }
+    }
+
+    /**
+     * The server rejected this session's credential: renew it and bring the session back on the new one.
+     *
+     * **Off the EDT**, because renewing spawns a process and makes a network call, and this is reached from the
+     * EDT where a failed turn is surfaced. **And the restart is not optional**: the credential travels to the
+     * binary in the launch environment, which is built once in [launch] — so a process already running keeps
+     * authenticating with the token that was just replaced, and every further turn fails exactly as the first
+     * one did. Renewing without relaunching fixes the safe and not the session.
+     *
+     * Silent when there is nothing to renew: [AuthGate.renewRejected] answers false for a blob with no refresh
+     * token, during a sign-in, and inside the cooldown a failed renewal arms — so a 401 in a loop costs one
+     * attempt every few minutes, not one process per turn. The user has already been told what happened by the
+     * notice this runs behind; a second message saying the automatic attempt also failed would be noise on top
+     * of a sign-in card that is about to appear anyway.
+     */
+    private fun renewRejectedCredential() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val settings = ClaudeSettings.getInstance(project)
+            val binary = ClaudeBinaryLocator.locate(settings.claudePath) ?: return@executeOnPooledThread
+            if (!auth.renewRejected(binary, settings)) return@executeOnPooledThread
+            log.info("the rejected credential was renewed; restarting the session on the new one")
+            edt { restart() }
         }
     }
 

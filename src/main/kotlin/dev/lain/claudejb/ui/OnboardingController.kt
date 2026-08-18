@@ -233,7 +233,9 @@ internal class OnboardingController(
 
     /**
      * Log out = every place a credential of ours can be: the IDE safe (API key, and the vaulted
-     * credentials file) and any file the vault materialized on disk.
+     * credentials file) and the credentials file itself, if one happens to be on disk — a terminal login writes
+     * one, and a renewal plants one for the length of a token exchange
+     * ([CredentialsVault.renewOnDisk]). Ordinary sessions leave none behind.
      *
      * Deliberately NOT `claude auth logout`. The plugin's credentials live in the safe and only visit the
      * disk while a session runs ([CredentialsVault]) — clearing the safe IS the logout. Shelling out to

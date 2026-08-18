@@ -95,10 +95,10 @@ def _run_auth(rest: list[str]) -> int:
     the IDE safe holds nothing, and a machine with no answer here never starts a session.
 
     `login` is answered with an honest FAILURE, not a fake success. It exists only so the path is
-    deterministic and fast: `CredentialsVault.renew` shells out to it (`AuthCli.loginFromRefreshToken`)
+    deterministic and fast: `CredentialsVault.renewOnDisk` shells out to it (`AuthCli.refreshUsingOwnFiles`)
     when a vaulted credential has expired, and without this branch the stand-in would replay a whole
-    stream-json fixture as the answer to a login and could sit there until the 60s timeout, in the
-    middle of `launch()`. Exiting non-zero says what is true — a stand-in mints no credentials — and
+    stream-json fixture as the answer to a login and could sit there until the 20s refresh timeout, in
+    the middle of `launch()`. Exiting non-zero says what is true — a stand-in mints no credentials — and
     the plugin then re-asks `hasCredential`, which `status` answers.
     """
     sub = rest[0] if rest else ""

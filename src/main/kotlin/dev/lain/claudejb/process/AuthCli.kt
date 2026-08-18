@@ -8,7 +8,8 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 /**
- * The binary's non-interactive auth surface: `claude auth status`, plus the refresh-token `auth login`.
+ * The binary's non-interactive auth surface: `claude auth status`, plus the on-disk-refresh `auth login`
+ * ([refreshUsingOwnFiles]) that lets a planted credentials file be renewed without a browser or a TTY.
  *
  * **`auth logout` is deliberately not here** (it was, unused, until 5.5.0). The plugin's credential lives in the
  * IDE safe, so clearing the safe IS the logout — see `OnboardingController.logout`. Shelling out would clear the
@@ -95,30 +96,13 @@ object AuthCli {
         return runCatching { json.decodeFromString<AuthState>(output.substring(start)) }.getOrNull()
     }
 
-    /**
-     * **Non-interactive** `claude auth login`, driven entirely by a refresh token in the environment — no
-     * browser, no TTY, no user.
-     *
-     * This is a first-class path in the binary, not a trick: given `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` the
-     * command takes a dedicated branch (`tengu_login_from_refresh_token`), exchanges the token at
-     * `platform.claude.com/v1/oauth/token` and stores the result in its own credential store, then exits 0.
-     * `CLAUDE_CODE_OAUTH_SCOPES` accompanies it and is always sent: the binary carries an explicit refusal
-     * for the case where it is missing ("required when using CLAUDE_CODE_OAUTH_REFRESH_TOKEN", naming the
-     * space-separated scopes it wants), and the grant cannot be restated without it — so
-     * [dev.lain.claudejb.process.CredentialsVault.renew] will not attempt a renewal from a blob that carries
-     * no scopes. Verified against `claude` 2.1.223 that the branch is taken and is genuinely non-interactive:
-     * with a deliberately invalid refresh token it fails on the HTTP round-trip and exits 1 without opening
-     * a browser or waiting on a terminal.
-     *
-     * That is what makes the vaulted login survive a reboot: the access token lives hours, the refresh token
-     * lives weeks, and this is the plugin's way of spending the second to mint the first WITHOUT holding an
-     * OAuth client itself. Not "the host refreshes the token" — the binary does, exactly as it always has.
-     *
-     * Its own 30 s HTTP timeout sits under this one, hence the longer wait: a renewal killed at 15 s would be
-     * reported as a failed login when it was merely a slow network.
-     */
-    fun loginFromRefreshToken(binary: File, env: Map<String, String>): Boolean =
-        run(binary, env, "auth", "login", timeoutMs = LOGIN_TIMEOUT_MS) != null
+    // NB the environment-driven renewal that used to live here is gone, and this note is the only thing left
+    // of it so nobody rebuilds it from the same reasoning. `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` +
+    // `CLAUDE_CODE_OAUTH_SCOPES` does take a branch in the binary, and that branch was verified only against a
+    // deliberately INVALID token: it reached the endpoint and got a `400`, which proves the branch exists and
+    // nothing about whether a valid token would be honoured. It shipped for a release and a login that expired
+    // overnight still asked the user to sign in every morning. What is observed to work is giving the binary
+    // its own file back — see `CredentialsVault.renewOnDisk` and `refreshUsingOwnFiles` below.
 
     /** Runs the binary with [args] and the given env; null on spawn failure, timeout or non-zero exit. */
     private fun run(
@@ -140,8 +124,43 @@ object AuthCli {
         return output.stdout
     }
 
+    /**
+     * Runs `auth login` for a binary that has been given **its own credentials file back** (see
+     * [dev.lain.claudejb.process.CredentialsVault.renewOnDisk]), for the sole purpose of letting it refresh
+     * an expired access token from the refresh token beside it.
+     *
+     * **This deliberately ignores the exit code, and that is the whole reason it is a separate function.**
+     * Measured against `claude` 2.1.226 with a real credential whose `expiresAt` had been put in the past: the
+     * binary refreshes the token and rewrites the file **first**, and only then decides it also wants an
+     * interactive login — printing `Opening browser to sign in…` and waiting at `Paste code here if
+     * prompted >` until it is killed. So the process exits non-zero (or is destroyed on timeout) on the very
+     * run that did exactly what was wanted, and `exitCode == 0` would report every success as a failure.
+     *
+     * The verdict therefore belongs to the CALLER, which reads the file back and asks whether the token it
+     * now holds is usable. Nothing here interprets the outcome.
+     *
+     * `destroyOnTimeout` is what bounds it: the refresh happens in the first round trip, so whatever is still
+     * running at the deadline is the interactive prompt nobody is going to answer. [REFRESH_TIMEOUT_MS] is
+     * therefore sized for one HTTP exchange, not for the binary's own 30 s login timeout — waiting that out
+     * would put a minute into the startup path of a session whose token merely aged.
+     */
+    fun refreshUsingOwnFiles(binary: File, env: Map<String, String>) {
+        runCatching {
+            val cmd = GeneralCommandLine(listOf(binary.absolutePath, "auth", "login"))
+                .withEnvironment(env)
+                .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+            CapturingProcessHandler(cmd).runProcess(REFRESH_TIMEOUT_MS, true)
+        }
+        // No logging here on purpose: this function has no verdict to report. Whether the refresh worked is
+        // decided by the caller reading the file back, and that is where the outcome is logged.
+    }
+
     private const val TIMEOUT_MS = 15_000
 
-    /** A renewal is a network round-trip with a 30 s timeout of its own; 15 s would cut it short. */
-    private const val LOGIN_TIMEOUT_MS = 60_000
+    /**
+     * How long the on-disk refresh run is given before it is destroyed. One token exchange, not one login: the
+     * process is expected to be killed here rather than to exit, because what it does after refreshing is wait
+     * for a code at a prompt (see [refreshUsingOwnFiles]).
+     */
+    private const val REFRESH_TIMEOUT_MS = 20_000
 }

@@ -127,53 +127,39 @@ class CredentialsVaultEnvTest {
         assertNull(env["CLAUDE_CODE_USER_EMAIL"])
     }
 
-    // ── renewalEnv: both names, and a case-insensitive strip ──────────────────────────────────────────────
+    // ── refreshEnv: the planted file is the ONLY source the refresh may use ───────────────────────────────
 
     @Test
-    fun `the renewal always sets BOTH the refresh token and the scopes`() {
-        // The binary refuses a refresh-token login that cannot state its grant: "required when using
-        // CLAUDE_CODE_OAUTH_REFRESH_TOKEN". One without the other is a spawned process that exits 1.
-        val env = CredentialsVault.renewalEnv(emptyMap(), "rt", listOf("user:inference", "user:profile"))
-
-        assertEquals("rt", env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"])
-        assertEquals("user:inference user:profile", env["CLAUDE_CODE_OAUTH_SCOPES"])
-    }
-
-    @Test
-    fun `the expired access token is stripped from the renewal environment`() {
-        val env = CredentialsVault.renewalEnv(
-            mapOf("CLAUDE_CODE_OAUTH_TOKEN" to "expired", "HTTPS_PROXY" to "http://proxy:3128"),
-            "rt",
-            listOf("user:profile"),
+    fun `the refresh environment carries no credential at all, so the file is the only source`() {
+        // The renewal used to put the refresh token and its scopes in the environment. That route shipped for a
+        // release and never renewed anything; what works is planting the file (`renewOnDisk`). Leaving any
+        // `CLAUDE_CODE_OAUTH_*` in place would make the outcome depend on which source the binary prefers —
+        // and the access token in particular is the one being replaced, so authenticating with it means
+        // refreshing nothing at all.
+        val env = CredentialsVault.refreshEnv(
+            mapOf(
+                "CLAUDE_CODE_OAUTH_TOKEN" to "revoked",
+                "CLAUDE_CODE_OAUTH_REFRESH_TOKEN" to "stale",
+                "CLAUDE_CODE_OAUTH_SCOPES" to "wrong",
+                "HTTPS_PROXY" to "http://proxy:3128",
+            ),
         )
 
-        assertNull(env["CLAUDE_CODE_OAUTH_TOKEN"], "handing back the token we are replacing is the bug")
+        assertFalse(
+            env.keys.any { it.startsWith("CLAUDE_CODE_OAUTH", ignoreCase = true) },
+            "the refresh must not be able to authenticate from the environment",
+        )
         assertEquals("http://proxy:3128", env["HTTPS_PROXY"], "the rest of the user's env must survive")
     }
 
     @Test
     fun `the strip is CASE-INSENSITIVE, because Windows env names are`() {
         // A hand-written `Claude_Code_Oauth_Token` in Settings is the SAME variable on Windows. An exact-match
-        // removal left it in place, and it was the very expired token the renewal exists to replace.
-        listOf("Claude_Code_Oauth_Token", "claude_code_oauth_token", "CLAUDE_code_OAUTH_token").forEach { name ->
-            val env = CredentialsVault.renewalEnv(mapOf(name to "expired"), "rt", listOf("user:profile"))
-            assertFalse(
-                env.keys.any { it.equals("CLAUDE_CODE_OAUTH_TOKEN", ignoreCase = true) },
-                "$name survived the strip",
-            )
+        // removal left it in place, and it was the very expired token the refresh exists to replace.
+        listOf("Claude_Code_Oauth_Token", "claude_code_oauth_refresh_token", "CLAUDE_code_OAUTH_SCOPES").forEach { name ->
+            val env = CredentialsVault.refreshEnv(mapOf(name to "x"))
+            assertTrue(env.isEmpty(), "$name survived the strip")
         }
-    }
-
-    @Test
-    fun `the vaulted refresh token overrides one already in the base environment`() {
-        val env = CredentialsVault.renewalEnv(
-            mapOf("CLAUDE_CODE_OAUTH_REFRESH_TOKEN" to "stale", "CLAUDE_CODE_OAUTH_SCOPES" to "wrong"),
-            "rt-fresh",
-            listOf("user:profile"),
-        )
-
-        assertEquals("rt-fresh", env["CLAUDE_CODE_OAUTH_REFRESH_TOKEN"])
-        assertEquals("user:profile", env["CLAUDE_CODE_OAUTH_SCOPES"])
     }
 
     // ── env, never argv ───────────────────────────────────────────────────────────────────────────────────
