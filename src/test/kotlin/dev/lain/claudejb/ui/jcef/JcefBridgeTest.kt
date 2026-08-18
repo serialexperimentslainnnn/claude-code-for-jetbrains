@@ -96,11 +96,6 @@ class JcefBridgeTest {
     }
 
     @Test
-    fun `parse pickFiles is the singleton object`() {
-        assertTrue(JcefBridge.parse("""{"type":"pickFiles"}""") is JcefBridge.Msg.PickFiles)
-    }
-
-    @Test
     fun `parse attach carries name mediaType and base64`() {
         val m = JcefBridge.parse(
             """{"type":"attach","name":"shot.png","mediaType":"image/png","base64":"AAAA"}""",
@@ -108,6 +103,68 @@ class JcefBridgeTest {
         assertEquals("shot.png", m.name)
         assertEquals("image/png", m.mediaType)
         assertEquals("AAAA", m.base64)
+    }
+
+    // ── the attach menu's project browser ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `parse treeChildren carries the root-relative path and the picker`() {
+        val m = JcefBridge.parse(
+            """{"type":"treeChildren","path":"src/main","mode":"files"}""",
+        ) as JcefBridge.Msg.TreeChildren
+        assertEquals("src/main", m.path)
+        assertEquals("files", m.mode)
+        val dirs = JcefBridge.parse(
+            """{"type":"treeExpand","path":"src","mode":"directories"}""",
+        ) as JcefBridge.Msg.TreeExpand
+        assertEquals("src", dirs.path)
+        assertEquals("directories", dirs.mode)
+    }
+
+    @Test
+    fun `an absent path is the project ROOT, not a missing field`() {
+        // The tree's vocabulary spells the root "" and the page omits the field when it means it, so the two
+        // have to arrive as one value — a null here would make "the root" and "no answer" the same input.
+        val m = JcefBridge.parse("""{"type":"treeChildren","mode":"files"}""") as JcefBridge.Msg.TreeChildren
+        assertEquals("", m.path)
+    }
+
+    @Test
+    fun `a path that is not a string is dropped, never thrown on`() {
+        // The input is a browser message, so a field of the wrong SHAPE is ordinary and not exceptional. It
+        // used to throw out of `parse` — `.jsonPrimitive` does that on an object or an array — which left the
+        // press with no answer at all rather than with a harmless empty one.
+        val obj = JcefBridge.parse("""{"type":"treeChildren","path":{"nope":1},"mode":"files"}""")
+        assertEquals("", (obj as JcefBridge.Msg.TreeChildren).path)
+        val arr = JcefBridge.parse("""{"type":"treeExpand","path":["a"],"mode":"files"}""")
+        assertEquals("", (arr as JcefBridge.Msg.TreeExpand).path)
+    }
+
+    @Test
+    fun `an absolute path rides through verbatim — containment is ProjectTree's single gate`() {
+        // Deliberately NOT refused here. `ProjectTree.resolve` canonicalizes and applies the same project-root
+        // check that confines what the binary may write, and a second opinion formed at the wire is how one of
+        // the two eventually ends up the weaker of the pair. Carried unchanged, refused where the rule lives.
+        val m = JcefBridge.parse(
+            """{"type":"treeChildren","path":"/etc/passwd","mode":"files"}""",
+        ) as JcefBridge.Msg.TreeChildren
+        assertEquals("/etc/passwd", m.path)
+        val up = JcefBridge.parse("""{"type":"attachPaths","paths":["../../etc/passwd"]}""")
+        assertEquals(listOf("../../etc/passwd"), (up as JcefBridge.Msg.AttachPaths).paths)
+    }
+
+    @Test
+    fun `parse attachPaths is a batch, and total on the shapes a batch can arrive in`() {
+        val m = JcefBridge.parse(
+            """{"type":"attachPaths","paths":["README.md","src/App.kt"]}""",
+        ) as JcefBridge.Msg.AttachPaths
+        assertEquals(listOf("README.md", "src/App.kt"), m.paths)
+        // Blanks and non-strings are dropped and the rest survives; an absent list is an empty one.
+        val junk = JcefBridge.parse(
+            """{"type":"attachPaths","paths":["ok.kt","",{"a":1}]}""",
+        ) as JcefBridge.Msg.AttachPaths
+        assertEquals(listOf("ok.kt"), junk.paths)
+        assertTrue((JcefBridge.parse("""{"type":"attachPaths"}""") as JcefBridge.Msg.AttachPaths).paths.isEmpty())
     }
 
     @Test

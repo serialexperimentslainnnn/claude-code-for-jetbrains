@@ -196,6 +196,53 @@
     };
     CX.els = els;
 
+    /**
+     * The ⋮ for the composer's own bar, collecting from the end: 🌈 and auto-follow first, then the pills
+     * from thinking back towards the clip.
+     *
+     * THE SEND BUTTON IS RESERVED, and that is two separate promises. It is never collected — it is the
+     * primary action of the screen and cannot end up behind a press — and it never gives up a pixel to make
+     * room for a pill: in a flex row the negative space is shared out by base × shrink factor, so without
+     * `flex: 0 0 auto` it would quietly narrow first and the row would only start collecting once it already
+     * looked wrong (composer.css). Reserving it here is the other half of that: its width comes out of the
+     * budget before anything is offered space, so the pressure falls on what can actually give.
+     *
+     * `activate` exists for the controls that open a popup of their own. They anchor it to THEMSELVES, and a
+     * collected control is `display: none`, which has no position — its menu would open in the corner of the
+     * page. Anchored to the ⋮ it opens where the reader just pressed, which is also where it belongs.
+     */
+    if (CX.createOverflow) {
+      CX.createOverflow({
+        row: bar,
+        label: 'More composer controls',
+        items: function () {
+          var list = [];
+          for (var n = 0; n < barLeft.children.length; n++) list.push(barLeft.children[n]);
+          return list.concat([followBtn, vibeBtn]);
+        },
+        reserved: function () {
+          return [sendBtn];
+        },
+        place: function (btn) {
+          barRight.insertBefore(btn, sendBtn);
+        },
+        activate: function (el, anchor) {
+          if (el === attachBtn) {
+            CX.toggleAttachMenu(anchor);
+            return true;
+          }
+          var key = el.getAttribute && el.getAttribute('data-pill');
+          for (var n = 0; key && n < CX.PILL_DEFS.length; n++) {
+            if (CX.PILL_DEFS[n].key === key) {
+              CX.togglePillMenu(CX.PILL_DEFS[n], anchor);
+              return true;
+            }
+          }
+          return false;
+        },
+      });
+    }
+
     wireInput(input);
     CX.wireImageDrop(card);
     CX.wireImagePaste(input);
@@ -422,7 +469,8 @@
     if (!s) return;
     announceTurnState(s);
     CX.renderAuth(s);
-    CX.renderActions(s);
+    // NB no `renderActions` here. Every control in the actions row acts on the chat you are already in and is
+    // available whenever there is one, so none of them reads the state — the row is built once and stays.
     renderSendMode(s);
     CX.renderPills(s);
     renderQueue(s.queue);
@@ -432,6 +480,9 @@
     ghostText = newGhost;
     renderGhost();
     CX.syncOpenMenu();
+    // LAST, because it measures what everything above it just drew — a pill's label is its width. It is also
+    // free when nothing moved: an identical push produces an identical signature and the row is never read.
+    CX.refreshOverflow();
   }
 
   // ---- Kotlin-facing API ----------------------------------------------------

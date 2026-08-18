@@ -464,7 +464,9 @@
 /* ── node diagram (CC.diagram / CC.panView) ──────────────────────────────────
    Cards laid out by depth, joined by curved connectors, on a canvas you drag. Every coordinate is computed
    by the layout, never measured from the DOM — which is what makes it right at every moment, unlike the
-   <svg> thread this design replaced. Used by the Workloads view and by the subtab popup. */
+   <svg> thread this design replaced. Used by the Workloads view, which is now its only caller — the subtab
+   popup that also drew it was removed with the tab bar's `⋮`, and the bar answers the same question in a
+   flat row of pills instead. */
 /* The canvas: a recessed sheet with a faint dot grid, so it reads as a surface things sit ON rather than as
    an empty black rectangle. The grid also makes the drag legible — without it, moving the canvas moves
    nothing the eye can hold on to. */
@@ -628,14 +630,29 @@
     stroke: color-mix(in srgb, var(--warning) 75%, transparent);
   }
 }
+/* WHO GIVES WAY when a card is narrower than its contents, which is now the ordinary case rather than the
+   exception: the cap in `widthFor` is 230px, so anything with a long title is clipped by design.
+   The order is label, then meta, and never the action. It is not expressed as an order — flexbox has none —
+   but as shrink factors: negative space is distributed in proportion to each item's flex base size times its
+   shrink factor, so the label, whose base is several times the meta's, absorbs several times as much before
+   the meta has visibly lost anything. `flex-shrink: 0` on the action is the only hard rule of the three, and
+   it is the one that matters: a Stop button that shrinks is a Stop button you cannot hit. */
 .dg-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Shrinkable, where it used to be `flex: 0 0 auto`. At the old 460px cap that was free — the computed width
+   always had room for the meta in full — but a card clamped to 230 has a deficit, and an item that refuses
+   to shrink does not politely stay wide: it pushes its own text out through the card's rounded border, over
+   the connector behind it. `min-width: 0` is what makes the ellipsis reachable at all, since a flex item's
+   automatic minimum size is its min-content width and would otherwise stop the shrink first. */
 .dg-meta {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--dim);
   font-family: var(--mono);
   font-size: 9.5px;
@@ -679,120 +696,144 @@
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   MINI SESSION VIEW — the same cards, folded into the composer's metrics strip
+   MINI SESSION VIEW — the standing facts, folded into the composer's metrics strip
    ════════════════════════════════════════════════════════════════════════════
    Built by app-composer-readout.js as a sibling of `.usage-bars`, i.e. a row of the DOCK — never a layer over
    anything. It has no `z-index` and needs none: it is in the flow, so the transcript gives up the space and
-   the prompt box stays exactly where it was. What that costs is height, which is why the body is capped and
-   scrolls (below) instead of being allowed to push the composer down as the session accumulates cards.
+   the prompt box stays exactly where it was. What that costs is height, and the answer is that the block
+   cannot grow: two lines of at most four facts, bounded by construction rather than by a cap.
 
-   The cards are the dashboard's own builders, unchanged. Everything here is DENSITY: the panel is a page you
-   open, this is a strip you glance at, and the same padding that reads as breathing room at full width reads
-   as three cards and a scrollbar in a fold. */
+   Everything here is DENSITY: the Session panel is a page you open, this is a strip you glance at, and the
+   same padding that reads as breathing room on the page reads as a scrollbar in the strip.
 
-/* The two elements the JS toggles with the `hidden` attribute, said out loud rather than left to the
-   user-agent. `[hidden] { display: none }` is a UA rule, and ANY author declaration beats it whatever its
-   specificity — which is why `.usage-bars` above, carrying `display: grid` in its own rule, stays laid out
-   while it holds the `hidden` attribute. Neither rule below declares a `display` of its own, so the UA rule
-   would in fact suffice today; stating it is what stops the next declaration added here from silently
-   reopening that trap. */
-.dash-mini[hidden],
-.dash-mini-body[hidden] {
+   It does NOT draw the panel's cards — see the note above the grid for what it draws instead and why — and
+   with them went the disclosure control that a block of six cards needed: the button, its caret, its label
+   and the `[data-open]` state. Their rules lived on here afterwards, styling a control nothing builds, which
+   is this repository's signature defect in its cheapest form. A rule whose selector cannot match is not
+   inert: it is a description of a feature, and the next reader believes it. */
+
+/* The element the JS toggles with the `hidden` attribute, said out loud rather than left to the user-agent.
+   `[hidden] { display: none }` is a UA rule, and ANY author declaration beats it whatever its specificity —
+   which is why `.usage-bars` above, carrying `display: grid` in its own rule, stays laid out while it holds
+   the `hidden` attribute. The rule below declares no `display` of its own, so the UA rule would in fact
+   suffice today; stating it is what stops the next declaration added here from silently reopening that trap.
+   `.dash-mini-body` was listed here too and nothing has ever set the attribute on it: a selector that cannot
+   match is not a safety net, it is a claim about behaviour that does not exist. */
+.dash-mini[hidden] {
   display: none;
 }
 
-/* Aligned with `.usage-bars`' own side margins so the fold sits in the same column as the bars above it,
-   rather than as a block that starts somewhere else. */
+/* The strip's shared side inset, so this row starts and ends on the same pixels as the two above it. The
+   number lives once, on `#composer` in composer.css; it was written out here as `4px` and in each of those
+   two rules as well, which is the same defect as four type sizes with a different value in it. */
 .dash-mini {
-  margin: 0 4px 8px;
+  /* Bottom margin from `--strip-row` for the same reason the inset comes from `--strip-inset`: what sits
+     under this block is the status line, i.e. the next ROW of the same readout, and a block margin standing
+     in for a row gap is how the strip ended up with four different distances between five rows. */
+  margin: 0 var(--strip-inset) var(--strip-row);
 }
 
-/* The disclosure. A quiet text control, not a `.btn`: it opens a detail view of numbers already on screen, so
-   it must not compete with the composer's own actions. No `outline` suppression anywhere — the shared
-   `:focus-visible` baseline (tabs.css) gives it its ring for free, because it is a real <button>. */
-.dash-mini-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
-  border: none;
-  background: none;
-  color: var(--dim);
-  font-family: var(--font);
-  font-size: 11.5px;
-  line-height: 1.4;
-  cursor: pointer;
-  transition: color 0.12s var(--ease);
-}
-.dash-mini-btn:hover {
-  color: var(--text);
-}
-/* Rotates to point down when the fold is open. It is `aria-hidden`, and the label beside it changes wording
-   at the same moment, so nothing depends on the reader perceiving the rotation (SC 1.4.1). Motion is
-   flattened globally by `body.reduced-motion` (boot.css); there is nothing to repeat here. */
-.dash-mini-caret {
-  flex: 0 0 auto;
-  font-size: 9px;
-  transition: transform 0.16s var(--ease);
-}
-.dash-mini[data-open='true'] .dash-mini-caret {
-  transform: rotate(90deg);
-}
-/* Never wraps: the two labels differ in width, and a control that becomes two lines when it is opened moves
-   everything under it — including the prompt box — as a side effect of being pressed. */
-.dash-mini-label {
-  white-space: nowrap;
-}
-
-/* BOUNDED, and this is the load-bearing rule of the whole section: the dock is a grid row that sizes to its
-   content, so an uncapped fold would grow it until the transcript had nowhere left to be. `vh` is the tool
-   window here — JCEF's viewport is the browser the tool window hosts — and the `min()` keeps a tall IDE from
-   turning a glance into half the panel. It is its own scroll container, which is why the JS carries the
-   offset across a rebuild. */
-.dash-mini-body {
-  margin-top: 4px;
-  max-height: min(32vh, 280px);
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.dash-mini-grid {
-  min-width: 0;
-}
+/* NB `.dash-mini-body` is gone — the capped, scrolling box that used to wrap the grid. Two reasons, and the
+   second is why it could go rather than merely why it was awkward. An element with `overflow` cannot be
+   `display: contents`, so it could not let its rows sit on the strip's own columns, which is now the whole
+   point of the block. And the cap was guarding against a block that grows without bound: that was true of
+   the Session panel's six cards, and is not true of two lines of at most four facts, whose height is
+   bounded by construction. The dock is a grid row that sizes to its content, so nothing else depended on
+   the cap either. */
 
 /* ── the standing facts, two lines under the reset row ────────────────────────
    NOT the Session view's cards, and not a two-column table either. Both were tried. The cards repeated what
-   is already on screen — the plan bars and the context figure are the lines directly above — and put page
-   furniture in a strip; the table fixed the furniture and kept the wrong shape, since a column of labels down
-   the left is a reference table and this is five short facts.
-   So: `label: value` pairs flowing across two lines, in the readout's own grammar. They WRAP rather than
-   overflow, because the tool window is often narrow and a strip that scrolls sideways is a strip nobody
-   reads. */
-/* `space-between` so each line spans the strip's full width the way the plan-limit row above it does, instead
-   of bunching at the left and leaving the right half empty. It shares `.usage-bars`' side margins (see
-   `.dash-mini`), so the two rows start and end on the same pixels — which is what makes this read as another
-   line of the same readout rather than as a block that happens to sit under one. */
-.mini-line {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 2px 16px;
+   is already on screen — the plan bars are the two lines directly above and the context figure is in the
+   status line below — and put page furniture in a strip; the table fixed the furniture and kept the wrong
+   shape, since a column of labels down the left is a reference table and this is five short facts.
+   So: `label: value` pairs across two lines, in the readout's own grammar. They WRAP rather than overflow,
+   because the tool window is often narrow and a strip that scrolls sideways is a strip nobody reads.
+
+   The third attempt was one `display: flex` per line with `justify-content: space-between`, and it is worth
+   stating why that failed too, because it looks right until there is text in it: space-between DISTRIBUTES
+   the leftover width between the items of ONE line, so a line of two pairs and a line of four spread their
+   gaps differently and nothing lines up vertically between them. It can only align two lines that happen to
+   hold the same number of items of the same width, which text never does — a grid drawn without a grid,
+   directly under `.usage-bars`, which is a real one.
+
+   So: ONE grid, shared by both lines — and, since the strip was unified, the SAME grid as the plan-limit
+   bars above them. The columns are not declared here: `--strip-cols` is declared once on `#composer` (see
+   "THE SESSION STRIP" in composer.css) and every row of the strip consumes it, which is what lets the eye
+   travel down a vertical instead of finding a new column system on each row. Here that is three tracks:
+   `Account · Plan · Provider` one each, `Model` one and `Working dir` the two remaining, and a fourth fact
+   wraps onto the next row of the same grid rather than widening the line. */
+.dash-mini-grid {
+  display: grid;
+  grid-template-columns: var(--strip-cols);
+  /* The column gap is what groups a pair, because nothing else does — no rule, no box, no colour. It has to
+     read as clearly wider than the gap between a key and its own value (`.mini-fact`, 4px), or the pairs
+     read as loose words. Which is why it is `var(--strip-gap)` and not a number: this row had `18px` and the
+     plan bars above had `14px`, and a `1fr` track is `(100% − 3 × gap) / 4`, so the two rows shared a
+     template and still put every gridline in a different place. The gap is part of the column system, not a
+     decoration on top of it. */
+  /* Both axes from the strip's own declarations, and the ROW gap for the same reason as the column one: two
+     lines of facts are two rows of the readout, and a row gap decided here is a distance that disagrees with
+     the four other rows without anything saying so. */
+  gap: var(--strip-row) var(--strip-gap);
   min-width: 0;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--strip-font);
+  /* `1.5` was written out here while the bars and the status line inherited the page's `1.6`, so the rows
+     were a pixel apart in HEIGHT even once their gaps agreed — see `--strip-line`. */
+  line-height: var(--strip-line);
 }
-/* A line that wrapped would otherwise stretch its last row across the width and leave the pairs floating a
-   long way apart; this keeps a wrapped remainder packed to the left where it reads as a continuation. */
-.mini-line > .mini-fact:last-child:not(:only-child) {
-  margin-right: auto;
+/* The lines stay ELEMENTS — they are what the JS builds, and what says which facts belong together — but not
+   boxes: `display: contents` places their pairs directly on the grid above, which is what lets two lines
+   share one set of columns.
+   The known accessibility hazard of this property does not reach here, and the reason is worth stating so it
+   is not rediscovered as a doubt: what browsers got wrong was dropping the element's own ROLE from the
+   accessibility tree, which cost a `<ul>` its list and a `<button>` its button. This is a plain `<div>` with
+   no role to lose and nothing focusable inside it, and the descendants — the pairs, which carry all the text
+   — are exposed either way. Chromium fixed the role case in 89, regressed it in 113 and fixed it again in
+   115; the page runs in a JCEF far past that, and there is no second engine to consider. */
+.mini-line {
+  display: contents;
+}
+/* Every line starts a new grid row. Without it a line that lost a fact to an absent value would leave its row
+   part-empty and the next line would flow into the space — the two lines merging into one, which is the
+   defect this grid exists to prevent arriving by another door. */
+.mini-line > .mini-fact:first-child {
+  grid-column-start: 1;
+}
+/* ── the one cell allowed to use the empty columns beside it ──────────────────
+   NO ROW STRETCHES ITS CELLS TO FILL, and that has not changed: `Model | Working dir` is two cells, not two
+   half-width ones, and a row that widened its cells to take up the slack would give itself a column layout
+   of its own — the defect the shared grid replaced. What this is instead is one cell using the columns that
+   are ALREADY EMPTY to its right, rather than clipping a filesystem path while there is room a millimetre
+   away. A path is the longest value on the strip and the only one with no natural break in it.
+
+   THE GRIDLINES DO NOT MOVE, and that is what makes the two compatible rather than a compromise between
+   them. It sets `grid-column-END`, so it changes where this item stops and nothing about the tracks; and the
+   tracks are `minmax(0, 1fr)` (see `--strip-cols`), whose size comes from the free space and never from
+   their content, so no item's width can feed back into them. Every other row of the strip keeps its
+   verticals exactly where they were, which is the whole thing the shared grid exists to guarantee.
+
+   DECLARED, NOT COUNTED: the class is put on by the JS at the one call site that means it
+   (`workingDirFact`), the same way the line's own class is decided there rather than derived from how many
+   facts survived. `:last-child` is a precondition and not the decision — a fact cannot spill over a
+   neighbour, so if anything is ever placed after it the fill stops on its own instead of overlapping.
+   The ellipsis stays underneath all of this: three columns are not infinite, and a genuinely absurd path
+   still clips with the whole of it in the pair's `title`. */
+.mini-line > .mini-fact.mini-fill:last-child {
+  grid-column-end: -1;
 }
 /* Each pair is one unit: the label and its value break together or not at all, so a wrap never leaves
-   "Organization:" at the end of one line and its value at the start of the next. */
+   "Organization:" at the end of one line and its value at the start of the next.
+   As a CELL of the strip's grid it must also be able to clip: `min-width: 0` overrides the automatic
+   minimum (a grid item's floor is its min-content width, which for `Working dir: /very/long/path` is the
+   whole path) and `overflow: hidden` keeps anything that still does not fit inside the column instead of
+   over the next one. WHAT clips inside the pair is decided below and is not negotiable: the value gives
+   way, never the key — a cell reading `Working d…` has lost the only part that said what it was. */
 .mini-fact {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
+  overflow: hidden;
 }
 .mini-key {
   flex: 0 0 auto;
@@ -809,10 +850,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The one child of the grid that is not a pair, so it takes the whole row rather than being squeezed into a
+   third of it and wrapping into three lines of one word. No `font-size`: it inherits the strip's, like
+   everything else in here. */
 .mini-empty {
+  grid-column: 1 / -1;
   color: var(--dim);
-  font-size: 11px;
 }
+/* NB there are no `@media` rules in this block any more, and their absence is the point. This row used to
+   halve and collapse its own columns at its own breakpoints while the bars above it reflowed at theirs, so
+   the two rows were mid-reflow at different widths — the three-systems defect, visible only when narrow.
+   The strip now folds as ONE thing, at one width, and the rule that does it names no row at all: it names
+   the cell class every row's cells share. Both live beside `--strip-cols` on `#composer` in composer.css. */
 
 /* ── toggle switch ──────────────────────────────────────────────────────────── */
 .toggle {

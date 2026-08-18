@@ -103,6 +103,58 @@ describe('a11y — visible focus (WCAG 2.4.7 / 1.4.11, Level AA)', () => {
   });
 });
 
+/**
+ * The one KNOWN, DELIBERATE shortfall against WCAG 2.2 AA in this UI, registered where it gets audited.
+ *
+ * A gap that lives only in a comment beside the rule that causes it is a gap nobody looks at again. There is
+ * no accessibility statement or conformance report in this repository to file it in, so it is filed here —
+ * these tests are the only accessibility record that runs — and it is asserted in BOTH directions, because a
+ * declared exception fails in two ways and only one of them looks like a failure: someone shrinks the control
+ * further, or the constraint that forced it goes away and nobody notices the exception could be retired.
+ */
+describe('a11y — target size (WCAG 2.5.8, Level AA) — one declared exception', () => {
+  /** The block of declarations following [selector], for a selector anchored at the start of a line. */
+  const block = (selector) => {
+    const sheet = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = sheet.indexOf('\n' + selector + ' {');
+    return at < 0 ? '' : sheet.slice(at, sheet.indexOf('}', at));
+  };
+
+  it('the subtab row’s close is 20×20 — SHORT of the 24×24 the criterion asks for', () => {
+    // THE EXCEPTION, stated rather than discovered. SC 2.5.8 asks for 24×24 CSS pixels; this control is 20×20
+    // and the spacing exception does not rescue it, because it sits against the pill and the 24px circles
+    // centred on the two intersect.
+    //
+    // WHY it is not closed: the subtab pill is 21px tall. A 24px control makes the row grow by three pixels
+    // the moment a subtab is opened — the transcript underneath shifts every time the user navigates, which
+    // trades a target-size failure for a moving target. The row is also the one that holds dozens of pills in
+    // a tool window a few hundred pixels wide, which is what fixes that height.
+    //
+    // WHAT LIMITS THE HARM: it is one control, it is only ever on the subtab you are already reading, and it
+    // hides a transcript rather than destroying anything — there is no path where missing it costs work.
+    expect(block('.pill-x')).toMatch(/width:\s*20px/);
+    expect(block('.pill-x')).toMatch(/height:\s*20px/);
+  });
+
+  it('and it is the ONLY one: on the chats’ row, where the pill has room, the gap is closed', () => {
+    // The other half of the register. The chats' row is a size up (29px, 34px selected), so the same control
+    // is the full 24×24 there. If the subtab row is ever given that height, this exception is retired rather
+    // than inherited — which is the sentence the failure message of the test above is there to prompt.
+    const chats = '.tab-capsule:not(.subtab-capsule)';
+    expect(block(`${chats} .pill-x`)).toMatch(/width:\s*24px/);
+    expect(block(`${chats} .pill-x`)).toMatch(/height:\s*24px/);
+  });
+
+  it('no OTHER tab control quietly joins the exception', () => {
+    // The exception is scoped to one class. It used to be three — the `⋮` that opened the agent tree and the
+    // `⇱` that pinned a subtab as a tab of its own shared this box — and both were removed with the features
+    // behind them. A new glyph added to that rule would inherit a documented shortfall without anyone
+    // deciding to, so the register asserts the SIZE of the exception, not just its existence.
+    const sheet = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(sheet).not.toMatch(/\.pill-more|\.pill-pin/);
+  });
+});
+
 describe('a11y — motion and language', () => {
   it('neutralises every animation when motion is reduced', () => {
     // The stylesheet defines several keyframe animations; reducing motion must neutralise them all rather

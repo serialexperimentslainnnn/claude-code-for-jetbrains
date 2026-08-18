@@ -139,6 +139,11 @@
       } else {
         pill.el.removeAttribute('hidden');
         pill.label.textContent = label;
+        // The pill's own name, which it did not have: the chip shows a VALUE (`Opus 5 with 1M context`,
+        // `High`) and nothing on it says which setting that value belongs to. It is the tooltip, and it is
+        // also what the overflow menu reads when the pill does not fit on the bar — a row that says only
+        // "High" there is a menu entry nobody can act on.
+        pill.el.title = def.key.charAt(0).toUpperCase() + def.key.slice(1) + ': ' + label;
         if (hasOpts) pill.el.removeAttribute('disabled');
         else pill.el.setAttribute('disabled', 'disabled');
       }

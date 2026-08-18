@@ -52,15 +52,19 @@ describe('the whole page comes up', () => {
   });
 
   it('shows the tab bar for the payload the HOST actually emits', () => {
-    // Not a hand-made fixture: this is the shape `JcefTabsData.tabsJson` builds — every chat carries its OWN
-    // `tree` and `tasks` (so hovering a tab you are not in shows what THAT chat started), and the selected
-    // chat's tree is repeated at the top level, which is what the bar's own rows are built from. A test that
-    // omits the per-chat keys exercises a payload the product never sends, and that is the difference
-    // between a green suite and a tool window with no tabs in it.
+    // Not a hand-made fixture: this is the shape `JcefTabsData.tabsJson` builds — a chat is `{id, title,
+    // selected, attention}` and nothing else, and the SELECTED chat's tree and tasks sit at the top level,
+    // which is what both of the bar's rows are built from. A test that invents keys the host does not send
+    // exercises a payload the product never emits, which is the difference between a green suite and a tool
+    // window with no tabs in it.
+    //
+    // Each chat used to carry its own `tree` and `tasks` as well, for a popup that showed what a tab you were
+    // NOT in had started. That popup went with the `⋮`, and the keys went with it: sending them meant
+    // serialising every open session's agent tree on every agent event for something nothing reads.
     win.cc.tabs({
       chats: [
-        { id: 'chat-0', title: 'Chat 1', selected: true, attention: false, tree: [], tasks: [] },
-        { id: 'chat-1', title: 'Chat 2', selected: false, attention: false, tree: [], tasks: [] },
+        { id: 'chat-0', title: 'Chat 1', selected: true, attention: false },
+        { id: 'chat-1', title: 'Chat 2', selected: false, attention: false },
       ],
       tree: [],
       tasks: [],

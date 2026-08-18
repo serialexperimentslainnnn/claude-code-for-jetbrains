@@ -9,7 +9,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.context.Attachment
-import dev.lain.claudejb.diff.OpenedDiffsService
 import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -54,7 +53,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     /** What this browser is painting (chat / agent / background task), and the streaming coalescer behind it. */
     internal val transcript = ChatTranscriptView(session, host::exec)
 
-    /** Pending attachments pinned to the next turn (editor actions, drag/drop/paste, file picker). */
+    /** Pending attachments pinned to the next turn (editor actions, drag/drop/paste, the 📎 project browser). */
     internal val tray = AttachmentTray(project, host::exec, ::focusInput)
 
     /** The read-only diff a permission card shows, and the restore behind a completed edit. */
@@ -96,11 +95,17 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     internal val agentTabs = ChatAgentTabs(this)
 
     /**
-     * The conversation embedded in the Git view — a SECOND session drawn into this same page.
+     * This page's window onto the project's ONE Git conversation — a SECOND session drawn into this page.
      *
      * It has no tab of its own, deliberately: as one it sat in the row with the user's own conversations and
-     * its startup painted the full-window boot screen over whatever chat they were in. It is created on
-     * first use and started silently; a browser that never opens the Git view never pays for it.
+     * its startup painted the full-window boot screen over whatever chat they were in. It is created on first
+     * *use* and started silently; a project where nobody ever acts on the Git view never pays for it.
+     *
+     * **The conversation is not this panel's** — it lives in [GitChatConversation], one per project, and this
+     * field is only where it gets painted. Registering here is also what paints it, so a chat opened after the
+     * talking was done comes up showing the whole thing rather than an empty pane. That is exactly what it did
+     * before: each panel owned its own session field and subscribed only once its own user had acted, so the
+     * same conversation looked like a different (empty) one in every other tab.
      */
     internal val gitChat = GitChatFeed(this, host::exec)
 
@@ -167,6 +172,10 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     override fun onStateChanged() {
         pushMetaState()
         pushSession()
+        // The ⚙ menu draws the session's model, effort and permission mode, so it moves with them — and the
+        // pill is the control that moves them most. The page stashes a push that lands while the menu is shut
+        // and draws it on the next open, so this costs one `exec` and no layout.
+        pushSettingsMenu()
         // Background tasks arrive on this path (`background_tasks_changed` is a level signal that fires
         // state), not through the agent scan — so their rows would otherwise only refresh when an agent
         // happened to change.
@@ -243,26 +252,24 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         host.exec("window.cc.theme && window.cc.theme(" + JcefTheme.vars(reduceMotion) + ")")
     }
 
-    /** The composer's ⚙ menu: the switches worth flipping without leaving the chat, and their current state. */
+    /**
+     * The composer's ⚙ menu: the settings worth changing without leaving the chat, and their current state.
+     *
+     * Takes the session because three of its groups — model, effort and permission mode — show what the LIVE
+     * session has selected rather than what is stored, so that they and the composer's own pills cannot
+     * disagree. That is also why this is pushed on every state change and not only when the menu itself was
+     * used: changing the model from the pill moves the value this menu draws.
+     */
     internal fun pushSettingsMenu() {
-        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state)
+        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state, session)
         host.exec("window.cc.settingsMenu && window.cc.settingsMenu({\"items\":$items})")
     }
 
-    /**
-     * The composer's own state: the meta document, then the live one.
-     *
-     * The diff count is read HERE rather than defaulted, and that is the whole reason this method reaches
-     * outside the session: `openDiffs` is what the composer's *Close diffs* button greys itself out on, so a
-     * push that omitted it left the button permanently disabled — a control that exists, is drawn, and can
-     * never be pressed. Opening or closing a diff tab is not a session event, so nothing else would ever
-     * supply the number.
-     */
+    /** The composer's own state: the meta document, then the live one. */
     internal fun pushMetaState() {
-        val openDiffs = OpenedDiffsService.getInstance(project).openCount()
         host.exec(
             "window.cc.meta && window.cc.meta(" + JcefState.metaJson(session) + ");" +
-                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage, openDiffs) + ")",
+                "window.cc.state && window.cc.state(" + JcefState.stateJson(session, feed.usage) + ")",
         )
     }
 
@@ -381,9 +388,9 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         onboarding.dispose()
         transcript.stop()
         feed.stop()
-        // Detaches this page's listeners from the Git conversation, and nothing else: that session belongs to
-        // the project, not to this panel — every chat's Git view is a window onto the same one, so disposing
-        // it here would kill it for the tabs still open on it.
+        // Unregisters this page from the Git conversation, and nothing else: that session belongs to the
+        // project, not to this panel — every chat's Git view is a window onto the same one, so ending it here
+        // would kill it for the tabs still open on it, and the pending card with it.
         gitChat.dispose()
         // host disposes via the parentDisposable (this panel) registered in JcefHost.
     }

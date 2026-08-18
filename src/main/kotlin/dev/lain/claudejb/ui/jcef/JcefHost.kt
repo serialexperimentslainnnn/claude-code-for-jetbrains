@@ -162,6 +162,21 @@ class JcefHost(
      */
     private val readyWatchdog = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
 
+    /**
+     * What [whenWebReady] queued and has not run yet, in the order it was queued. Each block is held as its own
+     * object, so taking it out of this list IS the guard that runs it at most once. EDT-only.
+     */
+    private val deferred = ArrayList<ReadyBlock>()
+
+    /**
+     * The deadline behind [whenWebReady], on an alarm of its own.
+     *
+     * Not [readyWatchdog], and that is not tidiness: the ladder cancels that alarm every time it delivers a
+     * rung, so sharing it would mean a promotion silently dropping the caller's deadline — on exactly the runs
+     * where the page is having trouble and the deadline is the only thing left.
+     */
+    private val deferredAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
+
     val component: JComponent
 
     init {
@@ -227,6 +242,38 @@ class JcefHost(
     }
 
     /**
+     * Run [block] once the web app is actually alive — immediately when it already is.
+     *
+     * For the gesture whose RESULT must not be shown before the page can draw it. A chat's browser starts
+     * loading from this class's constructor, so putting a fresh one on screen shows a blank frame assembling
+     * the whole document; deferring the switch until the page announces itself is what makes that invisible.
+     *
+     * **[timeoutMs] is not optional and it is not tuning.** A page that never announces would otherwise turn
+     * whatever queued this into a control that does nothing at all, which is precisely the failure this is
+     * used to avoid, so the deadline runs [block] regardless: late is a degraded outcome, never is a broken
+     * one. The caller therefore has to survive running without a live page — which is why what is deferred
+     * here is a UI switch and not, say, a push that needs `window.cc`.
+     *
+     * Exactly once, whichever clock wins. The queue entry is removed before it is run, so a [markWebReady]
+     * arriving after the deadline, or an alarm already dispatched onto the EDT when [markWebReady] cancels it,
+     * finds nothing left to run. Everything here is EDT-confined, so "first" is settled by the event queue and
+     * needs no lock. A [dispose] before either clock drops the queue unrun: there is no page to run it in.
+     */
+    fun whenWebReady(timeoutMs: Long = WEB_READY_TIMEOUT_MS, block: () -> Unit) {
+        runOnEdt {
+            // No browser means no page is coming — [supported] is false and what this host shows is a label.
+            // Waiting out the deadline for a document nobody is loading is just the delay with none of the point.
+            if (webReady || browser == null) {
+                block()
+                return@runOnEdt
+            }
+            val entry = ReadyBlock(block)
+            deferred.add(entry)
+            deferredAlarm.addRequest({ runDeferred(entry) }, timeoutMs)
+        }
+    }
+
+    /**
      * The web app announced it is alive (the `ready` bridge message). Stops the ladder where it stands and
      * settles the keyboard focus. Called by the panel when it receives `Msg.Ready`. Idempotent.
      */
@@ -240,6 +287,9 @@ class JcefHost(
             // THE focus fix (see requestFocus): CEF is told it has the focus only now, once the page it must paint
             // the caret in actually exists.
             if (inputComponent()?.isFocusOwner == true) grantCefFocus()
+            // Last, deliberately: a deferred block is typically what puts this chat on screen, and selecting a
+            // tab moves the focus itself. Running it after the line above lets the newer intent win.
+            flushDeferred()
         }
     }
 
@@ -279,12 +329,45 @@ class JcefHost(
     /** Optional eager teardown; both the browser and the JS query are also registered with the parent disposable,
      *  and [Disposer.dispose] is a no-op on an already-disposed object, so calling this twice is safe. */
     fun dispose() {
+        // Anything still waiting for the page is dropped rather than run: what it was waiting for is going
+        // away, and its own deadline would otherwise fire it into a torn-down browser.
+        runOnEdt {
+            deferredAlarm.cancelAllRequests()
+            deferred.clear()
+        }
         loopback?.stop()
         jsQuery?.let { Disposer.dispose(it) }
         browser?.let { Disposer.dispose(it) }
     }
 
     // --- internals -------------------------------------------------------------------------------------------
+
+    /**
+     * One block queued by [whenWebReady]. It exists so the block has an IDENTITY: two callers may hand over
+     * equal-looking lambdas, and it is the entry — not the function — that the queue removes exactly once.
+     */
+    private class ReadyBlock(val block: () -> Unit)
+
+    /** Runs everything still queued, in the order it arrived. EDT-only. */
+    private fun flushDeferred() {
+        deferredAlarm.cancelAllRequests()
+        // Drained before anything runs: a block is free to queue another, and the second one must wait for its
+        // own turn rather than be iterated over while the list is being walked.
+        val queued = ArrayList(deferred)
+        deferred.clear()
+        queued.forEach { it.block() }
+    }
+
+    /**
+     * The deadline came first: run [entry] without the page, unless it has already gone (flushed, or the queue
+     * dropped by [dispose]). Says so in the log, because a UI that acts before its page exists is worth being
+     * able to recognise afterwards. EDT-only.
+     */
+    private fun runDeferred(entry: ReadyBlock) {
+        if (!deferred.remove(entry)) return
+        log.warn("Claude Code chat page has not announced itself in time — running a deferred action without it")
+        entry.block()
+    }
 
     /**
      * The three load callbacks are one unit: `onLoadStart` clears the verdict, `onLoadError` records it, and
@@ -582,14 +665,21 @@ class JcefHost(
             "app-session-mcp.js",
             "app-session-workloads.js",
             "app-session-git.js",
-            // After `app-session-git.js` (it heads itself with that file's strip builder) and after
-            // `app-permissions.js` (it draws its cards with that file's renderer), and before the spine,
-            // which asks it for the pane on its first visibility pass.
+            // After `app-session-git.js` — it heads itself with that file's strip builder — and after
+            // `app-permissions.js`, whose renderer draws its cards; and before the spine, which asks it for
+            // the pane on its first visibility pass.
+            //
+            // NB **no parentheses in a comment inside this list.** `scripts/gen-projectmap.py` slices the
+            // declaration at the first `)` after `listOf(` without stripping comments first, so one here
+            // truncates the list it reads: the generated map silently loses every module declared below this
+            // point. `helpers/load.js` strips `//` lines before doing the same slice and is unaffected, which
+            // is what makes the disagreement invisible — the tests load the whole page while the map
+            // describes two thirds of it. Fixing the script is the real answer; this comment is what keeps
+            // the map honest until then.
             "app-session-gitchat.js",
             "app-session.js",
             "app-tabs-base.js",
             "app-tabs-guard.js",
-            "app-tabs-tree.js",
             "app-tabs-pill.js",
             "app-tabs-scroll.js",
             "app-tabs.js",
@@ -665,6 +755,18 @@ class JcefHost(
          * sooner.
          */
         private const val SCRIPTS_WATCHDOG_MS = 20_000
+
+        /**
+         * How long a [whenWebReady] block waits for the page before it runs without one.
+         *
+         * A ceiling on a wait the user is inside of, not a schedule: the page normally announces itself in well
+         * under a second, and everything past that is the machine being busy. Far short of
+         * [SCRIPTS_WATCHDOG_MS] on purpose — the two answer different questions. That one decides when to
+         * re-deliver the document, which is worth being patient about because the alternative costs a full
+         * reload; this one decides how long someone may press a control and see nothing at all happen, and
+         * patience there is indistinguishable from a dead button.
+         */
+        private const val WEB_READY_TIMEOUT_MS = 5_000L
 
         /**
          * The lowest rung any browser may start on, for the rest of this IDE run. Application-wide on purpose:

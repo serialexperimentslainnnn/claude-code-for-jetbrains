@@ -5,10 +5,9 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.options.ShowSettingsUtil
-import dev.lain.claudejb.context.FilePickerHelper
 import dev.lain.claudejb.context.ImageAttachments
+import dev.lain.claudejb.context.ProjectTree
 import dev.lain.claudejb.diff.DiffPresenter
-import dev.lain.claudejb.diff.OpenedDiffsService
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
@@ -16,6 +15,8 @@ import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
+import dev.lain.claudejb.ui.jcef.JcefTreeData
+import kotlinx.serialization.json.JsonObject
 import java.awt.datatransfer.StringSelection
 
 /**
@@ -93,23 +94,50 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
     /**
      * One switch of the composer's ⚙ menu.
      *
-     * Three things this does that a two-line handler would not, and each is a rule this repo learned the hard
-     * way. The key is checked against the closed set ([JcefSettingsMenu.apply]) and an unknown one is LOGGED
-     * rather than dropped in silence — five of these switches are the deterministic guard's own rules, so a
-     * key that stops matching after a rename is a security control that quietly cannot be reached. The write
-     * goes through `update {}`, never a bare `state.x = y`, which is a change that silently does not survive
-     * a restart. And the menu is re-pushed to EVERY chat: these settings are global, so leaving the other
-     * pages showing the old state would make the same switch read differently depending on which tab you
-     * opened it from.
+     * An unknown key is LOGGED rather than dropped in silence — six of these switches are the deterministic
+     * guard's own rules and one pre-authorises a tool, so a key that stops matching after a rename is a
+     * security control the user can press and nothing answers. And the menu is re-pushed to EVERY chat: these
+     * settings are global, so leaving the other pages showing the old state would make the same switch read
+     * differently depending on which tab you opened it from.
      */
     private fun onSettingsToggle(m: JcefBridge.Msg.SettingsToggle) {
-        var known = false
-        ClaudeSettings.getInstance(panel.project).update { known = JcefSettingsMenu.apply(it, m.key, m.on) }
-        if (!known) {
+        if (!writeSettingsToggle(m)) {
             logger.warn("The chat's settings menu asked for a switch this build does not have: ${m.key}")
             return
         }
         JcefChatPanel.pushSettingsMenuToAll()
+    }
+
+    /**
+     * Writes one switch, and answers false when no destination claims its key.
+     *
+     * Three destinations, because a menu row is not always a field of the settings document, and each of the
+     * other two carries a rule that a single `update` block would break:
+     *
+     * The **"Always allow" set** owns its own persistence ([dev.lain.claudejb.settings.AlwaysAllowTools]),
+     * which opens an `update` of its own — so it is answered before this method opens one, never from inside
+     * it. Nesting a read-modify-write of the settings document inside another is the exact race the serialised
+     * writes exist to remove.
+     *
+     * The **document** is written through `update {}`, never a bare `state.x = y`, which is a change that
+     * silently does not survive a restart. The block is applied twice by design, so what goes in it is the
+     * pure delta and nothing else — hence the model catalogue being read out here rather than in there.
+     *
+     * The **live session** is driven afterwards, and only for the three rows the composer also has a pill for:
+     * a menu that showed the stored default while the pill showed the running value would let two controls
+     * answer the same question differently.
+     */
+    private fun writeSettingsToggle(m: JcefBridge.Msg.SettingsToggle): Boolean {
+        val settings = ClaudeSettings.getInstance(panel.project)
+        JcefSettingsMenu.alwaysAllowTool(m.key)?.let { tool ->
+            if (m.on) settings.alwaysAllow.remember(tool) else settings.alwaysAllow.forget(tool)
+            return true
+        }
+        val models = session.models.map { it.value }
+        var known = false
+        settings.update { known = JcefSettingsMenu.apply(it, m.key, m.on, models) }
+        if (known) JcefSettingsMenu.applyToSession(session, m.key, m.on)
+        return known
     }
 
     private fun onRequestCard(m: JcefBridge.Msg.RequestCard) = when (m) {
@@ -255,13 +283,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
     private fun onAttachments(m: JcefBridge.Msg.Attachments) = when (m) {
         is JcefBridge.Msg.RemoveAttachment -> tray.remove(m.id)
 
-        JcefBridge.Msg.PickFiles -> FilePickerHelper.chooseFiles(panel.project).forEach(tray::addPath)
-
-        JcefBridge.Msg.PickDirectory -> {
-            FilePickerHelper.chooseDirectory(panel.project)?.let(tray::addPath)
-            Unit
-        }
-
         JcefBridge.Msg.AttachSelection -> {
             tray.addSelection()
             Unit
@@ -272,6 +293,12 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         JcefBridge.Msg.RequestAttachData -> tray.pushMenuData()
 
         is JcefBridge.Msg.AttachPath -> tray.addPath(m.path)
+
+        is JcefBridge.Msg.TreeChildren -> onTreeChildren(m)
+
+        is JcefBridge.Msg.TreeExpand -> onTreeExpand(m)
+
+        is JcefBridge.Msg.AttachPaths -> onAttachPaths(m.paths)
 
         JcefBridge.Msg.PasteClipboard -> tray.pasteFromClipboard()
 
@@ -305,6 +332,89 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         tray.add(image)
     }
 
+    /**
+     * Which picker is asking. CLOSED, and checked rather than trusted for the reason every other closed set
+     * here is: a mode this build does not know would otherwise pick a default, and the menu would quietly
+     * list the wrong things — the kind of wrong that is never reported as a bug.
+     */
+    private fun projectTreeMode(wire: String): ProjectTree.Mode? = when (wire) {
+        "files" -> ProjectTree.Mode.FILES
+        "directories" -> ProjectTree.Mode.DIRECTORIES
+        else -> null
+    }
+
+    /** One folder's children, for the attach menu's in-place project browser. */
+    private fun onTreeChildren(m: JcefBridge.Msg.TreeChildren) {
+        val mode = projectTreeMode(m.mode) ?: return unknownTreeMode(m.mode)
+        pushOffEdt("window.cc.treeChildren") {
+            JcefTreeData.childrenJson(m.path, m.mode, ProjectTree.children(panel.project, m.path, mode))
+        }
+    }
+
+    /** What marking that folder drags in — the paths themselves, since the count is the walk that found them. */
+    private fun onTreeExpand(m: JcefBridge.Msg.TreeExpand) {
+        val mode = projectTreeMode(m.mode) ?: return unknownTreeMode(m.mode)
+        pushOffEdt("window.cc.treeExpansion") {
+            JcefTreeData.expansionJson(m.path, m.mode, ProjectTree.expand(panel.project, m.path, mode))
+        }
+    }
+
+    /**
+     * Pin a whole batch the tree picked, named in ITS vocabulary: root-relative, forward-slashed.
+     *
+     * [ProjectTree.resolve] is the single crossing to a real file and therefore the only containment check —
+     * the same canonicalize-and-prefix gate that confines what the binary may write. Anything that does not
+     * name a file inside the project is simply absent from the result, including a value that arrived
+     * absolute. Bounded by the tree's own ceiling, because the size of this list is decided by a browser.
+     *
+     * **A drop is LOGGED rather than passed over.** Every path in this message was drawn from a listing this
+     * same gate produced, so one that no longer resolves means the page offered something the project does
+     * not contain — and the visible symptom is a batch that pins fewer chips than the button promised, which
+     * reads as the feature losing files. Not a balloon, though: it is a defect on our side, not something the
+     * user did or can act on.
+     *
+     * Off the EDT because the gate canonicalizes, which is a filesystem call per path; only the pinning is
+     * EDT work, and it is ONE operation there — see [AttachmentTray.addPaths].
+     */
+    private fun onAttachPaths(paths: List<String>) {
+        if (paths.isEmpty()) return
+        val root = panel.project.basePath
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val wanted = paths.take(ProjectTree.MAX_ENTRIES)
+            val files = wanted.mapNotNull { ProjectTree.resolve(root, it)?.path }
+            if (files.size != wanted.size) {
+                val lost = wanted.size - files.size
+                logger.warn("Claude Code: $lost of ${wanted.size} attached paths name nothing inside this project")
+            }
+            if (files.isEmpty()) return@executeOnPooledThread
+            app.invokeLater({ tray.addPaths(files) }, ModalityState.any())
+        }
+    }
+
+    private fun unknownTreeMode(wire: String) =
+        logger.warn("The attach menu asked to browse the project in a mode this build does not have: $wire")
+
+    /**
+     * Answers a page question on a POOLED thread and pushes the reply back on the EDT.
+     *
+     * [ProjectTree]'s two entry points take a read lock and walk the VFS, which on the EDT is a frozen IDE —
+     * the same shape [resolveLinksOffEdt] uses for the transcript's links. A failure is LOGGED rather than
+     * swallowed: the page is waiting for this reply and shows a folder stuck on "Loading…" without it, so a
+     * silent drop is a menu that appears to hang for no reason anybody can find afterwards.
+     */
+    private fun pushOffEdt(method: String, build: () -> JsonObject) {
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val payload = runCatching(build)
+                .onFailure { logger.warn("Claude Code: $method could not be answered", it) }
+                .getOrNull() ?: return@executeOnPooledThread
+            // The house idiom, guard included: a push that lands before the module registered would otherwise
+            // throw inside a page where nothing surfaces a throw.
+            app.invokeLater({ panel.host.exec("$method && $method($payload)") }, ModalityState.any())
+        }
+    }
+
     private fun onSessionControl(m: JcefBridge.Msg.SessionControl) = when (m) {
         is JcefBridge.Msg.McpReconnect -> {
             session.queries.reconnectMcp(m.name)
@@ -331,12 +441,11 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         // inside a chat is [ClaudeToolWindowFactory]'s companion.
         JcefBridge.Msg.NewChat -> ClaudeToolWindowFactory.newChat(panel.project)
 
-        JcefBridge.Msg.CloseAllDiffs -> {
-            OpenedDiffsService.getInstance(panel.project).closeAll()
-            // The count the button greys itself out on rides in the state payload, and closing the tabs is not
-            // a session event — nothing else would push one. Without this the button stays lit over an editor
-            // with no diffs left in it until the next turn happens to move the session.
-            panel.pushMetaState()
+        // The bin in the actions row. It resolves the tab from THIS panel's session rather than from an id the
+        // page sent, because the page cannot be wrong about which chat it is and an id can: the same close
+        // travels through `closeById` when the tab row asks, and through here when the chat asks about itself.
+        JcefBridge.Msg.CloseThisChat -> withStrip("close this chat") { strip ->
+            strip.tabFor(session)?.let { strip.close(it) }
         }
 
         JcefBridge.Msg.OpenGitView -> ClaudeToolWindowFactory.showGitView(panel.project)
@@ -389,9 +498,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             // No id means the chat's own transcript: that is how the breadcrumb's first segment goes back, and
             // `Shown.Agent("")` would be a transcript for an agent that does not exist — an empty page.
             is JcefBridge.Msg.SelectAgent -> panel.transcript.showTranscript(m.agentId.ifBlank { null })
-
-            // Pinning is the strip's business: it owns the tabs. This panel only knows WHAT was pinned.
-            is JcefBridge.Msg.PinSubtab -> panel.agentTabs.pinSubtab(m)
 
             is JcefBridge.Msg.CloseAgent -> panel.agentTabs.closeAgent(m.agentId)
 

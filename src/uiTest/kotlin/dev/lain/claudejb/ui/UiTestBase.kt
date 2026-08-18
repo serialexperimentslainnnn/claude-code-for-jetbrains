@@ -453,7 +453,15 @@ abstract class UiTestBase {
         /** Robot-server endpoint; override via `-Drobot-server.url` (e.g. a remote runner). */
         fun robotServerUrl(): String = System.getProperty("robot-server.url") ?: "http://127.0.0.1:8082"
 
-        /** The chat pills of the tab bar's first row, in bar order. */
+        /**
+         * The chat pills of the tab bar's first row, in bar order.
+         *
+         * A tab is a `.pill-wrap` holding SIBLINGS — the chat's own `<button class="pill">` and then its
+         * glyph controls — so `.pill` is the chat's button and not the whole tab. It stays the anchor here
+         * because it is the button that carries what this harness asks of a tab: one per chat to count,
+         * `click()` to select, and `aria-current` to read. Anything that lives on a SIBLING is reached
+         * through the wrapper (see [closeChatsAfter]); reaching under `.pill` for one finds nothing.
+         */
         private const val PILLS = "document.querySelectorAll(\"#tabsbar .tab-rows .tab-row .tab-capsule .pill\")"
 
         /** Selects the leftmost chat — the one [closeChatsOpenedHere] then closes the others from. */
@@ -470,10 +478,17 @@ abstract class UiTestBase {
          *
          * The handlers capture their chat's id, so a pill detached by a repaint mid-pass still asks the host
          * to close the right chat.
+         *
+         * The × is a SIBLING of the pill, not a child of it — it is a `<button>`, and interactive content
+         * inside a `<button>` is what the content model forbids and what made this control dead on screen.
+         * So the walk goes up to the tab (`.pill-wrap`) and back down. Asking `p[i]` for it directly returns
+         * null, and a null here is a silent no-op: nothing closes, and the failure surfaces two waits later
+         * as "still too many chats" rather than as a bad selector.
          */
         private fun closeChatsAfter(keep: Int) =
             "(function () { var p = $PILLS; for (var i = p.length - 1; i >= $keep; i--) { " +
-                "var x = p[i].querySelector(\".pill-x\"); if (x) { x.click(); } } return String(p.length); })()"
+                "var w = p[i].closest(\".pill-wrap\"); var x = w && w.querySelector(\".pill-x\"); " +
+                "if (x) { x.click(); } } return String(p.length); })()"
 
         private fun chatCountIsAtMost(keep: Int) =
             "(function () { var p = $PILLS; return String(p.length <= $keep); })()"

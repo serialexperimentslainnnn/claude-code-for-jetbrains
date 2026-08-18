@@ -73,6 +73,23 @@ body {
   display: none !important;
 }
 
+/* What a control row could not fit, collected behind its ⋮ (app-composer-base.js). Hidden the same way, and
+   for a stronger reason: a collected control must leave the tab order and the accessibility tree as well as
+   the paint, because a control nobody can see that Tab still stops on is worse than one that was never
+   offered. `visibility` or an opacity would leave it in both.
+
+   THE `!important` IS NOT CAUTION, it is the only thing that works. Both rows style their occupants through
+   DESCENDANT selectors — `.composer-bar .pill`, `.composer-views .dash-toggle`, each (0,2,0) — so a single
+   class loses on specificity however late it is declared, and the control would stay on screen while the
+   arithmetic that put it here believed it was gone. That failure is silent, which is what earns the flag.
+
+   Its own class and deliberately NOT the `hidden` attribute: `hidden` already has owners on these rows —
+   `renderPills` hides an unlabelled pill, the dashboard hides Plan and Git until the session has them — and
+   one attribute with two writers is decided by whichever wrote last. */
+.cc-collapsed {
+  display: none !important;
+}
+
 /* thin, calm scrollbars */
 ::-webkit-scrollbar {
   width: 11px;
