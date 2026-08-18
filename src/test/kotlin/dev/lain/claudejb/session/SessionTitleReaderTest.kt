@@ -1,14 +1,19 @@
 package dev.lain.claudejb.session
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Tests [SessionTitleReader.pickTitle]'s pure title-selection logic over raw JSONL lines (no filesystem):
- * ai-title is used, a `/rename` customTitle wins, the last value of each wins, and corrupt/blank input
- * never throws.
+ * Tests [SessionTitleReader]'s pure title selection over raw JSONL lines (no filesystem): ai-title is used, a
+ * `/rename` customTitle wins, the last value of each wins, corrupt/blank input never throws — and
+ * [SessionTitle.authored], which is what tells a caller whether the chat still needs a generated name.
+ *
+ * The order of authority is one function and each rule under it is another, so these exercise the rules
+ * through `pick`: a case that only reached the dispatcher would prove the priorities and nothing about how a
+ * line is recognised as carrying a name, which is where the two rules differ from each other.
  */
 class SessionTitleReaderTest {
 
@@ -23,10 +28,9 @@ class SessionTitleReaderTest {
 
     @Test
     fun `with no title from the binary, the chat is named after what was asked`() {
-        // `claude` 2.1.226 CAN generate a title (`saveAiGeneratedTitle` is in the binary) but only does so
-        // for an interactive session; the plugin runs it with `--print`, and across 30 real sessions on this
-        // machine not one carries an `ai-title` line. So every chat stayed "Chat 3" for its whole life.
-        // The binary's own fallback for display is the first meaningful user message
+        // The binary writes no `ai-title` line for a `--print` session unless it is ASKED to generate one
+        // (`generate_session_title`); until the answer lands there is nothing on disk to read. The binary's own
+        // fallback for display is the first meaningful user message
         // (`getFirstMeaningfulUserMessageTextContent`), which is what this mirrors — the first prompt is a
         // good name for a conversation, because it is what you went there to do.
         val lines = listOf(
@@ -87,6 +91,31 @@ class SessionTitleReaderTest {
         assertEquals("Second", SessionTitleReader.pickTitle(lines))
     }
 
+    /**
+     * The two rules are recognised differently and the difference is the binary's, not ours: a `customTitle`
+     * is read off the FIELD, because the line carrying it declares no `type` to key on, while an `ai-title` is
+     * a record KIND. These two pin that asymmetry, which is invisible while every fixture happens to agree
+     * with both readings.
+     */
+    @Test
+    fun `a blank customTitle is not a name, and does not blank the tab`() {
+        val lines = listOf(
+            """{"type":"ai-title","aiTitle":"Auto generated","sessionId":"s1"}""",
+            """{"customTitle":"   ","sessionId":"s1"}""",
+        )
+        assertEquals("Auto generated", SessionTitleReader.pickTitle(lines))
+    }
+
+    @Test
+    fun `an aiTitle field on a record that is not an ai-title names nothing`() {
+        val lines = listOf(
+            """{"type":"summary","aiTitle":"Not a title anyone gave this chat","sessionId":"s1"}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"lo que pedí"}]}}""",
+        )
+        assertEquals("lo que pedí", SessionTitleReader.pickTitle(lines))
+        assertFalse(SessionTitleReader.pick(lines)!!.authored, "a stray field is not somebody naming the chat")
+    }
+
     @Test
     fun `skips blank and corrupt lines, never throws`() {
         val lines = listOf(
@@ -107,5 +136,99 @@ class SessionTitleReaderTest {
         )
         assertNull(SessionTitleReader.pickTitle(lines))
         assertNull(SessionTitleReader.pickTitle(emptyList()))
+        assertNull(SessionTitleReader.pick(emptyList()))
+    }
+
+    // -- authored vs fallback: the flag that decides whether a title is still owed ---------------------
+    //
+    // The text alone cannot answer "should we ask the binary to name this chat?" — the first-prompt fallback
+    // is never absent once the user has said anything, so a caller keyed on the text would ask exactly never
+    // and every chat would keep its opening line for ever. That is the whole reason [SessionTitle] carries a
+    // flag, and these pin it.
+
+    @Test
+    fun `a rename is authored`() {
+        val picked = SessionTitleReader.pick(
+            listOf(
+                """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"lo que pedí"}]}}""",
+                """{"customTitle":"My rename","sessionId":"s1"}""",
+            ),
+        )!!
+        assertEquals("My rename", picked.text)
+        assertTrue(picked.authored, "a /rename names the chat; nothing more should be asked for")
+    }
+
+    @Test
+    fun `a generated title is authored`() {
+        val picked = SessionTitleReader.pick(
+            listOf("""{"type":"ai-title","aiTitle":"Permission guard audit","sessionId":"s1"}"""),
+        )!!
+        assertEquals("Permission guard audit", picked.text)
+        assertTrue(picked.authored)
+    }
+
+    @Test
+    fun `the first-prompt fallback is not authored, and carries the prompt whole`() {
+        // `prompt` is the material a generated title is made from, so it must NOT be the truncated display
+        // text: summarising an ellipsis produces a title about an ellipsis.
+        val long = "Necesito que revises absolutamente todo el sistema de permisos y me digas qué falla"
+        val picked = SessionTitleReader.pick(
+            listOf("""{"type":"user","message":{"role":"user","content":[{"type":"text","text":"$long"}]}}"""),
+        )!!
+        assertFalse(picked.authored, "the opening line is a fallback, not a name anyone chose")
+        assertEquals(long, picked.prompt)
+        assertTrue(picked.text.length < long.length, "the DISPLAY text is still cut to tab size")
+    }
+
+    @Test
+    fun `an authored title still carries the prompt, so a chat renamed early can still be re-asked`() {
+        val picked = SessionTitleReader.pick(
+            listOf(
+                """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"arregla el guard"}]}}""",
+                """{"type":"ai-title","aiTitle":"Guard fix","sessionId":"s1"}""",
+            ),
+        )!!
+        assertEquals("Guard fix", picked.text)
+        assertEquals("arregla el guard", picked.prompt)
+    }
+
+    @Test
+    fun `the binary's own bookkeeping is never offered as the prompt either`() {
+        // Same rule as the title: feeding "<task-notification>…" to the title generator asks it to name the
+        // chat after a notification the user never wrote.
+        val picked = SessionTitleReader.pick(
+            listOf(
+                """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>algo</task-notification>"}]}}""",
+                """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"lo que de verdad pedí"}]}}""",
+            ),
+        )!!
+        assertEquals("lo que de verdad pedí", picked.prompt)
+    }
+
+    // -- asTitle: the ONE shape rule, applied to the fallback and to whatever the model generates ------
+
+    @Test
+    fun `asTitle keeps a short single line verbatim`() {
+        assertEquals("Guard fix", SessionTitleReader.asTitle("  Guard fix  "))
+    }
+
+    @Test
+    fun `asTitle takes the first non-blank line`() {
+        assertEquals("Primera", SessionTitleReader.asTitle("\n\n  Primera\nsegunda"))
+    }
+
+    @Test
+    fun `asTitle cuts a long generated title on a word, so the model does not decide the length`() {
+        val verbose = "A comprehensive review of the permission guard and every rule it applies to tool calls"
+        val title = SessionTitleReader.asTitle(verbose)!!
+        assertTrue(title.endsWith("…"), "expected an ellipsis, got: $title")
+        assertTrue(title.length <= 50, "too long: ${title.length}")
+        assertTrue(verbose.startsWith(title.removeSuffix("…").trim()), "cut mid-word: $title")
+    }
+
+    @Test
+    fun `asTitle answers null for nothing at all`() {
+        assertNull(SessionTitleReader.asTitle(""))
+        assertNull(SessionTitleReader.asTitle("   \n \n "))
     }
 }

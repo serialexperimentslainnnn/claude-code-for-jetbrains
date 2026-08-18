@@ -217,6 +217,60 @@ object Asks {
     val BINARY_VERSION = Ask("get_binary_version") { it }
 
     /**
+     * Asks the binary to NAME this conversation, and to keep the name.
+     *
+     * The binary generates session titles and always could; what it does not do is generate one unprompted
+     * for a `--print` session — no `ai-title` line exists in any session file on this machine. It is a
+     * request, and this is it: `{subtype:"generate_session_title", description, persist}` → `{title}`,
+     * declared beside `side_question` in the SDK's own client. One round-trip on the session that is already
+     * up: no second process, no credential, no model of our own.
+     *
+     * **[persist] defaults to true, and that is the whole storage design.** The binary writes the title into
+     * its own session file, so it survives `--resume` and the next IDE start, [SessionTitleReader.pick] finds
+     * it as an authored title, and nobody asks for it twice. The plugin invents no place to keep it and — as
+     * everywhere else — writes nothing into the binary's files itself; letting the binary do it is the clean
+     * exit, not a workaround.
+     *
+     * A blank title decodes to null: a caller that painted it would replace a usable fallback with an empty
+     * tab, which is the one outcome worse than not asking.
+     */
+    fun generateTitle(description: String, persist: Boolean = true) = Ask(
+        subtype = "generate_session_title",
+        params = {
+            put("description", description)
+            put("persist", persist)
+        },
+        decode = { payload ->
+            (payload?.get("title") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        },
+    )
+
+    /**
+     * `/btw` — a question answered alongside the conversation, without becoming a turn in it.
+     *
+     * **The answer comes back HERE, in the control response, not on the message stream**, and that is why this
+     * is a control request rather than another user line: output the binary does not label as the main run is
+     * dropped by [TranscriptReconciler.belongsHere] — the same filter that keeps a subagent's blocks out of
+     * this transcript — so a side answer fished out of the stream is a side answer nobody sees. It is also
+     * what `system/control_request_progress` reports the progress OF; until this existed, nothing sent the
+     * request it correlates to.
+     *
+     * The SDK's own client can attach a `history` array here. It is not sent: the question is asked inside a
+     * live session that already holds the conversation, and the field's shape is declared nowhere in the
+     * published `.d.ts` — sending a guess costs more than the nothing it buys.
+     *
+     * A null or blank `response` decodes to null; the caller says so rather than leaving the question with no
+     * reply under it.
+     */
+    fun sideQuestion(question: String) = Ask(
+        subtype = "side_question",
+        params = { put("question", question) },
+        decode = { payload ->
+            (payload?.get("response") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        },
+    )
+
+    /**
      * Rewind tracked files to a turn anchor. With `dryRun` the binary only reports feasibility.
      *
      * Both spellings of every field are read: the binary has sent camelCase and snake_case for these at

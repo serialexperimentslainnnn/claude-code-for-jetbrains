@@ -74,4 +74,63 @@ class ControlAsksTest {
             assertEquals(listOf("a.kt"), result.filesChanged)
         }
     }
+
+    // -- generate_session_title -------------------------------------------------------------------------
+
+    @Test
+    fun `generateTitle sends the description and asks the binary to keep the answer`() {
+        // `persist` is the storage design: the binary writes the title into its own session file, so it
+        // survives --resume and the next IDE start and the plugin invents nowhere to keep it. Sending this
+        // false would mean re-asking, and paying, on every launch.
+        val request = lineOf(Asks.generateTitle("arregla el guard"))["request"]!!.jsonObject
+        assertEquals("generate_session_title", request["subtype"]!!.jsonPrimitive.content)
+        assertEquals("arregla el guard", request["description"]!!.jsonPrimitive.content)
+        assertEquals(true, request["persist"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun `generateTitle reads the title out of the reply`() {
+        assertEquals("Guard audit", Asks.generateTitle("x").decode(buildJsonObject { put("title", "Guard audit") }))
+    }
+
+    @Test
+    fun `a blank or missing generated title is null, so a usable fallback is never replaced by an empty tab`() {
+        assertNull(Asks.generateTitle("x").decode(buildJsonObject { put("title", "   ") }))
+        assertNull(Asks.generateTitle("x").decode(buildJsonObject { put("nothing", "here") }))
+        assertNull(Asks.generateTitle("x").decode(null))
+    }
+
+    // -- side_question ----------------------------------------------------------------------------------
+
+    @Test
+    fun `sideQuestion is a control request, which is what makes the answer reachable at all`() {
+        // Sent as a plain user line instead, the reply arrives on the message stream labelled as something
+        // other than the main run — and TranscriptReconciler.belongsHere drops exactly that. As a control
+        // request the answer comes back correlated, in the caller's hand.
+        val request = lineOf(Asks.sideQuestion("¿cuánto llevo gastado?"))["request"]!!.jsonObject
+        assertEquals("side_question", request["subtype"]!!.jsonPrimitive.content)
+        assertEquals("¿cuánto llevo gastado?", request["question"]!!.jsonPrimitive.content)
+        // `history` is deliberately absent: the question runs inside a session that already holds the
+        // conversation, and the field's shape is declared nowhere in the published .d.ts.
+        assertNull(request["history"])
+    }
+
+    @Test
+    fun `sideQuestion reads the response text`() {
+        val reply = buildJsonObject {
+            put("response", "Unos cuatro euros.")
+            put("synthetic", false)
+        }
+        assertEquals("Unos cuatro euros.", Asks.sideQuestion("q").decode(reply))
+    }
+
+    @Test
+    fun `a null, blank or missing side answer is null, never an empty row`() {
+        // The binary answers `response: null` when it has nothing to say — its own client checks for exactly
+        // that before handing the answer back.
+        assertNull(Asks.sideQuestion("q").decode(buildJsonObject { put("response", null as String?) }))
+        assertNull(Asks.sideQuestion("q").decode(buildJsonObject { put("response", "") }))
+        assertNull(Asks.sideQuestion("q").decode(buildJsonObject { put("synthetic", true) }))
+        assertNull(Asks.sideQuestion("q").decode(null))
+    }
 }

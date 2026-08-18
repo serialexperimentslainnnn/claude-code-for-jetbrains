@@ -124,6 +124,13 @@ data class ProtocolSurface(
             // thin-client control requests we knowingly don't send: models come from the `initialize` reply, and
             // the plan / workspace-diff dialogs are the remote thin client's, not ours.
             "list_models", "get_plan", "get_workspace_diff",
+            // Control requests the plugin sends that the published `sdk.d.ts` does not declare: both live only
+            // in the SDK's own client (`sdk.mjs` — `generateSessionTitle`, `askSideQuestion`), so [fromDts]
+            // cannot see them and the drift report lists them under "the parser models these but the SDK
+            // dropped them". That section is informational and does NOT make a run actionable ([SdkDrift]).
+            // They are listed here anyway, because this set is the inventory of what the plugin puts on the
+            // wire and a subtype missing from it is a subtype nobody triaged.
+            "generate_session_title", "side_question",
         )
     }
 }
