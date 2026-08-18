@@ -44,9 +44,14 @@ internal class AttachmentTray(
 
     /** Pins an attachment (file / selection / image) as a chip; it travels with the next send. */
     fun add(attachment: Attachment) {
-        pending["a" + (nextId++)] = attachment
+        pin(attachment)
         push()
         focusInput()
+    }
+
+    /** Into the set and nowhere else. Everything that repaints or moves the caret is the caller's. */
+    private fun pin(attachment: Attachment) {
+        pending["a" + (nextId++)] = attachment
     }
 
     fun remove(id: String) {
@@ -60,7 +65,49 @@ internal class AttachmentTray(
         addPath(path)
     }
 
-    fun addPath(path: String) = add(Attachment.FileRef(path, FilePickerHelper.displayName(project, path)))
+    /** One file. The plural is the real implementation — see [addPaths] for why there is only one. */
+    fun addPath(path: String) = addPaths(listOf(path))
+
+    /**
+     * Pin a whole batch as ONE operation.
+     *
+     * **The cost is not in the message, it is in the PUSH.** A batch arrives as a single `attachPaths`, and
+     * applying it one file at a time was still one full serialization of the tray plus one `exec` into the
+     * browser plus one caret move *per file*: the page repaints the chip row N times and the focus jumps N
+     * times for a decision the user made once. With two files nothing shows; with a folder of two hundred —
+     * which is the case the project browser exists to serve — it is a stalled panel and a caret that will not
+     * sit still. So the set is filled first and the page is told once, at the end.
+     *
+     * **The singular delegates here rather than duplicating three lines**, because the two would drift and the
+     * one that drifted would be the one nobody was watching.
+     *
+     * **Idempotent by path.** A path already pinned — whether it arrived twice in this batch or is already a
+     * chip from an earlier one — is skipped, so the same file can never occupy two chips and be mentioned to
+     * the agent twice. The de-duplication is over [Attachment.FileRef] only: a selection and an image are
+     * legitimately repeatable, and two selections from the same file are two different pieces of text.
+     * Nothing is announced when a duplicate is dropped — the chip the user would have got is already on
+     * screen, which is a better answer than a balloon saying so.
+     *
+     * **No validation is added here, deliberately.** This never rejected anything by size or type and still
+     * does not: what may be attached is decided where it can be decided properly — `ProjectTree` refuses a
+     * file that is too big, binary or outside the project before it is ever offered as a row, and
+     * `ImageAttachments.fromWebPayload` refuses an image and says so. A second, weaker copy of those rules
+     * living here would be one more thing to keep in step, and the copy that fell behind would be this one.
+     */
+    fun addPaths(paths: List<String>) {
+        val known = pending.values.filterIsInstance<Attachment.FileRef>().mapTo(HashSet()) { it.path }
+        var pinned = 0
+        for (path in paths) {
+            if (path.isBlank() || !known.add(path)) continue
+            pin(Attachment.FileRef(path, FilePickerHelper.displayName(project, path)))
+            pinned++
+        }
+        // Nothing pinned is nothing to repaint, and taking the caret for a no-op is the very cost this exists
+        // to remove.
+        if (pinned == 0) return
+        push()
+        focusInput()
+    }
 
     /** Pins the editor's current selection, when there is one. */
     fun addSelection() = EditorContextProvider.selectionAsAttachment(project)?.let { add(it) }
