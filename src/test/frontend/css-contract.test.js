@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { JCEF, appJsFiles, readCss } = require('./helpers/load');
+const { stripComments } = require('./helpers/source');
 
 // Classes emitted by the JS that intentionally have no dedicated `.<class>{...}` rule today. A NEW class not in
 // this set and not in the stylesheet fails the test.
@@ -41,19 +42,79 @@ function cssClassNames() {
   return new Set([...readCss().matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
 }
 
-function jsEmittedClasses() {
+/**
+ * The classes ONE source emits — the prose it is documented with is not one of them.
+ *
+ * `stripComments` is shared with the two bridge gates (`helpers/source.js`, which is where the reasoning
+ * lives): this repository documents by quoting the code a comment is about, so a paragraph explaining how a
+ * class is emitted reads exactly like the emission, and the gate would go red over a sentence.
+ *
+ * Separate from the sweep below so the scanner itself can be driven over a case whose answer is known.
+ */
+function classesIn(src) {
   const used = new Set();
-  for (const f of appJsFiles()) {
-    const src = fs.readFileSync(path.join(JCEF, f), 'utf8');
-    for (const m of src.matchAll(/class:\s*(["'])([^"']+)\1/g)) {
-      for (const c of m[2].split(/\s+/)) {
-        // Drop empty tokens and dynamic prefixes like `att-` (built as `'att-' + kind`) — not statically checkable.
-        if (c && !c.endsWith('-')) used.add(c);
-      }
+  for (const m of stripComments(src).matchAll(/class:\s*(["'])([^"']+)\1/g)) {
+    for (const c of m[2].split(/\s+/)) {
+      // Drop empty tokens and dynamic prefixes like `att-` (built as `'att-' + kind`) — not statically checkable.
+      if (c && !c.endsWith('-')) used.add(c);
     }
   }
   return used;
 }
+
+function jsEmittedClasses() {
+  const used = new Set();
+  for (const f of appJsFiles()) {
+    for (const c of classesIn(fs.readFileSync(path.join(JCEF, f), 'utf8'))) used.add(c);
+  }
+  return used;
+}
+
+/**
+ * The scanner, driven on its own. It decides what "the JS emits this class" MEANS, so every way it can be
+ * wrong is a way the contract above can be wrong — in one direction loudly, in the other silently.
+ *
+ * `String.raw` because the fixture contains a real regex literal with escaped slashes, and an ordinary
+ * template would hand the scanner a source with the backslashes already gone — testing a shape that never
+ * reaches it.
+ */
+const SCANNER_FIXTURE = String.raw`
+// WRITTEN OUT, because the gate scans for a class key followed by: class: 'quoted-in-a-line-comment'.
+/* and the same trap in the block form: class: 'quoted-in-a-block-comment' */
+h('a', { href: 'https://example.com//x', class: 'after-a-url' });
+if (/^https?:\/\//i.test(u)) h('b', { class: 'after-a-regex' });
+h('c', { class: 'two tokens' });
+h('d', { class: 'att-' + kind });
+`;
+
+describe('the scanner that decides what counts as an emission', () => {
+  const found = classesIn(SCANNER_FIXTURE);
+
+  it('prose that quotes an emission is not one, in either comment form', () => {
+    // The repository documents by quoting the code it is explaining, so this is the normal case and not an
+    // unlucky line: a comment about how a class is emitted reads exactly like the emission.
+    expect(found.has('quoted-in-a-line-comment')).toBe(false);
+    expect(found.has('quoted-in-a-block-comment')).toBe(false);
+  });
+
+  it('a string holding `//` is still code, and what follows it on the line is still scanned', () => {
+    // The whole reason the strip is a token walk. A regex that deleted from `//` to the end of the line
+    // would swallow the class on THIS line, and a missing class is a gate that passes while protecting
+    // nothing — the failure the comment fix must not buy.
+    expect(found.has('after-a-url')).toBe(true);
+  });
+
+  it('a regex literal with an escaped slash does not swallow the rest of its line', () => {
+    // Not hypothetical: `app-permissions.js` tests URLs with exactly this literal.
+    expect(found.has('after-a-regex')).toBe(true);
+  });
+
+  it('still splits a multi-class literal and still skips a concatenated one', () => {
+    expect(found.has('two')).toBe(true);
+    expect(found.has('tokens')).toBe(true);
+    expect(found.has('att-')).toBe(false);
+  });
+});
 
 describe('JS↔CSS class contract', () => {
   it('every class the JS emits has a CSS rule (or is grandfathered)', () => {

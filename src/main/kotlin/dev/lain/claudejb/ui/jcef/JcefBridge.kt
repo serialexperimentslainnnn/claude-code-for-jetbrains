@@ -8,7 +8,6 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
@@ -67,7 +66,7 @@ object JcefBridge {
         /** Diff review, rollback and jump-to-code. */
         sealed interface Diffs : Msg
 
-        /** Composer attachments: chips, drag/drop/paste, file picker. */
+        /** Composer attachments: chips, drag/drop/paste, and the in-menu project browser. */
         sealed interface Attachments : Msg
 
         /** Session dashboard: MCP health and subagent control. */
@@ -115,11 +114,15 @@ object JcefBridge {
         /**
          * One switch of the composer's ⚙ menu — the settings worth flipping without leaving the chat.
          *
-         * [key] is a CLOSED set, checked against [JcefSettingsMenu.apply]'s `when` and dropped when this
-         * build does not know it. Five of the nine are the deterministic guard's own rules, so this is a
-         * browser message that can relax a security control: it may only ever downgrade a refusal to a card
-         * the user still has to answer, never to silent approval, and the `when` is what makes an unrecognised
-         * key a case rather than an assignment.
+         * [key] is a CLOSED set, checked against [JcefSettingsMenu] and dropped when this build does not know
+         * it. A composite key (`mode:plan`, `always:Bash`) has its suffix re-checked against the catalogue the
+         * row was built from, so the set stays closed because the value is verified rather than because it
+         * came from somewhere trusted.
+         *
+         * This is a browser message that can relax a security control, so what it may do is bounded on both
+         * sides: the guard's own switches only ever downgrade a refusal to a card the user still has to
+         * answer, never to silent approval, and pre-authorising a tool still leaves `SensitiveGuard` in front
+         * of every call and the project-root check in front of every reviewable write.
          */
         data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
@@ -156,8 +159,45 @@ object JcefBridge {
         data class ResolveLinks(val rowId: Long, val paths: List<String>, val symbols: List<String>) : Diffs
 
         data class RemoveAttachment(val id: String) : Attachments
-        object PickFiles : Attachments
-        object PickDirectory : Attachments
+
+        /**
+         * The attach menu is browsing the project and wants one folder's children.
+         *
+         * [path] is **root-relative, forward-slashed**, the empty string being the project root — the whole
+         * vocabulary of [dev.lain.claudejb.context.ProjectTree], where a path outside the project cannot even
+         * be spelled. [mode] is a CLOSED set (`files` / `directories`) checked host-side, because the two
+         * pickers browse the same tree and select different things out of it.
+         *
+         * **Nothing here validates the path, deliberately.** Containment is `ProjectTree.resolve`'s single
+         * gate — canonicalize, then the same project-root check the binary's writes go through — and a second
+         * opinion formed at the wire is how one of the two eventually ends up the weaker. An absolute value
+         * is therefore carried verbatim and refused (or resolved to a harmless miss inside the tree) where
+         * the rule actually lives, and it is not a special case there either.
+         */
+        data class TreeChildren(val path: String, val mode: String) : Attachments
+
+        /**
+         * What marking that folder would drag in: every attachable file at or below it, or that directory and
+         * every directory below it.
+         *
+         * Sent only to MARK, never to count separately — the host answers with the paths themselves because
+         * counting and resolving are the same bounded walk, so the number on the button is the list that will
+         * be attached rather than a second opinion about it.
+         */
+        data class TreeExpand(val path: String, val mode: String) : Attachments
+
+        /**
+         * Attach these root-relative paths, as ONE act.
+         *
+         * Distinct from [AttachPath], which carries an ABSOLUTE path from the recent-files list; the two
+         * vocabularies are kept in two messages rather than sniffed apart at the far end, because a rule that
+         * guesses which one it was handed is a rule that will one day guess wrong about a path beginning with
+         * a drive letter.
+         *
+         * A batch, because pressing *Attach 214* is one decision: N messages would be N chances to arrive
+         * interleaved with anything else the page is sending.
+         */
+        data class AttachPaths(val paths: List<String>) : Attachments
         object RequestAttachData : Attachments
         data class AttachPath(val path: String) : Attachments
         object AttachSelection : Attachments
@@ -211,7 +251,15 @@ object JcefBridge {
          */
         object NewChat : SessionControl
 
-        object CloseAllDiffs : SessionControl
+        /**
+         * Close the chat this page belongs to — the bin, beside *New chat*.
+         *
+         * It carries no id, unlike [CloseChat] which the tab row sends: the tab row is asking about SOME chat
+         * and has to say which, while this button is inside the one it closes. Passing an id here would mean
+         * the page telling the host which chat the page is, and the host already knows — the panel that
+         * received the message is the answer, and it cannot be the wrong one.
+         */
+        object CloseThisChat : SessionControl
 
         /** Go to the Git view, opening its chat if this project does not have one yet. */
         object OpenGitView : SessionControl
@@ -258,15 +306,6 @@ object JcefBridge {
         data class SelectAgent(val agentId: String) : SessionControl
         data class CloseAgent(val agentId: String) : SessionControl
 
-        /**
-         * Pin the open subtab as a chat tab of its own — one of [agentId] / [taskId] is set.
-         *
-         * A subtab is a VIEW: one browser painting somebody else's transcript, gone the moment you look at
-         * something else. Pinning turns it into a real tab that stays put, which is what you want for the
-         * one agent you keep coming back to.
-         */
-        data class PinSubtab(val agentId: String, val taskId: String) : SessionControl
-
         // The "Claude Code was not found" boot card: run an official installer in the IDE terminal,
         // validate a user-typed binary path, or re-check after an install finished.
         data class InstallClaude(val method: String) : SessionControl
@@ -293,10 +332,13 @@ object JcefBridge {
 
     /** Typed accessors over one inbound payload, so the per-group parsers below read as plain field reads. */
     private class Fields(val obj: JsonObject) {
-        fun str(key: String): String? = obj[key]?.jsonPrimitive?.contentOrNull
+        // `as? JsonPrimitive`, never `.jsonPrimitive`: the latter THROWS on an object or an array, and the
+        // input is a browser message, so a field carrying the wrong shape is an ordinary input and not an
+        // exceptional one. Thrown from here it escapes `parse` and leaves the press with no answer at all.
+        fun str(key: String): String? = (obj[key] as? JsonPrimitive)?.contentOrNull
         fun text(key: String): String = str(key).orEmpty()
-        fun bool(key: String): Boolean = obj[key]?.jsonPrimitive?.booleanOrNull ?: false
-        fun int(key: String, fallback: Int): Int = obj[key]?.jsonPrimitive?.intOrNull ?: fallback
+        fun bool(key: String): Boolean = (obj[key] as? JsonPrimitive)?.booleanOrNull ?: false
+        fun int(key: String, fallback: Int): Int = (obj[key] as? JsonPrimitive)?.intOrNull ?: fallback
         fun long(key: String, fallback: Long): Long = (obj[key] as? JsonPrimitive)?.longOrNull ?: fallback
         fun json(key: String): JsonObject? = obj[key] as? JsonObject
     }
@@ -319,7 +361,7 @@ object JcefBridge {
     fun parse(json: String): Msg {
         val obj = runCatching { lenient.parseToJsonElement(json).jsonObject }.getOrNull()
             ?: return Msg.Unknown("malformed")
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: return Msg.Unknown("notype")
+        val type = (obj["type"] as? JsonPrimitive)?.contentOrNull ?: return Msg.Unknown("notype")
         val f = Fields(obj)
         return parseComposer(type, f)
             ?: parseSettings(type, f)
@@ -398,10 +440,16 @@ object JcefBridge {
         else -> null
     }
 
+    /**
+     * NB there is no message for the platform's own file or directory chooser, and that is a rule rather than
+     * an omission: everything the attach menu offers is browsed in-page through [parseProjectTree], whose every
+     * entry is confined to the project by [dev.lain.claudejb.context.ProjectTree]'s single gate. A native
+     * chooser can walk anywhere on disk from wherever it is rooted, so a message for one would be a second and
+     * weaker answer beside that gate. `bridge-inbound.test.js` is what catches a message type parsed here that
+     * no module sends — the shape a retired one leaves behind, and the shape a speculative one arrives in.
+     */
     private fun parseAttachments(type: String, f: Fields): Msg? = when (type) {
         "removeAttachment" -> Msg.RemoveAttachment(f.text("id"))
-        "pickFiles" -> Msg.PickFiles
-        "pickDirectory" -> Msg.PickDirectory
         "requestAttachData" -> Msg.RequestAttachData
         "attachPath" -> Msg.AttachPath(f.text("path"))
         "attachSelection" -> Msg.AttachSelection
@@ -409,6 +457,21 @@ object JcefBridge {
         "pasteClipboardImage" -> Msg.PasteClipboardImage(f.bool("notify"))
         "pasteClipboard" -> Msg.PasteClipboard
         "attach" -> Msg.Attach(f.text("name"), f.text("mediaType"), f.text("base64"))
+        else -> parseProjectTree(type, f)
+    }
+
+    /**
+     * The attach menu browsing the project (app-composer-attach.js). Split out of [parseAttachments] for
+     * complexity, and the grouping is a real one: all three speak the root-relative vocabulary of
+     * [dev.lain.claudejb.context.ProjectTree] and none of them touches the session.
+     *
+     * `path` absent is the project ROOT rather than a missing field, which is why `text` and not `str`: the
+     * two spellings of "the root" have to mean one thing.
+     */
+    private fun parseProjectTree(type: String, f: Fields): Msg? = when (type) {
+        "treeChildren" -> Msg.TreeChildren(f.text("path"), f.text("mode"))
+        "treeExpand" -> Msg.TreeExpand(f.text("path"), f.text("mode"))
+        "attachPaths" -> Msg.AttachPaths(strList(f.obj["paths"]))
         else -> null
     }
 
@@ -449,7 +512,7 @@ object JcefBridge {
 
         "newChat" -> Msg.NewChat
 
-        "closeAllDiffs" -> Msg.CloseAllDiffs
+        "closeThisChat" -> Msg.CloseThisChat
 
         else -> null
     }
@@ -463,7 +526,6 @@ object JcefBridge {
         "closeChat" -> Msg.CloseChat(f.text("chatId"))
         "selectAgent" -> Msg.SelectAgent(f.text("agentId"))
         "closeAgent" -> Msg.CloseAgent(f.text("agentId"))
-        "pinSubtab" -> Msg.PinSubtab(f.text("agentId"), f.text("taskId"))
         else -> null
     }
 

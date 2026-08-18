@@ -1,6 +1,6 @@
 /* app-composer-actions.js — the two control rows above the prompt box.
  *
- * Owns: the chat's own action buttons (new chat, stop, commands, Git, close diffs, sign out) and the row the
+ * Owns: the chat's own action buttons (new chat, commands, Git, close this chat, sign out) and the row the
  * dashboard mounts its view buttons into.
  *
  * WHY THEY ARE HERE AND NOT IN THE TOOL WINDOW'S TITLE BAR. They were six Swing `AnAction`s registered with
@@ -47,12 +47,9 @@
     git: svg(
       '<circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="8" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M9.7 8H8.2a3.7 3.7 0 0 1-3.7-3.7"/>'
     ),
-    closeDiffs: svg('<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.5 4.5 5 13h6l.5-8.5"/>'),
+    closeChat: svg('<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.5 4.5 5 13h6l.5-8.5"/>'),
     signOut: svg('<path d="M9.5 3.5H4v9h5.5"/><path d="M11 5.5 13.5 8 11 10.5"/><path d="M13.5 8h-6"/>'),
   };
-
-  /** The one button whose enabled state is a function of the session, kept so [renderActions] can find it. */
-  var diffsBtn = null;
 
   function actionButton(glyph, label, onClick) {
     var btn = h('button', {
@@ -63,7 +60,6 @@
         click: function (e) {
           e.preventDefault();
           e.stopPropagation();
-          if (btn.disabled) return;
           onClick();
         },
       },
@@ -100,9 +96,13 @@
     });
     // NB no Stop here. The composer's own send button turns into one for the length of a turn, right where
     // you are typing — a second stop three centimetres away is the duplication this row exists to end.
-    diffsBtn = actionButton(GLYPH.closeDiffs, 'Close every diff Claude opened', function () {
-      send({ type: 'closeAllDiffs' });
-    });
+    //
+    // The bin closes THIS chat, which is what a bin next to "New chat" reads as. It used to send
+    // `closeAllDiffs`, and that mismatch is the whole reason this comment exists: the glyph said "delete this"
+    // and the button closed diff tabs in the editor, so it was reported three times as broken — and it looked
+    // broken, because with no diffs open it disabled itself and a disabled `.bar-icon` had no style saying so.
+    // A control whose picture and whose effect disagree is not a naming problem; it is a control nobody can
+    // learn.
     [
       actionButton(GLYPH.newChat, 'New chat', function () {
         send({ type: 'newChat' });
@@ -111,15 +111,59 @@
       actionButton(GLYPH.git, 'Git', function () {
         send({ type: 'openGitView' });
       }),
-      diffsBtn,
+      actionButton(GLYPH.closeChat, 'Close this chat', function () {
+        send({ type: 'closeThisChat' });
+      }),
       actionButton(GLYPH.signOut, 'Log out of Claude', function () {
         send({ type: 'logout' });
       }),
     ].forEach(function (button) {
       actions.appendChild(button);
     });
+    wireOverflow(controls, views, actions);
     return controls;
   };
+
+  /**
+   * The ⋮ for this row. Everything on it may be collected, and it is collected FROM THE END.
+   *
+   * Which means the action icons go first and the views last, and that ordering is the point rather than an
+   * artifact of where the ⋮ sits: the actions are things you do to this chat occasionally, the views are where
+   * you are. Losing the sight of "occasionally" behind one press is cheap; losing the navigation is not. The
+   * ⚙ is the head of the row and is therefore the last thing left, which is the right answer for the control
+   * that holds the settings — it is not a rule written anywhere, it is what "collect from the end" gives.
+   *
+   * Nothing here is reserved: this row has no primary action, and the ⋮ lands at its end, in the action group.
+   *
+   * The item list is READ ON EVERY PASS and flattens `.dash-toggles`, which is a wrapper the dashboard owns
+   * and fills on its own schedule (`app-session.js` `mountToggles`). Collecting the wrapper would collect all
+   * five views at once; a snapshot taken here at build time would describe a row that did not exist yet.
+   */
+  function wireOverflow(controls, views, actions) {
+    if (!CX.createOverflow) return;
+    CX.createOverflow({
+      row: controls,
+      label: 'More chat controls',
+      items: function () {
+        var out = [];
+        collect(views, out);
+        collect(actions, out);
+        return out;
+      },
+      place: function (btn) {
+        actions.appendChild(btn);
+      },
+    });
+  }
+
+  function collect(container, out) {
+    if (!container) return;
+    for (var i = 0; i < container.children.length; i++) {
+      var el = container.children[i];
+      if (el.classList.contains('dash-toggles')) collect(el, out);
+      else out.push(el);
+    }
+  }
 
   /**
    * Where the dashboard's view buttons go — a STATIC element of the shell, so it is there from the first
@@ -128,16 +172,5 @@
    */
   CX.viewsRow = function () {
     return document.getElementById('views');
-  };
-
-  /**
-   * Enablement, from the state the host already pushes — a button that cannot do anything says so.
-   *
-   * Close-diffs follows `openDiffs`, which the host counts: without it the button would be permanently live
-   * and pressing it with nothing open would look broken rather than idempotent. The other four are always
-   * available inside a chat.
-   */
-  CX.renderActions = function (s) {
-    if (diffsBtn) diffsBtn.disabled = !(s && s.openDiffs > 0);
   };
 })();
