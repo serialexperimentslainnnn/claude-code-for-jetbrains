@@ -11,7 +11,7 @@ import dev.lain.claudejb.ui.jcef.JcefTabsData
 
 /**
  * The tab bar this page draws, and everything reached from it: which agents are open, which the user closed,
- * revealing one (here or in another chat), pinning one as a tab of its own, and announcing new ones.
+ * revealing one (here or in another chat), and announcing new ones.
  *
  * Extracted from `JcefChatPanel`, which is an assembler. The bar itself is WEB (`app-tabs.js` +
  * [JcefTabsData]); this is its host side. EDT-confined, like the panel.
@@ -65,11 +65,15 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
         if (chats.isEmpty()) {
             LOG.warn("Claude Code tab bar: nothing to draw (strip=${strip != null}, cached=${this.chats.size})")
         }
-        // Every open chat's session, so hovering ANY tab can show that chat's tree — not just this one's.
-        val others = strip?.workloads().orEmpty().associate { it.chatId to it.session }
-        // The retention window and the instant to measure it from, read ONCE for the whole push: every chat
-        // in this bar is then aged by the same instant, instead of the last one drawn being younger than the
-        // first by however long the serialisation took.
+        // Only THIS chat's tree travels, and that is the whole payload now ([JcefTabsData]). Every open
+        // chat's own tree used to ride along so that hovering a tab you were not in could draw what THAT chat
+        // had started; that popup went with the `⋮`, and what it left behind was a full serialisation of
+        // every session's agent tree on every agent event, several times a turn, for fields the page no
+        // longer reads. "What is running everywhere" is the dashboard's Workloads diagram, which asks for it
+        // when it is on screen — this is the bar, and the bar draws the open chat.
+        //
+        // The retention window and the instant to measure it from are read once for the push, so the bar is
+        // aged by one instant rather than by however long the serialisation took.
         val windowMinutes = ClaudeSettings.getInstance(project).workloadWindowMinutes
         panel.host.exec(
             "window.cc.tabs && window.cc.tabs(" +
@@ -79,7 +83,6 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
                     hiddenAgents,
                     windowMinutes,
                     System.currentTimeMillis(),
-                    others,
                 ) + ")",
         )
     }
@@ -179,31 +182,6 @@ internal class ChatAgentTabs(private val panel: JcefChatPanel) {
         session.sessionId?.let { PluginAgentIndex.getInstance(project).setTabOpen(it, agentId, false) }
         panel.transcript.showTranscript(null)
         render()
-    }
-
-    /**
-     * Turns the open subtab into a chat tab of its own.
-     *
-     * The tab shows the SAME session — an agent is not a separate conversation, it is part of this one — but
-     * it is pinned to that agent's (or that task's) transcript and stays there while you use the chat next to
-     * it. Which is the whole point: a subtab is a view of this browser, so it disappears the moment you look
-     * at something else, and the one agent you keep coming back to deserves better than being re-found.
-     */
-    fun pinSubtab(m: JcefBridge.Msg.PinSubtab) {
-        val strip = panel.chatStrip() ?: return
-        val agentId = m.agentId.takeIf { it.isNotBlank() }
-        val taskId = m.taskId.takeIf { it.isNotBlank() }
-        if (agentId == null && taskId == null) return
-        val node = agentId?.let { session.runningAgents.nodes[it] }
-        val title = when {
-            node != null -> "${node.kindLabel} (${node.meta.label()})"
-
-            taskId != null -> session.backgroundTaskRegistry.all.firstOrNull { it.taskId == taskId }
-                ?.let { "Background Task (${it.label()})" } ?: "Background Task"
-
-            else -> "Agent"
-        }
-        strip.pin(JcefChatPanel(project, session), agentId, taskId, title)
     }
 
     /**

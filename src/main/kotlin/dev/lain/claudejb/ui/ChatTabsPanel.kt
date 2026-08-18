@@ -1,6 +1,9 @@
 package dev.lain.claudejb.ui
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
 import dev.lain.claudejb.session.ClaudeSession
@@ -19,6 +22,16 @@ import javax.swing.JPanel
  * SVG, so keeping one meant approximating the page's look by hand in another toolkit — and looking like it.
  * What remains here is the part that genuinely is not UI: which chats exist, which one is on screen, and the
  * disposal contract.
+ *
+ * **ONE TAB PER SESSION, and that is the invariant everything below rests on.** A tab is a chat; an agent, a
+ * subagent and a background task are *transcripts of* a chat, switched inside that chat's one browser
+ * (`app-tabs.js` → `selectAgent`), and none of them is ever a tab of its own. So a tab is the only thing
+ * holding its session, [close] disposes it unconditionally, and there is no arrangement in which closing what
+ * the user is reading can kill a process something else is still painting. It was possible once: a second
+ * `JcefChatPanel` over the SAME session could be added as a tab, and closing that tab disposed the session of
+ * the chat that had spawned the agent — leaving that chat's own tab open over a dead process and dropping it
+ * from the restorable set. The guarantee is structural rather than careful, and `ToolWindowWiringContractTest`
+ * pins the two facts it is made of: one construction site for [JcefChatPanel], one caller of [add].
  *
  * Every chat's page renders the whole chat list and marks its own entry ([pushChats]); a click comes back as
  * a `selectChat` message and lands in [selectById]. Switching swaps browsers, and because both pages draw
@@ -55,25 +68,10 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         var lastNotified: Long = 0L
 
         /**
-         * What this tab is PINNED to: an agent id, a background-task id, or neither (an ordinary chat).
+         * The session this tab draws; null for a tab that is not a chat panel.
          *
-         * Selecting a chat means "show me the chat", so [select] resets its panel to the chat's own
-         * transcript — which would immediately undo a pin. This is what makes the exception explicit rather
-         * than making the reset conditional on something the tab does not know.
+         * No other tab holds it — see the class doc. That is what lets [close] dispose without asking.
          */
-        var pinnedAgent: String? = null
-        var pinnedTask: String? = null
-
-        /**
-         * True when this tab is a second VIEW of a chat, not a chat of its own.
-         *
-         * A pinned tab holds another `JcefChatPanel` over the SAME [ClaudeSession] (see [pin]), so everything
-         * that used to be safe while one panel meant one session has to ask this first — closing it must not
-         * dispose the session, or closing an agent's tab kills the chat that spawned it.
-         */
-        val isPinnedView: Boolean get() = pinnedAgent != null || pinnedTask != null
-
-        /** The session this tab draws, chat or pinned view; null for a tab that is not a chat panel. */
         val session: ClaudeSession? get() = (component as? JcefChatPanel)?.session
     }
 
@@ -87,9 +85,18 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     private var onClosed: (ChatTab) -> Unit = {}
     private var onSelected: (ChatTab?) -> Unit = {}
 
+    /**
+     * True once [dispose] has run, so a deferred [replaceLastChat] does not open a chat into a dead strip.
+     *
+     * A flag rather than `Disposer.isDisposed(this)`: this panel is registered as its `Content`'s disposer by
+     * the factory, and an instance built outside a tool window is in no `Disposer` tree at all — where that
+     * question answers "not disposed" forever, including after [dispose] has already run.
+     */
+    private var disposed = false
+
     val selected: ChatTab? get() = selectedTab
 
-    /** The selected tab's chat panel, or null when the selected tab is not a chat (e.g. Diff History). */
+    /** The selected tab's chat panel, or null when the selected tab is not a chat. */
     val selectedChat: JcefChatPanel? get() = selectedTab?.component as? JcefChatPanel
 
     /**
@@ -121,6 +128,10 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      *
      * [disposer] is disposed when the tab is closed — the same contract as `Content.setDisposer`, and the
      * reason a closed chat's JCEF browser and session actually go away instead of leaking.
+     *
+     * **One call site, and that is a contract** ([ClaudeToolWindowFactory.openChat]). A second one is how a
+     * second tab over a live session comes back, and with it the close that kills somebody else's process —
+     * see the class doc.
      */
     fun add(component: JComponent, title: String, tooltip: String, disposer: Disposable?): ChatTab {
         val tab = ChatTab("chat-${seq++}", component, title, tooltip, disposer)
@@ -130,51 +141,28 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         return tab
     }
 
-    /** Selects [tab], shows its component and moves the keyboard focus into it. */
+    /**
+     * Selects [tab], shows its component and moves the keyboard focus into it.
+     *
+     * **The bar is pushed BEFORE the card is shown, and that ordering is the ghost tab.** Each chat's page
+     * draws the whole bar from the last list it was pushed, so a page that is made visible first is visible
+     * drawing the list it had *before* this call — which on the close path still contains the chat being
+     * closed, unselected, exactly as it was reported. Pushing first gives the page the whole duration of the
+     * switch to apply the new list instead of starting from the stale one.
+     */
     fun select(tab: ChatTab) {
         if (tab !in tabs) return
         selectedTab = tab
         tab.attention = false
+        pushChats()
         cards.show(content, tab.id)
         (tab.component as? JcefChatPanel)?.let {
-            when {
-                // A PINNED tab is that agent's (or task's) tab: selecting it shows what it is pinned to.
-                tab.pinnedAgent != null -> it.transcript.showTranscript(tab.pinnedAgent)
-
-                tab.pinnedTask != null -> it.transcript.showBackgroundTask(tab.pinnedTask!!)
-
-                // Selecting a chat means "show me this chat" — including when an agent's transcript is what
-                // is currently painted in it. Without this there is NO WAY BACK from an agent tab.
-                else -> it.transcript.showTranscript(null)
-            }
+            // Selecting a chat means "show me this chat" — including when an agent's transcript is what is
+            // currently painted in it. Without this there is NO WAY BACK from an agent's subtab.
+            it.transcript.showTranscript(null)
             it.focusInput()
         }
-        pushChats()
         onSelected(tab)
-    }
-
-    /**
-     * Opens [agentId] (or [taskId]) as a tab of its own, on the SAME session, and selects it.
-     *
-     * Same session on purpose: an agent is not a separate conversation, it is part of this one — it shares
-     * the process, the credentials and the transcript store. What the new tab owns is a second view of it,
-     * pinned so that selecting the tab always lands on that transcript. [panel] is built by the caller, which
-     * is the only place that holds the `Project` a JCEF panel needs.
-     *
-     * Pinning the same thing twice just selects the tab that already exists; two tabs showing one agent
-     * would be two things to close and no way to tell them apart.
-     */
-    fun pin(panel: JcefChatPanel, agentId: String?, taskId: String?, title: String): ChatTab {
-        tabs.firstOrNull { it.pinnedAgent == agentId && it.pinnedTask == taskId && (agentId ?: taskId) != null }
-            ?.let {
-                select(it)
-                return it
-            }
-        val tab = add(panel, title, title, panel)
-        tab.pinnedAgent = agentId
-        tab.pinnedTask = taskId
-        select(tab)
-        return tab
     }
 
     /** The chat panel behind tab [id], for a message that names the chat it belongs to (Workloads does). */
@@ -182,7 +170,7 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         tabs.firstOrNull { it.id == id }?.component as? JcefChatPanel
 
     /**
-     * The tab showing [session] — the chat's own, since it was added before any [pin]ned view of the same one.
+     * The tab showing [session] — there is exactly one (see the class doc).
      * Asked of the strip rather than remembered in a map that outlived it (see [ChatTab.lastNotified]).
      */
     fun tabFor(session: ClaudeSession): ChatTab? =
@@ -199,9 +187,8 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     /**
      * Closes [tab]: shows something else, removes it, fires the close callback and disposes what it carried.
      *
-     * Closing a CHAT takes its pinned views with it, first: they are second panels over that chat's session
-     * ([ChatTab.isPinnedView]), so leaving them behind leaves tabs painting a transcript whose session the
-     * close is about to dispose. They cannot cascade further — a pinned view is never pinned to.
+     * The callback disposes the tab's `claude` process, and it may do that unconditionally because no other
+     * tab holds this session — the class doc says why that is structural rather than a hope.
      *
      * **The ORDER of the three middle steps is the whole of this method, and getting it wrong is what made
      * the close button do nothing at all.** Removing the card that is currently SHOWN makes `CardLayout` pick
@@ -214,16 +201,19 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      * So: move the display to a survivor FIRST, while every component involved is still alive; only then
      * remove the dead card, which is no longer the one on screen and therefore no longer something the layout
      * has to make a decision about; and dispose last, once the container has settled.
+     *
+     * **What is drawn is settled before anything expensive is asked for, and that is the second ordering
+     * rule.** [onClosed] used to be the first line, and it disposes the tab's `claude` — which used to kill a
+     * process tree on the EDT (see [dev.lain.claudejb.process.ClaudeProcess.terminate]). So the push that
+     * takes the pill off the bar was emitted *behind* seconds of blocking I/O, in the same event, and the
+     * browser teardown came after it: the press produced nothing, the closed chat's pill stayed on screen,
+     * and the whole thing then happened at once. Both halves are fixed — the kill left the EDT, and the
+     * consequences the user is waiting to see are now sequenced in front of the teardown rather than behind
+     * it. Removing the tab from [tabs] stays the first line either way: it is what makes this call idempotent
+     * and what everything below reads.
      */
     fun close(tab: ChatTab) {
         if (!tabs.remove(tab)) return
-        if (!tab.isPinnedView) {
-            val session = tab.session
-            if (session != null) {
-                tabs.filter { it.isPinnedView && it.session === session }.forEach { close(it) }
-            }
-        }
-        onClosed(tab)
         if (selectedTab === tab) {
             selectedTab = null
             // Never leave the area blank: show whatever is left, BEFORE the card goes.
@@ -231,6 +221,10 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         } else {
             pushChats()
         }
+        // The session, once the bar and the card already agree the tab is gone. It also settles `active` in
+        // the right order: the survivor has been selected by now, so removing the closed session no longer
+        // has to guess which chat inherits it.
+        onClosed(tab)
         content.remove(tab.component)
         tab.disposer?.let { Disposer.dispose(it) }
         content.revalidate()
@@ -247,12 +241,38 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      * the tool window. Closing your last conversation is a reasonable thing to do; being left with nothing is
      * not what it means.
      *
-     * Only for real chats. A pinned view closing is a view closing, and the chat behind it is still open —
-     * counting them here would make the last VIEW of a chat conjure a second conversation.
+     * With no [commands] there is nothing to open a chat WITH, and the strip has no other way to make one. It
+     * says so instead of returning quietly: the empty tool window this method exists to prevent is exactly
+     * what the user gets, and a silent `?.` leaves no trace anywhere of why. The factory publishes the field
+     * before it opens anything ([ClaudeToolWindowFactory.createToolWindowContent]), so reaching this branch in
+     * a running IDE means that wiring is broken rather than merely late.
+     *
+     * **The replacement is opened on the NEXT event, not in the middle of the close.** Opening a chat builds a
+     * whole `JBCefBrowser` and hands it the document to assemble, and that cannot leave the EDT — Swing and
+     * JCEF both require it. What it can leave is *this* event: run inline, closing your only chat meant one
+     * EDT event that tore a Chromium down and stood another one up before a single frame could be painted, so
+     * the press appeared to do nothing at all until the whole sequence was over. Deferred, the close paints
+     * first — the pill goes, the card goes — and the fresh chat arrives behind it. The cost is one event with
+     * no card in the [CardLayout]; the thing this method exists to prevent is being left with none *for good*.
+     *
+     * Re-checked when it runs, not only when it is queued: [dispose] can have happened (the tool window
+     * closed), and a chat can have been opened in between by anything else, and either one turns the
+     * replacement into a chat nobody asked for.
      */
     private fun replaceLastChat() {
-        if (tabs.any { !it.isPinnedView }) return
-        commands?.newChat()
+        if (tabs.isNotEmpty()) return
+        val open = commands
+        if (open == null) {
+            LOG.warn(
+                "The last chat was closed with no tab commands wired, so no replacement was opened: the tool " +
+                    "window is left with no chats and no control to create one.",
+            )
+            return
+        }
+        ApplicationManager.getApplication().invokeLater(
+            { if (!disposed && tabs.isEmpty()) open.newChat() },
+            ModalityState.defaultModalityState(),
+        )
     }
 
     fun all(): List<ChatTab> = tabs.toList()
@@ -296,7 +316,7 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      * is that a page can also just ask, which is what it does when it comes up ([ChatAgentTabs.render]).
      */
     fun chatList(): List<JcefTabsData.Chat> = tabs.map {
-        JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention, it.pinnedAgent)
+        JcefTabsData.Chat(it.id, it.title, it === selectedTab, it.attention)
     }
 
     /**
@@ -304,15 +324,11 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
      *
      * Workloads is about what is RUNNING, and what is running does not belong to the chat you happen to be
      * looking at: agents and background tasks keep going in the other tabs, and a view that showed only the
-     * selected one answered "what is running?" with a fraction of the truth. The bar's own popup is the
+     * selected one answered "what is running?" with a fraction of the truth. The bar's second row is the
      * per-chat view; this is the whole picture.
      *
-     * Ordered as the tabs are, so the diagram reads in the same order as the bar above it.
-     *
-     * EVERY tab, pinned ones included: the tab bar needs each tab's tree to answer its own ⋮. The diagram
-     * is the one that must not draw the same chat twice — [pin] adds a second tab over the SAME panel, a
-     * VIEW of one agent rather than another workload — and that is deduplicated by session where it is
-     * drawn ([JcefSessionData.sessionJson]).
+     * Ordered as the tabs are, so the diagram reads in the same order as the bar above it. One entry per
+     * chat, and therefore one per session ([ChatTab.session]).
      */
     fun workloads(): List<JcefSessionData.Workload> = tabs.mapNotNull { tab ->
         (tab.component as? JcefChatPanel)?.let { panel ->
@@ -321,6 +337,11 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
     }
 
     override fun dispose() {
+        disposed = true
         tabs.forEach { tab -> tab.disposer?.let { Disposer.dispose(it) } }
+    }
+
+    private companion object {
+        private val LOG = logger<ChatTabsPanel>()
     }
 }
