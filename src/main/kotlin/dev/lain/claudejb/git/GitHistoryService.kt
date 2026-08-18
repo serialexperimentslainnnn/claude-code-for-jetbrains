@@ -57,11 +57,21 @@ class GitHistoryService(private val project: Project) {
      * The [limit] most recent commits of the primary repository, newest first, each with the files it touched
      * (paths relative to that repository root). Empty when Git is unavailable, when `git` fails, or when called
      * on the EDT — this runs a child process and belongs on a background thread.
+     *
+     * **[scope] decides which lines of development are read, and it is part of what the caller displays.** It
+     * defaults to [GitLogScope.CURRENT_BRANCH] because that is what an unqualified "recent commits" has always
+     * meant here and because the two mistakes are not equally visible: a caller that wanted the whole
+     * repository and forgot gets a history with no forks in it, which is obvious the moment it is drawn, while
+     * a caller that wanted one branch and got every ref shows other people's work under its own title and says
+     * nothing. Ask for [GitLogScope.EVERY_LINE_OF_DEVELOPMENT] explicitly; nothing here will widen for you.
      */
-    fun recentCommits(limit: Int = DEFAULT_COMMIT_LIMIT): List<GitCommitInfo> {
+    fun recentCommits(
+        limit: Int = DEFAULT_COMMIT_LIMIT,
+        scope: GitLogScope = GitLogScope.CURRENT_BRANCH,
+    ): List<GitCommitInfo> {
         if (limit <= 0) return emptyList()
         if (refusedOnEdt("recentCommits()", "git log")) return emptyList()
-        return withPrimaryRoot(emptyList()) { root -> GitGateway.recentCommits(project, root, limit) }
+        return withPrimaryRoot(emptyList()) { root -> GitGateway.recentCommits(project, root, limit, scope) }
     }
 
     /**
@@ -188,7 +198,15 @@ class GitHistoryService(private val project: Project) {
 
     companion object {
 
-        /** Enough to see what the last stretch of work did, small enough that `git log` stays instant. */
+        /**
+         * Enough to see what the last stretch of work did on ONE branch, small enough that `git log` stays
+         * instant.
+         *
+         * It answers that question and only that one. A graph over every line of development needs a window
+         * several times this size before a fork falls inside it, and it says so where it asks
+         * (`GitIntegration.GRAPH_COMMIT_LIMIT`): one constant serving two questions is how the smaller answer
+         * silently becomes the bigger one's ceiling.
+         */
         const val DEFAULT_COMMIT_LIMIT = 20
 
         private val LOG = logger<GitHistoryService>()

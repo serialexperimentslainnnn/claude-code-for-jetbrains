@@ -8,16 +8,23 @@
  * conversation that acts on it. The Git conversation is a chat of its own (see `TabSessionCommands.gitChat`),
  * so putting its door here is what stops it having to be found among the ordinary chat pills.
  *
- * The history is ONE vertical rail, and it stays one on purpose: it is the list you read down, newest first,
- * to see what happened. The GRAPH is a separate card (`buildGitBranchMapCard`), drawn horizontally with time
- * on the x axis and one lane per line of development.
+ * The history is ONE card and it is a LIST: one row per commit, newest first, each row a gutter on the left
+ * and the commit's prose on the right. The graph lives in that gutter — a small SVG per row — rather than on a
+ * canvas with the text positioned over it, and that is the whole layout decision: a list keeps its scrolling,
+ * its wrapping and its tab order from the platform, while a canvas has to reimplement all three and gets the
+ * accessible name of a picture. It replaces the separate horizontal branch map, which asked the reader to hold
+ * two pictures of the same history at once.
  *
- * **That graph is drawn from real parents and real refs, or it is not drawn at all.** The rule this file was
- * written under has not been relaxed, it has been satisfied: the payload now carries each commit's parent
- * hashes and every branch with the commit it points at (`JcefGitData`), so a fork is a fork the repository
- * has and a lane is named by a ref that exists. With either half missing the card returns null. An invented
- * topology in a Git view is worse than none, because nothing on screen tells a drawn branch from a real one —
- * and the same goes for a truncated one presented as complete, which is why what is cut is said out loud.
+ * **The graph is drawn from real parents and real refs, or it is not drawn at all.** The payload carries each
+ * commit's parent hashes and every branch with the commit it points at (`JcefGitData`), so a fork is a fork the
+ * repository has and a lane is named by a ref that exists; a commit with no parents in the window simply gets
+ * no line, never an invented one. An invented topology in a Git view is worse than none, because nothing on
+ * screen tells a drawn branch from a real one — and the same goes for a truncated one presented as complete,
+ * which is why what is cut is said out loud.
+ *
+ * **Lane colour is never the only carrier of anything** (WCAG 1.4.1): a branch is a text tag on its row, a
+ * merge says the word, and what the gutter draws is `aria-hidden` because every relationship it shows is
+ * already in the row's own text.
  */
 (function () {
   'use strict';
@@ -37,33 +44,14 @@
   /**
    * The catalogue id that opens the platform's own branch switcher.
    *
-   * ONE id with three doors — the action bar, the branch chip in this header, and every ref on the branch map
-   * — because the button and what it does may not drift apart, which is the whole reason `GitActionCatalog`
+   * ONE id with three doors — the action bar, the branch chip in this header, and every branch tag on a commit
+   * row — because the button and what it does may not drift apart, which is the whole reason `GitActionCatalog`
    * exists. The page never invents a message for "switch to this branch": a branch name coming off this page
    * is a free-form value exactly like a commit hash, and the only thing that could act on one is a checkout,
    * which this plugin does not perform. The platform's popup offers the real list instead, with its own
    * enablement and its own undo.
    */
   var BRANCHES_ACTION = 'branches';
-
-  /**
-   * The commit the user picked on the branch map, remembered across rebuilds.
-   *
-   * Module-level and not a DOM read, for the reason the dashboard learned twice: the panel is rebuilt on every
-   * host push, several times a turn, so anything held only in the elements is thrown away by a repaint the
-   * user did not cause. Cleared when that commit falls out of the drawn window, since a selection pointing at
-   * nothing would leave the detail row describing a commit that is no longer on screen.
-   */
-  var selectedHash = null;
-
-  /**
-   * Where the map was scrolled to, or null before it has ever been drawn.
-   *
-   * Same reason as the selection: a rebuilt container is born at offset 0. Null is not 0 — it means "nobody
-   * has looked at this yet", and the first paint answers it by going to the far right, where the newest
-   * commits are. Restoring 0 there would open every session on the oldest commit in the window.
-   */
-  var mapScrollLeft = null;
 
   // ---------------------------------------------------------------------------
   // Payload readers
@@ -134,7 +122,7 @@
       branchChip(g, repo),
       h('span', { class: 'git-sha', text: text(repo.head, '—') })
     );
-    return viewHead(card('Repository', [id], true, 'git-head'), buildGitBranchMapCard(g));
+    return viewHead(card('Repository', [id], true, 'git-head'));
   }
 
   /**
@@ -177,15 +165,14 @@
   }
 
   /**
-   * The strip, whatever heads the Overview, and the branch map, as ONE full-width item of the dashboard's grid.
+   * The strip and whatever heads the Overview, as ONE full-width item of the dashboard's grid.
    *
    * The builders return one node each and the panel appends them side by side, so the strip has to travel
    * with the first card; loose, it would be laid out as a 260px grid column beside the repository rather than
-   * as a header over the view. [mapEl] rides along for the same reason and because it belongs there: "which
-   * branch am I on" and "where does that branch sit" are one question, and the map is the picture of it.
+   * as a header over the view.
    */
-  function viewHead(cardEl, mapEl) {
-    return h('div', { class: 'git-viewhead' }, viewTabs('overview'), cardEl, mapEl || null);
+  function viewHead(cardEl) {
+    return h('div', { class: 'git-viewhead' }, viewTabs('overview'), cardEl);
   }
 
   /**
@@ -352,28 +339,275 @@
   }
 
   // ---------------------------------------------------------------------------
-  // History — the WIP node and one vertical rail of commits
+  // History — the graph, drawn as a list
   // ---------------------------------------------------------------------------
+
   /**
-   * Working copy first, then the commits, all on ONE rail.
+   * One lane of development, in CSS px, and the two numbers a row is drawn in.
    *
-   * Uncommitted work is the top node because that is where it sits in time, and it only appears when there IS
-   * some: an empty "Uncommitted changes" node reads as a state, and the state it reads as is the wrong one.
+   * The lane width is real pixels, because it decides how wide the gutter column is. A row's HEIGHT is not a
+   * number this file can know — a wrapped subject, a file list or an action bar all change it — so the gutter
+   * is drawn in ABSTRACT units instead: each row's SVG declares a [ROW_UNITS]-tall viewBox and is stretched to
+   * whatever the row turns out to be (`preserveAspectRatio="none"`). A vertical line is the one shape that
+   * cannot show that stretch, which is what makes the trick sound; the curves keep their weight through
+   * `vector-effect="non-scaling-stroke"`, and the dot is an HTML element rather than a circle that would
+   * arrive as an ellipse.
+   */
+  var LANE_W = 16;
+  var ROW_UNITS = 100;
+  var ROW_MID = 50;
+
+  /**
+   * How many lanes the palette tells apart before it repeats.
+   *
+   * Six colours, all of them derived in git.css from the IDE's own theme variables — the page invents no hue
+   * of its own. The seventh lane wears the first one's colour, and that is survivable for one reason only:
+   * **colour is never the sole carrier here** (1.4.1). The branch is a text tag on its row and a merge says
+   * the word, so a repeated hue costs a little legibility and no information.
+   */
+  var LANE_COLOURS = 6;
+
+  /** The working copy's row id. Not a hash, and nothing in a repository can collide with it. */
+  var WIP_ID = ':working-copy:';
+
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /**
+   * Working copy first, then one row per commit, each with its piece of the graph in its own gutter.
+   *
+   * Uncommitted work is the top row because that is where it sits in time, and it only appears when there IS
+   * some: an empty "Uncommitted changes" row reads as a state, and the state it reads as is the wrong one. It
+   * goes through the same lane assignment as everything else, with `HEAD`'s commit as its parent — which both
+   * draws it on the line it will actually land on and keeps that line in the leftmost lane, rather than
+   * wherever the newest commit of some other branch happens to push it.
    */
   function buildGitHistoryCard(git) {
     var g = gitOf(git);
     if (!g || !repoOf(g).present) return null;
     var changes = list(g.changes);
-    var commits = list(g.commits);
+    var commits = list(g.commits).filter(function (c) {
+      return text(c.hash, '') !== '';
+    });
     if (!changes.length && !commits.length) return null;
 
-    var perCommit = commitActionsOf(g);
-    var nodes = [];
-    if (changes.length) nodes.push(wipNode(changes));
+    var entries = [];
+    if (changes.length) {
+      entries.push({ hash: WIP_ID, parents: [headHashOf(g, commits)], changes: changes });
+    }
     commits.forEach(function (c) {
-      nodes.push(commitNode(c, perCommit));
+      entries.push({ hash: text(c.hash, ''), parents: list(c.parents).map(String), commit: c });
     });
-    return card('History', [h('div', { class: 'git-rail' }, nodes)], true, 'git-history');
+
+    var model = layoutLanes(entries);
+    var byHash = refsByHash(g);
+    var actions = commitActionsOf(g);
+    var rows = model.rows.map(function (row) {
+      if (row.item.changes) return wipRow(row, model.lanes);
+      return commitRow(g, row, model.lanes, byHash, actions);
+    });
+    return card(
+      'History',
+      [
+        h('ul', { class: 'git-rail', attrs: { 'aria-label': 'Commits, newest first' } }, rows),
+        historyNote(g, model, commits.length),
+      ],
+      true,
+      'git-history'
+    );
+  }
+
+  /**
+   * Assigns every entry a lane and says what its row's gutter has to draw. `git log --graph`'s own rule,
+   * written once, with no DOM and no knowledge of the payload beyond `hash` and `parents`.
+   *
+   * A lane is a slot waiting for a particular commit. Walking newest to oldest, a commit takes the lane that
+   * was waiting for it — the first of them, when several were — or opens one where nothing was; its FIRST
+   * parent then continues that lane, and every other parent books one of its own. **Keeping the first parent
+   * in place is what makes a mainline read as a straight line** instead of wandering into whichever slot
+   * happened to be free, and it is why a merge pushes the branch it absorbed aside rather than the reverse.
+   *
+   * Two rules bound the width, and without them it only grows. A lane still waiting for a commit that has now
+   * been drawn is RELEASED, because several lanes converge on a fork and leaving them reserved would step
+   * every later line one lane further right for good; and a parent outside this window books nothing at all,
+   * since it can never arrive to claim the slot.
+   *
+   * Exported as `CC.dash.gitLanes` so the assignment can be tested as the arithmetic it is, rather than
+   * through the pixel positions it eventually becomes.
+   *
+   * Returns `{ rows, lanes }` — one row per entry, in the order given:
+   *  - `lane` — the column this commit's dot sits in;
+   *  - `up` — lanes arriving from above and ending at that dot. Empty on a branch tip, which nothing points
+   *    at yet;
+   *  - `down` — lanes leaving the dot for its parents. Empty on a root, and on a commit whose every parent is
+   *    out of the window;
+   *  - `through` — lanes that cross this row untouched, top to bottom;
+   *  - `merge` — more than one parent. A fact about the commit, not about the drawing.
+   */
+  function layoutLanes(entries) {
+    var items = list(entries);
+    var known = Object.create(null);
+    items.forEach(function (item) {
+      var hash = text(item.hash, '');
+      if (hash) known[hash] = true;
+    });
+
+    // lane index → the hash that lane is waiting for, or null while it is free.
+    var lanes = [];
+    var rows = [];
+
+    function firstFree() {
+      for (var i = 0; i < lanes.length; i++) {
+        if (lanes[i] == null) return i;
+      }
+      lanes.push(null);
+      return lanes.length - 1;
+    }
+
+    items.forEach(function (item, index) {
+      var hash = text(item.hash, '');
+      var before = lanes.slice();
+      var up = [];
+      for (var k = 0; k < before.length; k++) {
+        if (hash && before[k] === hash) up.push(k);
+      }
+      var lane = up.length ? up[0] : firstFree();
+      up.forEach(function (waiting) {
+        if (waiting !== lane) lanes[waiting] = null;
+      });
+
+      var parents = list(item.parents).map(String);
+      var down = [];
+      var first = parents.length ? parents[0] : null;
+      lanes[lane] = first && known[first] ? first : null;
+      if (lanes[lane]) down.push(lane);
+      for (var p = 1; p < parents.length; p++) {
+        var other = parents[p];
+        if (!known[other]) continue;
+        var at = lanes.indexOf(other);
+        if (at < 0) {
+          at = firstFree();
+          lanes[at] = other;
+        }
+        if (down.indexOf(at) < 0) down.push(at);
+      }
+
+      var through = [];
+      for (var q = 0; q < lanes.length; q++) {
+        if (q !== lane && before[q] != null && lanes[q] === before[q]) through.push(q);
+      }
+      rows.push({
+        item: item,
+        hash: hash,
+        index: index,
+        lane: lane,
+        up: up,
+        down: down,
+        through: through,
+        parents: parents,
+        merge: parents.length > 1,
+      });
+    });
+    return { rows: rows, lanes: Math.max(1, lanes.length) };
+  }
+
+  /** The centre of lane [l]: real pixels across, since only the vertical axis is stretched. */
+  function laneX(l) {
+    return l * LANE_W + LANE_W / 2;
+  }
+
+  /** A line that leaves one lane vertically and arrives in another vertically. */
+  function bend(x1, y1, x2, y2) {
+    var mid = (y1 + y2) / 2;
+    return 'M' + x1 + ' ' + y1 + 'C' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2;
+  }
+
+  /**
+   * One stroke of the graph.
+   *
+   * `data-lane` is the palette SLOT, not the lane index: the colours repeat every [LANE_COLOURS] lanes, and
+   * asking CSS to know that would mean one rule per lane a repository might ever open.
+   */
+  function edge(svg, d, lane) {
+    var path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('class', 'git-edge');
+    path.setAttribute('d', d);
+    path.setAttribute('data-lane', String(lane % LANE_COLOURS));
+    svg.appendChild(path);
+  }
+
+  /**
+   * The gutter of one row: every line that crosses it, and the dot itself.
+   *
+   * `aria-hidden` on the drawing, deliberately: it is decoration over content that is already reachable, since
+   * the row's own text names the branches on it and says whether it is a merge. Announcing the picture too
+   * would only repeat that, in a form nobody can act on.
+   */
+  function gutter(row, lanes) {
+    var width = lanes * LANE_W;
+    var x = laneX(row.lane);
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'git-graph');
+    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + ROW_UNITS);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+    row.through.forEach(function (l) {
+      edge(svg, 'M' + laneX(l) + ' 0V' + ROW_UNITS, l);
+    });
+    row.up.forEach(function (l) {
+      if (l === row.lane) {
+        edge(svg, 'M' + x + ' 0V' + ROW_MID, l);
+      } else {
+        edge(svg, bend(laneX(l), 0, x, ROW_MID), l);
+      }
+    });
+    row.down.forEach(function (l) {
+      if (l === row.lane) {
+        edge(svg, 'M' + x + ' ' + ROW_MID + 'V' + ROW_UNITS, l);
+      } else {
+        edge(svg, bend(x, ROW_MID, laneX(l), ROW_UNITS), l);
+      }
+    });
+    var dot = h('span', {
+      class: 'git-dot-node' + (row.merge ? ' merge' : ''),
+      style: { left: x + 'px' },
+      attrs: { 'data-lane': String(row.lane % LANE_COLOURS) },
+    });
+    return h('span', { class: 'git-gutter', style: { width: width + 'px' } }, svg, dot);
+  }
+
+  /** Commit hash → the refs pointing at it. A ref with no hash is dropped: it cannot be anchored to anything. */
+  function refsByHash(g) {
+    var byHash = Object.create(null);
+    list(g.refs).forEach(function (r) {
+      var hash = text(r.hash, '');
+      if (!hash) return;
+      if (!byHash[hash]) byHash[hash] = [];
+      byHash[hash].push(r);
+    });
+    return byHash;
+  }
+
+  /**
+   * The commit `HEAD` stands on, in full, or '' when this window cannot see it.
+   *
+   * The refs are asked first because the checked-out one carries the full hash; `repo.head` is the fallback,
+   * matched by prefix so a payload that abbreviates it still anchors. It is what the working-copy row hangs
+   * from, and '' is a real answer: the row is then a dot with nothing under it, which says less than the truth
+   * but never more.
+   */
+  function headHashOf(g, commits) {
+    var found = '';
+    list(g.refs).forEach(function (r) {
+      if (!found && r.current === true) found = text(r.hash, '');
+    });
+    if (found) return found;
+    var head = text(repoOf(g).head, '');
+    if (!head) return '';
+    commits.forEach(function (c) {
+      var hash = text(c.hash, '');
+      if (!found && hash.indexOf(head) === 0) found = hash;
+    });
+    return found;
   }
 
   /**
@@ -390,14 +624,15 @@
   }
 
   /** The working copy: what would go into the next commit. */
-  function wipNode(changes) {
+  function wipRow(row, lanes) {
+    var changes = row.item.changes;
     var files = changes.map(function (path) {
       return h('li', { class: 'git-file', text: String(path) });
     });
     return h(
-      'div',
+      'li',
       { class: 'git-node git-wip' },
-      h('span', { class: 'git-dot' }),
+      gutter(row, lanes),
       h(
         'div',
         { class: 'git-body' },
@@ -408,29 +643,99 @@
     );
   }
 
-  /** One commit: what it is, what it says, who wrote it when, and what can be done to it. */
-  function commitNode(c, actions) {
-    var hash = text(c.short, text(c.hash, '').slice(0, 7));
+  /** One commit: where it sits in the graph, what it says, who wrote it when, and what can be done to it. */
+  function commitRow(g, row, lanes, byHash, actions) {
+    var c = row.item.commit;
+    var hash = row.hash;
+    var short = text(c.short, hash.slice(0, 7));
+    var refs = byHash[hash] || [];
     var meta = [text(c.author, null), ageText(c.ageMillis), fileCount(c.files)].filter(Boolean);
     return h(
-      'div',
-      { class: 'git-node git-commit' },
-      h('span', { class: 'git-dot' }),
+      'li',
+      { class: 'git-node git-commit', attrs: { 'data-hash': hash } },
+      gutter(row, lanes),
       h(
         'div',
         { class: 'git-body' },
         h(
           'div',
           { class: 'git-line' },
-          hash ? h('span', { class: 'git-hash', text: hash }) : null,
+          short ? h('span', { class: 'git-hash', text: short }) : null,
+          // The WORD, not the wider dot alone: a shape is no more audible than a colour (1.4.1), it does not
+          // survive forced colours either, and the subject of a merge does not always say so itself.
+          row.merge ? h('span', { class: 'git-merge', text: 'merge' }) : null,
+          refs.map(function (r) {
+            return refTag(g, r);
+          }),
           h('span', { class: 'git-subject', text: text(c.subject, '(no message)') })
         ),
         meta.length ? h('div', { class: 'git-meta', text: meta.join(' · ') }) : null,
         // The FULL hash, never the seven characters on screen: an abbreviation is unique only until it is
-        // not, and the host acts on what it is sent. `short` is the fallback merely so a payload that omits
-        // the long form still produces working buttons rather than silent ones.
-        commitActionBar(actions, text(c.hash, hash))
+        // not, and the host acts on what it is sent.
+        commitActionBar(actions, hash)
       )
+    );
+  }
+
+  /**
+   * A branch — or a detached `HEAD` — as a tag on the row it points at, and the third door onto the platform's
+   * branch switcher.
+   *
+   * **The tag is where a lane's identity lives.** The gutter can only say "these commits share a line"; which
+   * line it is is precisely what a colour cannot carry (1.4.1), so the name is text on the row. `remote` and
+   * `HEAD` are words for the same reason — otherwise those two are told apart from a plain local branch by hue
+   * alone — and the accessible name contains the whole visible label, so speaking what is on screen activates
+   * it (2.5.3 Label in Name).
+   *
+   * Pressing one opens the platform's popup: the same catalogue entry the action bar and the header chip fire,
+   * never an invented "check out this branch" message, which is a write this plugin does not perform. It falls
+   * back to plain text when the host is not offering that entry, since a button firing an id the catalogue
+   * lookup will miss is a control that does nothing and says nothing.
+   */
+  function refTag(g, r) {
+    var name = text(r.name, '');
+    var kind = text(r.kind, 'local');
+    var current = r.current === true;
+    var word = null;
+    if (current) {
+      word = 'HEAD';
+    } else if (kind === 'remote') {
+      word = 'remote';
+    }
+    var children = [h('span', { class: 'git-ref-name', text: name })];
+    if (word) children.push(h('span', { class: 'git-ref-kind', text: word }));
+
+    var action = actionById(g, BRANCHES_ACTION);
+    if (!action) {
+      return h(
+        'span',
+        {
+          class: 'git-ref' + (kind === 'remote' ? ' remote' : '') + (current ? ' current' : ''),
+          // Which one you are on, said programmatically rather than by the accent alone (1.4.1 / 4.1.2).
+          attrs: { 'aria-current': current ? 'true' : null },
+        },
+        children
+      );
+    }
+    return h(
+      'button',
+      {
+        class: 'git-ref' + (kind === 'remote' ? ' remote' : '') + (current ? ' current' : ''),
+        attrs: {
+          type: 'button',
+          'data-ref': name,
+          'aria-current': current ? 'true' : null,
+          'aria-label': (word ? name + ' ' + word : name) + ' — switch branch',
+        },
+        title: text(action.hint, 'Switch, create or compare branches'),
+        on: {
+          click: function (ev) {
+            ev.preventDefault();
+            send({ type: 'gitAction', id: BRANCHES_ACTION });
+          },
+        },
+      },
+      children
     );
   }
 
@@ -458,10 +763,14 @@
    * executor host-side, and a message type the host has no parser for is a button that silently does nothing.
    * The hash is the row's; an entry that does not act on a commit simply omits it.
    *
-   * Quiet until the row is hovered or something in it takes focus (git.css) — three controls on every row of a
-   * long history compete with the subjects, which are what the list is read for. Quiet is `opacity`, never
-   * `display: none` or `visibility: hidden`: those take the button out of the tab order, and a control that
-   * exists only under a pointer is a WCAG 2.1.1 failure, not a design choice.
+   * Quiet until the row is hovered or something in it takes focus, and OUT OF FLOW while it is (git.css).
+   * Both halves matter and they are different arguments. Quiet, because four controls on every row of a long
+   * history compete with the subjects, which are what the list is read for. Out of flow, because faded is not
+   * free: as a line of its own the strip was the tallest thing in a row that only ever needed two lines of
+   * text, on all hundred commits at once.
+   *
+   * Quiet is `opacity`, never `display: none` or `visibility: hidden`: those take the button out of the tab
+   * order, and a control that exists only under a pointer is a WCAG 2.1.1 failure, not a design choice.
    */
   function commitActionButton(action, hash) {
     var id = text(action.id, '');
@@ -501,475 +810,45 @@
     return Math.floor(days / 365) + 'y ago';
   }
 
-  // ---------------------------------------------------------------------------
-  // The branch map — real parents, real refs, drawn horizontally
-  // ---------------------------------------------------------------------------
-
   /**
-   * How much is drawn, and why each bound exists.
+   * What the card is NOT showing, in words.
    *
-   * The window is the host's list, which is the last `GitHistoryService.DEFAULT_COMMIT_LIMIT` commits; the cap
-   * here is a second, independent ceiling so that raising the host's limit for the history rail cannot silently
-   * turn this into a canvas thousands of columns wide. Whatever these bounds cut is SAID (see [mapNote]) — a
-   * map that truncates in silence reads as the whole picture, which is the same defect as an invented one.
+   * The window is always named, even when nothing was cut: a complete-looking picture read as the whole
+   * history is exactly the misreading a graph invites, and it is the same defect as an invented fork. Each
+   * further sentence is added only when its bound actually bit, so the note never claims a truncation that did
+   * not happen.
+   *
+   * "across every branch" is a statement about the data, not a flourish: the host walks every ref
+   * (`GitGateway.recentCommits`), which is why a commit nobody made on this branch can appear here — and why
+   * the window holds fewer commits of each line than it used to hold of one.
+   *
+   * The last sentence is the one that answers the complaint this card exists for. A graph of a single lane
+   * looks exactly like a graph that failed, and on a branch that has been linear for longer than the window
+   * that is the honest picture rather than a fault — so when there is one lane and branches the window cannot
+   * reach, it SAYS which of the two it is. Silence there is the defect being reported all over again, with
+   * the drawing telling the reader nothing and nothing else telling them either.
    */
-  var MAX_MAP_COMMITS = 24;
-  var MAX_MAP_REFS = 12;
-
-  /** Geometry, in CSS px. Computed from these, never measured — the same discipline as CC.diagram. */
-  var COL_W = 44; // one commit of history
-  var LANE_H = 30; // one line of development
-  var MAP_PAD = 18;
-  var DOT = 12; // what is painted
-  var HIT = 24; // what is pressable — WCAG 2.2 SC 2.5.8 floor, and both gaps above clear it
-
-  function cxOf(col, total) {
-    // Newest on the RIGHT: time reads left to right, and the newest commit is where the eye starts because it
-    // is the one the scroller opens on.
-    return MAP_PAD + DOT / 2 + (total - 1 - col) * COL_W;
-  }
-
-  function cyOf(lane) {
-    return MAP_PAD + DOT / 2 + lane * LANE_H;
-  }
-
-  /**
-   * Assigns every commit a column (time) and a lane (line of development) in one pass, newest to oldest.
-   *
-   * This is `git log --graph`'s own rule and nothing cleverer: a lane is a slot waiting for a particular
-   * commit. A commit takes the lane that was waiting for it, or the first free one if nothing was; its FIRST
-   * parent then continues that lane, and every other parent — a merge — books a lane of its own. Keeping the
-   * first parent in place is what makes a mainline read as a straight line instead of wandering into whichever
-   * slot happened to be free.
-   *
-   * Nothing here infers a fork from ordering: an edge exists only where the payload gave a parent hash.
-   */
-  function layoutCommits(commits) {
-    var lanes = [];
+  function historyNote(g, model, total) {
     var placed = Object.create(null);
-    var order = [];
-
-    function firstFree() {
-      for (var i = 0; i < lanes.length; i++) {
-        if (lanes[i] == null) return i;
-      }
-      lanes.push(null);
-      return lanes.length - 1;
-    }
-
-    commits.forEach(function (c, col) {
-      var hash = text(c.hash, '');
-      var lane = lanes.indexOf(hash);
-      if (lane < 0) lane = firstFree();
-      // Two lanes can be waiting for the SAME commit — that is what a branch merging back into the one it came
-      // from looks like from this end. The commit lands on the first of them and the others are released; left
-      // reserved for a hash already drawn, they would push every later line one lane further down for good.
-      for (var q = 0; q < lanes.length; q++) {
-        if (q !== lane && lanes[q] === hash) lanes[q] = null;
-      }
-      var parents = list(c.parents).map(String);
-      var node = { commit: c, hash: hash, col: col, lane: lane, parents: parents };
-      placed[hash] = node;
-      order.push(node);
-      lanes[lane] = parents.length ? parents[0] : null;
-      for (var k = 1; k < parents.length; k++) {
-        if (lanes.indexOf(parents[k]) < 0) lanes[firstFree()] = parents[k];
-      }
+    model.rows.forEach(function (row) {
+      if (row.hash) placed[row.hash] = true;
     });
-    return { placed: placed, order: order, lanes: Math.max(1, lanes.length) };
-  }
-
-  /** Commit hash → the refs pointing at it. A ref with no hash is dropped: it cannot be anchored to anything. */
-  function refsByHash(g) {
-    var byHash = Object.create(null);
-    list(g.refs).forEach(function (r) {
-      var hash = text(r.hash, '');
-      if (!hash) return;
-      if (!byHash[hash]) byHash[hash] = [];
-      byHash[hash].push(r);
-    });
-    return byHash;
-  }
-
-  /**
-   * The branch map, or null when there is nothing real to draw.
-   *
-   * **Null in three cases, and none of them is an empty card.** No repository; fewer than two commits, so
-   * there is no relationship to show; or not one commit carrying a parent, which is what a payload from a host
-   * that never read the topology looks like. In that last case a graph would be a row of unconnected dots
-   * presented as a history, and this file's founding rule is that a drawing nobody can tell apart from a real
-   * one must not be made.
-   */
-  function buildGitBranchMapCard(g) {
-    if (!g || !repoOf(g).present) return null;
-    var all = list(g.commits).filter(function (c) {
-      return text(c.hash, '') !== '';
-    });
-    var commits = all.slice(0, MAX_MAP_COMMITS);
-    if (commits.length < 2) return null;
-    var hasTopology = commits.some(function (c) {
-      return list(c.parents).length > 0;
-    });
-    if (!hasTopology) return null;
-
-    var model = layoutCommits(commits);
-    var byHash = refsByHash(g);
-    var ctx = {
-      g: g,
-      model: model,
-      byHash: byHash,
-      total: commits.length,
-      commitActions: commitActionsOf(g),
-    };
-    // A selection kept from a previous push may name a commit that has since scrolled out of the window; the
-    // detail row would then describe something that is not on screen.
-    if (selectedHash && !model.placed[selectedHash]) selectedHash = null;
-
-    var detail = h('div', { class: 'git-map-detail' });
-    var nodes = [];
-    var scroller = mapScroller(ctx, nodes, detail);
-    var refRow = mapRefs(ctx, nodes, detail);
-    applySelection(ctx, nodes, detail);
-
-    return card(
-      'Branch map',
-      [scroller, refRow, detail, mapNote(ctx, all.length)].filter(Boolean),
-      true,
-      'git-map'
-    );
-  }
-
-  /**
-   * The canvas and the viewport it scrolls in.
-   *
-   * **A native scroll container, deliberately, and not the pan-and-drag viewport the Workloads diagram uses.**
-   * That one is moved only by dragging, which WCAG 2.2 SC 2.5.7 (Dragging Movements) requires an alternative
-   * for, and it moves by `transform`, so the browser cannot bring a focused node into view — SC 2.4.11 (Focus
-   * Not Obscured) again. A scroll container gets the wheel, the keyboard, a scrollbar and `scrollIntoView`
-   * from the platform, for less code than the drag handler would cost. What IS reused is the drawing itself:
-   * `.dg-view`, `.dg-edges` and `.dg-edge` are app-core-diagram's classes, so this reads as the same surface
-   * as the Workloads canvas rather than as a second visual language.
-   */
-  function mapScroller(ctx, nodes, detail) {
-    var width = MAP_PAD * 2 + (ctx.total - 1) * COL_W + DOT;
-    var height = MAP_PAD * 2 + (ctx.model.lanes - 1) * LANE_H + DOT;
-    var canvas = h('div', {
-      class: 'git-map-canvas',
-      style: { width: width + 'px', height: height + 'px' },
-    });
-    canvas.appendChild(mapEdges(ctx, width, height));
-    ctx.model.order.forEach(function (p) {
-      var el = mapNode(ctx, p, nodes, detail);
-      nodes.push({ hash: p.hash, el: el, kind: 'node' });
-      canvas.appendChild(el);
-    });
-
-    var scroller = h('div', {
-      // `.dg-view` for the recessed dot-grid surface; the rest of that rule (overflow, grab cursor) is
-      // overridden in git.css, because here the surface scrolls rather than being dragged.
-      class: 'dg-view git-map-scroll',
-      attrs: {
-        role: 'group',
-        'aria-label': 'Branch map — the newest ' + ctx.total + ' commits, one lane per line of development',
-      },
-      on: {
-        scroll: function (ev) {
-          mapScrollLeft = ev.target.scrollLeft;
-        },
-      },
-    });
-    scroller.appendChild(canvas);
-    // The card is not in the document yet, so it has no scroll extent to set. On the next frame it has.
-    // Null means nobody has looked at this map yet: open on the newest commits, which are at the far right.
-    requestAnimationFrame(function () {
-      scroller.scrollLeft = mapScrollLeft == null ? scroller.scrollWidth : mapScrollLeft;
-    });
-    return scroller;
-  }
-
-  /**
-   * One curve per real parent link. `aria-hidden`, because the graph is decoration over content that is
-   * already reachable: every node is a button with the same relationships in its accessible name.
-   *
-   * A parent OUTSIDE the drawn window gets no stub. A line trailing off the edge would say "this continues",
-   * which is true, but it would say it in exactly the same ink as a line that ends — so the fact is stated in
-   * words instead ([mapNote]) where it cannot be misread.
-   */
-  function mapEdges(ctx, width, height) {
-    var ns = 'http://www.w3.org/2000/svg';
-    var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('class', 'dg-edges');
-    svg.setAttribute('width', String(width));
-    svg.setAttribute('height', String(height));
-    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
-    svg.setAttribute('aria-hidden', 'true');
-    ctx.model.order.forEach(function (p) {
-      var x1 = cxOf(p.col, ctx.total);
-      var y1 = cyOf(p.lane);
-      p.parents.forEach(function (parentHash) {
-        var parent = ctx.model.placed[parentHash];
-        if (!parent) return;
-        var x2 = cxOf(parent.col, ctx.total);
-        var y2 = cyOf(parent.lane);
-        var mid = x1 + (x2 - x1) / 2;
-        var path = document.createElementNS(ns, 'path');
-        path.setAttribute('class', 'dg-edge');
-        path.setAttribute(
-          'd',
-          'M' + x1 + ' ' + y1 + ' C' + mid + ' ' + y1 + ' ' + mid + ' ' + y2 + ' ' + x2 + ' ' + y2
-        );
-        svg.appendChild(path);
-      });
-    });
-    return svg;
-  }
-
-  /**
-   * How a node names itself out loud: hash, subject, then the two things the drawing says in shape and colour.
-   *
-   * A merge is drawn as a wider dot and the checked-out commit carries the accent; neither survives forced
-   * colours and neither is audible, so both are also words here (1.4.1 Use of Color).
-   */
-  function nodeName(p, refs) {
-    var bits = [text(p.commit.short, p.hash.slice(0, 7)), text(p.commit.subject, '(no message)')];
-    if (p.parents.length > 1) bits.push('merge of ' + p.parents.length + ' parents');
-    if (refs.length) {
-      bits.push(
-        refs
-          .map(function (r) {
-            return text(r.name, '') + (r.current === true ? ' (checked out)' : '');
-          })
-          .join(', ')
-      );
-    }
-    return bits.join(' — ');
-  }
-
-  /**
-   * One commit: a dot you can press.
-   *
-   * A real `<button>` rather than an SVG circle with a click handler — it arrives with focus, Enter, Space and
-   * the button role instead of a set of ARIA attributes this file would have to keep correct. `aria-pressed`
-   * is what makes the selection programmatic rather than a colour (4.1.2), and the 24px box around a 12px dot
-   * is SC 2.5.8; the lane and column gaps are both wider than it, so two targets never overlap.
-   */
-  function mapNode(ctx, p, nodes, detail) {
-    var refs = ctx.byHash[p.hash] || [];
-    var current = refs.some(function (r) {
-      return r.current === true;
-    });
-    var label = nodeName(p, refs);
-    return h(
-      'button',
-      {
-        class:
-          'git-map-node' +
-          (p.parents.length > 1 ? ' merge' : '') +
-          (refs.length ? ' tagged' : '') +
-          (current ? ' current' : ''),
-        style: {
-          left: cxOf(p.col, ctx.total) - HIT / 2 + 'px',
-          top: cyOf(p.lane) - HIT / 2 + 'px',
-        },
-        attrs: {
-          type: 'button',
-          'data-hash': p.hash,
-          'aria-pressed': 'false',
-          'aria-label': label,
-        },
-        title: label,
-        on: {
-          click: function (ev) {
-            ev.preventDefault();
-            pick(ctx, p.hash, label, nodes, detail);
-          },
-        },
-      },
-      h('span', { class: 'git-map-dot', attrs: { 'aria-hidden': 'true' } })
-    );
-  }
-
-  /**
-   * The branches, as the map's index — and the one place a branch is something you can act on.
-   *
-   * Pressing one goes to its commit: it selects it, brings it into view, and the detail row below then offers
-   * what can be done there, *Branches* included. That is one meaning per control — a chip that both navigated
-   * and checked out would be two actions behind one press, and the destructive one would be the surprise.
-   *
-   * Only refs anchored inside the drawn window are listed: a button for a branch that is not on the map could
-   * only fail to go anywhere. How many were left out is said in [mapNote], and the header's branch chip
-   * reaches the full list whatever is drawn here.
-   */
-  function mapRefs(ctx, nodes, detail) {
-    var anchored = list(ctx.g.refs).filter(function (r) {
-      return !!ctx.model.placed[text(r.hash, '')];
-    });
-    if (!anchored.length) return null;
-    var shown = anchored.slice(0, MAX_MAP_REFS);
-    return h(
-      'div',
-      { class: 'git-map-refs', attrs: { role: 'group', 'aria-label': 'Branches on this map' } },
-      shown.map(function (r) {
-        return refButton(ctx, r, nodes, detail);
-      })
-    );
-  }
-
-  function refButton(ctx, r, nodes, detail) {
-    var name = text(r.name, '');
-    var hash = text(r.hash, '');
-    var kind = text(r.kind, 'local');
-    var current = r.current === true;
-    var p = ctx.model.placed[hash];
-    var el = h(
-      'button',
-      {
-        class:
-          'git-map-ref ' +
-          (kind === 'remote' || kind === 'head' ? kind : 'local') +
-          (current ? ' current' : ''),
-        attrs: {
-          type: 'button',
-          'data-ref': name,
-          // Which one you are ON, said programmatically rather than by the accent alone (1.4.1 / 4.1.2).
-          'aria-current': current ? 'true' : null,
-          'aria-pressed': 'false',
-          'aria-label': name + ' — go to this branch on the map',
-        },
-        title: 'Go to ' + name + ' (' + text(r.short, hash.slice(0, 7)) + ')',
-        on: {
-          click: function (ev) {
-            ev.preventDefault();
-            pick(ctx, hash, nodeName(p, ctx.byHash[hash] || []), nodes, detail);
-            var node = nodeFor(nodes, hash);
-            // jsdom has no layout and therefore no `scrollIntoView`; the guard is what keeps the tests honest
-            // rather than making them assert on a stub.
-            if (node && typeof node.scrollIntoView === 'function') {
-              node.scrollIntoView({ block: 'nearest', inline: 'center' });
-            }
-          },
-        },
-      },
-      h('span', { class: 'git-map-ref-name', text: name }),
-      // The kind in words, because `local` / `remote` is otherwise only a colour, and the "you are here"
-      // marker likewise. Both are the same 1.4.1 rule the status chips follow.
-      h('span', { class: 'git-map-ref-kind', text: current ? 'HEAD' : kind })
-    );
-    nodes.push({ hash: hash, el: el, kind: 'ref' });
-    return el;
-  }
-
-  function nodeFor(nodes, hash) {
-    var found = null;
-    nodes.forEach(function (entry) {
-      if (found === null && entry.kind === 'node' && entry.hash === hash) found = entry.el;
-    });
-    return found;
-  }
-
-  /**
-   * Selects a commit — or clears the selection when it was already the one selected.
-   *
-   * Updates in place rather than asking for a rebuild: the dashboard only repaints on a host push, so a
-   * selection that waited for one would appear to do nothing until the next turn. It is also announced,
-   * because the detail row appears without the focus moving and a screen-reader user would otherwise get no
-   * signal at all (4.1.3 Status Messages).
-   */
-  function pick(ctx, hash, label, nodes, detail) {
-    if (!hash) return;
-    selectedHash = selectedHash === hash ? null : hash;
-    applySelection(ctx, nodes, detail);
-    if (typeof CC.announce === 'function') {
-      CC.announce(selectedHash ? 'Selected ' + label : 'Commit selection cleared');
-    }
-  }
-
-  /** Paints the current selection onto every control that reflects it, then redraws the detail row. */
-  function applySelection(ctx, nodes, detail) {
-    nodes.forEach(function (entry) {
-      var on = !!selectedHash && entry.hash === selectedHash;
-      entry.el.classList.toggle('selected', on);
-      entry.el.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-    renderDetail(ctx, nodes, detail);
-  }
-
-  /**
-   * What the selected commit is, and what can be done to it.
-   *
-   * The buttons are the host's catalogue and nothing else: the per-commit entries come from `commitActions`
-   * (the same builder the history rail uses, so the two bars cannot offer different things), and *Branches*
-   * is added only when the commit actually carries a ref — that is the one place on this card where a branch
-   * is what you are acting on.
-   */
-  function renderDetail(ctx, nodes, detail) {
-    while (detail.firstChild) {
-      detail.removeChild(detail.firstChild);
-    }
-    var p = selectedHash ? ctx.model.placed[selectedHash] : null;
-    if (!p) {
-      detail.appendChild(
-        h('div', { class: 'git-note', text: 'Select a commit or a branch to see what can be done there.' })
-      );
-      return;
-    }
-    var refs = ctx.byHash[p.hash] || [];
-    detail.appendChild(
-      h(
-        'div',
-        { class: 'git-line' },
-        h('span', { class: 'git-hash', text: text(p.commit.short, p.hash.slice(0, 7)) }),
-        h('span', { class: 'git-subject', text: text(p.commit.subject, '(no message)') })
-      )
-    );
-    if (refs.length) {
-      detail.appendChild(
-        h(
-          'div',
-          { class: 'git-map-tags' },
-          refs.map(function (r) {
-            return h('span', {
-              class: 'git-map-tag' + (r.current === true ? ' current' : ''),
-              text: text(r.name, '') + (r.current === true ? ' · HEAD' : ''),
-            });
-          })
-        )
-      );
-    }
-    var buttons = ctx.commitActions.map(function (a) {
-      return commitActionButton(a, p.hash);
-    });
-    var branches = refs.length ? actionById(ctx.g, BRANCHES_ACTION) : null;
-    if (branches) buttons.push(actionButton(branches));
-    if (buttons.length) detail.appendChild(h('div', { class: 'git-map-actions' }, buttons));
-  }
-
-  /**
-   * What the map is NOT showing, in words.
-   *
-   * The window is always named, even when nothing was cut: "the newest N commits" is what stops a complete-
-   * looking picture being read as the whole history. Each further sentence is added only when its bound
-   * actually bit, so the note never claims a truncation that did not happen.
-   */
-  function mapNote(ctx, available) {
-    var lines = ['Showing the newest ' + ctx.total + ' commits.'];
-    if (available > ctx.total) lines.push('Older commits in this payload are not drawn.');
-    var cutOff = ctx.model.order.some(function (p) {
-      return p.parents.some(function (hash) {
-        return !ctx.model.placed[hash];
+    var lines = ['Showing the newest ' + total + ' commits across every branch.'];
+    var cutOff = model.rows.some(function (row) {
+      return row.parents.some(function (hash) {
+        return !placed[hash];
       });
     });
     if (cutOff) lines.push('Lines continuing past the oldest commit shown have no edge drawn.');
-    var refs = list(ctx.g.refs);
-    var anchored = refs.filter(function (r) {
-      return !!ctx.model.placed[text(r.hash, '')];
-    });
-    var away = refs.length - anchored.length;
+    var away = list(g.refs).filter(function (r) {
+      var hash = text(r.hash, '');
+      return hash !== '' && !placed[hash];
+    }).length;
     if (away > 0) {
       lines.push(away + (away === 1 ? ' branch points' : ' branches point') + ' outside this window.');
-    }
-    if (anchored.length > MAX_MAP_REFS) {
-      lines.push(anchored.length - MAX_MAP_REFS + ' more are not listed.');
+      if (model.lanes === 1) {
+        lines.push('Every commit here is on one line; no branch point falls inside this window.');
+      }
     }
     return h('div', { class: 'git-note', text: lines.join(' ') });
   }
@@ -1088,6 +967,8 @@
 
   // The strip, so the embedded chat pane heads itself with the same two destinations rather than a copy.
   D.gitViewTabs = viewTabs;
+  // The lane assignment, exported so it can be tested as arithmetic rather than through pixel positions.
+  D.gitLanes = layoutLanes;
   D.buildGitHeadCard = buildGitHeadCard;
   D.buildGitActionsCard = buildGitActionsCard;
   D.buildGitHistoryCard = buildGitHistoryCard;

@@ -17,7 +17,13 @@ import java.util.concurrent.atomic.AtomicInteger
 @Service(Service.Level.PROJECT)
 class ChatSessionManager(private val project: Project) : Disposable {
 
-    /** Notified when a session is created/removed so the tool window can sync its tabs. */
+    /**
+     * Notified when a session is registered or removed.
+     *
+     * It fires from inside [gitChatOrCreate]'s lock, so an implementation must not wait on another thread —
+     * see that method. Its consumer is `ui.GitChatConversation`, which needs to hear about a Git chat created
+     * by a caller that did not go through it.
+     */
     interface Listener {
         fun onSessionsChanged() {}
     }
@@ -67,7 +73,21 @@ class ChatSessionManager(private val project: Project) : Disposable {
      * Creating a session makes it the manager's ACTIVE one, and there is no tab selection coming to settle
      * that any more — so "the active chat", which is what every dialog outside the tool window asks for,
      * would silently become a conversation with no tab. Whatever was active stays active.
+     *
+     * **Synchronised because it is a check-then-act, and [sessions] being thread-safe does not make it one.**
+     * A `CopyOnWriteArrayList` makes each operation atomic and says nothing about a pair of them: two callers
+     * can both read no Git chat and both create one, and the second `claude` process is invisible — it is not
+     * a tab, so nothing on screen would show it, and the two would each hold half the context of what was
+     * asked while running commands against the same working tree. Every caller today is a UI gesture on the
+     * EDT and would never collide; the lock is what stops that from being an unwritten precondition of a
+     * `public` method with three call sites.
+     *
+     * It spans [fireChanged] deliberately, so a listener sees the new session rather than a moment in which
+     * there is not one yet. Safe because no listener waits on another thread: the one that reaches back in
+     * here (`ui.GitChatConversation`, which needs exactly this door covered — it is the creation path that
+     * does not go through it) runs on this same thread and takes no lock of its own on the way.
      */
+    @Synchronized
     fun gitChatOrCreate(): ClaudeSession {
         gitChat()?.let { return it }
         val previous = active

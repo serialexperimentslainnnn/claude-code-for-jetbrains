@@ -54,9 +54,11 @@ internal object GitContextActions {
         OpenGitLogAction(project),
     )
 
-    // NB there is deliberately no Git Log button in the title bar. The one title-bar slot Git gets belongs to
-    // the door that is otherwise invisible — [GitPromptedActions.toolbarAction], the integration, whose gear
-    // entries hide themselves. Reading history is already discoverable from the gear menu below.
+    // NB there is deliberately no Git Log button anywhere but here. The tool window has no title actions at
+    // all any more, and the chat's own action row carries exactly ONE Git control: the door to the repository
+    // view (`app-composer-actions.js` → `openGitView`), which is the entry that would otherwise be invisible
+    // on a project that is not a repository yet. Reading history is already discoverable from this menu, so a
+    // button for it would spend the one place people look on the surface that needs it least.
 
     // ── what the entries say (pure: this is what the tests pin) ───────────────────────────────────────────────
 
@@ -102,6 +104,13 @@ internal object GitContextActions {
     /**
      * Reads the branch and the last [GitHistoryService.DEFAULT_COMMIT_LIMIT] commits **off the EDT**, then
      * offers them in a chooser.
+     *
+     * **The commits are the CHECKED-OUT branch's, and that is a promise this entry makes twice on screen** —
+     * in its own label (*Recent Commits on `<branch>`…*) and in the chooser's title, which names the branch and
+     * the short `HEAD`. So it takes the read at its default scope, [dev.lain.claudejb.git.GitLogScope]'s narrow
+     * one, and the dashboard's commit graph is the surface that asks the same method for every line of
+     * development instead. Reading wider here would not look like a defect: the rows would render perfectly,
+     * under a title naming one branch, with nothing saying which of them came from somewhere else.
      *
      * Picking one opens the IDE's Git Log, and the popup's ad line says exactly that rather than implying the
      * log will land on that commit: [GitLogNavigator] exposes no jump-to-revision, and inventing one here would
@@ -206,8 +215,7 @@ internal object GitContextActions {
 
         /**
          * BGT: availability and the branch name are reads of the platform's in-memory repository registry — no
-         * Swing, no PSI, no editor — so there is no reason to make the menu wait for the EDT (the same reasoning
-         * spelled out on `ClaudeToolWindowFactory.CloseAllDiffsAction`).
+         * Swing, no PSI, no editor — so there is no reason to make the menu wait for the EDT.
          */
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
     }

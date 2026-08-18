@@ -31,6 +31,16 @@ import dev.lain.claudejb.git.GitAvailability
  * divider wherever the catalogue opens a block. The page's Git view draws buttons from that same list, so the
  * two surfaces cannot come to offer different things; a menu keeping its own copy of the ids is how they would.
  *
+ * **Two doors onto one action id, and only one of them builds an invocation.** The Git view's button goes
+ * through [GitIntegration], which constructs the `AnActionEvent`, populates its presentation and calls
+ * `ActionUtil.performAction`. This menu constructs nothing: the platform builds the event from the gear popup
+ * the entry was chosen in, so the data context, the place and the ui kind are all its own. That split is the
+ * first thing to settle about any report naming one of these actions — a defect reproducible from the gear
+ * menu cannot be caused, or fixed, by anything in [GitIntegration], and one reproducible only from the view's
+ * button cannot be fixed here. It is also why an entry here must never become a wrapper routing into that
+ * executor: a wrapper is a different action object, and it takes the icon, the shortcut and the platform's own
+ * enablement with it.
+ *
  * **The catalogue's ids are verified**, not remembered: every one appears in `vcs-git`'s own `META-INF/plugin.xml`
  * in the 253 distribution this plugin compiles against, either as a declared `<action id>` or as a `<reference>`
  * the descriptor would fail to load without. They are still resolved defensively — an id the running IDE does not

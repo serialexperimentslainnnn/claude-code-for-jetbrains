@@ -31,6 +31,7 @@ import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.git.GitLogNavigator
+import dev.lain.claudejb.git.GitLogScope
 import dev.lain.claudejb.git.GitRemoteProvider
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
@@ -188,8 +189,13 @@ internal class GitIntegration(private val project: Project) {
                 root = root,
             ),
             changes = changes,
-            commits = history.recentCommits(),
-            // The branch map's other half. Read here rather than on the page because only the IDE knows which
+            // EVERY line, not just the one HEAD is on, and that is the difference between a graph and a rail:
+            // a fork can only be drawn when both sides of it are in the list, so with `HEAD` alone the page has
+            // nothing to fork into and draws a straight line however good the layout is. Both arguments are
+            // named here rather than left to their defaults because the gear menu reads this same method and
+            // means one branch, and twenty commits, by it — see GRAPH_COMMIT_LIMIT for the second half.
+            commits = history.recentCommits(limit = GRAPH_COMMIT_LIMIT, scope = GitLogScope.EVERY_LINE_OF_DEVELOPMENT),
+            // The graph's other half. Read here rather than on the page because only the IDE knows which
             // refs exist: the commits carry their parents, which is the shape, and these say which line is
             // `main` and which one HEAD is on. Costs no process — it is the ref state already in memory.
             refs = history.refs(),
@@ -490,9 +496,40 @@ internal class GitIntegration(private val project: Project) {
      * **The data context is the whole of this function, and getting it wrong made every one of these buttons
      * do nothing.** It used to be `SimpleDataContext.getProjectContext(project)`, which carries exactly one
      * key. A platform action resolves its target from the context it is handed — the repository, the selected
-     * files, the component a popup will hang off — and when it cannot find one it disables itself in its
-     * `update`. `DataManager.getDataContext(component)` is what the platform gives its own menus: the project,
-     * the component, and every key the tool window's providers contribute.
+     * files, the change list — and when it cannot find one it disables itself in its `update`.
+     * `DataManager.getDataContext(component)` is what the platform gives its own menus: the project, the
+     * component, and every key the tool window's providers contribute.
+     *
+     * **What the context is NOT is a place for a popup to appear**, and reading it as one is what sends a
+     * report about a misbehaving popup to this file. An action that opens one decides that itself:
+     * `Git.Branches` is `git4idea.ui.branch.GitBranchesAction`, and its `actionPerformed` ends in
+     * `showCenteredInCurrentWindow(project)`, which centres on the focused component's outermost window or
+     * else the project frame and never asks the context for a component. Nothing passed from here can move,
+     * size or re-parent one of these popups.
+     *
+     * **Nor can one of them be a lightweight Swing surface drawn under the browser's native window** — the
+     * other thing a tool window made of JCEF invites people to assume. Both popup families on this path are
+     * native windows already: `AbstractPopup.init` sets its heavyweight flag unconditionally and
+     * `getMostSuitablePopupType()` answers `HEAVYWEIGHT` whenever it is set, while an action menu is an
+     * `ActionPopupMenuImpl` menu, which extends `JBPopupMenu` — whose constructor calls
+     * `setLightWeightPopupEnabled(false)`. So there is nothing here to force heavyweight, and the JVM-wide
+     * switch that would force it belongs to the IDE and not to a plugin: it would change nothing on this path
+     * and every popup in the application. `IdeActionApiContractTest` fails the build if one appears.
+     *
+     * **Nor, on Wayland, can one of them end up hanging off the browser's surface** — the same assumption a
+     * layer down, and the one worth refuting in writing because a compositor decides who receives pointer
+     * events while a popup is open, which makes it sound like the whole explanation for a popup that shows and
+     * then ignores the mouse. It is not, and the reason is structural rather than circumstantial:
+     * `WLComponentPeer.getToplevelFor` walks the AWT container chain and returns the first `Window` that is not
+     * itself a popup, while `AbstractPopup.show` forces `SwingUtilities.getRoot(owner)` on Wayland. A child
+     * component is not a candidate in either, so the parent toplevel is the project frame no matter what is
+     * focused — which is also why "take focus out of the chat before invoking" is not a fix waiting to be
+     * written. It does not even depend on how the browser is rendered, though that settles it a second time:
+     * under the IDE's default (`ide.browser.jcef.osr.enabled`) the browser is off-screen-rendered, i.e. Swing
+     * painting pixels, with no native surface to hand a grab to. The ONE thing that changes the owner is
+     * undocking the tool window, because `AbstractPopup.getTargetWindow` returns a `FloatingDecorator` before
+     * it ever reaches the frame. So a popup on this path that misbehaves under a compositor is the IDE's;
+     * `docs/TROUBLESHOOTING.md` carries the symptom, what it is not, and the way round it.
      *
      * **The update must be RUN, and `performAction` does not run it.** Read on 253: `performAction` only
      * *reads* `event.presentation.isEnabled` and returns `ignored("action is disabled")` — so with a
@@ -535,8 +572,9 @@ internal class GitIntegration(private val project: Project) {
             context,
             null,
             ActionPlaces.TOOLWINDOW_CONTENT,
-            // TOOLBAR, not NONE: it IS a button, and the ui kind is what a popup-based action reads to decide
-            // how to present itself.
+            // TOOLBAR, not NONE: this is a button in the page's action bar, and the kind is what
+            // `AnActionEvent.isFromActionToolbar` answers from — an action entitled to behave differently
+            // there would otherwise be told the press came from nowhere.
             ActionUiKind.TOOLBAR,
             null,
         )
@@ -563,6 +601,35 @@ internal class GitIntegration(private val project: Project) {
     companion object {
 
         fun getInstance(project: Project): GitIntegration = project.service()
+
+        /**
+         * How much history the commit graph asks for, and why it is not [GitHistoryService.DEFAULT_COMMIT_LIMIT].
+         *
+         * That one answers *"what did the last stretch of work do"* about ONE branch, where twenty rows is a
+         * generous screenful. This answers *"where does this branch sit against the others"*, and the same
+         * number cannot serve both: twenty commits shared out over every live line is four or five each, and a
+         * branch graph with five commits per branch draws no fork at all — the same straight line the
+         * branch-only `git log` used to produce, reached from the other end.
+         *
+         * **The floor is what a REAL repository needs, and it is measured rather than guessed.** The window has
+         * to reach the most recent bifurcation, and the worst case is not a busy repository — it is a release
+         * branch that has been linear for a long stretch, where the nearest other line is as far back as the
+         * branch is old. Walking this one with the command the gateway issues
+         * (`git log --graph --oneline --topo-order HEAD --branches --remotes --tags`), the first row that is
+         * not on the checked-out line sits in the seventies and the first merge just behind it. A hundred
+         * clears that with room for the branch to keep advancing before the fork slides out of the window;
+         * re-run that command before changing the number, because it is the only thing that justifies it.
+         *
+         * **The ceiling is cost, and it is real.** This is one `git log` over every ref that materialises the
+         * changed-file list of every commit it returns, [refresh] runs it several times a turn while the Git
+         * view is open, and the page then draws a row and an SVG gutter for each. Raising it buys older
+         * history and pays a slower read and a taller card for it.
+         *
+         * Nothing downstream trims this further — `JcefGitData` serialises what it is handed and the page draws
+         * every row it is sent — so this IS the number of commits on screen, and the card's own note is what
+         * says so when a line continues past the oldest of them.
+         */
+        const val GRAPH_COMMIT_LIMIT = 100
 
         /** The catalogue ids this file knows how to act on. */
         const val INIT = "init"

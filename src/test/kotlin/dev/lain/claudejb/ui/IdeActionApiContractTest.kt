@@ -5,6 +5,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.Presentation
 import com.intellij.openapi.project.Project
+import dev.lain.claudejb.MainSources
 import dev.lain.claudejb.session.AgentStatus
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefGitData
@@ -36,6 +37,13 @@ import java.lang.reflect.Method
  * Reflection rather than a direct call because these are *existence and shape* assertions: a compile-time call
  * proves the symbol is on the compile classpath and nothing about the parameter list we depend on, which is
  * exactly what changed under `TerminalLauncher`.
+ *
+ * **It also pins the two routes deliberately NOT taken**, because both are what an IDE popup misbehaving over
+ * a JCEF tool window tempts the next person into. One is switching the popup weight, which is a JVM-wide
+ * setting owned by the IDE and would change every popup in the application to no effect on this path — the
+ * platform already makes all of them native windows. The other is having the gear submenu invoke through
+ * [GitIntegration] instead of handing the action over, which costs the icon, the shortcut and the platform's
+ * own enablement. Neither failure is visible in a diff that looks reasonable, so each has an assertion.
  */
 class IdeActionApiContractTest {
 
@@ -88,11 +96,18 @@ class IdeActionApiContractTest {
     }
 
     @Test
-    fun `the ui kind used for a programmatic invocation still exists`() {
-        val field = load("com.intellij.openapi.actionSystem.ActionUiKind").getField("NONE")
+    fun `the ui kind the invocation actually names still exists`() {
+        // The one the code passes, not a plausible neighbour: these are pressed as buttons in the page's
+        // action bar, so TOOLBAR is what `AnActionEvent.isFromActionToolbar` should answer. Pinning a
+        // constant nothing uses is an assertion that stays green while the used one is removed.
+        val field = load("com.intellij.openapi.actionSystem.ActionUiKind").getField("TOOLBAR")
         assertFalse(
             field.isAnnotationPresent(java.lang.Deprecated::class.java) || field.isAnnotationPresent(Deprecated::class.java),
-            "ActionUiKind.NONE is deprecated — a programmatic invocation has no UI to name.",
+            "ActionUiKind.TOOLBAR is deprecated — GitIntegration names it on every IDE invocation.",
+        )
+        assertTrue(
+            codeOf("ui/GitIntegration.kt").any { "ActionUiKind.TOOLBAR" in it },
+            "GitIntegration no longer names ActionUiKind.TOOLBAR; pin the kind it does name instead of this one.",
         )
     }
 
@@ -184,7 +199,68 @@ class IdeActionApiContractTest {
         )
     }
 
+    // ── the context the action is handed, and the two shortcuts that must not be taken ────────────────────────
+
+    @Test
+    fun `the IDE invocation is given the tool window's own component, not the project alone`() {
+        // The regression this guards is silent by construction: with a project-only context the action finds
+        // no target, disables itself in `update`, and `performAction` returns `ignored` — a button that does
+        // nothing, with no exception and nothing on screen. That is the bug this call site already had once.
+        val code = codeOf("ui/GitIntegration.kt")
+        assertTrue(
+            code.any { "ClaudeToolWindowFactory.contextComponent(" in it },
+            "GitIntegration no longer builds its data context from the tool window's component.",
+        )
+        assertTrue(
+            code.any { "DataManager.getInstance().getDataContext(" in it },
+            "GitIntegration no longer asks DataManager for the component's context, so every key the tool " +
+                "window's providers contribute is gone and the actions are back to deciding on one key.",
+        )
+    }
+
+    @Test
+    fun `nothing in this plugin decides how the IDE draws its popups`() {
+        // Popup weight is the reflex fix when a platform popup misbehaves over an embedded browser, and here
+        // it is both useless and out of proportion. Useless: every popup on this path is a native window
+        // already — `AbstractPopup.init` forces heavyweight, and an action menu extends `JBPopupMenu`, whose
+        // constructor calls `setLightWeightPopupEnabled(false)`. Out of proportion: both routes to it, the
+        // static Swing switch and the `idea.popup.weight` system property, are JVM-wide and belong to the
+        // IDE. The property's name is a string literal and therefore invisible once literals are reduced
+        // away, so the guard is on the call that would set any of them.
+        val offenders = MainSources.files()
+            .flatMap { file -> MainSources.codeOf(file).map { file.name to it } }
+            .filter { (_, line) -> "LightWeightPopupEnabled" in line || "System.setProperty(" in line }
+            .map { (name, line) -> "$name: ${line.trim()}" }
+        assertEquals(
+            emptyList<String>(),
+            offenders,
+            "This plugin sets a JVM-wide UI property. Whatever it is meant to fix, it changes behaviour for " +
+                "every window in the user's IDE, and popup weight in particular is already decided by the " +
+                "platform. Report the defect instead of reaching for a global switch.",
+        )
+    }
+
+    @Test
+    fun `the gear submenu hands the platform its own actions instead of invoking them`() {
+        // The menu and the Git view's buttons are two doors onto one action id, and only the second builds an
+        // invocation. Turning an entry here into a wrapper that routes into GitIntegration would look like a
+        // fix for anything the menu does wrong, and would quietly cost the icon, the shortcut and the
+        // platform's own enablement — the entire reason these are the IDE's action objects.
+        val code = codeOf("ui/GitIdeMenu.kt")
+        listOf("createEvent", "ActionUtil.", "actionPerformed").forEach { forbidden ->
+            assertTrue(
+                code.none { forbidden in it },
+                "GitIdeMenu now invokes an action itself ('$forbidden'). It resolves ids and hands the " +
+                    "objects over; the platform builds the event from the menu the entry was chosen in.",
+            )
+        }
+    }
+
     private fun actionUtil(): Class<*> = load("com.intellij.openapi.actionSystem.ex.ActionUtil")
+
+    /** [relative]'s code with comments and string literals reduced away, so a KDoc cannot satisfy a scan. */
+    private fun codeOf(relative: String): List<String> =
+        MainSources.codeOf(File(MainSources.root("src/main/kotlin"), "dev/lain/claudejb/$relative"))
 
     /**
      * Loads a class **without running its static initializer**: several platform classes refuse to initialize
