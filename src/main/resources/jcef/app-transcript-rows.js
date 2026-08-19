@@ -100,11 +100,21 @@
     { token: '5m', label: '5 minutes' },
     { token: '15m', label: '15 minutes' },
     { token: '30m', label: '30 minutes' },
-    { token: '4h', label: '4 hour' },
-    { token: '8h', label: '8 hour' },
+    { token: '4h', label: '4 hours' },
+    { token: '8h', label: '8 hours' },
     { token: 'ide', label: 'Until IDE closes' },
     { token: 'forever', label: 'Forever' },
   ];
+
+  function placeByAnchor(floating, anchor) {
+    var margin = 8;
+    var r = anchor.getBoundingClientRect();
+    var left = Math.min(Math.round(r.left), window.innerWidth - floating.offsetWidth - margin);
+    var top = r.bottom + 4;
+    if (top + floating.offsetHeight > window.innerHeight - margin) top = r.top - floating.offsetHeight - 4;
+    floating.style.left = Math.max(margin, left) + 'px';
+    floating.style.top = Math.round(Math.max(margin, top)) + 'px';
+  }
 
   function buildBlockNotice(rule) {
     var node = el('div', { class: 'notice guard-block' });
@@ -120,44 +130,80 @@
       text: 'Disable rule',
       attrs: { type: 'button', 'aria-expanded': 'false', 'aria-haspopup': 'menu' },
     });
+    var options = [];
+    var isOpen = false;
+
+    function focusOption(at) {
+      var target = options[(at + options.length) % options.length];
+      if (target) target.focus({ preventScroll: true });
+    }
+
+    function onOutside(e) {
+      if (menu.contains(e.target) || link.contains(e.target)) return;
+      setOpen(false);
+    }
+
+    function onEscape(e) {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      link.focus();
+    }
+
+    function onViewChange() {
+      setOpen(false);
+    }
 
     function setOpen(open) {
-      if (open) {
-        menu.removeAttribute('hidden');
-      } else {
-        menu.setAttribute('hidden', 'hidden');
-      }
+      if (open === isOpen) return;
+      isOpen = open;
       link.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!open) {
+        menu.setAttribute('hidden', 'hidden');
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onEscape, true);
+        document.removeEventListener('scroll', onViewChange, true);
+        window.removeEventListener('resize', onViewChange);
+        return;
+      }
+      menu.removeAttribute('hidden');
+      placeByAnchor(menu, link);
+      document.addEventListener('mousedown', onOutside, true);
+      document.addEventListener('keydown', onEscape, true);
+      document.addEventListener('scroll', onViewChange, true);
+      window.addEventListener('resize', onViewChange);
+      focusOption(0);
     }
 
     link.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      setOpen(link.getAttribute('aria-expanded') !== 'true');
+      setOpen(!isOpen);
     });
     menu.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        link.focus();
-      }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      var step = e.key === 'ArrowDown' ? 1 : -1;
+      var at = options.indexOf(document.activeElement);
+      focusOption(at < 0 ? (step > 0 ? 0 : options.length - 1) : at + step);
     });
 
     SUSPEND_DURATIONS.forEach(function (d) {
-      menu.appendChild(
-        el('button', {
-          class: 'guard-disable-option',
-          text: d.label,
-          attrs: { type: 'button', role: 'menuitem' },
-          on: {
-            click: function (e) {
-              e.preventDefault();
-              e.stopPropagation();
-              safeSend({ type: 'guardSuspend', rule: String(rule), duration: d.token });
-              setOpen(false);
-            },
+      var option = el('button', {
+        class: 'guard-disable-option',
+        text: d.label,
+        attrs: { type: 'button', role: 'menuitem' },
+        on: {
+          click: function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            safeSend({ type: 'guardSuspend', rule: String(rule), duration: d.token });
+            setOpen(false);
+            link.focus();
           },
-        })
-      );
+        },
+      });
+      options.push(option);
+      menu.appendChild(option);
     });
 
     var actions = el('div', { class: 'guard-block-actions' });
