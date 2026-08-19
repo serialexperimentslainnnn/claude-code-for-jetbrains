@@ -106,6 +106,23 @@ class SecurityRuleFamiliesTest {
     }
 
     @Test
+    fun `a redirect's target ends at the shell separator, not at the next space`() {
+        listOf(
+            "which cutycapt 2>/dev/null; echo ok",
+            "git status 2>/dev/null | head",
+            "npm test >/dev/null && echo ok",
+            "(git status 2>/dev/null)",
+            "git status >/dev/null;",
+            "ls /usr/lib64 2>/dev/null; ls /home/me/proj",
+        ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+
+        val alsoWritesForReal = bash("ls /usr 2>/dev/null; echo hi > /etc/motd")
+        assertEquals(Verdict.DENY, v(alsoWritesForReal))
+        assertEquals(SecurityRule.SHELL_FILE_WRITE, rule(alsoWritesForReal))
+        assertEquals(Verdict.DENY, v(bash("echo hi >/dev/nullx")))
+    }
+
+    @Test
     fun `with no proxy declared the bypass rule says nothing at all`() {
         assertEquals(Verdict.ALLOW, v(bash("curl -x http://other:3128 https://api.example.com")))
         assertEquals(Verdict.ALLOW, v(bash("http_proxy= curl https://api.example.com")))
