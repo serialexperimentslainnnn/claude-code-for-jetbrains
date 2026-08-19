@@ -346,24 +346,32 @@ class AgentRegistry(
      *    outranks everything below it, its parent included, and that ordering is the whole point of the rule:
      *    a subagent finishes and hands its answer back while the agent that spawned it goes on working, which
      *    is not an edge case, it is what a subagent IS. Copying the parent's state instead — which is what
-     *    rule 3 used to do for EVERY child, unconditionally, before its own evidence was ever read — meant a
+     *    rule 4 used to do for EVERY child, unconditionally, before its own evidence was ever read — meant a
      *    finished subagent reported RUNNING for as long as its parent ran, and everything downstream repeated
      *    it faithfully: a dot that never turned in the tab bar, a Task card fading for ever (
      *    [dev.lain.claudejb.session.ClaudeSession] hands that card the AGENT's state), and a row the Workloads
      *    window could never expire, since it exempts running work by design. The instant is [sealCompletion]'s,
      *    and only when something live is behind the agent — see there.
-     * 3. **Its parent's ending — for a child that never closed a turn of its own.** A NESTED agent has no
+     * 3. **Its OWN transcript, when the work STOPPED without finishing** ([AgentEnding.Ending.ABORTED]) — the
+     *    agent was cancelled, or the binary cut it off. It ranks with rule 2 and not below it: both are the
+     *    file stating an ending of its own, and they differ only in which colour the ending deserves. Without
+     *    this verdict such a transcript fell through to rules 4 and 5 as merely "unfinished" and read as live
+     *    work FOR EVER — nothing further was ever going to be appended that could change the answer, and a
+     *    resumed-then-cancelled one was worse still, since [AgentEnding.Ending.RESUMED] answers RUNNING
+     *    unconditionally. That is the "agents stuck on green" bug, and 155 of the 672 transcripts on one
+     *    developer machine end exactly this way.
+     * 4. **Its parent's ending — for a child that never closed a turn of its own.** A NESTED agent has no
      *    `toolUseId` — it was spawned inside another agent's turn, so no Task call of ours ever named it — and
      *    rule 1 can never settle it. It cannot outlive the turn that spawned it, so a parent that has STOPPED
      *    stops it too, with the parent's instant: the child ended when the turn did. A parent that is still
      *    running settles nothing; all it says is that there is a live process behind the child, which is what
      *    `live` below reads it as.
-     * 4. **A live process behind it → still working.** Three witnesses, making the same claim: its Task call
+     * 5. **A live process behind it → still working.** Three witnesses, making the same claim: its Task call
      *    is in [observedToolUse] (this process launched it), its parent is still running (the turn it belongs
      *    to is), or the chat was never restored (everything in it was started here). An unfinished transcript
      *    then means in flight.
-     * 5. **Otherwise it was cut off.** A RESTORED chat's agent whose transcript never closed a turn belongs to
-     *    a process that is gone. That stricter reading is why rules 4 and 5 are separate at all: the same
+     * 6. **Otherwise it was cut off.** A RESTORED chat's agent whose transcript never closed a turn belongs to
+     *    a process that is gone. That stricter reading is why rules 5 and 6 are separate at all: the same
      *    unfinished file means "still working" for an agent we watched start and "cut off" for one read back
      *    off disk, and collapsing the two is how every agent in a freshly reopened IDE came up red.
      *    No instant comes with it — the status is read off a file, not watched, so nothing here can vouch for
@@ -375,8 +383,8 @@ class AgentRegistry(
      *
      * **Why [restoring] cannot decide this on its own**: it is set when a chat comes back from disk and is
      * never cleared (it is what admits that chat's own subagents), so an agent launched AFTERWARDS in that
-     * same chat is in a "restored" chat too — and since restoring open chats is the default, reading rule 5
-     * off that flag alone painted live work red. Rule 4's other two witnesses are what keep it honest.
+     * same chat is in a "restored" chat too — and since restoring open chats is the default, reading rule 6
+     * off that flag alone painted live work red. Rule 5's other two witnesses are what keep it honest.
      *
      * [resolved] holds the agents already built by this scan, parents first — see the sort in [scan].
      */
@@ -404,6 +412,10 @@ class AgentRegistry(
 
             // The file grew past a turn it had already closed: working again, whoever is asking.
             AgentEnding.Ending.RESUMED -> Settled(AgentStatus.RUNNING, null)
+
+            // The file says the work STOPPED without finishing — cancelled, or cut off by the binary. It is an
+            // ending like any other, so it is dated like any other; only the colour differs.
+            AgentEnding.Ending.ABORTED -> Settled(AgentStatus.STOPPED, if (live) sealCompletion(meta) else null)
 
             // The file has NOT closed a turn — see [unfinishedFileState] for who decides then.
             AgentEnding.Ending.UNFINISHED, null -> unfinishedFileState(meta, streamStatus, parent, live)
