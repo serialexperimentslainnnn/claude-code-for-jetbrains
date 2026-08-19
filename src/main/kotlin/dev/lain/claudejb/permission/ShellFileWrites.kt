@@ -17,7 +17,7 @@ object ShellFileWrites {
         RegexOption.IGNORE_CASE,
     )
 
-    private val REDIRECT = Regex("""\d*>{1,2}\|?(?!&)\s*(\S+)""")
+    private val REDIRECT = Regex("""\d*>{1,2}\|?(?!&)\s*([^\s;&|<>()]+)""")
 
     internal fun shellFileWrite(input: JsonObject): String? {
         for (raw in ToolInputScanner.commandCandidates(input)) {
