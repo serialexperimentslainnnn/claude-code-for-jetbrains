@@ -65,7 +65,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.Interrupt ->
             if (m.scope == JcefBridge.SCOPE_GIT) panel.gitChat.interrupt() else session.interrupt()
 
-        JcefBridge.Msg.CycleMode -> session.cyclePermissionMode()
+        JcefBridge.Msg.CycleMode -> session.settings.cyclePermissionMode()
 
         is JcefBridge.Msg.RemoveQueued -> session.removeQueued(m.index)
 
@@ -73,21 +73,21 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
     }
 
     private fun onSettings(m: JcefBridge.Msg.Settings) = when (m) {
-        is JcefBridge.Msg.ChangeModel -> session.changeModel(m.value)
+        is JcefBridge.Msg.ChangeModel -> session.settings.changeModel(m.value)
 
-        is JcefBridge.Msg.ChangeMode -> session.changePermissionMode(m.wire)
+        is JcefBridge.Msg.ChangeMode -> session.settings.changePermissionMode(m.wire)
 
-        is JcefBridge.Msg.ChangeEffort -> session.changeEffort(m.value)
+        is JcefBridge.Msg.ChangeEffort -> session.settings.changeEffort(m.value)
 
         is JcefBridge.Msg.ChangeThinking ->
-            session.changeThinkingTokens(if (m.on) ClaudeSession.THINKING_ON else null)
+            session.settings.changeThinkingTokens(if (m.on) ClaudeSession.THINKING_ON else null)
 
         is JcefBridge.Msg.ChangeVibe -> {
             ChatTheme.setVibeMode(m.on)
             JcefChatPanel.broadcastTheme()
         }
 
-        is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
+        is JcefBridge.Msg.ChangeProvider -> session.settings.changeProvider(Provider.fromId(m.id))
 
         is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
 

@@ -104,7 +104,23 @@ class ClaudeSession(
     private val reconciler = TranscriptReconciler(transcript)
     private val diffs = DiffLifecycleManager(project)
     private val rollback = RollbackManager(project, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
-    private val controlClient = SessionControlClient(write = ::write)
+    internal val controlClient = SessionControlClient(write = ::write)
+
+    /**
+     * Changing a LIVE session's options — `session.settings.changeModel(…)`, `…changePermissionMode(…)`.
+     *
+     * Seven verbs that were members here. Internal visibility on a PROPERTY costs nothing against the size of
+     * this class's API (detekt counts functions, and rightly: a property is a thing you read, a function is a
+     * thing that can act on a running session), which is what makes moving the verbs out an actual reduction
+     * rather than a rename.
+     */
+    val settings = SessionLiveSettings(
+        session = this,
+        project = project,
+        edt = ::edt,
+        fireState = ::fireState,
+        write = ::write,
+    )
 
     /**
      * Everything the UI ASKS the binary on demand — see [SessionQueries].
@@ -160,66 +176,81 @@ class ClaudeSession(
     )
 
     // --- session/runtime state (read by the GUI) ---
+    //
+    // Everything from `model` to `strictMcpConfig` is READ by the UI and WRITTEN by exactly one collaborator:
+    // [SessionLiveSettings], which owns the seven verbs that change a live session's options. The setters are
+    // `internal` rather than `private` for that reason, and `SessionStateOwnershipTest` is what keeps the
+    // sentence true — the compiler cannot, since `internal` is the whole module. Adding a second writer is a
+    // decision somebody argues for in review, not something that happens by autocomplete.
     @Volatile var sessionId: String? = null
         internal set
 
     @Volatile var model: String? = null
-        private set
+        internal set
 
     @Volatile var effort: String? = null
-        private set
+        internal set
 
+    /**
+     * The permission mode a turn launches under.
+     *
+     * The one property in this block worth naming on its own: `bypassPermissions` lives here, so whoever can
+     * write this can stop the plugin asking about ordinary tool calls. It never opens the deterministic guard —
+     * `PermissionBroker` refuses to let the mode answer a guard card at all — but it does decide everything
+     * outside it, which is why the ownership test above treats a new writer of this field as a failure rather
+     * than a finding.
+     */
     @Volatile var permissionMode: String = "default"
-        private set
+        internal set
 
     @Volatile var thinkingTokens: Int? = null
-        private set
+        internal set
 
     @Volatile var allowedTools: String = ""
-        private set
+        internal set
 
     @Volatile var disallowedTools: String = ""
-        private set
+        internal set
 
     @Volatile var settingSources: String = "user,project,local"
-        private set
+        internal set
 
     /** Whether to wire JetBrains' own MCP server. Independent of [customMcpServers]. */
     @Volatile var ideMcpEnabled: Boolean = false
-        private set
+        internal set
 
     /** JetBrains transport: "sse" / "streamable-http" (localhost at [ideMcpPort]) or "stdio" (synthesized from IDE paths). */
     @Volatile var ideMcpTransport: String = "sse"
-        private set
+        internal set
 
     @Volatile var ideMcpPort: Int = DEFAULT_IDE_MCP_PORT
-        private set
+        internal set
 
     /** User-defined extra MCP servers, as a JSON object with the same shape as `mcpServers` (name → server). */
     @Volatile var customMcpServers: String = ""
-        private set
+        internal set
 
     @Volatile var includePartialMessages: Boolean = true
-        private set
+        internal set
 
     // E6 advanced launch options (null/empty = flag omitted). Captured into the LaunchOptions snapshot per (re)start.
     @Volatile var maxTurns: Int? = null
-        private set
+        internal set
 
     @Volatile var maxBudgetUsd: Double? = null
-        private set
+        internal set
 
     @Volatile var fallbackModel: String? = null
-        private set
+        internal set
 
     @Volatile var addDirs: List<String> = emptyList()
-        private set
+        internal set
 
     @Volatile var betas: String? = null
-        private set
+        internal set
 
     @Volatile var strictMcpConfig: Boolean = false
-        private set
+        internal set
 
     @Volatile var outputStyle: String = "default"
         private set
@@ -422,7 +453,9 @@ class ClaudeSession(
 
     /** Env resolved by sourcing the user's shell script (blocking, ~seconds). Cached so a restart doesn't re-source it;
      *  invalidated in [stop] so a settings change to the source script is picked up on the next start. */
-    @Volatile private var cachedEnv: Map<String, String>? = null
+    // Internal, not private, for the same reason as the block above: switching provider invalidates it, and
+    // that verb lives in [SessionLiveSettings] now.
+    @Volatile internal var cachedEnv: Map<String, String>? = null
 
     // --- metadata from the initialize handshake (powers the GUI menus) ---
     var commands: List<SlashCommand> = emptyList()
@@ -976,7 +1009,7 @@ class ClaudeSession(
                 // binary doesn't actually offer it, re-resolve against the real catalog and push the correction
                 // so we never sit on a model it can't honour. Only touches the pin, never an explicit choice.
                 val pinMissing = info.models.isNotEmpty() && info.models.none { it.value == DEFAULT_MODEL }
-                if (model == DEFAULT_MODEL && pinMissing) changeModel(preferredDefault(info.models))
+                if (model == DEFAULT_MODEL && pinMissing) settings.changeModel(preferredDefault(info.models))
                 edt { fireMetadata() }
             },
         )
@@ -1347,7 +1380,7 @@ class ClaudeSession(
         // permissionMode, so flip it back to default (and push set_permission_mode) — otherwise the binary
         // proceeds out of plan while the chip stays stuck on "plan".
         if (request.isPlan && permissionMode == PermissionMode.PLAN.wire) {
-            changePermissionMode(PermissionMode.DEFAULT.wire)
+            settings.changePermissionMode(PermissionMode.DEFAULT.wire)
         }
     }
 
@@ -1422,173 +1455,15 @@ class ClaudeSession(
     }
 
     // -----------------------------------------------------------------------
-    // Runtime option controls (drive the GUI menus)
+    // Runtime option controls — all of them live in [settings] now
     // -----------------------------------------------------------------------
-
-    fun changeModel(value: String?) {
-        // "default" is no longer a selectable model (the UI pins a concrete tier). Map any legacy/persisted
-        // "default" to the preferred concrete model so both the display and what's sent to the binary agree;
-        // null stays null (unset — the Init handler fills it from the binary's reported model).
-        val resolved = if (value == RECOMMENDED_ALIAS) preferredDefaultModel() else value
-        val previous = model
-        model = resolved
-        if (isRunning()) {
-            // Correlated, not fire-and-forget, because "Other models" can offer a model this ACCOUNT cannot
-            // run (the list is curated from ids the binary knows — it cannot know what the plan grants). A
-            // refusal that only changed the pill would leave the tab pointed at a model every later turn
-            // fails on, with nothing saying why.
-            controlClient.send({ id -> ControlProtocol.setModelRequest(id, resolved) }) { res ->
-                if (!res.success) edt { revertModel(previous, resolved, res.error) }
-            }
-        }
-        fireState()
-    }
-
-    /**
-     * Puts the previously selected model back after the binary refused a change, and says so in the transcript.
-     *
-     * EDT-only (it writes session state the UI reads). Silent when a newer selection has raced ahead of this
-     * reply — reverting then would undo a choice the user made after the failure.
-     *
-     * Scope, stated because it is narrower than it looks: this catches a refusal of the `set_model` control
-     * request itself. A binary that ACCEPTS the id and only fails later, when the turn reaches the API, is a
-     * different signal and arrives as an ordinary turn error.
-     */
-    private fun revertModel(previous: String?, attempted: String?, error: String?) {
-        if (model != attempted) return
-        model = previous
-        // Labelled from the curated list, NOT from the UI layer: naming a model is not a rendering decision,
-        // and reaching into `ui.jcef` from here would invert the dependency this package deliberately keeps.
-        val name = attempted?.let { LegacyModels.labelFor(it) ?: it } ?: "That model"
-        val kept = previous?.let { LegacyModels.labelFor(it) ?: it } ?: "the previous model"
-        val reason = error?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
-        transcript.add(Speaker.SYSTEM, "$name is not available on this account$reason — kept $kept.")
-        fireState()
-    }
-
-    fun changePermissionMode(mode: String) {
-        permissionMode = mode
-        // Persist so new tabs / restarts launch in this mode instead of falling back to "default".
-        // `save()` is explicit since 5.5.0: the settings are the plugin's own file now, so nothing writes
-        // them for us and a mutation without it is a setting that silently does not stick.
-        ClaudeSettings.getInstance(project).update { it.permissionMode = mode }
-        if (isRunning()) {
-            val wire = SessionLauncher.binaryPermissionMode(permissionMode)
-            write(ControlProtocol.setPermissionModeRequest(ControlProtocol.newRequestId(), wire))
-        }
-        fireState()
-    }
-
-    /** Effort is a launch flag; it takes effect on the next (re)start. */
-    fun changeEffort(value: String?) {
-        effort = value
-        fireState()
-    }
 
     /** The active API provider (persisted in settings). Anthropic = native auth; others = own key. */
     val provider: Provider get() = ClaudeSettings.getInstance(project).provider
 
-    /**
-     * Switch the API provider. The provider's `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` are launch env, so the
-     * change requires a restart (we invalidate the cached env and resume via `--resume`).
-     *
-     * SECURITY: a third-party provider needs its OWN isolated key. If none is stored we do NOT switch and do
-     * NOT restart — we prompt the user to configure it (Settings → password safe). Restarting into a keyless
-     * third-party provider would silently fall back to Anthropic's native auth, which is confusing and not what
-     * the user asked for; and we never reuse Anthropic credentials for another provider.
-     */
-    fun changeProvider(target: Provider) {
-        val settings = ClaudeSettings.getInstance(project)
-        if (target == settings.provider) return
-        if (target.requiresApiKey && settings.getProviderApiKey(target).isBlank()) {
-            notifyConfigureProviderKey(target)
-            return
-        }
-        val wasRunning = isRunning()
-        settings.update { it.provider = target.id }
-        cachedEnv = null // provider env changed → re-resolve on next start
-        fireState()
-        if (wasRunning) {
-            systemNotice("Provider → ${target.label} — restarting session.")
-            restart(resume = true)
-        }
-    }
-
-    /** Warn that a third-party provider needs its own key and offer to open Settings. No provider switch. */
-    private fun notifyConfigureProviderKey(target: Provider) {
-        NotificationGroupManager.getInstance()
-            .getNotificationGroup(NOTIFICATION_GROUP)
-            .createNotification(
-                "Claude Code",
-                "${target.label} needs its own API key. Configure it in Settings — the provider isn't switched " +
-                    "until a key is set, and your Anthropic credentials are never used for another provider.",
-                NotificationType.WARNING,
-            )
-            .addAction(
-                NotificationAction.createSimple("Configure…") {
-                    ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
-                },
-            )
-            .notify(project)
-    }
-
-    /**
-     * Extended thinking is a launch flag now (`--thinking`), not a runtime control — the deprecated
-     * `set_max_thinking_tokens` no longer surfaces reasoning on current models. So toggling it restarts the
-     * session (resuming the same conversation via `--resume`) to re-launch with the new flag. Any non-null
-     * value means "on" (adaptive); the exact token count is no longer sent (adaptive lets the model decide).
-     */
-    fun changeThinkingTokens(tokens: Int?) {
-        if (tokens == thinkingTokens) return
-        val wasRunning = isRunning()
-        thinkingTokens = tokens
-        fireState()
-        if (wasRunning) {
-            val state = if (tokens != null) "on" else "off"
-            systemNotice("Extended thinking $state — restarting session.")
-            restart(resume = true)
-        }
-    }
-
-    /** Launch-time options (tool allow/deny lists, setting sources, partial streaming). Take effect on (re)start. */
-    fun configureLaunchOptions(
-        allowedTools: String,
-        disallowedTools: String,
-        settingSources: String,
-        includePartialMessages: Boolean,
-        ideMcpEnabled: Boolean = false,
-        ideMcpTransport: String = "sse",
-        ideMcpPort: Int = DEFAULT_IDE_MCP_PORT,
-        customMcpServers: String = "",
-        maxTurns: Int? = null,
-        maxBudgetUsd: Double? = null,
-        fallbackModel: String? = null,
-        addDirs: List<String> = emptyList(),
-        betas: String? = null,
-        strictMcpConfig: Boolean = false,
-    ) {
-        this.allowedTools = allowedTools
-        this.disallowedTools = disallowedTools
-        this.settingSources = settingSources
-        this.includePartialMessages = includePartialMessages
-        this.ideMcpEnabled = ideMcpEnabled
-        this.ideMcpTransport = ideMcpTransport.ifBlank { "sse" }
-        this.ideMcpPort = ideMcpPort.takeIf { it in VALID_PORTS } ?: DEFAULT_IDE_MCP_PORT
-        this.customMcpServers = customMcpServers
-        this.maxTurns = maxTurns
-        this.maxBudgetUsd = maxBudgetUsd
-        this.fallbackModel = fallbackModel
-        this.addDirs = addDirs
-        this.betas = betas
-        this.strictMcpConfig = strictMcpConfig
-        fireState()
-    }
-
-    fun cyclePermissionMode() {
-        val order = PERMISSION_MODES_CYCLE
-        val idx = order.indexOf(permissionMode).let { if (it < 0) 0 else it }
-        changePermissionMode(order[(idx + 1) % order.size])
-    }
+    // `changeProvider`, `changeThinkingTokens`, `configureLaunchOptions` and `cyclePermissionMode` moved to
+    // [SessionLiveSettings] with the other four, unchanged. They write this class's state and borrow three of
+    // its private effects; nothing about when a change restarts the session moved with them.
 
     /**
      * Refresh the VFS for files the binary changed during a rewind so the editor reflects them.
@@ -2650,7 +2525,7 @@ class ClaudeSession(
         const val DEFAULT_IDE_MCP_PORT = 64342
 
         /** Listenable TCP port range; anything outside it falls back to [DEFAULT_IDE_MCP_PORT]. */
-        private val VALID_PORTS = 1..65_535
+        internal val VALID_PORTS = 1..65_535
 
         /** Transports JetBrains' MCP server exposes; stdio is synthesized from the running IDE. */
         val IDE_MCP_TRANSPORTS = McpTransport.entries.map { it.wire }

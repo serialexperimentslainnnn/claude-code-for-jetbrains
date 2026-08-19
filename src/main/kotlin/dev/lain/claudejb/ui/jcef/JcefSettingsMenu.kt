@@ -111,9 +111,9 @@ internal object JcefSettingsMenu {
         if (!on) return
         val value = key.substringAfter(':', missingDelimiterValue = "")
         when (key.substringBefore(':', missingDelimiterValue = "")) {
-            MODEL -> session.changeModel(value)
-            EFFORT -> session.changeEffort(value)
-            MODE -> session.changePermissionMode(value)
+            MODEL -> session.settings.changeModel(value)
+            EFFORT -> session.settings.changeEffort(value)
+            MODE -> session.settings.changePermissionMode(value)
             else -> {}
         }
     }

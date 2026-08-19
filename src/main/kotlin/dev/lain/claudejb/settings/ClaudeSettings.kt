@@ -445,11 +445,11 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     /** Seeds the session's launch options from persisted defaults (call before start()). */
     fun applyTo(session: ClaudeSession) {
-        session.changeModel(state.model.ifBlank { null })
-        session.changeEffort(state.effort.ifBlank { null })
-        session.changePermissionMode(state.permissionMode.ifBlank { "default" })
-        session.changeThinkingTokens(state.thinkingTokens.takeIf { it > 0 })
-        session.configureLaunchOptions(
+        session.settings.changeModel(state.model.ifBlank { null })
+        session.settings.changeEffort(state.effort.ifBlank { null })
+        session.settings.changePermissionMode(state.permissionMode.ifBlank { "default" })
+        session.settings.changeThinkingTokens(state.thinkingTokens.takeIf { it > 0 })
+        session.settings.configureLaunchOptions(
             allowedTools = state.allowedTools,
             disallowedTools = state.disallowedTools,
             settingSources = state.settingSources,
