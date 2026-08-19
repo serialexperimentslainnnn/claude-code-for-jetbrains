@@ -5,16 +5,11 @@ import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionHistory
 
-/**
- * Headless: the [ChatSessionManager] project service owns the set of open chat tabs.
- * Tests only the in-memory session bookkeeping — never [ClaudeSession.start], which would spawn the binary.
- */
 class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
 
     private val manager get() = ChatSessionManager.getInstance(project)
 
     override fun tearDown() {
-        // Dispose any sessions created during the test before the platform tears the project down.
         try {
             manager.all().forEach { runCatching { manager.remove(it) } }
         } finally {
@@ -35,6 +30,37 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         assertEquals(1, manager.all().size)
     }
 
+    fun `test the fallback title reuses the lowest number no open chat is using`() {
+        val first = manager.create()
+        assertEquals("Chat 1", first.title)
+        val second = manager.create()
+        assertEquals("Chat 2", second.title)
+
+        manager.remove(first)
+        manager.remove(second)
+        assertEquals("Chat 1", manager.create().title)
+    }
+
+    fun `test a freed number is reused rather than skipped, so two chats never share a title`() {
+        val one = manager.create()
+        val two = manager.create()
+        val three = manager.create()
+        assertEquals(listOf("Chat 1", "Chat 2", "Chat 3"), manager.all().map { it.title })
+
+        manager.remove(two)
+        val replacement = manager.create()
+        assertEquals("Chat 2", replacement.title)
+        assertEquals(manager.all().size, manager.all().map { it.title }.toSet().size)
+        assertTrue(one.title == "Chat 1" && three.title == "Chat 3")
+    }
+
+    fun `test a renamed chat frees its number, because the number only tells unnamed chats apart`() {
+        val first = manager.create()
+        assertEquals("Chat 1", first.title)
+        first.title = "Release notes"
+        assertEquals("Chat 1", manager.create().title)
+    }
+
     fun `test create marks the new session active`() {
         val first = manager.create()
         assertSame(first, manager.active)
@@ -49,7 +75,6 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         manager.remove(second)
         assertFalse(second in manager.all())
         assertTrue(first in manager.all())
-        // active falls back to the last remaining session.
         assertSame(first, manager.active)
     }
 
@@ -57,7 +82,6 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         val first = manager.create()
         val second = manager.create()
         manager.remove(second)
-        // Sessions were never started, so their sessionId is null → no ids persisted.
         assertEquals(emptyList<String>(), SessionHistory.getInstance(project).openSessions())
         manager.remove(first)
         assertEquals(emptyList<String>(), SessionHistory.getInstance(project).openSessions())

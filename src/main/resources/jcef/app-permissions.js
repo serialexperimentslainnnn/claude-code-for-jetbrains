@@ -1,12 +1,6 @@
-/* app-permissions.js — A4 (permissions)
- * Renders cc.permissions(list) into CC.els.permissions per §PERMISSIONS.
- * Consumes app-core.js globals (window.CC: h, escape, markdown, send).
- * Vanilla ES2019, addEventListener only, no external resources, themeable via classes only.
- */
 (function () {
   'use strict';
 
-  // Safe accessors — every method must be callable before core fully initializes.
   function core() {
     return window.CC || null;
   }
@@ -34,18 +28,20 @@
     if (c && typeof c.send === 'function') c.send(obj);
   }
 
-  function isHttpUrl(u) {
-    if (!u || typeof u !== 'string') return false;
-    // Anchor at start; only http/https schemes are permitted.
-    return /^https?:\/\//i.test(u.trim());
+  function sendFor(card, obj) {
+    var scope = card && card.scope ? String(card.scope) : null;
+    if (scope) obj.scope = scope;
+    send(obj);
   }
 
-  // ---- card builders ---------------------------------------------------------
+  function isHttpUrl(u) {
+    if (!u || typeof u !== 'string') return false;
+    return /^https?:\/\//i.test(u.trim());
+  }
 
   function buildQuestionCard(card) {
     var id = card.id;
     var questions = Array.isArray(card.questions) ? card.questions : [];
-    // selections[questionText] = [labels...]
     var selections = {};
 
     var qBlocks = questions
@@ -76,7 +72,6 @@
                   } else {
                     selections[qText] = [label];
                   }
-                  // re-paint selected state within this question block
                   syncSelected();
                 },
               },
@@ -84,7 +79,6 @@
             if (preview) props.title = preview;
 
             var el = h('button', props, children[0], children[1] || null);
-            // tag for sync
             if (el) {
               el.__qText = qText;
               el.__label = label;
@@ -121,24 +115,22 @@
               Object.keys(selections).forEach(function (qText) {
                 answers[qText] = selections[qText].join(', ');
               });
-              send({ type: 'resolveQuestion', id: id, answers: answers });
+              sendFor(card, { type: 'resolveQuestion', id: id, answers: answers });
             },
           },
         }),
-        // Cancel = deny the AskUserQuestion tool (the model continues without an answer).
         h('button', {
           class: 'btn ghost',
           text: 'Cancel',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: false });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: false });
             },
           },
         })
       )
     );
 
-    // Reflect current selection state onto option buttons.
     function syncSelected() {
       if (!root) return;
       var opts = root.querySelectorAll('.q-option');
@@ -153,7 +145,6 @@
     return root;
   }
 
-  // Normalize a field's declared type to one of: string | number | integer | boolean.
   function fieldKind(f) {
     var t = f && f.type != null ? String(f.type).toLowerCase() : 'string';
     if (t === 'number') return 'number';
@@ -166,8 +157,6 @@
     var id = card.id;
     var e = card.elicitation || {};
 
-    // A field is { name, title?, type?, required? }.  Render form when the
-    // elicitation explicitly asks for a form OR when fields are supplied.
     var fields = Array.isArray(e.fields)
       ? e.fields.filter(function (f) {
           return f && f.name != null && String(f.name) !== '';
@@ -179,7 +168,6 @@
     var bodyChildren = [];
     if (e.description) bodyChildren.push(h('div', { class: 'elicit-desc', text: String(e.description) }));
 
-    // Safe URL link (http/https only), routed through Kotlin (never navigated).
     if (isUrl) {
       var url = String(e.url).trim();
       bodyChildren.push(
@@ -196,7 +184,6 @@
       );
     }
 
-    // name -> { input, kind, required } for value collection + validation.
     var fieldMeta = {};
     var acceptBtn = null;
 
@@ -226,7 +213,6 @@
       bodyChildren.push(h('div', { class: 'elicit-fields' }, fieldEls));
     }
 
-    // Required fields must be satisfied before Accept is enabled (form only).
     function requiredSatisfied() {
       var names = Object.keys(fieldMeta);
       for (var i = 0; i < names.length; i++) {
@@ -234,7 +220,6 @@
         if (!meta || !meta.required) continue;
         var input = meta.input;
         if (meta.kind === 'boolean') {
-          // A required checkbox must be checked.
           if (!input.checked) return false;
         } else if (String(input.value == null ? '' : input.value).trim() === '') {
           return false;
@@ -272,7 +257,7 @@
     function resolve(action) {
       var msg = { type: 'resolveElicitation', id: id, action: action };
       if (action === 'accept') msg.content = collectContent();
-      send(msg);
+      sendFor(card, msg);
     }
 
     var serverName = e.serverName != null ? String(e.serverName) : card.title || 'Server';
@@ -348,7 +333,7 @@
           text: 'Approve plan',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: true });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: true });
             },
           },
         }),
@@ -357,7 +342,7 @@
           text: 'Keep planning',
           on: {
             click: function () {
-              send({ type: 'resolvePermission', id: id, allow: false });
+              sendFor(card, { type: 'resolvePermission', id: id, allow: false });
             },
           },
         })
@@ -365,8 +350,6 @@
     );
   }
 
-  // Render a unified-diff string as a read-only, colour-coded block (red removed / green added / hunk headers).
-  // Uses textContent per line (never innerHTML) so file contents can't inject markup. Bounded for very large diffs.
   function renderPermDiff(text) {
     var pre = h('pre', { class: 'perm-diff' });
     var code = h('code', {});
@@ -394,11 +377,38 @@
     return pre;
   }
 
+  function buildGuardAlert(g) {
+    var rule = g.rule != null ? String(g.rule) : '';
+    var children = [
+      h('span', { class: 'perm-guard-badge', text: 'Guard alert' }),
+      h('span', {
+        class: 'perm-guard-rule',
+        text: String(g.label || rule) + (g.category ? ' — ' + String(g.category) : ''),
+      }),
+    ];
+    if (g.reason) children.push(h('div', { class: 'perm-guard-reason', text: String(g.reason) }));
+    if (rule) {
+      children.push(
+        h('button', {
+          class: 'perm-guard-restore',
+          text: 'Re-enable this rule',
+          on: {
+            click: function () {
+              send({ type: 'settingsToggle', key: 'rule:' + rule, on: true });
+            },
+          },
+        })
+      );
+    }
+    return h('div', { class: 'perm-guard' }, children);
+  }
+
   function buildPermCard(card) {
     var id = card.id;
     var tool = card.tool;
 
     var bodyChildren = [];
+    if (card.guard) bodyChildren.push(buildGuardAlert(card.guard));
     var summary = card.summary != null ? String(card.summary) : '';
     var description = card.description != null ? String(card.description) : '';
     if (summary) bodyChildren.push(h('div', { class: 'perm-summary', text: summary }));
@@ -414,21 +424,16 @@
     if (card.decisionReason)
       bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
 
-    // Read-only unified diff for reviewable edits: shows exactly what changes (red removed / green added). No
-    // per-line selection — the whole edit is accepted or rejected.
     if (card.diff != null && String(card.diff).length) {
       bodyChildren.push(renderPermDiff(String(card.diff)));
     }
 
-    // Edits are ATOMIC: accept or reject the whole change. Per-hunk "apply this line, not that one" selection was
-    // removed — picking a subset of a coherent edit produces broken code, and it rendered as a confusing checklist.
-    // The full change is viewable via "View diff" (and the IDE auto-opens the diff tab when the card appears).
     var acceptBtn = h('button', {
       class: 'btn primary',
       text: 'Accept',
       on: {
         click: function () {
-          send({ type: 'resolvePermission', id: id, allow: true });
+          sendFor(card, { type: 'resolvePermission', id: id, allow: true });
         },
       },
     });
@@ -440,7 +445,7 @@
         text: 'Reject',
         on: {
           click: function () {
-            send({ type: 'resolvePermission', id: id, allow: false });
+            sendFor(card, { type: 'resolvePermission', id: id, allow: false });
           },
         },
       }),
@@ -452,20 +457,32 @@
           text: 'View diff',
           on: {
             click: function () {
-              send({ type: 'viewDiff', id: id });
+              sendFor(card, { type: 'viewDiff', id: id });
             },
           },
         })
       );
     }
-    if (tool) {
+    if (card.guard) {
+      actions.push(
+        h('button', {
+          class: 'btn ghost perm-always',
+          text: 'Always allow this command',
+          on: {
+            click: function () {
+              sendFor(card, { type: 'guardAllowAlways', id: id });
+            },
+          },
+        })
+      );
+    } else if (tool) {
       actions.push(
         h('button', {
           class: 'btn ghost perm-always',
           text: 'Always allow',
           on: {
             click: function () {
-              send({ type: 'alwaysAllow', tool: tool, id: id });
+              sendFor(card, { type: 'alwaysAllow', tool: tool, id: id });
             },
           },
         })
@@ -483,33 +500,19 @@
 
   function buildCard(card) {
     if (!card || typeof card !== 'object') return null;
-    // First match wins.
     if (Array.isArray(card.questions) && card.questions.length) return buildQuestionCard(card);
     if (card.elicitation) return buildElicitCard(card);
     if (card.isPlan) return buildPlanCard(card);
     return buildPermCard(card);
   }
 
-  // ---- public API ------------------------------------------------------------
-
-  /**
-   * Announce that Claude is blocked on the user (WCAG 2.2 AA — 4.1.3 Status Messages).
-   *
-   * This is the single most important announcement in the whole UI: a permission card appears in the dock
-   * WITHOUT taking focus, so to a screen-reader user the turn simply stops with no explanation and no
-   * indication that anything is waiting for them. Sighted users see a card slide in; everyone else got silence.
-   *
-   * Announces only the 0 -> n transition, and names the tool when there is exactly one card, since "Claude
-   * needs your permission to run Bash" is actionable in a way that "Claude needs your response" is not.
-   * Resolution is left silent on purpose — the user just acted, so they know.
-   */
-  var lastPendingCount = 0;
-  function announcePending(list) {
+  var pendingCounts = new WeakMap();
+  function announcePending(list, region) {
     var C = core();
     if (!C || typeof C.announce !== 'function') return;
     var count = list.length;
-    var previous = lastPendingCount;
-    lastPendingCount = count;
+    var previous = pendingCounts.get(region) || 0;
+    pendingCounts.set(region, count);
     if (count === 0 || count <= previous) return;
     if (count === 1) {
       var only = list[0] || {};
@@ -526,16 +529,12 @@
     C.announce(count + ' requests are waiting for your response.');
   }
 
-  function permissions(list) {
-    var region = mount();
+  function permissions(list, into) {
+    var region = into || mount();
     if (!region) return;
     if (!list || !Array.isArray(list)) list = [];
-    announcePending(list);
+    announcePending(list, region);
 
-    // Reconcile by card id rather than wiping + rebuilding the whole region. A blunt innerHTML='' on every push
-    // (the host re-pushes on ANY permission change — a second card arriving, one resolving) destroyed the
-    // in-progress state of the OTHER cards: typed elicitation fields, AskUserQuestion selections, unticked hunk
-    // checkboxes. Keeping the existing DOM node for an id already shown preserves all of that.
     var existing = {};
     var n = region.children.length;
     for (var i = 0; i < n; i++) {
@@ -559,17 +558,19 @@
       if (node) ordered.push(node);
     }
 
-    // Drop cards that are no longer pending.
     for (var k = region.children.length - 1; k >= 0; k--) {
       var child = region.children[k];
       var ck = child.getAttribute ? child.getAttribute('data-card-id') : null;
       if (ck == null || !wanted[ck]) region.removeChild(child);
     }
 
-    // Append in list order; appendChild MOVES an existing node (keeping its state) rather than recreating it.
-    for (var m = 0; m < ordered.length; m++) region.appendChild(ordered[m]);
+    for (var m = 0; m < ordered.length; m++) {
+      if (region.children[m] !== ordered[m]) region.insertBefore(ordered[m], region.children[m] || null);
+    }
   }
 
   window.cc = window.cc || {};
   window.cc.permissions = permissions;
+  window.CC = window.CC || {};
+  window.CC.permissions = { render: permissions };
 })();

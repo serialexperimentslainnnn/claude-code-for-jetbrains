@@ -5,11 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The pure half of [RemoteMounts] — parsing `/proc/mounts` and deciding whether a path is remote against a fixed
- * snapshot. The impure half (reading `/proc`, `FileStore`) is exercised by the live suites; the decision logic,
- * which is what gates whether an agent may start, is unit-tested here.
- */
 class RemoteMountsTest {
 
     private val procMounts = """
@@ -71,25 +66,18 @@ class RemoteMountsTest {
         assertFalse(RemoteMounts.isRemote("", snap))
     }
 
-    /**
-     * Regression: WSL2 surfaces /mnt/c over 9p, so its mount point used to land in remoteRoots and the startup
-     * gate refused to launch on a perfectly normal C:\ project. /mnt/c is the sanctioned local disk and must be
-     * exempt from the remote check even if it slipped into remoteRoots; every other WSL mount stays foreign.
-     */
     @Test
     fun `on WSL mnt-c is never remote, even if its 9p mount slipped into remoteRoots`() {
         val snap = RemoteMounts.Snapshot(remoteRoots = listOf("/mnt/c", "/mnt/d"), isWsl = true)
         assertFalse(RemoteMounts.isRemote("/mnt/c", snap))
         assertFalse(RemoteMounts.isRemote("/mnt/c/dev/proj", snap))
         assertFalse(RemoteMounts.isRemote("/mnt/c/Users/me/code", snap))
-        // Other Windows/network drives under WSL stay remote.
         assertTrue(RemoteMounts.isRemote("/mnt/d/work/proj", snap))
         assertTrue(RemoteMounts.isRemote("/mnt/z/share", snap))
     }
 
     @Test
     fun `on native Linux mnt-c is not special — governed only by real remote mounts`() {
-        // Not WSL: /mnt/c is just a path; only a genuine remote mount root flags it.
         val plain = RemoteMounts.Snapshot(remoteRoots = emptyList(), isWsl = false)
         assertFalse(RemoteMounts.isRemote("/mnt/c/whatever", plain))
         val mounted = RemoteMounts.Snapshot(remoteRoots = listOf("/mnt/c"), isWsl = false)

@@ -1,17 +1,15 @@
 package dev.lain.claudejb.session
 
-/**
- * Pure heuristic that decides whether an error text from the binary (a failed `result`, or an `auth_status`
- * error) means the user needs to **log in** — as opposed to an unrelated failure (a tool error, a network
- * blip, a billing/quota issue). When true, the session offers to open an interactive terminal for `claude
- * login`, because the OAuth flow cannot run inside the TTY-less stream-json session.
- *
- * Deliberately conservative: matches auth/login phrasing the binary uses, and explicitly excludes
- * billing/quota wording ("credit balance", "rate limit") which is NOT a login problem. Pure → unit-testable.
- */
+enum class AuthFailure {
+    NONE,
+
+    EXPIRED,
+
+    NO_IDENTITY,
+}
+
 object LoginDetection {
 
-    // Phrases that indicate an authentication / login problem (lower-cased substring match).
     private val LOGIN_HINTS = listOf(
         "/login",
         "please log in",
@@ -27,7 +25,6 @@ object LoginDetection {
         "run `claude login`",
     )
 
-    // Phrases that look auth-adjacent but are NOT a login problem — never prompt for these.
     private val EXCLUSIONS = listOf(
         "credit balance",
         "rate limit",
@@ -36,10 +33,27 @@ object LoginDetection {
         "usage limit",
     )
 
-    /** True when [text] reads like a login/auth failure and not a billing/quota one. Null/blank → false. */
-    fun needsLogin(text: String?): Boolean {
-        val t = text?.lowercase()?.takeIf { it.isNotBlank() } ?: return false
-        if (EXCLUSIONS.any { it in t }) return false
-        return LOGIN_HINTS.any { it in t }
+    private val EXPIRY_PHRASES = listOf(
+        "oauth access token has expired",
+        "access token has expired",
+        "access token is expired",
+        "oauth token has expired",
+        "oauth token is expired",
+    )
+
+    private const val REFRESH_TOKEN = "refresh token"
+
+    fun classify(text: String?): AuthFailure {
+        val t = text?.lowercase()?.takeIf { it.isNotBlank() } ?: return AuthFailure.NONE
+        if (EXCLUSIONS.any { it in t }) return AuthFailure.NONE
+        if (LOGIN_HINTS.none { it in t }) return AuthFailure.NONE
+        if (REFRESH_TOKEN in t) return AuthFailure.NO_IDENTITY
+        return if (EXPIRY_PHRASES.any { it in t }) AuthFailure.EXPIRED else AuthFailure.NO_IDENTITY
+    }
+
+    fun resolve(text: String?, renewable: () -> Boolean): AuthFailure {
+        val failure = classify(text)
+        if (failure != AuthFailure.EXPIRED) return failure
+        return if (renewable()) AuthFailure.EXPIRED else AuthFailure.NO_IDENTITY
     }
 }

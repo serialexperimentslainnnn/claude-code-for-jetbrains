@@ -10,10 +10,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins [HookBroker]: parsing each HookInput variant, the default (non-intrusive) decisions, the exact `HookJSONOutput`
- * wire shape per event, and the data-only [HookSideEffect] surface. Pure JVM — no IDE runtime.
- */
 class HookBrokerTest {
 
     private val broker = HookBroker()
@@ -38,8 +34,6 @@ class HookBrokerTest {
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.content
     private fun JsonObject.bool(key: String): Boolean? =
         (this[key] as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
-
-    // --- parsing ---
 
     @Test
     fun `parses PreToolUse with tool name and input`() {
@@ -106,8 +100,6 @@ class HookBrokerTest {
         assertNull(broker.parse(buildJsonObject { put("input", buildJsonObject { put("x", 1) }) }))
     }
 
-    // --- default decisions ---
-
     @Test
     fun `default handlers Continue for every default event`() {
         for (event in listOf(
@@ -135,8 +127,6 @@ class HookBrokerTest {
         val decision = b.decide(ctx)
         assertEquals("no shell", (decision as HookDecision.Block).reason)
     }
-
-    // --- buildResponse wire shapes ---
 
     @Test
     fun `Continue maps to continue true`() {
@@ -207,8 +197,6 @@ class HookBrokerTest {
         assertEquals("note", out.string("systemMessage"))
         assertNull(out["hookSpecificOutput"])
     }
-
-    // --- side effects ---
 
     @Test
     fun `Notification yields NotifyUser side effect`() {

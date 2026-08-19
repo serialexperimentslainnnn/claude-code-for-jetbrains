@@ -5,11 +5,13 @@
 #
 # Every action is pinned by full commit SHA, not by tag. A tag is mutable: whoever controls the action's
 # repository can repoint it at different code, and that code runs with this workflow's token. Dependabot
-# (.github/dependabot.yml) proposes SHA bumps weekly, so pinning costs nothing in maintenance.
+# (.github/dependabot.yml) proposes SHA bumps monthly — and security updates on their own schedule,
+# independently of that interval — so pinning costs nothing in maintenance.
 name: CI
 
 on:
-  # Pull requests ONLY — there is deliberately no `push` trigger.
+  # No `push` trigger, deliberately — the pull request is the door. The one addition to that is a nightly
+  # schedule, for the single suite that must not sit on the pull-request path at all (see `schedule:` below).
   #
   # A branch with an open PR fires `pull_request` on every push to it (the `synchronize` event), so the
   # iteration loop is fully covered, and covered ONCE. Having both triggers meant two complete pipelines per
@@ -26,8 +28,31 @@ on:
   #
   # `release.yml` is unaffected — it carries its own `push: branches: [main]` trigger and still fires on the
   # merge that publishes.
+  #
+  # LEFTOVER, named so it is not mistaken for live logic: THREE jobs below — `Static analysis`,
+  # `Dependency audit` and `Plugin verifier` — still carry
+  # `github.event_name == 'push' && github.ref == 'refs/heads/develop|main'` in their `if:`. Those halves
+  # can no longer match anything and are kept only so restoring the trigger is a one-line change. They are
+  # inert, not a second door — nothing runs on a push to a protected branch from this file.
+  #
+  # (`No bot PRs pending on develop` has no push half; `Build plugin` has no `if:` at all and is gated
+  # instead by `needs: [verify]`. So on `workflow_dispatch` and on the schedule below, where no half matches,
+  # exactly three jobs run: `JVM tests`, `Frontend tests` and `UI end-to-end tests`.)
   pull_request:
     branches: [develop, main]
+  # Nightly, on the default branch. This exists for `UI end-to-end tests`, which answers to this trigger and
+  # to a manual run and to nothing else: that suite boots a real IDE behind a virtual framebuffer, it is
+  # slower than everything else in this file combined, and it fails for reasons no other job here can (a
+  # display, a browser, a window that has not finished painting). On the pull-request path it would teach
+  # people to re-run CI until it went green, which is how a real defect becomes noise.
+  #
+  # A trigger belongs to the WORKFLOW and not to one job, so this brings `JVM tests` and `Frontend tests` with
+  # it — the set is the one the parenthetical above works out, never a second count kept in step by hand.
+  # That is left as it is rather than gated away: a nightly run of the JVM and frontend suites against the
+  # default branch answers a question the pull-request path cannot — whether the branch everyone builds on is
+  # still green on its own, rather than green in the merge commit of somebody's pull request.
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 # Least privilege at the top; a job that needs more elevates it for itself. The default token is
@@ -54,7 +79,8 @@ env:
 
 jobs:
   # Unit + headless (BasePlatformTestCase, in-process IDE fixture) + integration (the bin/fake-claude
-  # Python stand-in). The whole non-UI pyramid, 677 tests.
+  # Python stand-in). The whole non-UI pyramid. Deliberately no test count here: it changes every release,
+  # and a number in a comment is a claim nobody re-checks.
   test:
     name: JVM tests
     runs-on: ubuntu-latest
@@ -82,9 +108,18 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
+      # The image drops /usr/share/locale to stay small, so the JVM inherits an ASCII `sun.jnu.encoding` and
+      # CANNOT CREATE A FILE whose name is not ASCII — `DiffPresenterIsWithinRootTest` writes `fïle ñ.txt` and
+      # died with FileNotFoundException here while passing on any developer machine. `C.UTF-8` is built into
+      # glibc rather than living under /usr/share/locale, so this needs no image rebuild — which matters,
+      # because the image is the only cache this pipeline has.
+      #
+      # It is not a test concession either: this plugin resolves paths the user chose, and a UTF-8 filesystem
+      # is the environment it actually ships into. Asserting containment for an accented path is the point.
+      LANG: C.UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,7 +169,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
     # Same door as the verifier: pull requests into main, and the protected branches themselves.
@@ -177,6 +212,12 @@ jobs:
 
       - name: Prettier
         run: npm run format:check
+
+      # NB the PROJECTMAP.md index is deliberately NOT checked here. It is an orientation index for
+      # AI-assisted sessions — a local convention, excluded from the artifact — so a stale one cannot affect
+      # anybody who installs the plugin, and gating on it made the only CI failure that is never a defect in
+      # the product. It also made every contributor's build depend on running a Python script after editing a
+      # file. Regenerate it when you want it current: `python3 scripts/gen-projectmap.py`.
 
       - name: Upload analysis reports
         if: always()
@@ -331,15 +372,22 @@ jobs:
           exit 1
 
   # The IntelliJ Plugin Verifier: the ONLY thing that catches a *binary* incompatibility across the
-  # declared 251 → 263.* range. Compiling against 252 proves nothing about 262 — that asymmetry is
-  # exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs, hence the timeout.
+  # declared 253 → 263.* range (the floor moved from 251 to 253 in 5.5.0, when the hard dependency on
+  # com.intellij.modules.jcef was declared). Compiling against the floor proves nothing about the ceiling —
+  # that asymmetry is exactly how the 4.4.1 /login regression shipped. It downloads several full IDEs,
+  # hence the timeout.
+  #
+  # It is also NOT the gate that catches a missing plugin dependency: the verifier resolves against the
+  # whole IDE distribution, not against the plugin's classloader, which is where that failure lives. It
+  # reported Compatible on 262 all through the 5.1.1 breakage and was right to. JcefDependencyContractTest,
+  # in the JVM suite, is the gate for that.
   verify:
     name: Plugin verifier
     runs-on: ubuntu-latest
     timeout-minutes: 60
     container:
       # Same image as every other job, and it does NOT carry the IDEs this job downloads — see the note at
-      # the top of .github/ci-image/Dockerfile. Baking them made the image 38.1 GB, which every job paid for
+      # the top of .github/ci-image/jvm-test.Dockerfile. Baking them made the image 38.1 GB, which every job paid for
       # on its own runner, to save ten minutes on the one job that runs least often.
       image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
       # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
@@ -352,21 +400,26 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
     needs: [test, frontend-test]
-    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads. It runs where the answer is load-bearing —
-    # on every pull request, and on the protected branches — and NOT on each push to a topic branch, where it
-    # was re-verifying a commit nobody was about to merge. The gate is unchanged: it is still a required check
-    # on develop and main, and a PR cannot merge without it. What is lost is early detection mid-branch, which
-    # is a real cost and the reason it ran everywhere until now.
-    # Where the exhaustive check belongs: the develop -> main door, plus the protected branches themselves.
+    # The expensive one: ~10 minutes and 1.25 GB of IDE downloads, so it runs at the release door and
+    # nowhere else — pull requests targeting `main`, which is the merge that publishes.
     #
-    # NOT on topic branches and NOT on pull requests into develop — those iterate constantly and this job is
-    # ~10 minutes and 1.25 GB of IDE downloads. It DOES run on any pull request targeting main, because that
-    # is the merge that publishes, and it is the only gate that catches a BINARY incompatibility across the
-    # 251 -> 262 range (compiling against 252 proves nothing about 262 — see the 4.4.1 /login regression).
+    # NOT on pull requests into develop: those iterate constantly, and paying ten minutes per push to
+    # re-verify a commit nobody is about to promote is the cost this condition removes. What is lost is
+    # early detection mid-branch, which is real and is the reason it used to run everywhere.
+    #
+    # Where the gate actually lives, stated precisely because the two rulesets differ: `Plugin verifier` is
+    # a required check in .github/rulesets/main.json ONLY. develop.json requires `JVM tests`,
+    # `Frontend tests` and the two CodeQL jobs, and deliberately not this one. So a binary incompatibility
+    # can reach develop; it cannot reach main.
+    #
+    # The `push` half of the condition below is INERT: this workflow has no `push` trigger (see `on:` at the
+    # top). It is left in place so that restoring the trigger restores the intended behaviour in one edit
+    # rather than four. On `workflow_dispatch` neither half matches, so a manual run executes only the two
+    # ungated test jobs.
     if: >-
       (github.event_name == 'pull_request' && github.base_ref == 'main') ||
       (github.event_name == 'push' &&
@@ -411,7 +464,8 @@ jobs:
   # ran against bytes that were never verified — a second build on a fresh runner is not guaranteed to be
   # the same artifact. Downloading it also drops a full Gradle setup, JDK provision and compile from the
   # critical path. Unsigned and unpublished by design: signing and publishing happen only in release.yml,
-  # behind a human approval.
+  # which runs on the merge into `main` and has NO human approval — the `marketplace` environment scopes the
+  # credentials, it does not gate on a reviewer. See that file's header.
   build:
     name: Build plugin
     runs-on: ubuntu-latest
@@ -423,6 +477,19 @@ jobs:
       contents: read
     needs: [verify]
     steps:
+      # A sparse checkout of LICENSES/ ONLY, and emphatically not a second build: the attribution assertion
+      # below compares the artifact against the licence texts this commit actually carries, and that set has
+      # to come from somewhere other than a list in this file, which would rot the first time a dependency
+      # is added. Nothing else in this job reads the working tree.
+      #
+      # It runs FIRST on purpose: `actions/checkout` cleans the workspace it lands in, so downloading the
+      # distributable before it would delete build/distributions again.
+      - name: Fetch the licence texts this commit declares
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: LICENSES
+
       - name: Fetch the verified distributable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -438,16 +505,95 @@ jobs:
           echo "node_modules entries in $zip: $count"
           [ "$count" -eq 0 ] || { echo "::error::npm code leaked into the distributed artifact"; exit 1; }
 
+      # What the plugin jar may contain, as an ALLOWLIST — because the leak this replaces was not a name
+      # anyone would have thought to ban.
+      #
+      # `src/main/resources/jcef/PROJECTMAP.md` is a map written for this repository, and to Gradle it is a
+      # resource like any other: it rode into the jar in every published release, 20 KB of internal design
+      # notes and source paths handed to users. `processResources` excludes it by pattern now, but banning
+      # that one name would only catch the file we already know about — the next accidental doc, scratch
+      # fixture or generated report under `resources/` would ship exactly the same way and just as silently.
+      #
+      # So the assertion is inverted: four families are runtime content (our classes, the plugin's own
+      # descriptors and licences, the tool-window icons, and the inlined web app), and anything else is a
+      # mistake until someone adds it here deliberately. A new legitimate family costs one line; a leak costs
+      # a red build instead of a release.
+      - name: Assert the plugin jar carries only what it should
+        run: |
+          zip=$(ls build/distributions/*.zip)
+          unzip -o -q "$zip" -d /tmp/artifact
+          jar=$(ls /tmp/artifact/*/lib/claude-code-native-*.jar | grep -v searchableOptions)
+          # -1 lists entry names alone; directory entries end in `/` and carry nothing.
+          unzip -Z -1 "$jar" | grep -v '/$' \
+            | grep -vE '^dev/lain/claudejb/.*\.class$' \
+            | grep -vE '^META-INF/' \
+            | grep -vE '^icons/[^/]+\.svg$' \
+            | grep -vE '^jcef/([^/]+\.(js|html)|css/[^/]+\.css)$' > /tmp/unexpected.txt || true
+          if [ -s /tmp/unexpected.txt ]; then
+            echo "::error::unexpected entries in the plugin jar — either they must not ship, or add their family to this allowlist"
+            cat /tmp/unexpected.txt
+            exit 1
+          fi
+          echo "plugin jar contents are within the declared allowlist"
+
       # Likewise for attribution: the licences of the bundled web libraries must travel INSIDE the jar,
       # because that is where the redistribution obligation actually lands.
+      #
+      # THREE things are asserted, on the SAME artifact the verifier checked: this repository's own LICENSE,
+      # the notices file, and — the part that used to be missing — the licence TEXTS every entry in that
+      # notices file points at (`build.gradle.kts` copies `LICENSES/` to `META-INF/licenses/` in
+      # `processResources`). Without that third assertion, deleting that one Gradle line left this gate GREEN
+      # while the plugin shipped a THIRD-PARTY-NOTICES.md whose every "Full text: LICENSES/…" line referred
+      # to a file that was not in the artifact. MIT, BSD-3-Clause and Apache-2.0 all bind their notice
+      # obligation on REDISTRIBUTION, so that is a compliance defect, not a cosmetic one.
+      #
+      # The expected set is DERIVED FROM THE CHECKOUT, never enumerated here: adding a text under LICENSES/
+      # extends this gate by itself, which is the only version of this check that survives contact with a
+      # new dependency.
       - name: Assert third-party attribution is packaged
         run: |
-          unzip -o -q build/distributions/*.zip -d /tmp/dist
+          set -eu
+
+          zip=$(ls build/distributions/*.zip)
+          unzip -o -q "$zip" -d /tmp/dist
           jar=$(ls /tmp/dist/*/lib/claude-code-native-*.jar | grep -v searchableOptions | head -1)
+
+          # ONE listing, read by every assertion below. `-Z1` prints one entry name per line, so names are
+          # matched WHOLE (`grep -qxF`) instead of as substrings of `unzip -l`'s formatted table — where
+          # `META-INF/LICENSE` also matches `META-INF/LICENSES-anything`.
+          unzip -Z1 "$jar" > /tmp/jar-entries.txt
+
+          missing=''
+
           for f in META-INF/LICENSE META-INF/THIRD-PARTY-NOTICES.md; do
-            unzip -l "$jar" | grep -q "$f" || { echo "::error::$f missing from $jar"; exit 1; }
+            grep -qxF "$f" /tmp/jar-entries.txt || missing="$missing $f"
           done
-          echo "attribution present in $jar"
+
+          # The repository side. Guarded explicitly rather than left to fail obscurely: with no LICENSES/ at
+          # all there is nothing to compare against, and an assertion with an empty expected set passes
+          # vacuously — which is the exact failure mode this whole step exists to remove.
+          [ -d LICENSES ] || { echo "::error::LICENSES/ is absent from the checkout — there is nothing to compare the artifact against"; exit 1; }
+          find LICENSES -maxdepth 1 -type f -printf '%f\n' | sort > /tmp/expected-licences.txt
+          [ -s /tmp/expected-licences.txt ] || { echo "::error::LICENSES/ carries no licence texts, but every entry in THIRD-PARTY-NOTICES.md points at one"; exit 1; }
+
+          # Every declared text must have a counterpart in the jar. Read from a FILE with `while read`, not
+          # iterated as a bare $(…): no word splitting on the names, and no subshell to lose `missing` in.
+          while IFS= read -r name; do
+            grep -qxF "META-INF/licenses/$name" /tmp/jar-entries.txt || missing="$missing META-INF/licenses/$name"
+          done < /tmp/expected-licences.txt
+
+          # …and the directory itself must exist and be non-empty in the artifact. `grep -c` exits 1 on no
+          # match while still printing `0`, so the count is the signal and the exit status is not.
+          texts=$(grep -c '^META-INF/licenses/[^/]\{1,\}$' /tmp/jar-entries.txt || true)
+          texts=${texts:-0}
+
+          if [ -n "$missing" ] || [ "$texts" -eq 0 ]; then
+            [ "$texts" -ne 0 ] || echo "::error::META-INF/licenses/ is absent or empty in $jar — the LICENSES/ copy in build.gradle.kts (processResources) is what puts it there"
+            [ -z "$missing" ] || echo "::error::missing from $jar:$missing"
+            exit 1
+          fi
+
+          echo "attribution present in $jar: LICENSE, THIRD-PARTY-NOTICES.md, and $texts licence text(s) matching LICENSES/"
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -455,3 +601,179 @@ jobs:
           name: plugin-distribution
           path: build/distributions/*.zip
           retention-days: 30
+
+  # The RemoteRobot end-to-end suite (src/uiTest): a real IDE, booted behind a virtual framebuffer and driven
+  # over HTTP. It is the only layer that can answer what neither jsdom nor the headless fixture can — that the
+  # tool window gives a live JCEF web view instead of the "needs JCEF" fallback, that keystrokes from the OS
+  # keyboard reach the page, that overflow and geometry are what the layout actually produced.
+  #
+  # NON-BLOCKING, by omission and by nothing else: no UI context appears in `required_status_checks` in
+  # .github/rulesets/{main,develop}.json, so a failure here reports RED, is visible on the run, and stops no
+  # merge. There is deliberately NO `continue-on-error:` anywhere in this job — that reports the job GREEN
+  # with a failed suite inside it, which is the same lie as a suite that ran nothing, only better dressed.
+  #
+  # PROMOTION CRITERION, written down because an informational job with no exit becomes one nobody reads: it
+  # becomes a required check once it has run thirty consecutive scheduled runs whose every failure was a real
+  # defect in the plugin — none attributable to the harness, the framebuffer or a timing window. The line to
+  # add then is `{ "context": "UI end-to-end tests" }` under `required_status_checks` in
+  # .github/rulesets/main.json, and in develop.json if it should gate both doors. Until that holds, a red run
+  # is triaged and never re-run until it passes: a retried UI failure converts a defect into noise.
+  ui-test:
+    name: UI end-to-end tests
+    runs-on: ubuntu-latest
+    # This job's characteristic failure is a HANG, not a red assertion — a background IDE that never finishes
+    # painting leaves a socket nobody ever answers. The budget is generous because the IDE boots, opens a
+    # project and indexes before the first assertion runs; the bounded readiness wait below is what turns a
+    # dead IDE into a fast, explained failure instead of letting it eat the whole budget.
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/serialexperimentslainnnn/jvm-test:v1.0.0
+      # The package stays PRIVATE and is pulled with the run's own GITHUB_TOKEN — no new secret, nothing to
+      # rotate, and access dies with the job. `packages: read` is granted per job below; without it the pull
+      # fails with a 401 that reads like a wrong image name rather than a permission problem.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile, and it carries more weight here
+      # than in any other job: `runIdeForUiTests` builds its sandbox from the IntelliJ Platform artifact baked
+      # into that home. Point it elsewhere and this job silently downloads and extracts several GB per run.
+      GRADLE_USER_HOME: /opt/gradle-home
+    # Nightly and on demand, never on a pull request — see the `schedule:` comment in `on:` above. That also
+    # means this job never runs on code a fork author controls. It needs no credential of any kind either: the
+    # suite drives `bin/fake-claude`, whose `auth status` answers with a synthetic identity, so the sign-in
+    # card is satisfied without an account existing anywhere in this job.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image running this job carries no X11 whatsoever: it was built for headless Gradle and npm, and
+      # nothing in it has ever had to draw. This is the one job that does — a real IDE, with a real Chromium
+      # inside it.
+      #
+      # .github/ci-image/jvm-test.Dockerfile ALREADY bakes this exact package set, which is where it belongs:
+      # the image is this pipeline's only caching mechanism, so a `dnf install` per run is a network
+      # transaction whose failure mode is this job's worst one. This step survives because every workflow
+      # pins `jvm-test:v1.0.0`, and that tag names an image built BEFORE the Dockerfile gained the stack. A
+      # Dockerfile edit changes nothing on its own; the image has to be rebuilt and a new tag cut.
+      #
+      # DELETE THIS STEP in the same change that bumps the tag — in every workflow that names it, not just
+      # this one (ci.yml ×4, release.yml, codeql.yml, drift.yml). Leaving it behind costs one redundant
+      # install per nightly run; deleting it BEFORE the tag moves costs an IDE that never opens its port.
+      #
+      # A missing library here does not announce itself — the IDE simply never opens :8082 — which is exactly
+      # the silence the bounded wait below turns back into a message.
+      - name: Install the virtual display and the libraries the IDE draws through
+        run: |
+          set -euo pipefail
+          dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install \
+            xorg-x11-server-Xvfb \
+            gtk3 nss alsa-lib mesa-libgbm libxkbcommon-x11 \
+            libXtst libXi libXrender libXext libXrandr libXcursor \
+            liberation-fonts
+          dnf clean all
+
+      # Step one of the two-process dance that build.gradle.kts and docs/UI_TESTING.md both document: the IDE
+      # comes up under Xvfb and STAYS UP, and the suite is a second Gradle invocation that talks to it over
+      # :8082. Backgrounded here rather than split into a second job, because the two halves must share a host.
+      - name: Boot the IDE under test
+        run: |
+          set -euo pipefail
+          xvfb-run -a -s "-screen 0 1920x1080x24" \
+            ./gradlew --no-daemon --stacktrace runIdeForUiTests > ide.log 2>&1 &
+          echo $! > ide.pid
+          echo "IDE launched, pid $(cat ide.pid)"
+
+      # Bounded, and it watches BOTH ends: the port answering, and the process still being alive. Polling the
+      # socket alone turns a crashed IDE into three minutes of silence and then a timeout that names the wrong
+      # thing; `kill -0` makes that case fail in seconds and prints the log that explains why.
+      - name: Wait for robot-server to answer
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8082 > /dev/null 2>&1; then
+              echo "robot-server is answering on :8082"
+              exit 0
+            fi
+            if ! kill -0 "$(cat ide.pid)" 2> /dev/null; then
+              echo "::error::the IDE exited before robot-server answered — last 100 lines of its log follow"
+              tail -n 100 ide.log
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::robot-server did not answer on :8082 within 180s — last 100 lines of the IDE log follow"
+          tail -n 100 ide.log
+          exit 1
+
+      # Step two. The step-level timeout is deliberate and independent of the job's: two Gradle invocations
+      # share this project directory, and the failure mode of that contention is a build WAITING on a lock,
+      # not one that errors. Bounding the client leaves budget for the teardown and the artifacts, which are
+      # the only things anyone can diagnose a nightly failure from.
+      - name: Run the RemoteRobot suite
+        timeout-minutes: 25
+        run: ./gradlew --no-daemon --stacktrace uiTest -PuiTest.enabled=true
+
+      # THE GATE ON THE GATE, and the reason this job exists in a shape anyone can trust. `uiTest` carries
+      # `onlyIf { project.findProperty("uiTest.enabled") == "true" }`, and a Gradle `onlyIf` SKIPS SILENTLY:
+      # without the flag the task never runs, the build reports SUCCESSFUL, and the step above is green having
+      # executed nothing. Passing `-PuiTest.enabled=true` is necessary and is NOT evidence — a renamed
+      # property, a renamed task or a filter matching no class all end the same way. So the evidence is
+      # asserted rather than assumed: the JUnit XML must exist, and the number of tests that actually ran must
+      # be greater than zero.
+      - name: Assert the suite executed tests
+        run: |
+          set -euo pipefail
+
+          results=build/test-results/uiTest
+          reports=$( { ls "$results"/*.xml 2> /dev/null || true; } | wc -l )
+
+          if [ "$reports" -eq 0 ]; then
+            echo "::error::no JUnit XML under $results — the suite left no evidence that it ran at all."
+            echo "::error::uiTest is gated by onlyIf { uiTest.enabled } in build.gradle.kts, and a skipped"
+            echo "::error::Gradle task still reports BUILD SUCCESSFUL."
+            exit 1
+          fi
+
+          # One <testsuite> element per class carries these as attributes; <testcase> carries none of these
+          # names, so summing every occurrence across the files cannot pick up anything but the suite totals.
+          count() {
+            grep -ho "$1=\"[0-9]\{1,\}\"" "$results"/*.xml | tr -dc '0-9\n' | awk '{ s += $1 } END { print s + 0 }'
+          }
+
+          declared=$(count tests)
+          skipped=$(count skipped)
+          executed=$(( declared - skipped ))
+
+          echo "$reports report(s): $declared declared, $skipped skipped, $executed executed"
+
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::every test was skipped — a suite that ran nothing is not a passing suite"
+            exit 1
+          fi
+
+      # `if: always()` so the IDE is stopped after a failed suite too. Note what it does not do: it runs a
+      # teardown, it does not touch the outcome — the job still fails on whatever the steps above decided.
+      - name: Stop the IDE
+        if: always()
+        run: |
+          kill "$(cat ide.pid)" 2> /dev/null || true
+          # `xvfb-run` is only the parent: the Gradle JVM beneath it does not die with it, and a survivor
+          # holds :8082 against whatever runs next on this host.
+          pkill -f runIdeForUiTests || true
+
+      - name: Upload UI test reports and the IDE log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-test-reports
+          path: |
+            build/reports/tests/uiTest/
+            build/test-results/uiTest/
+            ide.log
+          retention-days: 14

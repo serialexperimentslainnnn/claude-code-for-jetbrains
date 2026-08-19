@@ -6,15 +6,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 
-/**
- * What a RESTORED conversation looks like, pinned against the binary's own JSONL.
- *
- * This is the read path behind "Open Previous Session…" and the startup restore, and it is the only
- * reconstruction the plugin has: the transcripts are the binary's files and the plugin never duplicates them.
- * A silent regression here does not throw — it renders a conversation that is subtly not the one that
- * happened (an output with no call, a command card downgraded to plain text, a prompt attributed to the
- * model), which is exactly the class of defect that survives a manual glance.
- */
 class SessionTranscriptReaderParseTest {
 
     private fun user(text: String) =
@@ -29,7 +20,6 @@ class SessionTranscriptReaderParseTest {
             listOf(
                 user("plain string content"),
                 """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"array block"}]}}""",
-                // Blank text is not a turn: the binary emits these around tool plumbing.
                 """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"   "}]}}""",
             ),
         )
@@ -50,6 +40,30 @@ class SessionTranscriptReaderParseTest {
     }
 
     @Test
+    fun `a call with no result is in flight, and one with a failed result is marked failed`() {
+        val entries = SessionTranscriptReader.parseEntries(
+            listOf(
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"live","name":"Bash","input":{"command":"sleep 60"}}]}}""".replace("\n", ""),
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"boom","name":"Bash","input":{"command":"false"}}]}}""".replace("\n", ""),
+                """{"type":"user","message":{"role":"user","content":[
+                   {"type":"tool_result","tool_use_id":"boom","is_error":true,"content":"exit 1"}]}}""".replace("\n", ""),
+                """{"type":"assistant","message":{"role":"assistant","content":[
+                   {"type":"tool_use","id":"ok","name":"Read","input":{"file_path":"/tmp/x"}}]}}""".replace("\n", ""),
+                """{"type":"user","message":{"role":"user","content":[
+                   {"type":"tool_result","tool_use_id":"ok","content":"contents"}]}}""".replace("\n", ""),
+            ),
+        )
+        val calls = entries.filter { it.speaker == "TOOL" }.associateBy { it.toolUseId }
+        assertTrue(calls["live"]!!.inFlight, "a call with no result is still running")
+        assertTrue(!calls["live"]!!.failed)
+        assertTrue(calls["boom"]!!.failed, "a call whose result is an error has failed")
+        assertTrue(!calls["boom"]!!.inFlight)
+        assertTrue(!calls["ok"]!!.inFlight && !calls["ok"]!!.failed, "a call that returned is simply done")
+    }
+
+    @Test
     fun `a tool_result is attributed to TOOL_OUTPUT and carries its error flag`() {
         val entries = SessionTranscriptReader.parseEntries(
             listOf(
@@ -63,7 +77,6 @@ class SessionTranscriptReaderParseTest {
         assertEquals(listOf("TOOL_OUTPUT", "TOOL_OUTPUT"), entries.map { it.speaker })
         assertEquals("it worked", entries[0].text)
         assertNull(entries[0].meta)
-        // An array content is concatenated, and the error tag is the same one the live path sets.
         assertEquals("line one\nline two", entries[1].text)
         assertEquals("error", entries[1].meta)
     }
@@ -83,7 +96,6 @@ class SessionTranscriptReaderParseTest {
             ),
         )
         val byId = entries.filter { it.speaker == "TOOL_OUTPUT" }.associateBy { it.toolUseId }
-        // The command tag is what makes a reloaded card render the copyable code block a live one does.
         assertEquals("command", byId["c1"]?.meta)
         assertNull(byId["r1"]?.meta, "a non-command tool's output must not be tagged")
         assertEquals("ls -la", entries.first { it.toolUseId == "c1" && it.speaker == "TOOL" }.commandText)
@@ -111,10 +123,8 @@ class SessionTranscriptReaderParseTest {
                {"type":"tool_result","tool_use_id":"t1","content":"body"}]}}""".replace("\n", ""),
             user("still here"),
         )
-        // Window of 2 would be [TOOL_OUTPUT, USER]; the orphan output goes, so only the prompt survives.
         val capped = SessionTranscriptReader.parseEntries(lines, maxEntries = 2)
         assertEquals(listOf("USER"), capped.map { it.speaker })
-        // A non-positive cap is "no cap", not "nothing".
         assertEquals(3, SessionTranscriptReader.parseEntries(lines, maxEntries = 0).size)
         assertEquals(3, SessionTranscriptReader.parseEntries(lines, maxEntries = null).size)
     }
@@ -146,7 +156,6 @@ class SessionTranscriptReaderParseTest {
                    "message":{"content":[{"type":"text","text":"the real first prompt"}]}}""".replace("\n", ""),
             ),
         )
-        // A tool_result is not a prompt, so the first REAL user text wins — and first-wins holds for the rest.
         assertEquals("the real first prompt", meta.firstPrompt)
         assertEquals("feature/x", meta.gitBranch)
         assertEquals("2026-08-06T10:00:00Z", meta.createdAt)
@@ -178,7 +187,6 @@ class SessionTranscriptReaderParseTest {
             Files.writeString(newer, "{}")
             Files.setLastModifiedTime(older, java.nio.file.attribute.FileTime.fromMillis(1_000_000))
             Files.setLastModifiedTime(newer, java.nio.file.attribute.FileTime.fromMillis(2_000_000))
-            // A stray non-transcript must not be offered as a session.
             Files.writeString(dir.resolve("notes.txt"), "ignore me")
 
             assertEquals(dir, SessionStore.projectDir("/tmp/proj"))

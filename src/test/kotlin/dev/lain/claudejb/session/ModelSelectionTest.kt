@@ -4,11 +4,6 @@ import dev.lain.claudejb.protocol.ModelInfo
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * [ClaudeSession.preferredDefault] — the concrete model chosen in place of the removed floating "default" alias.
- * The user's choice was to PIN the concrete Opus tier, with a graceful fallback so we never select a model the
- * binary doesn't actually offer.
- */
 class ModelSelectionTest {
 
     private fun m(value: String) = ModelInfo(value)
@@ -26,7 +21,7 @@ class ModelSelectionTest {
 
     @Test
     fun `falls back to the binary's recommended alias when the pin is absent`() {
-        val catalog = listOf(m("default"), m("sonnet"), m("haiku")) // no opus[1m]
+        val catalog = listOf(m("default"), m("sonnet"), m("haiku"))
         assertEquals("default", ClaudeSession.preferredDefault(catalog))
     }
 

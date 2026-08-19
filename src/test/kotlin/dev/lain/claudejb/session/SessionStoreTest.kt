@@ -7,17 +7,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 
-/**
- * Tests [SessionStore]'s security-relevant, filesystem-independent behaviour: the path-traversal guard
- * (a non-UUID session id never resolves a path, short-circuiting before any FS access) and the pure cwd
- * folder-name encoding the `claude` binary uses.
- */
 class SessionStoreTest {
 
     @Test
     fun `locate rejects ids that aren't plain UUID-like tokens`() {
-        // Each contains a char outside [A-Za-z0-9-], so SAFE_ID.matches() fails and locate short-circuits to null
-        // (the `||` returns before touching the filesystem) — no traversal possible.
         listOf(
             "../etc/passwd",
             "..",
@@ -35,8 +28,6 @@ class SessionStoreTest {
 
     @Test
     fun `encodePath maps every non-alphanumeric char to a dash`() {
-        // Neutral, relative-style inputs only — no real local paths in tests.
-        // Dots, underscores, spaces and traversal sequences all collapse to '-' (no separator survives).
         assertEquals("-home-u-My-Proj", SessionStore.encodePath("/home/u/My.Proj"))
         assertEquals("a-b-c", SessionStore.encodePath("a_b c"))
         assertEquals("-----", SessionStore.encodePath("/../."))
@@ -44,8 +35,6 @@ class SessionStoreTest {
 
     @Test
     fun `locate finds the transcript without removing anything`() {
-        // What used to be the `delete` tests. The capability is gone (see the class KDoc): the store reads,
-        // and this pins that a lookup leaves the whole tree exactly as it found it.
         val home = Files.createTempDirectory("claudejb-home")
         val originalHome = System.getProperty("user.home")
         try {

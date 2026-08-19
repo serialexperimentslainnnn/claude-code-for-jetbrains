@@ -1,38 +1,75 @@
-// Transcript rendering (app-transcript.js). Drives cc.batch([...]) and asserts the DOM, covering the bugs from
-// the 4.0.4 / 4.2.0 passes: user prompts rendered VERBATIM (never Markdown), the code-block Copy affordance, and
-// coloured inline diffs. Batch item shape mirrors JcefBridge.entryJson: { id, order, speaker, text, meta?, ... }.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 function row(id, order, speaker, text, extra = {}) {
   return { id, order, speaker, text, state: 'FINISHED', elapsed: 0, ...extra };
 }
 
-describe('transcript — user prompts render verbatim', () => {
-  it('a USER row shows raw text via textContent, never Markdown', () => {
+describe('transcript — the user row is a row, not a card', () => {
+  const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+  const userBody = () => {
+    const at = css.indexOf('\n.msg.user .body {');
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf('}', at));
+  };
+
+  it('does not re-introduce pre-wrap over markdown, which is what ballooned the spacing', () => {
+    expect(userBody()).not.toMatch(/white-space/);
+  });
+
+  it('carries no container chrome — that is what made it a card', () => {
+    const rule = userBody();
+    expect(rule).not.toMatch(/border:/);
+    expect(rule).not.toMatch(/background:/);
+    expect(rule).not.toMatch(/box-shadow:/);
+  });
+
+  it('keeps what the container was actually needed for: wrapping an unbreakable path', () => {
+    expect(userBody()).toMatch(/word-break:\s*break-word/);
+    expect(userBody()).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('still says whose row it is, and still offers Copy', () => {
     const win = loadFrontend(['app-transcript.js']);
-    const raw = '**bold** # heading `code` *italic*\n    indented';
-    win.cc.batch([row(1, 0, 'USER', raw)]);
+    win.cc.batch([row(1, 0, 'USER', 'hello')]);
+    const head = win.document.querySelector('.msg.user .msg-head');
+    expect(head.querySelector('.name').textContent).toBe('You');
+    expect(win.document.querySelector('.msg.user .copy')).not.toBeNull();
+  });
+});
+
+describe('transcript — a user prompt goes through the same parser as Claude’s', () => {
+  it('renders a USER row as Markdown, so an attachment link is a link', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(1, 0, 'USER', 'Look at this\n\n[@certs/root.crt](jb://open?file=%2Ftmp%2Fx&line=1)')]);
 
     const body = win.document.querySelector('.msg.user .body');
     expect(body).not.toBeNull();
-    // Literal text preserved…
-    expect(body.textContent).toBe(raw);
-    // …and NOT parsed into markup (no <strong>/<em>/<h1> from marked).
-    expect(body.querySelector('strong, em, h1, code')).toBeNull();
-    expect(body.innerHTML).not.toContain('<strong>');
+    const link = body.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link.textContent).toBe('@certs/root.crt');
+    expect(link.getAttribute('href')).toBe('jb://open?file=%2Ftmp%2Fx&line=1');
+    expect(body.textContent).not.toContain('jb://');
+  });
+
+  it('interprets the markdown the user typed — the cost of the line above', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(1, 0, 'USER', '**bold** and `code`')]);
+    const body = win.document.querySelector('.msg.user .body');
+    expect(body.querySelector('strong')).not.toBeNull();
+    expect(body.querySelector('code')).not.toBeNull();
+    expect(body.__rawText).toBe('**bold** and `code`');
   });
 });
 
 describe('transcript — assistant Markdown + code blocks', () => {
   it('an ASSISTANT row renders Markdown and decorates code blocks with a Copy control', () => {
-    const win = loadFrontend(['app-transcript.js']); // vendored marked/DOMPurify loaded → real markdown
+    const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([row(2, 0, 'ASSISTANT', 'Here:\n\n```js\nconst x = 1;\n```')]);
 
     const body = win.document.querySelector('.msg.assistant .body');
     expect(body).not.toBeNull();
     const pre = body.querySelector('pre');
     expect(pre).not.toBeNull();
-    // Decoration: a code-head with a Copy affordance.
     const copy =
       pre.parentElement.querySelector('.code-head .copy') || body.querySelector('.code-head .copy');
     expect(copy).not.toBeNull();
@@ -47,13 +84,10 @@ describe('transcript — assistant Markdown + code blocks', () => {
 
     const copy = win.document.querySelector('.code-head .copy');
     expect(copy).not.toBeNull();
-    copy.click(); // delegated document handler resolves the sibling <code> text
+    copy.click();
     expect(sent.some((m) => m.type === 'copy' && /hello world/.test(m.text))).toBe(true);
   });
 
-  // A Copy button that copies and says nothing is reported as a broken Copy button — it happened. The
-  // message-level buttons carry their own click handler, so they never reach the delegated code-head path
-  // that flashes; both must confirm, and via the SAME helper so the wording cannot drift apart.
   it('every Copy affordance confirms with "Copied", message-level ones included', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
@@ -99,7 +133,7 @@ describe('transcript — inline diff colouring', () => {
   });
 
   it('a diff on a known-extension file gets hljs syntax highlighting layered under the add/remove colour', () => {
-    const win = loadFrontend(['app-transcript.js']); // vendored hljs loaded → real highlighting
+    const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
       row(20, 0, 'TOOL', 'Edit(src/Foo.kt)', {
         meta: 'Edit',
@@ -128,7 +162,6 @@ describe('transcript — inline diff colouring', () => {
   });
 });
 
-// ── syntax highlighting on a file tool's plain output (Read/Write/Edit) ─────────────────────────────────────
 describe("transcript — a file tool's plain output is a highlighted, copyable code block", () => {
   it("a Read on a .kt file gets code-head chrome and hljs highlighting from the file's extension", () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -159,11 +192,6 @@ describe("transcript — a file tool's plain output is a highlighted, copyable c
   });
 });
 
-// ── command output as a copyable code block ──────────────────────────────────────────────────────────────
-// meta is a space-separated tag set for TOOL_OUTPUT (see ClaudeSession.kt): "command", "error", or "command
-// error" together — a failing command's stderr is still command output you want to copy. Covers Bash,
-// PowerShell, and any MCP tool that executes something (the backend decides via SensitiveGuard.isCommandCall,
-// which looks at the INPUT shape, not the tool name — the frontend only ever sees the resulting meta tag).
 describe('transcript — command output renders as a copyable code block', () => {
   it("a Bash tool's output gets the code-head + Copy chrome, like a markdown fence", () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -230,12 +258,6 @@ describe('transcript — command output renders as a copyable code block', () =>
   });
 });
 
-// ── the command ITSELF as a copyable code block, ALWAYS visible (not gated by collapse) ─────────────────────
-// Distinct from the block above: that one is the command's OUTPUT (TOOL_OUTPUT), still behind the collapse
-// toggle. This is the command TEXT — entry.command (JcefBridge "command" field, from SensitiveGuard.commandText)
-// renders it as its own code-head+Copy block in .tool-cmd, a SIBLING of .tool-out (not nested inside it), so
-// it's visible whether the card is open or collapsed. The header no longer carries the raw command text — it
-// just names the tool ("Bash"), and the card gets a `cmd-tool` class for its own distinct look.
 describe('transcript — the executed command renders as its own always-visible code block', () => {
   it('a Bash tool with entry.command gets a command-src block in .tool-cmd, visible while collapsed', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -248,15 +270,13 @@ describe('transcript — the executed command renders as its own always-visible 
       row(17, 1, 'TOOL_OUTPUT', 'src/Foo.kt:1:foo', { meta: 'command', toolUseId: 'tu-src1' }),
     ]);
     const card = win.document.querySelector('.tool');
-    expect(card.classList.contains('open')).toBe(false); // collapsed by default
+    expect(card.classList.contains('open')).toBe(false);
     expect(card.classList.contains('cmd-tool')).toBe(true);
     const srcBlock = card.querySelector('.tool-cmd pre.command-src');
     expect(srcBlock).not.toBeNull();
     expect(srcBlock.querySelector('code').textContent).toBe('grep -R foo src');
     expect(srcBlock.querySelector('.code-head .copy')).not.toBeNull();
-    // The command block is NOT inside .tool-out (which stays hidden until expanded) — it's a sibling.
     expect(card.querySelector('.tool-out pre.command-src')).toBeNull();
-    // The header no longer shows the raw command text — just the tool name.
     const nameEl = win.document.querySelector('.tool-head .name');
     expect(nameEl.textContent).toBe('Bash');
   });
@@ -282,11 +302,6 @@ describe('transcript — the executed command renders as its own always-visible 
   });
 });
 
-// ── jump-to-code links (jb://open) ───────────────────────────────────────────────────────────────────────
-// Two halves of the same feature: a file tool's card links its path straight away (the host already told us the
-// path is real), while paths/symbols *guessed* in model text are only linked after the host confirms them via
-// cc.links — so a path that doesn't exist never becomes a dead link.
-
 describe('transcript — jump-to-code on tool cards', () => {
   it('a file tool renders its project-relative path as a jb://open link inside the label', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -302,7 +317,6 @@ describe('transcript — jump-to-code on tool cards', () => {
     expect(a).not.toBeNull();
     expect(a.textContent).toBe('src/main/Foo.kt');
     expect(a.getAttribute('href')).toBe('jb://open?file=' + encodeURIComponent('src/main/Foo.kt'));
-    // The tool name around the link survives — the label still reads Read(<path>).
     expect(a.parentNode.textContent).toBe('Read(src/main/Foo.kt)');
   });
 
@@ -332,7 +346,6 @@ describe('transcript — jump-to-code in model text', () => {
     win.CC.send = () => {};
     win.cc.batch([row(13, 0, 'ASSISTANT', 'See `src/main/Foo.kt` and `ghost/Nope.kt`.')]);
 
-    // Host resolved only the first one (the second file does not exist).
     win.cc.links({ rowId: 13, links: [{ token: 'src/main/Foo.kt', path: 'src/main/Foo.kt', line: 12 }] });
 
     const links = win.document.querySelectorAll('a.jb-link');
@@ -341,11 +354,9 @@ describe('transcript — jump-to-code in model text', () => {
     expect(links[0].getAttribute('href')).toBe(
       'jb://open?file=' + encodeURIComponent('src/main/Foo.kt') + '&line=12'
     );
-    expect(win.document.body.textContent).toContain('ghost/Nope.kt'); // still there, just not a link
+    expect(win.document.body.textContent).toContain('ghost/Nope.kt');
   });
 
-  /** Regression: a resolved token was linkified as a plain substring, so `src/main/ui` (a real directory) lit up
-   *  INSIDE `src/main/ui/Fantasma.kt` (a file that does not exist), and `Session` inside `ClaudeSession`. */
   it('a token is only linked as a whole token, never inside a longer path or word', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
@@ -366,10 +377,9 @@ describe('transcript — jump-to-code in model text', () => {
     });
 
     const links = win.document.querySelectorAll('a.jb-link');
-    // Exactly ONE link: the standalone directory. Not the prefix of the ghost path, not inside ClaudeSession.
     expect(links.length).toBe(1);
     expect(links[0].textContent).toBe('src/main/ui');
-    expect(links[0].parentNode.textContent).toBe('src/main/ui'); // the whole code span, nothing dangling
+    expect(links[0].parentNode.textContent).toBe('src/main/ui');
     expect(win.document.body.textContent).toContain('src/main/ui/Fantasma.kt');
     expect(win.document.body.textContent).toContain('ClaudeSession');
   });
@@ -402,13 +412,11 @@ describe('transcript — jump-to-code for directories', () => {
 
     const req = sent.find((m) => m.type === 'resolveLinks');
     expect(req.paths).toContain('build/');
-    expect(req.paths).toContain('~/.claude'); // anchored → no trailing slash needed
-    expect(req.paths).toContain('src/main/kotlin'); // several segments → no trailing slash needed
+    expect(req.paths).toContain('~/.claude');
+    expect(req.paths).toContain('src/main/kotlin');
     expect(req.paths).toContain('src/main/Foo.kt');
   });
 
-  /** The bug this guards: a long path used to match only up to its last slash, linking the prefix and leaving the
-   *  final segment dangling outside the link (`src/main/kotlin/dev/ui` → link on `src/main/kotlin/dev/` + `ui`). */
   it('a path is captured WHOLE — never chopped into a linked prefix plus a dangling last segment', () => {
     const win = loadFrontend(['app-transcript.js']);
     const sent = [];
@@ -417,7 +425,7 @@ describe('transcript — jump-to-code for directories', () => {
 
     const req = sent.find((m) => m.type === 'resolveLinks');
     expect(req.paths).toContain('src/main/kotlin/dev/lain/claudejb/ui');
-    expect(req.paths).not.toContain('src/main/kotlin/dev/lain/claudejb/'); // the prefix is NOT a candidate
+    expect(req.paths).not.toContain('src/main/kotlin/dev/lain/claudejb/');
   });
 
   it('a bare word is never treated as a path', () => {
@@ -444,13 +452,6 @@ describe('transcript — jump-to-code for directories', () => {
   });
 });
 
-// A tool card must carry a STATE CLASS the moment it appears, not only once something updates it.
-//
-// This is the regression these tests exist for: the binary emits NO `tool_progress` for an ordinary Bash call
-// (verified live — zero progress frames across a 12-second `sleep`), so a running tool row is inserted once
-// with state LOADING and then nothing touches it again until its result lands. If the insert path does not
-// apply the class, the card sits grey for the whole call and the fade/spin never runs — which is exactly what
-// a user sees, with no error anywhere to explain it.
 describe('transcript — tool state class on FIRST render', () => {
   it('a TOOL row inserted as LOADING gets the .loading class (no second update needed)', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -476,5 +477,219 @@ describe('transcript — tool state class on FIRST render', () => {
     const card = win.document.querySelector('.tool');
     expect(card.classList.contains('done')).toBe(true);
     expect(card.classList.contains('loading')).toBe(false);
+  });
+});
+
+describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
+  const three = () => [
+    row(101, 0, 'USER', 'first'),
+    row(102, 1, 'ASSISTANT', 'second'),
+    row(103, 2, 'USER', 'third'),
+  ];
+
+  it('removes exactly the named rows and states the cumulative total', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101, 102], total: 2 });
+
+    const bodies = [...win.document.querySelectorAll('#conversation .msg .body')];
+    expect(bodies.map((b) => b.textContent.trim())).toEqual(['third']);
+    const notice = win.document.querySelector('.trim-notice');
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('an EMPTY id list refreshes the notice and removes nothing', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [], total: 40 });
+
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('40 earlier rows were dropped');
+  });
+
+  it('a total of 0 means NO notice at all — absent, not present and empty', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [], total: 0 });
+
+    expect(win.document.querySelector('.trim-notice')).toBeNull();
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+  });
+
+  it('a later trim UPDATES the one notice instead of appending a second', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+    const first = win.document.querySelector('.trim-notice');
+    win.cc.trimRows({ ids: [102], total: 2 });
+
+    expect(win.document.querySelectorAll('.trim-notice').length).toBe(1);
+    expect(win.document.querySelector('.trim-notice')).toBe(first);
+    expect(first.textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('a total of 1 reads as one row, not "1 rows"', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('1 earlier row was dropped');
+  });
+
+  it('the notice sits at the HEAD of the transcript — it stands for what came before', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+    win.cc.batch([row(104, 3, 'USER', 'fourth')]);
+
+    const first = win.document.querySelector('#conversation > .trim-notice, #conversation > .msg');
+    expect(first.classList.contains('trim-notice')).toBe(true);
+  });
+
+  it('announces the first trim through the shared live region, and does not re-announce on every later trim', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [101], total: 1 });
+
+    const region = win.document.getElementById('a11y-status');
+    expect(region.textContent).toContain('1 earlier row was dropped');
+
+    win.cc.trimRows({ ids: [102], total: 2 });
+    expect(region.textContent).toContain('1 earlier row was dropped');
+    expect(win.document.querySelector('.trim-notice').textContent).toContain('2 earlier rows were dropped');
+  });
+
+  it('an id the page never had is harmless', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch(three());
+    win.cc.trimRows({ ids: [999], total: 1 });
+
+    expect(win.document.querySelectorAll('#conversation .msg').length).toBe(3);
+    expect(win.document.querySelector('.trim-notice')).not.toBeNull();
+  });
+});
+
+describe('transcript — the auto-follow names its scroll behaviour', () => {
+  const armed = (distance) => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    const c = win.document.getElementById('conversation');
+    Object.defineProperty(c, 'scrollHeight', { value: distance, configurable: true });
+    Object.defineProperty(c, 'clientHeight', { value: 0, configurable: true });
+    c.scrollTop = 0;
+    win.requestAnimationFrame = (fn) => {
+      fn();
+      return 0;
+    };
+    const asked = [];
+    c.scrollTo = (opts) => asked.push(opts);
+    return { win, c, asked };
+  };
+
+  const NEAR = 40;
+  const FAR = 1200;
+
+  it('a small step glides — the one case that is meant to animate', () => {
+    const { win, asked } = armed(NEAR);
+    win.cc.batch([row(900, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('smooth');
+  });
+
+  it('a long jump asks for INSTANT, and does not leave the answer to the stylesheet', () => {
+    const { win, asked } = armed(FAR);
+    win.CC.emit('follow', true);
+    asked.length = 0;
+    win.cc.batch([row(901, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('instant');
+    expect(asked[0].behavior).not.toBe('auto');
+  });
+
+  it('reduced motion makes even the small step instant', () => {
+    const { win, asked } = armed(NEAR);
+    win.cc.theme({ reducedMotion: true });
+    asked.length = 0;
+    win.cc.batch([row(902, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(asked.length).toBe(1);
+    expect(asked[0].behavior).toBe('instant');
+  });
+
+  it('and it still scrolls where scrollTo does not exist', () => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    const c = win.document.getElementById('conversation');
+    expect(typeof c.scrollTo).toBe('undefined');
+    Object.defineProperty(c, 'scrollHeight', { value: NEAR, configurable: true });
+    win.requestAnimationFrame = (fn) => {
+      fn();
+      return 0;
+    };
+    win.cc.batch([row(903, 0, 'ASSISTANT', 'a delta')]);
+
+    expect(c.scrollTop).toBe(NEAR);
+  });
+});
+
+describe('transcript — the find bar', () => {
+  const openFind = (win) =>
+    win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }));
+  const bar = (win) => win.document.querySelector('.find-bar');
+
+  it('Escape closes it without interrupting the running turn', () => {
+    const win = loadFrontend(['app-transcript.js', 'app-composer.js'], { vendor: false });
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    win.cc.state({ turnActive: true });
+    openFind(win);
+    expect(bar(win).hidden).toBe(false);
+
+    const input = win.document.querySelector('.composer-card textarea, #composer textarea');
+    expect(input).not.toBeNull();
+    input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+    expect(bar(win).hidden).toBe(true);
+    expect(sent.filter((m) => m.type === 'interrupt')).toEqual([]);
+  });
+
+  it('is mounted in the work area, so it cannot cover the tab row', () => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    openFind(win);
+    const found = bar(win);
+    expect(found).not.toBeNull();
+    expect(found.hidden).toBe(false);
+    expect(found.parentElement.id).toBe('work');
+    expect(win.document.getElementById('work').contains(win.document.getElementById('tabsbar'))).toBe(false);
+  });
+
+  it('Enter and Shift+Enter walk the matches, and bring the active one into view', () => {
+    const win = loadFrontend(['app-transcript.js'], { vendor: false });
+    win.cc.batch([row(910, 0, 'ASSISTANT', 'needle one'), row(911, 1, 'ASSISTANT', 'needle two')]);
+    openFind(win);
+
+    const into = [];
+    win.Element.prototype.scrollIntoView = function (opts) {
+      into.push([this.textContent, opts.block]);
+    };
+    try {
+      const input = bar(win).querySelector('.find-input');
+      input.value = 'needle';
+      input.dispatchEvent(new win.Event('input', { bubbles: true }));
+
+      const count = () => bar(win).querySelector('.find-count').textContent;
+      expect(count()).toBe('1 / 2');
+      expect(into.length).toBe(1);
+
+      input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(count()).toBe('2 / 2');
+      input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
+      expect(count()).toBe('1 / 2');
+      expect(into.length).toBe(3);
+      expect(into[2]).toEqual(['needle', 'center']);
+    } finally {
+      delete win.Element.prototype.scrollIntoView;
+    }
   });
 });

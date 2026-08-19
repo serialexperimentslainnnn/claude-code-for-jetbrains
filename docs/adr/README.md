@@ -18,6 +18,7 @@ What earns a record here:
 | [0001](0001-release-process.md) | Release process: branching, signing and tag immutability | accepted | Why GitFlow rather than trunk-based, why GPG-on-YubiKey rather than SSH signing, and why a published tag is never moved |
 | [0002](0002-threat-model.md) | Threat model: what the plugin defends against, and what it does not | accepted | The trust model and STRIDE over the three real surfaces; why prompt injection is assumed to succeed rather than detected; the non-goals |
 | [0003](0003-i18n-deferred.md) | Internationalisation is deferred, deliberately | accepted | Why there is no resource bundle, what that does **not** excuse (WCAG 3.1.1), and the three triggers that reopen it |
+| [0004](0004-target-size-exception.md) | One declared shortfall against WCAG 2.2 SC 2.5.8: the subtab row's close | accepted | Why one control is 20×20 where the criterion asks 24×24, why it covers exactly one class, the gate that watches it in both directions, and the three triggers that retire it |
 
 ## Format
 

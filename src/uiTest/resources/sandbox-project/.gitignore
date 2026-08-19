@@ -1,0 +1,9 @@
+# IDE state. The UI suite OPENS this fixture in the IDE under test, so an IDE writes in here
+# while the suite runs. Tracking that would leave the fixture's own repository dirty from the
+# first run onwards, and a test that inspects a clean tree would then fail over IDE noise
+# instead of over the thing it exercises.
+#
+# It also matches what the repository ABOVE this one does: that one ignores `**/.idea/` and
+# tracks only README.md and src/Sample.kt here. Two repositories over one directory disagreeing
+# about the same files is the kind of asymmetry that gets discovered by a confusing failure.
+/.idea/

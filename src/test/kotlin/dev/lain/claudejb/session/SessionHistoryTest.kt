@@ -4,10 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Tests [SessionHistory]'s pure open-session id (de)serialization without an Application/Project:
- * ordered round-trip and tolerance of blank/garbage input (→ empty, never throws).
- */
 class SessionHistoryTest {
 
     @Test

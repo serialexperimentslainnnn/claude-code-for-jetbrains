@@ -1,0 +1,17 @@
+<!--
+  Optional-dependency descriptor, loaded by the IntelliJ Platform ONLY when the bundled Git plugin (id
+  `Git4Idea`) is present and enabled. Its sole purpose is to satisfy the `config-file` requirement of the
+  optional <depends> in plugin.xml; that <depends> is what grants our plugin runtime classloader access to
+  `git4idea.*` (the Gradle `bundledPlugin("Git4Idea")` dependency only covers compilation), and transitively to
+  the platform modules Git4Idea itself declares — `intellij.platform.vcs.dvcs` (com.intellij.dvcs.repo.Repository)
+  and the VCS-log modules (com.intellij.vcs.log.VcsFullCommitDetails and its supertypes).
+
+  DELIBERATELY OPTIONAL, unlike `com.intellij.modules.jcef`. The chat UI *is* a JCEF page, so a missing browser
+  leaves nothing to degrade to and that dependency is hard. Git is the opposite: an IDE without the Git plugin,
+  or a project that is not a Git working copy, must still load this plugin and run every chat — the Git surface
+  simply reports "unavailable" (see GitHistoryService.isAvailable). No extra extensions are needed: the Git
+  service is registered by the @Service annotation and every entry point checks availability first, so this
+  descriptor is intentionally empty.
+-->
+<idea-plugin>
+</idea-plugin>

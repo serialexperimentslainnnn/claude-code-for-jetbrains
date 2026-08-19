@@ -7,12 +7,8 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.wm.ToolWindowManager
 import dev.lain.claudejb.session.ChatSessionManager
+import dev.lain.claudejb.ui.ClaudeToolWindowFactory
 
-/**
- * Editor-popup action: send the current selection to Claude with an "explain this code" prompt, then focus the chat.
- * The prompt carries the file's project-relative path and (when detectable) a language hint so the agent can fence
- * the snippet correctly. Enabled only when there is a non-empty selection in the focused editor.
- */
 class ExplainSelectionAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -32,9 +28,16 @@ class ExplainSelectionAction : AnAction() {
             append("```")
         }
 
-        val session = ChatSessionManager.getInstance(project).activeOrCreate()
-        session.send(prompt)
-        ToolWindowManager.getInstance(project).getToolWindow("Claude Code")?.activate(null)
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(ClaudeToolWindowFactory.TOOL_WINDOW_ID)
+        if (toolWindow == null) {
+            ChatSessionManager.getInstance(project).activeOrCreate().send(prompt)
+            return
+        }
+        toolWindow.activate {
+            val session = ClaudeToolWindowFactory.activePanel(project)?.session
+                ?: ChatSessionManager.getInstance(project).activeOrCreate()
+            session.send(prompt)
+        }
     }
 
     override fun update(e: AnActionEvent) {
@@ -44,7 +47,6 @@ class ExplainSelectionAction : AnAction() {
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
 
-    /** Project-relative path when [path] is under [basePath]; otherwise the bare file name. */
     private fun relativize(path: String, basePath: String?): String {
         if (basePath != null && path.startsWith(basePath)) {
             return path.removePrefix(basePath).trimStart('/')

@@ -26,13 +26,32 @@
 #                two can never disagree. An existing tag means "already released" and the run stops.
 #   2. LINEAGE.  The commit must be reachable from `main`. Tagging a feature branch, or a develop commit
 #                that never went through a PR into main, aborts the run. `main` is protected and only
-#                accepts PRs, so "reachable from main" IS "was reviewed and merged".
-#   3. HUMAN.    Everything irreversible lives in the `marketplace` GitHub Environment with a required
-#                reviewer — including the tag, which is why cutting it early is safe. Marketplace
-#                publication cannot be undone; a version is out the moment it is out.
+#                accepts PRs with every required check green, so "reachable from main" IS "went through
+#                the pull-request gate". NOT "was reviewed by a second person": main.json sets
+#                `required_approving_review_count: 0` on purpose — GitHub will not let an author approve
+#                their own PR, so on a single-maintainer repository any higher value is a deadlock, not a
+#                control. The mechanical half (PR required, up to date, all checks passing) is what is
+#                actually enforced; raise the count the moment a second maintainer exists.
+#   3. SCOPE.    Everything irreversible lives in the `marketplace` GitHub Environment: the credentials
+#                exist only inside that job, and only refs the environment's branch policy allows can
+#                deploy at all. Marketplace publication cannot be undone; a version is out the moment
+#                it is out.
 #
-# Gate 2 is the one worth arguing about, so: it is not decoration. Without it, anyone who can push a
-# tag can publish from any code, and the PR review that gate 3 assumes has happened becomes optional.
+# WHAT GATE 3 IS NOT, since this file used to say otherwise in four places: it is **not** a human approval.
+# The `marketplace` environment has NO required reviewer — verified against the live repository, and
+# deliberate rather than overlooked: the reasoning is written out in scripts/bootstrap-ci.sh §1 (on a
+# single-maintainer repository the approval was the same person clicking a second time, moments later, over
+# the same decision). So **a merge into `main` that carries a bumped version publishes to the Marketplace
+# unattended.** The human act is the merge, not a later button.
+#
+# That makes gate 2 the load-bearing one, and it is not decoration. Without it, anyone who can push a tag
+# can publish from any code, and the pull request into `main` — now the only human step there is —
+# becomes optional.
+#
+# NB the environment's protection rules are a GitHub setting, not a file in this repository: unlike
+# .github/rulesets/*.json they are not versioned, so this comment can go stale without any diff. Re-check
+# with `gh api repos/OWNER/REPO/environments`, which is what scripts/bootstrap-ci.sh reports at the end of
+# every run.
 name: Release
 
 on:
@@ -75,13 +94,14 @@ jobs:
 
       # Lineage. On a tag push this is the load-bearing gate: without it, anyone who can push a tag can
       # publish from any code. On a main push it is trivially true, and checked anyway rather than assumed —
-      # the cost is one command and the failure mode it guards against is publishing unreviewed code.
+      # the cost is one command and the failure mode it guards against is publishing code that never passed
+      # the pull-request gate on `main`.
       - name: Assert this commit is on main
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::${GITHUB_REF_NAME} points at a commit that is not reachable from main."
-            echo "Releases are cut from main only, and main only accepts reviewed PRs from develop."
+            echo "Releases are cut from main only, and main only accepts pull requests with every check green."
             exit 1
           fi
           echo "lineage OK — $GITHUB_SHA is reachable from main."
@@ -136,7 +156,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile.
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile.
       GRADLE_USER_HOME: /opt/gradle-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,8 +184,10 @@ jobs:
   # That is the lesser problem. Attestation proves WHERE a build ran, and this is the job where the
   # release is genuinely built; two divergent artifacts is a correctness bug users can actually hit.
   #
-  # Everything here is behind the `marketplace` environment, so nothing runs until a human approves —
-  # and no credential is even in scope before that point.
+  # Everything here is behind the `marketplace` environment, which is what SCOPES the credentials: they
+  # exist in this job and nowhere else in the repository. It is not an approval gate — that environment has
+  # no required reviewer (see the header, and scripts/bootstrap-ci.sh §1). Reaching this job means `guard`
+  # passed: the commit is reachable from `main`, and the version in build.gradle.kts has never been tagged.
   publish:
     name: Build, sign and publish
     runs-on: ubuntu-latest
@@ -194,9 +216,11 @@ jobs:
       # than publishing first and stamping a tag on afterwards, which makes the tag a label for something
       # already gone out.
       #
-      # This is safe to do this early ONLY because the whole job is behind the `marketplace` environment:
-      # nothing here runs until a human approves, so a tag can no longer appear for a release nobody
-      # authorised. What it can still do is outlive a FAILED publish, and published tags are immutable
+      # What makes it safe to do this early is `guard`, not an approval: this job is only reached once the
+      # commit is proven reachable from `main` and the declared version proven not already tagged. So a tag
+      # can only appear for a version somebody merged into `main` on purpose. (An earlier version of this
+      # note credited a required reviewer on the `marketplace` environment; there is none — see the header.)
+      # What the tag can still do is outlive a FAILED publish, and published tags are immutable
       # here. That is deliberate, and the recovery is to re-run THIS JOB on the existing tag — the tag
       # step below detects the ref and skips re-cutting it. Note it has to be a JOB re-run and not a
       # workflow re-run: `guard` would see the tag on the remote and correctly report the version as
@@ -226,8 +250,10 @@ jobs:
       # Signed with the CI key, NOT the maintainer's YubiKey — which cannot sign inside a runner, and whose
       # non-exportability is exactly what makes it worth trusting. The chain still terminates in hardware
       # because the CI key is certified by it. The claims therefore shift, and SECURITY.md says so: the tag
-      # attests "this workflow released these bytes", and the human authorisation lives in the two gates
-      # around it — the reviewed PR into main, and the required approval on this environment.
+      # attests "this workflow released these bytes", and the human authorisation is the MERGE into `main` —
+      # the only human act in the sequence. There is no approval on this environment (see the header); the
+      # mechanical guards either side of the merge are the pull-request gate on `main` and `guard`'s lineage
+      # and already-tagged checks.
       - name: Create and sign the release tag
         if: github.ref_type != 'tag'
         env:
@@ -316,18 +342,44 @@ jobs:
           ---
 
           **Verifying this release.** Both the `.asc` files and the tag are signed by the project's **CI
-          signing key** (`docs/ci-signing-key.asc`), which is itself certified by the maintainer's hardware
-          key — so the chain terminates in a key that has never been on a computer.
+          signing key**, and everything needed to check it is in the one file attached here as
+          `trust-chain.asc`: that key's public half, plus the two hardware CAs that certify it — so the
+          chain terminates in keys whose private halves have never been on a computer.
+
+          One file rather than three because a chain is imported whole or not at all. A certification you
+          have no way to follow is indistinguishable from one nobody made, which is exactly the assurance
+          the two CA keys carry.
 
           What the signatures do NOT assert is that a human pressed a button: the release is cut
-          automatically from `main`. That claim rests on the two gates around it — `main` accepts only
-          reviewed pull requests, and publication requires an approval on a protected environment.
+          automatically from the merge into `main`, with no approval step and no required reviewer. What
+          stands behind it instead is mechanical, and it is worth being exact about — `main` accepts nothing
+          but pull requests that are up to date and have all nine required checks green (among them the JVM
+          and frontend tests, both CodeQL scans, the dependency audit and the plugin verifier), that
+          protection can be bypassed by nobody including admins, and this workflow refuses to publish a
+          commit that is not reachable from `main` or a version number that has already been released.
 
           ```sh
-          gpg --import docs/ci-signing-key.asc
+          gpg --import trust-chain.asc
+          # The CI key is the LAST block in that file — the CAs come first, and the awk below takes the
+          # last one deliberately. Then: endorsed by both of them, not merely asserted by a file.
+          gpg --check-sigs "$(gpg --show-keys --with-colons trust-chain.asc \
+                              | awk -F: '$1=="pub"{getline; if ($1=="fpr") f=$10} END{print f}')"
           gpg --verify claude-code-native-*.zip.asc   # these bytes came from this workflow
           git verify-tag <tag>                        # this workflow cut this release from main
           ```
+
+          **The one check worth doing that this file cannot do for you.** Everything above arrives from
+          this repository, so it proves the release is internally consistent and nothing more — whoever
+          could publish a forged artifact could publish a bundle agreeing with it. The CAs are therefore
+          also on **keys.openpgp.org**, an operator with no relation to GitHub, and fetching one by
+          fingerprint is what turns the chain into evidence:
+
+          ```sh
+          gpg --keyserver hkps://keys.openpgp.org --recv-keys <CA fingerprint from SECURITY.md>
+          ```
+
+          Two copies of the same CA from two unrelated publishers either agree, or the disagreement is
+          the story.
           EOF
           gh release create "$TAG" --draft --title "$TAG" --notes-file /tmp/notes.md --verify-tag
 
@@ -391,8 +443,8 @@ jobs:
 
       # --- GPG-sign the exact bytes that were published -------------------------------------------
       # The key is already imported: it was needed above to sign the tag, and it is the same key by
-      # design — one CI signing key backs both claims, and `docs/ci-signing-key.asc` is the single
-      # public half a user needs to check either of them.
+      # design — one CI signing key backs both claims, and `docs/trust-chain.asc` is the single file a
+      # user needs to check either of them.
       - name: Sign the artifact
         env:
           PASSPHRASE: ${{ secrets.GPG_SIGNING_PASSPHRASE }}
@@ -410,11 +462,28 @@ jobs:
           for f in "$NAME" "$NAME.sha256"; do gpg --verify "$f.asc" "$f"; done
           sha256sum -c "$NAME.sha256"
 
+      # --- the trust chain travels with the release ------------------------------------------------
+      #
+      # A signature is worth what the reader's access to the key is worth, and "clone the repository to
+      # fetch the key" asks them to trust the same tree the artifact came from. So the chain rides along
+      # as an asset: one file carrying the CI signing key that made these signatures and the two hardware
+      # CAs that certify it — without which the certification is present and unfollowable, which is the
+      # same thing as absent to anyone verifying.
+      #
+      # Attaching it per release is also what keeps an OLD release verifiable. Rotating the CI key
+      # OVERWRITES `docs/trust-chain.asc` in the tree, so the retired key survives beside the CAs that
+      # vouched for it only on the releases it actually signed — which is where someone verifying one of
+      # them is already standing. `cp` failing on a missing file is the intended behaviour: a release
+      # without its chain is worse than no release, because nothing on the page says the chain is missing.
+      - name: Attach the trust chain
+        run: cp docs/trust-chain.asc dist/
+
       # --- Attach the artifacts and take the release out of draft ---------------------------------
       #
-      # Last, and only now: the draft became a real release the moment it has the four files a user is
-      # told to verify — the signed zip, its checksum, and a detached signature for each. Undrafting
-      # earlier would publish a release whose download links 404 for the length of a build.
+      # Last, and only now: the draft became a real release the moment it has the files a user is told to
+      # verify — the signed zip, its checksum, a detached signature for each, and the trust chain that
+      # makes those signatures checkable. Undrafting earlier would publish a release whose download
+      # links 404 for the length of a build.
       #
       # `--clobber` so re-running this job on an existing tag replaces the assets instead of failing on
       # a name collision. That is the documented recovery path when a publish fails after the tag was

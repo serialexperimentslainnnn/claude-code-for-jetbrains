@@ -1,8 +1,8 @@
 # jvm-test — the CI image for every job that runs Gradle. Built ON TOP of node-test.
 #
 # WHO USES IT
-# `JVM tests`, `Static analysis` and `Plugin verifier` in ci.yml, `CodeQL (java-kotlin)`, the weekly drift
-# check, and the release gate in release.yml.
+# `JVM tests`, `Static analysis`, `Plugin verifier` and `UI end-to-end tests` in ci.yml, `CodeQL
+# (java-kotlin)`, the weekly drift check, and the release gate in release.yml.
 #
 # WHY IT IS BUILT FROM node-test RATHER THAN FROM fedora
 # Two reasons, and the second is the one that matters.
@@ -87,6 +87,39 @@ RUN curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
     && dnf clean all \
     && rm -rf /var/cache/dnf \
     && rm -rf /usr/share/locale
+
+# THE DISPLAY STACK, for `UI end-to-end tests` — the one job here that draws.
+#
+# That job boots a real IDE behind a virtual framebuffer and drives a real Chromium inside it, so it needs
+# an X server plus the libraries the JBR and CEF link against. Everything else here is headless Gradle and
+# npm, which is why the base image carries none of it.
+#
+# It is baked rather than installed per run because THE IMAGE IS THIS PIPELINE'S ONLY CACHING MECHANISM: a
+# `dnf install` in a workflow step is a network transaction on every execution, and its failure mode is the
+# job's worst one — a missing library does not announce itself, the IDE simply never opens its port.
+#
+# Its own layer, not appended to the JDK transaction above: the two answer to different consumers, and a
+# change to either would otherwise invalidate the other's cache. Same manager, same flags and the same
+# cache cleanup as that transaction — an image that installs two ways is an image nobody can reason about.
+#
+# `xorg-x11-server-Xvfb` is what supplies `xvfb-run`; `liberation-fonts` is what stops the IDE drawing
+# boxes, which is not cosmetic here — text the harness reads has to be rendered before it can be read.
+RUN dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs install \
+        xorg-x11-server-Xvfb \
+        gtk3 \
+        nss \
+        alsa-lib \
+        mesa-libgbm \
+        libxkbcommon-x11 \
+        libXtst \
+        libXi \
+        libXrender \
+        libXext \
+        libXrandr \
+        libXcursor \
+        liberation-fonts \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 # JAVA_HOME is resolved rather than hardcoded: the exact path carries the package's build number and would
 # silently break on the next base-image bump. The symlink keeps the ENV below stable across rebuilds.

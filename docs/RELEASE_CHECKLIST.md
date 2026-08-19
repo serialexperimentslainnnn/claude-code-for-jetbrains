@@ -9,21 +9,28 @@ file is the verifiable per-release gate.
 - [ ] On a clean working tree on `develop` (or `hotfix/*` for a hotfix).
 - [ ] `git pull --ff-only` shows no surprises.
 - [ ] Target version selected per SemVer rules (see procedure §Versioning).
+- [ ] **No open bot pull requests against `develop`** (`gh pr list --base develop
+      --state open`). `No bot PRs pending on develop` is a required check on
+      `main` and will block the release PR until the queue is drained.
 
 ## Build & verification
 
-- [ ] `./gradlew test` — all unit tests pass (currently 682, 2 Windows-only skips).
-- [ ] `./gradlew detekt spotlessCheck` — static analysis and formatting clean.
-- [ ] `npm run lint && npm test` — the shipped JCEF frontend lints clean, 54 tests pass.
+- [ ] `./gradlew test` — green, with **no failures**; the only expected skips are
+      the two Windows-only tests.
+- [ ] `./gradlew detekt spotlessCheck` — static analysis and formatting clean,
+      with `config/detekt/baseline.xml` **untouched** (it holds exactly two
+      accepted `ClaudeSession` findings; regenerating it to make a build pass is
+      how the gate stops meaning anything).
+- [ ] `npm test && npm run lint && npm run format:check` — the shipped JCEF
+      frontend passes vitest, ESLint and Prettier.
 - [ ] `./gradlew koverVerify` — coverage gates hold (see **Coverage policy** below).
-- [ ] `./gradlew verifyPlugin` — **Compatible** with IU-261 **and**
-      IU-262/RC.
-- [ ] Verifier report has **no new internal-API usage**
-      (`@ApiStatus.Internal`).
-- [ ] No new deprecated or scheduled-for-removal IntelliJ Platform APIs in
-      the diff since the last tag.
-- [ ] `./gradlew buildPlugin` produces a zip under
-      `build/distributions/claude-code-for-jetbrains-X.Y.Z.zip`.
+- [ ] `./gradlew verifyPlugin` — **Compatible** across the declared range: the
+      floor (253) through the newest IDEA **and PyCharm** EAP/RC.
+- [ ] Verifier report clean at all four failure levels the build declares —
+      compatibility problems, internal API, override-only API, and **deprecated
+      API**. A deprecation is a blocker here, not a warning.
+- [ ] `./gradlew buildPlugin` produces
+      `build/distributions/claude-code-native-X.Y.Z.zip`.
 
 ## Coverage policy
 
@@ -32,37 +39,73 @@ Coverage is gated **per package**, not globally, because the risk in this codeba
 would either set the bar low enough that the guard could rot unnoticed, or high enough that the only way to
 meet it is writing tests against Swing and JCEF that assert nothing anyone cares about.
 
-Thresholds are set slightly **below** what each package measures today — a gate that catches regression, not a
-target that invites test-padding. Line coverage measured 2026-08-05:
+Every bound sits slightly **below** what is measured — a gate that catches regression, not a target that
+invites test-padding. **This table is the only place the measured figures live**; `build.gradle.kts` carries
+the bounds and the exclusion list, and points here rather than repeating a number that would then have two
+homes and no way to notice they had diverged. The two must agree, and keeping them agreeing is part of
+releasing.
 
-| package | line % | gated |
-|---|---|---|
-| `permission/` | 98.1 | ✅ |
-| `protocol/` | 87.3 | ✅ |
-| `settings/` | 86.1 | ✅ |
-| `diff/` | 72.8 | ✅ |
-| `session/` | 67.3 | ✅ |
-| `context/`, `process/` | 42.1 / 37.9 | ❌ excluded — known gap |
-| `ui/`, `ui/jcef/` | 24.6 / 31.2 | ❌ excluded — covered elsewhere |
-| `actions/` | 0.0 | ❌ excluded — one delegate call each |
+Regenerate the figures rather than trusting the ones below — a measurement ages in silence and nothing here can
+notice when it has. `./gradlew cleanTest test koverXmlReport` writes `build/reports/kover/report.xml`; the
+`<counter type="LINE">` and `<counter type="BRANCH">` elements under each `<package>` are the per-package rows,
+and the ones at the root of the document are the **all gated code** row. Measured 2026-08-14:
+
+| package | line % | branch % | gated |
+|---|---|---|---|
+| `permission/` | 98.1 | 74.5 | ✅ |
+| `protocol/` | 88.9 | 27.5 | ✅ |
+| `git/` | 100.0 | 100.0 | ✅ — **`GitCommitInfo` only**; the other four classes are excluded by name |
+| `settings/` | 79.0 | 57.3 | ✅ |
+| `diff/` | 72.0 | 64.7 | ✅ |
+| `session/` | 70.7 | 48.6 | ✅ |
+| **all gated code** | **76.99** | **43.63** | — the aggregate the second rule bounds |
+| `context/`, `process/` | — | — | ❌ excluded — known gap |
+| `ui/`, `ui/jcef/` | — | — | ❌ excluded — covered elsewhere |
+| `actions/` | — | — | ❌ excluded — one delegate call each |
+| `util/` | — | — | ❌ excluded — one line, and it needs a live platform to run |
+
+The excluded rows carry no percentage on purpose. `reports.filters.excludes` removes those classes from the
+**report**, not merely from the calculation, so they are absent from `report.xml` altogether and there is no
+measured figure to quote. An estimate in this table would defeat the only reason it exists.
+
+`git/` is gated and easy to miss: the exclusion names four classes, not the package, so `GitCommitInfo` — the
+pure half, and the only place a bug there would be silent — stays inside the gate and is subject to the floor
+like any other package.
 
 **Excluded, and why it is stated rather than gated at a token value.** `ui/` needs a live IDE and a live
-Chromium; it is covered by a different layer — 54 vitest tests that drive the *real shipped JS*, plus the
-mandatory manual pass in §Smoke test below. `context/` and `process/` wrap the OS (system clipboard, process
-spawn, shell environment) and most of what is uncovered there cannot execute on a CI box. That is a **known
-gap**, listed so nobody mistakes it for coverage; the pure parts of both (`AttachmentEncoder`,
-`EnvScriptLoader.parse`) *are* tested. Gating any of these at 20% would dress the same fact up as a passing
-check.
+Chromium; it is covered by a different layer — the vitest suite, which drives the *real shipped JS* out of
+`src/main/resources/jcef/`, plus the mandatory manual pass in §Smoke test below. `context/` and `process/` wrap
+the OS (system clipboard, process spawn, shell environment) and most of what is uncovered there cannot execute
+on a CI box. That is a **known gap**, listed so nobody mistakes it for coverage; the pure parts of both —
+`ClipboardCli` and `ImageAttachments` in `context/` (`ClipboardCliTest`, `ImageAttachmentsTest`), and
+`EnvScriptLoader.parse` in `process/` — *are* tested. Gating any of these at 20% would dress the same fact up
+as a passing check. `build.gradle.kts`'s kover exclusion carries the same list as the ❌ rows above; the two
+must agree.
 
-**Known limitation.** Kover 0.9.2's `KoverVerifyRule` has no per-rule filter, so the exact per-package numbers
-above are not individually expressible in the build. What `koverVerify` enforces is a **floor applied to every
-gated package** plus an **aggregate** — both real gates (the floor catches one package collapsing, the
-aggregate catches death by a thousand cuts), but looser than the table. If a future Kover adds per-rule
-filters, tighten `build.gradle.kts` to match this table.
+**What `koverVerify` actually enforces.** Four bounds, and these are the numbers in the build:
 
-> Historical note: until 5.0.0 a comment in `build.gradle.kts` claimed a "≥90% target … documented in
-> `docs/RELEASE_CHECKLIST.md`". This file had never said that, and the real figure was 53%. The number was
-> never measured and the requirement it cited did not exist.
+| rule | scope | line | branch |
+|---|---|---|---|
+| `every gated package holds its floor` | each package on its own | ≥ 65 | ≥ 20 |
+| `gated code as a whole` | the aggregate | ≥ 75 | ≥ 40 |
+
+**Known limitation, and it is larger than it looks.** `KoverVerifyRule` has no per-rule filter — re-checked at
+**0.9.9**, the version the build resolves, against the plugin's own DSL sources; nor can a report variant stand
+in for one, since a variant is scoped by source set rather than by package. So a threshold per package cannot
+be expressed at all, and the per-package figures in the table above are **recorded, not enforced**. Read the
+consequences rather than the shape:
+
+- **A floor is fixed by the weakest package.** On lines that is `session/`; on branches it is `protocol/`, far
+  below everything else, which is why the branch floor is 20 while `permission/` measures 74.5. The branch
+  floor detects a collapse, not a regression, and it says nothing whatsoever about `permission/` holding its
+  own number.
+- **The aggregate cannot cover for that.** `permission/` holds about a twentieth of the gated branch mass, so
+  it could lose half its branch coverage and the aggregate would still clear 40.
+- **The line aggregate has little headroom**: 76.99 against a bound of 75. A change that lands a large, lightly
+  tested package can turn this red on its own, and that is the bound to look at first when it does.
+
+If a future Kover adds per-rule filters, tighten `build.gradle.kts` so the per-package figures above become
+gates instead of records.
 
 ## Documentation
 
@@ -71,6 +114,12 @@ filters, tighten `build.gradle.kts` to match this table.
       (`Added`, `Changed`, `Fixed`, `Security`).
 - [ ] [`../RELEASE_NOTES.md`](../RELEASE_NOTES.md) updated with a
       user-facing narrative for the new version.
+- [ ] **Both dates re-checked immediately before the merge.** They are stamped
+      by hand while the notes are written and the release happens at the merge,
+      so a PR that sits ships a date that is already wrong — and the
+      `## [x.y.z]` block goes out **verbatim** as the GitHub Release body.
+      Known defect, with its exit, in
+      [ADR 0001 §4](adr/0001-release-process.md).
 - [ ] `change-notes` renders cleanly in the Marketplace HTML — verify by
       running `./gradlew patchPluginXml` and inspecting
       `build/patchedPluginXmlFiles/plugin.xml` (the `<change-notes>` tag
@@ -78,9 +127,10 @@ filters, tighten `build.gradle.kts` to match this table.
       `latestReleaseNotesHtml()` in `build.gradle.kts`).
 - [ ] [`../README.md`](../README.md) install instructions still match
       reality (Marketplace name, link, settings paths).
-- [ ] [`BINARY_COMPAT.md`](BINARY_COMPAT.md) updated **only if** the
-      supported `claude` binary range changed, with a new row and any
-      newly handled / pending events.
+- [ ] [`BINARY_COMPAT.md`](BINARY_COMPAT.md) updated **only if** the protocol
+      baseline or the IDE range moved, with a new row in the matching table.
+- [ ] [`../CLAUDE.md`](../CLAUDE.md) and [`../PROJECTMAP.md`](../PROJECTMAP.md)
+      reflect the release — the version, and anything that moved or was added.
 
 ## Version metadata
 
@@ -104,33 +154,56 @@ Find the IDE config directory under the Toolbox install, e.g. on Linux:
 
 Steps:
 
+This step is **not automatable and not optional**: twice now a release passed
+every automated check and was broken in the IDE (ADR 0001 §5).
+
 - [ ] Settings → Plugins → ⚙ → Install Plugin from Disk → pick the new zip.
 - [ ] Restart IDE.
-- [ ] Tool window "Claude Code" appears on the right.
+- [ ] Tool window "Claude Code" appears on the right, and the chat **renders** —
+      i.e. JCEF loaded. Do this on the newest IDE available, not only on the one
+      you develop in: the 5.1.1 breakage was a classloader difference that only
+      appeared from build 262.
 - [ ] New chat: model chip, mode chip, effort chip, thinking chip all show
       the expected defaults.
 - [ ] Send a prompt that triggers an Edit tool call — permission card
-      appears inline, "View diff" opens a diff in the editor area (not a
-      modal window).
-- [ ] Approve a hunk — the binary writes, VFS refreshes, the file shows
-      the change.
-- [ ] Restart IDE with `restoreOpenChatsOnStartup` enabled — chats are
-      reopened via `--resume`.
+      appears inline, "View diff" opens an **editable** diff in the editor area
+      (not a modal window).
+- [ ] Accept it — the edit is written whole (per-hunk acceptance was removed in
+      4.0.5), VFS refreshes, and the file shows the change.
+- [ ] Run something that spawns a subagent — it gets its **own tab** with its own
+      transcript, and the main transcript links to it instead of interleaving.
+- [ ] Restart the IDE — the previously open chats are reopened via `--resume`,
+      and you are **still signed in** (the vaulted credential renews itself from
+      the refresh token rather than falling back to the sign-in card).
 
 ## Git hygiene
 
-- [ ] Commit message: `Release vX.Y.Z`.
-- [ ] CI green on `develop` before promoting to `main`.
-- [ ] PR `release/X.Y.Z` → `main` opened, CI green, approved.
-- [ ] Signed tag `vX.Y.Z` pushed to `main` (the ruleset enforces this via
-      GPG / YubiKey).
-- [ ] `release.yml` reached the `publish` job and the `marketplace`
-      environment approval was granted; the version is live on Marketplace.
+- [ ] Version-bump commit is a Conventional Commit (`build: bump the version to
+      X.Y.Z`) — `commitlint` rejects the old `Release vX.Y.Z` subject.
+- [ ] Every commit signed with the YubiKey (the ruleset requires signatures, and
+      merge commit is the only merge method enabled, because squash and rebase
+      would rewrite the commits and strip those signatures).
+- [ ] PR `release/X.Y.Z` → `main` opened, full CI green.
+- [ ] **No tag pushed by hand.** `release.yml` cuts and signs `vX.Y.Z` itself,
+      with the CI key, inside the `marketplace`-scoped job. A hand-cut tag
+      bypasses the merge and cannot be undone — published tags are immutable
+      (ADR 0001 §3).
+- [ ] `release.yml` reached `publish` and it completed. **There is no approval
+      prompt** — the `marketplace` environment carries no required reviewer, by
+      design, so the merge you just made was the last human act. See
+      [`RELEASE_PROCEDURE.md`](RELEASE_PROCEDURE.md) §Secrets.
 
 ## Post-release
 
 - [ ] Marketplace listing shows the new version within ~20 minutes.
-- [ ] GitHub Release created with the signed zip attached.
+- [ ] GitHub Release out of draft, with five assets: the signed zip, its
+      `.sha256`, a `.asc` for each, and `trust-chain.asc`.
+- [ ] `git verify-tag vX.Y.Z` and `gpg --verify` on the artifact both pass
+      against `docs/trust-chain.asc`, **and** `gpg --check-sigs` on the CI key
+      shows a certification from each hardware CA. A chain that does not chain
+      is the failure this asset exists to prevent, and it looks like success.
 - [ ] Milestone for `vX.Y.Z` closed and linked issues closed.
-- [ ] `develop` back in sync with `main` (fast-forward or merge as needed).
+- [ ] `develop` back in sync with `main` — via a **pull request**; `develop` is
+      protected and a fast-forward is impossible anyway, since GitHub creates the
+      merge commit on `main`.
 - [ ] Auto-memory / project notes updated if release status changed.

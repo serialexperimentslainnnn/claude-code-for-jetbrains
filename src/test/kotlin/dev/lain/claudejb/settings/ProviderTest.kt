@@ -5,12 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the security-critical [Provider] launch-env rules: a third-party provider gets its base URL and key as
- * an ATOMIC PAIR and only when a key is present; Anthropic (or a missing key) gets nothing so the binary uses
- * its own login; we never emit `ANTHROPIC_AUTH_TOKEN`; and an Anthropic-shaped key is recognised so the UI can
- * refuse to send Anthropic credentials to another provider.
- */
 class ProviderTest {
 
     @Test
@@ -18,14 +12,12 @@ class ProviderTest {
         val env = Provider.launchEnv(Provider.DEEPSEEK, "sk-deepseek-123")
         assertEquals("https://api.deepseek.com/anthropic", env["ANTHROPIC_BASE_URL"])
         assertEquals("sk-deepseek-123", env["ANTHROPIC_API_KEY"])
-        // Hard rule: never the bearer token, and exactly those two keys (no stray overrides).
         assertFalse(env.containsKey("ANTHROPIC_AUTH_TOKEN"))
         assertEquals(setOf("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"), env.keys)
     }
 
     @Test
     fun `deepseek with a blank or whitespace key emits NOTHING (never a lone base url)`() {
-        // A lone base URL would make the SDK ship the Anthropic OAuth bearer to the third party — forbidden.
         assertTrue(Provider.launchEnv(Provider.DEEPSEEK, "").isEmpty())
         assertTrue(Provider.launchEnv(Provider.DEEPSEEK, "   ").isEmpty())
         assertTrue(Provider.launchEnv(Provider.DEEPSEEK, null).isEmpty())

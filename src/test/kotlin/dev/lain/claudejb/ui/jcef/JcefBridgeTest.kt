@@ -1,22 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
-import dev.lain.claudejb.permission.ElicitationCard
-import dev.lain.claudejb.permission.PendingPermission
-import dev.lain.claudejb.protocol.AskOption
-import dev.lain.claudejb.protocol.AskQuestion
-import dev.lain.claudejb.protocol.ElicitField
-import dev.lain.claudejb.session.Speaker
-import dev.lain.claudejb.session.ToolState
-import dev.lain.claudejb.session.TranscriptEntry
-import dev.lain.claudejb.ui.LinkResolver
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -24,143 +9,13 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the JCEF bridge protocol — [JcefBridge] serialization (transcript rows / permission
- * cards → the frontend's JSON shapes) and inbound parsing (every `window.__ccSend` message `type` → a typed
- * [JcefBridge.Msg]). No platform/browser is involved, so this is the load-bearing contract test.
- */
 class JcefBridgeTest {
-
-    // ── entry serialization ──────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    fun `entryJson carries id order speaker text state elapsed and omits null optionals`() {
-        val e = TranscriptEntry(7L, Speaker.ASSISTANT, "**hi**")
-        val o = JcefBridge.entryJson(e, order = 3)
-        assertEquals(7, o["id"]!!.jsonPrimitive.int)
-        assertEquals(3, o["order"]!!.jsonPrimitive.int)
-        assertEquals("ASSISTANT", o["speaker"]!!.jsonPrimitive.content)
-        assertEquals("**hi**", o["text"]!!.jsonPrimitive.content)
-        assertEquals("FINISHED", o["state"]!!.jsonPrimitive.content)
-        assertTrue(o.containsKey("elapsed"))
-        assertFalse(o.containsKey("meta"))
-        assertFalse(o.containsKey("toolUseId"))
-        assertFalse(o.containsKey("parent"))
-    }
-
-    @Test
-    fun `entryJson includes meta toolUseId and parent when present`() {
-        val e = TranscriptEntry(
-            1L,
-            Speaker.TOOL,
-            "Read(App.kt)",
-            meta = "error",
-            toolUseId = "tu1",
-            parentToolUseId = "agent1",
-            toolState = ToolState.RUNNING,
-        )
-        val o = JcefBridge.entryJson(e, order = 0)
-        assertEquals("error", o["meta"]!!.jsonPrimitive.content)
-        assertEquals("tu1", o["toolUseId"]!!.jsonPrimitive.content)
-        assertEquals("agent1", o["parent"]!!.jsonPrimitive.content)
-        assertEquals("RUNNING", o["state"]!!.jsonPrimitive.content)
-    }
-
-    @Test
-    fun `batchJson is a JSON array preserving order pairs`() {
-        val a = TranscriptEntry(1L, Speaker.USER, "one")
-        val b = TranscriptEntry(2L, Speaker.ASSISTANT, "two")
-        val arr = Json.parseToJsonElement(JcefBridge.batchJson(listOf(a to 5, b to 6))).jsonArray
-        assertEquals(2, arr.size)
-        assertEquals(5, arr[0].jsonObject["order"]!!.jsonPrimitive.int)
-        assertEquals(2, arr[1].jsonObject["id"]!!.jsonPrimitive.int)
-    }
-
-    // ── permission serialization ─────────────────────────────────────────────────────────────────────────
-
-    private fun perm(
-        reviewable: Boolean = false,
-        questions: List<AskQuestion>? = null,
-        isPlan: Boolean = false,
-        planText: String? = null,
-        elicitation: ElicitationCard? = null,
-    ) = PendingPermission(
-        requestId = "r1", toolName = "Edit", input = buildJsonObject { put("file_path", "App.kt") },
-        title = "Edit App.kt", summary = "writes App.kt", reviewable = reviewable,
-        questions = questions, isPlan = isPlan, planText = planText, elicitation = elicitation,
-    )
-
-    @Test
-    fun `permissionJson standard card`() {
-        val o = JcefBridge.permissionJson(perm(reviewable = true))
-        assertEquals("r1", o["id"]!!.jsonPrimitive.content)
-        assertEquals("Edit", o["tool"]!!.jsonPrimitive.content)
-        assertTrue(o["reviewable"]!!.jsonPrimitive.boolean)
-        assertFalse(o["isPlan"]!!.jsonPrimitive.boolean)
-        assertFalse(o.containsKey("questions"))
-        assertFalse(o.containsKey("elicitation"))
-    }
-
-    @Test
-    fun `permissionJson AskUserQuestion card carries questions and options`() {
-        val q = AskQuestion(
-            question = "Pick one",
-            header = "Choice",
-            options = listOf(AskOption("A", "first", preview = "pa"), AskOption("B", "second")),
-            multiSelect = true,
-        )
-        val o = JcefBridge.permissionJson(perm(questions = listOf(q)))
-        val qs = o["questions"]!!.jsonArray
-        assertEquals(1, qs.size)
-        val q0 = qs[0].jsonObject
-        assertEquals("Choice", q0["header"]!!.jsonPrimitive.content)
-        assertTrue(q0["multiSelect"]!!.jsonPrimitive.boolean)
-        val opts = q0["options"]!!.jsonArray
-        assertEquals("A", opts[0].jsonObject["label"]!!.jsonPrimitive.content)
-        assertEquals("pa", opts[0].jsonObject["preview"]!!.jsonPrimitive.content)
-        assertFalse(opts[1].jsonObject.containsKey("preview"))
-    }
-
-    @Test
-    fun `permissionJson plan card carries planText`() {
-        val o = JcefBridge.permissionJson(perm(isPlan = true, planText = "## Plan\n- do it"))
-        assertTrue(o["isPlan"]!!.jsonPrimitive.boolean)
-        assertEquals("## Plan\n- do it", o["planText"]!!.jsonPrimitive.content)
-    }
-
-    @Test
-    fun `permissionJson elicitation card carries fields`() {
-        val card = ElicitationCard(
-            serverName = "srv",
-            message = "Enter a key",
-            description = null,
-            mode = "form",
-            url = null,
-            fields = listOf(ElicitField("token", "string", "Token", required = true)),
-        )
-        val o = JcefBridge.permissionJson(perm(elicitation = card))
-        val e = o["elicitation"]!!.jsonObject
-        assertEquals("srv", e["serverName"]!!.jsonPrimitive.content)
-        assertEquals("form", e["mode"]!!.jsonPrimitive.content)
-        val f0 = e["fields"]!!.jsonArray[0].jsonObject
-        assertEquals("token", f0["name"]!!.jsonPrimitive.content)
-        assertTrue(f0["required"]!!.jsonPrimitive.boolean)
-    }
-
-    @Test
-    fun `permissionsJson is an array`() {
-        val arr = Json.parseToJsonElement(JcefBridge.permissionsJson(listOf(perm(), perm()))).jsonArray
-        assertEquals(2, arr.size)
-    }
-
-    // ── inbound parsing ──────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `parse simple verbs`() {
         assertTrue(JcefBridge.parse("""{"type":"interrupt"}""") is JcefBridge.Msg.Interrupt)
         assertTrue(JcefBridge.parse("""{"type":"cycleMode"}""") is JcefBridge.Msg.CycleMode)
         assertTrue(JcefBridge.parse("""{"type":"ready"}""") is JcefBridge.Msg.Ready)
-        assertTrue(JcefBridge.parse("""{"type":"palette"}""") is JcefBridge.Msg.OpenPalette)
     }
 
     @Test
@@ -233,11 +88,6 @@ class JcefBridgeTest {
     }
 
     @Test
-    fun `parse pickFiles is the singleton object`() {
-        assertTrue(JcefBridge.parse("""{"type":"pickFiles"}""") is JcefBridge.Msg.PickFiles)
-    }
-
-    @Test
     fun `parse attach carries name mediaType and base64`() {
         val m = JcefBridge.parse(
             """{"type":"attach","name":"shot.png","mediaType":"image/png","base64":"AAAA"}""",
@@ -245,6 +95,57 @@ class JcefBridgeTest {
         assertEquals("shot.png", m.name)
         assertEquals("image/png", m.mediaType)
         assertEquals("AAAA", m.base64)
+    }
+
+    @Test
+    fun `parse treeChildren carries the root-relative path and the picker`() {
+        val m = JcefBridge.parse(
+            """{"type":"treeChildren","path":"src/main","mode":"files"}""",
+        ) as JcefBridge.Msg.TreeChildren
+        assertEquals("src/main", m.path)
+        assertEquals("files", m.mode)
+        val dirs = JcefBridge.parse(
+            """{"type":"treeExpand","path":"src","mode":"directories"}""",
+        ) as JcefBridge.Msg.TreeExpand
+        assertEquals("src", dirs.path)
+        assertEquals("directories", dirs.mode)
+    }
+
+    @Test
+    fun `an absent path is the project ROOT, not a missing field`() {
+        val m = JcefBridge.parse("""{"type":"treeChildren","mode":"files"}""") as JcefBridge.Msg.TreeChildren
+        assertEquals("", m.path)
+    }
+
+    @Test
+    fun `a path that is not a string is dropped, never thrown on`() {
+        val obj = JcefBridge.parse("""{"type":"treeChildren","path":{"nope":1},"mode":"files"}""")
+        assertEquals("", (obj as JcefBridge.Msg.TreeChildren).path)
+        val arr = JcefBridge.parse("""{"type":"treeExpand","path":["a"],"mode":"files"}""")
+        assertEquals("", (arr as JcefBridge.Msg.TreeExpand).path)
+    }
+
+    @Test
+    fun `an absolute path rides through verbatim — containment is ProjectTree's single gate`() {
+        val m = JcefBridge.parse(
+            """{"type":"treeChildren","path":"/etc/passwd","mode":"files"}""",
+        ) as JcefBridge.Msg.TreeChildren
+        assertEquals("/etc/passwd", m.path)
+        val up = JcefBridge.parse("""{"type":"attachPaths","paths":["../../etc/passwd"]}""")
+        assertEquals(listOf("../../etc/passwd"), (up as JcefBridge.Msg.AttachPaths).paths)
+    }
+
+    @Test
+    fun `parse attachPaths is a batch, and total on the shapes a batch can arrive in`() {
+        val m = JcefBridge.parse(
+            """{"type":"attachPaths","paths":["README.md","src/App.kt"]}""",
+        ) as JcefBridge.Msg.AttachPaths
+        assertEquals(listOf("README.md", "src/App.kt"), m.paths)
+        val junk = JcefBridge.parse(
+            """{"type":"attachPaths","paths":["ok.kt","",{"a":1}]}""",
+        ) as JcefBridge.Msg.AttachPaths
+        assertEquals(listOf("ok.kt"), junk.paths)
+        assertTrue((JcefBridge.parse("""{"type":"attachPaths"}""") as JcefBridge.Msg.AttachPaths).paths.isEmpty())
     }
 
     @Test
@@ -269,7 +170,43 @@ class JcefBridgeTest {
         assertEquals("task42", m.taskId)
     }
 
-    // ── "Claude Code was not found" boot card ────────────────────────────────────────────────────────────
+    @Test
+    fun `parse gitAction carries the id and the commit hash`() {
+        val m = JcefBridge.parse(
+            """{"type":"gitAction","id":"commitRevert","hash":"8933592ffee1"}""",
+        ) as JcefBridge.Msg.GitAction
+        assertEquals("commitRevert", m.id)
+        assertEquals("8933592ffee1", m.hash)
+    }
+
+    @Test
+    fun `parse gitAction without a hash reads as no commit, not as a missing field`() {
+        val m = JcefBridge.parse("""{"type":"gitAction","id":"commit"}""") as JcefBridge.Msg.GitAction
+        assertEquals("commit", m.id)
+        assertEquals("", m.hash)
+    }
+
+    @Test
+    fun `a turn carries the conversation it is for, and the ordinary one carries none`() {
+        assertEquals(JcefBridge.Msg.Send("hello"), JcefBridge.parse("""{"type":"send","text":"hello"}"""))
+        assertEquals(
+            JcefBridge.Msg.Send("squash those two", JcefBridge.SCOPE_GIT),
+            JcefBridge.parse("""{"type":"send","text":"squash those two","scope":"git"}"""),
+        )
+        assertEquals(JcefBridge.Msg.Interrupt(), JcefBridge.parse("""{"type":"interrupt"}"""))
+        assertEquals(
+            JcefBridge.Msg.Interrupt(JcefBridge.SCOPE_GIT),
+            JcefBridge.parse("""{"type":"interrupt","scope":"git"}"""),
+        )
+    }
+
+    @Test
+    fun `parse a card resolution carries the conversation it belongs to`() {
+        val own = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true}""")
+        assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, ""), own)
+        val git = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true,"scope":"git"}""")
+        assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, JcefBridge.SCOPE_GIT), git)
+    }
 
     @Test
     fun `parse installClaude carries the method id`() {
@@ -287,8 +224,6 @@ class JcefBridgeTest {
     fun `parse recheckBinary`() {
         assertEquals(JcefBridge.Msg.RecheckBinary, JcefBridge.parse("""{"type":"recheckBinary"}"""))
     }
-
-    // ── sign-in card ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `parse loginSubscription cancelLogin dismissAuth logout`() {
@@ -309,26 +244,8 @@ class JcefBridgeTest {
     @Test
     fun `jsString escapes what would break out of a host exec call`() {
         assertEquals("\"plain\"", JcefBridge.jsString("plain"))
-        // A quote+paren payload must come back inert, and control chars must be escaped, or a message
-        // containing them would terminate the JS string it is embedded in.
         assertEquals("\"a\\\"b\"", JcefBridge.jsString("a\"b"))
         assertEquals("\"line\\nbreak\"", JcefBridge.jsString("line\nbreak"))
-    }
-
-    // ── jump-to-code links ───────────────────────────────────────────────────────────────────────────────
-
-    @Test
-    fun `entryJson carries the project-relative filePath of a file tool and omits it elsewhere`() {
-        val tool = TranscriptEntry(
-            1L,
-            Speaker.TOOL,
-            "Read(src/Foo.kt)",
-            meta = "Read",
-            toolUseId = "t1",
-            filePath = "src/Foo.kt",
-        )
-        assertEquals("src/Foo.kt", JcefBridge.entryJson(tool, 0)["filePath"]!!.jsonPrimitive.content)
-        assertNull(JcefBridge.entryJson(TranscriptEntry(2L, Speaker.ASSISTANT, "hi"), 1)["filePath"])
     }
 
     @Test
@@ -347,39 +264,11 @@ class JcefBridgeTest {
         assertEquals(-1L, m.rowId)
         assertTrue(m.paths.isEmpty())
         assertTrue(m.symbols.isEmpty())
-        // Malformed candidates must not throw: non-strings and blanks are dropped, the rest survives.
         val junk = JcefBridge.parse(
             """{"type":"resolveLinks","rowId":1,"paths":["ok.kt","",{"a":1}],"symbols":"nope"}""",
         ) as JcefBridge.Msg.ResolveLinks
         assertEquals(listOf("ok.kt"), junk.paths)
         assertTrue(junk.symbols.isEmpty())
-    }
-
-    @Test
-    fun `linksJson answers with the row id and only the resolved tokens`() {
-        val json = JcefBridge.linksJson(
-            7L,
-            listOf(
-                LinkResolver.Resolved("src/Foo.kt", "src/Foo.kt", null),
-                LinkResolver.Resolved("PermissionBroker", "src/permission/PermissionBroker.kt", 31),
-            ),
-        )
-        val o = Json.parseToJsonElement(json).jsonObject
-        assertEquals(7, o["rowId"]!!.jsonPrimitive.int)
-        val links = o["links"]!!.jsonArray
-        assertEquals(2, links.size)
-        assertEquals("src/Foo.kt", links[0].jsonObject["token"]!!.jsonPrimitive.content)
-        assertNull(links[0].jsonObject["line"]) // no line → the key is absent, not null
-        assertEquals("PermissionBroker", links[1].jsonObject["token"]!!.jsonPrimitive.content)
-        assertEquals("src/permission/PermissionBroker.kt", links[1].jsonObject["path"]!!.jsonPrimitive.content)
-        assertEquals(31, links[1].jsonObject["line"]!!.jsonPrimitive.int)
-    }
-
-    @Test
-    fun `linksJson with nothing resolved is an empty link list, never null`() {
-        val o = Json.parseToJsonElement(JcefBridge.linksJson(3L, emptyList())).jsonObject
-        assertEquals(3, o["rowId"]!!.jsonPrimitive.int)
-        assertTrue(o["links"]!!.jsonArray.isEmpty())
     }
 
     @Test

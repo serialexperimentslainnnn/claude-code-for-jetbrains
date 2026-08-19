@@ -1,47 +1,56 @@
 package dev.lain.claudejb.ui
 
-import com.intellij.remoterobot.fixtures.ComponentFixture
-import com.intellij.remoterobot.search.locators.byXpath
-import com.intellij.remoterobot.utils.waitFor
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.time.Duration
 
 /**
- * E8 attachments: pinning the current file as @-context (the gear "Add Current File as @-context" action, which
- * routes to `ChatPanel.addAttachment`) must show a removable chip in the composer's attachment strip — carrying
- * the file's basename with the `@` marker — instead of sending immediately. Sending then clears the strip.
+ * Pinning the current file as @-context shows a removable chip in the composer — and removing it gets back.
  *
- * The chip is a plain label inside [AttachmentStripPanel]; locate it by its `@`-prefixed text. Open the UI Robot
- * inspector against the running IDE to tighten the locator if several labels match.
+ * The subject survived the rewrite; the mechanism did not. The chip used to be a Swing label in an
+ * `AttachmentStripPanel`, which is one of the components 4.0.0 deleted. Today the whole path is
+ * host → page → host: a tool-window action calls `AttachmentTray.addCurrentFile`, which pushes
+ * `cc.attachments(...)` into the browser, the page draws `.att-label`, and the ✕ on the chip comes back as a
+ * `removeAttachment` bridge message that only the host can honour.
+ *
+ * Neither end of that is testable on its own: the frontend suite has no host to answer the message and the
+ * headless tests have no browser to draw the chip. Here both halves are real, and none of it needs a `claude`
+ * process — attachments are pinned by the IDE and only travel with the next turn.
  */
 class AttachmentChipUiTest : UiTestBase() {
 
     @Test
-    fun `adding current file as context pins an @ chip that clears on send`() {
-        val toolWindow = openClaudeToolWindow()
+    fun `the current file becomes a chip, and its close button removes it`() {
+        openClaudeToolWindow()
+        awaitChatPage()
+        // The action pins "the current file", so there has to be one: no editor, nothing to pin.
+        openSampleFile()
 
-        // Invoke the gear action via the tool-window header gear menu. inspector: the gear is an ActionButton
-        // with accessiblename "Show Options Menu" / "More"; the item label is "Add Current File as @-context".
-        val gear = toolWindow.find(
-            ComponentFixture::class.java,
-            byXpath("//div[@accessiblename='Show Options Menu' or @accessiblename='More' or @myicon='gearPlain.svg']"),
-            shortTimeout,
-        )
-        gear.click()
-        val item = remoteRobot.find(
-            ComponentFixture::class.java,
-            byXpath("//div[contains(@text,'Add Current File as')]"),
-            shortTimeout,
-        )
-        item.click()
+        openGearMenu()
+        clickMenuItem("Add Current File")
 
-        // A chip with the @-marked file name should now be pinned in the composer.
-        waitFor(longTimeout, Duration.ofMillis(500), "expected an @-context chip in the attachment strip") {
-            transcriptText(toolWindow).contains("@")
-        }
+        waitForWeb("a chip for the open file to appear in the composer", CHIP_FOR_SAMPLE)
+        assertTrue(jsInt(CHIP_COUNT) >= 1, "the attachment row is empty after pinning a file")
 
-        // Sending a prompt should clear the strip (the attachment travels with the turn).
-        sendPrompt("Use the attached file.", toolWindow)
-        waitForTranscript("expected the prompt to be sent") { it.contains("Use the attached file.") }
+        findDom("//span[contains(@class,'att-x')]").clickAtCenter()
+
+        waitForWeb("the chip to disappear once its ✕ is pressed", NO_CHIPS)
+    }
+
+    private companion object {
+        const val CHIPS = "document.querySelectorAll(\"#composer .attachments .att-label\")"
+
+        const val CHIP_COUNT = "(function () { return String($CHIPS.length); })()"
+
+        const val CHIP_FOR_SAMPLE =
+            "(function () { var c = $CHIPS; for (var i = 0; i < c.length; i++) { " +
+                "if (c[i].textContent.indexOf(\"Sample.kt\") >= 0) { return String(true); } } return String(false); })()"
+
+        /**
+         * The row hides itself when the list empties (`renderAttachments`), so "gone" is checked as the row
+         * being hidden or carrying no labels — either is the honest answer to "is the chip still there".
+         */
+        const val NO_CHIPS =
+            "(function () { var row = document.querySelector(\"#composer .attachments\"); " +
+                "return String(!row || row.hasAttribute(\"hidden\") || $CHIPS.length === 0); })()"
     }
 }

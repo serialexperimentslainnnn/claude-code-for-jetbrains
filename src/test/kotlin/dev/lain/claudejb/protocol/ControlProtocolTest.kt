@@ -9,11 +9,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the exact wire shape of every line the plugin writes to the binary's stdin. These are built
- * explicitly (not via the lenient [ClaudeJson]) precisely because the binary's runtime schema is stricter
- * than the published .d.ts (e.g. `updatedInput` is required), so the shapes must not drift silently.
- */
 class ControlProtocolTest {
 
     private fun parse(line: String): JsonObject =
@@ -28,7 +23,6 @@ class ControlProtocolTest {
         assertEquals("user", root.string("type"))
         assertEquals("hello", root.obj("message").string("content"))
         assertEquals("user", root.obj("message").string("role"))
-        // The protocol expects the key present and explicitly null, not omitted.
         assertEquals(JsonNull, root["parent_tool_use_id"])
     }
 
@@ -41,7 +35,6 @@ class ControlProtocolTest {
     @Test
     fun `userMessageWithImages falls back to plain string content when no images`() {
         val root = parse(ControlProtocol.userMessageWithImages("just text", emptyList()))
-        // No images → identical to userMessage: content is a plain string, not an array.
         assertEquals("just text", root.obj("message").string("content"))
     }
 
@@ -81,7 +74,6 @@ class ControlProtocolTest {
         assertEquals("r1", response.string("request_id"))
         val inner = response.obj("response")
         assertEquals("allow", inner.string("behavior"))
-        // updatedInput MUST be present (binary rejects the response otherwise).
         assertEquals(input, inner["updatedInput"])
     }
 
@@ -136,62 +128,6 @@ class ControlProtocolTest {
     }
 
     @Test
-    fun `setColorRequest carries color`() {
-        val request = parse(ControlProtocol.setColorRequest("r11", "blue")).obj("request")
-        assertEquals("set_color", request.string("subtype"))
-        assertEquals("blue", request.string("color"))
-    }
-
-    @Test
-    fun `getSettingsRequest has get_settings subtype`() {
-        val request = parse(ControlProtocol.getSettingsRequest("r12")).obj("request")
-        assertEquals("get_settings", request.string("subtype"))
-    }
-
-    @Test
-    fun `getBinaryVersionRequest has get_binary_version subtype`() {
-        val request = parse(ControlProtocol.getBinaryVersionRequest("r13")).obj("request")
-        assertEquals("get_binary_version", request.string("subtype"))
-    }
-
-    @Test
-    fun `fileSuggestionsRequest carries query`() {
-        val request = parse(ControlProtocol.fileSuggestionsRequest("r14", "src/Ma")).obj("request")
-        assertEquals("file_suggestions", request.string("subtype"))
-        assertEquals("src/Ma", request.string("query"))
-    }
-
-    @Test
-    fun `readFileRequest carries path and omits optionals by default`() {
-        val request = parse(ControlProtocol.readFileRequest("r15", "a.kt")).obj("request")
-        assertEquals("read_file", request.string("subtype"))
-        assertEquals("a.kt", request.string("path"))
-        assertTrue(!request.containsKey("max_bytes"))
-        assertTrue(!request.containsKey("encoding"))
-    }
-
-    @Test
-    fun `readFileRequest carries max_bytes and encoding when given`() {
-        val request = parse(ControlProtocol.readFileRequest("r16", "img.png", maxBytes = 1024, encoding = "base64")).obj("request")
-        assertEquals("1024", request.num("max_bytes"))
-        assertEquals("base64", request.string("encoding"))
-    }
-
-    @Test
-    fun `rewindFilesRequest carries user_message_id and dry_run`() {
-        val request = parse(ControlProtocol.rewindFilesRequest("r17", "msg-1", dryRun = true)).obj("request")
-        assertEquals("rewind_files", request.string("subtype"))
-        assertEquals("msg-1", request.string("user_message_id"))
-        assertEquals(true, request.bool("dry_run"))
-    }
-
-    @Test
-    fun `rewindFilesRequest omits dry_run by default`() {
-        val request = parse(ControlProtocol.rewindFilesRequest("r18", "msg-2")).obj("request")
-        assertTrue(!request.containsKey("dry_run"))
-    }
-
-    @Test
     fun `seedReadStateRequest carries path and mtime`() {
         val request = parse(ControlProtocol.seedReadStateRequest("r19", "a.kt", 1717000000000L)).obj("request")
         assertEquals("seed_read_state", request.string("subtype"))
@@ -204,20 +140,6 @@ class ControlProtocolTest {
         val request = parse(ControlProtocol.stopTaskRequest("r20", "task-7")).obj("request")
         assertEquals("stop_task", request.string("subtype"))
         assertEquals("task-7", request.string("task_id"))
-    }
-
-    @Test
-    fun `backgroundTasksRequest carries tool_use_id when given`() {
-        val request = parse(ControlProtocol.backgroundTasksRequest("r21", toolUseId = "tu-1")).obj("request")
-        assertEquals("background_tasks", request.string("subtype"))
-        assertEquals("tu-1", request.string("tool_use_id"))
-    }
-
-    @Test
-    fun `backgroundTasksRequest omits tool_use_id by default`() {
-        val request = parse(ControlProtocol.backgroundTasksRequest("r22")).obj("request")
-        assertEquals("background_tasks", request.string("subtype"))
-        assertTrue(!request.containsKey("tool_use_id"))
     }
 
     @Test
@@ -236,51 +158,12 @@ class ControlProtocolTest {
     }
 
     @Test
-    fun `mcpSetServersRequest carries servers object`() {
-        val servers = buildJsonObject { put("jetbrains", buildJsonObject { put("type", "stdio") }) }
-        val request = parse(ControlProtocol.mcpSetServersRequest("r25", servers)).obj("request")
-        assertEquals("mcp_set_servers", request.string("subtype"))
-        assertEquals(servers, request["servers"])
-    }
-
-    @Test
-    fun `mcpCallRequest carries tool and arguments`() {
-        val args = buildJsonObject { put("path", "a.kt") }
-        val request = parse(ControlProtocol.mcpCallRequest("r26", "mcp__jetbrains__read_file", args)).obj("request")
-        assertEquals("mcp_call", request.string("subtype"))
-        assertEquals("mcp__jetbrains__read_file", request.string("tool"))
-        assertEquals(args, request["arguments"])
-    }
-
-    @Test
-    fun `mcpCallRequest omits arguments by default`() {
-        val request = parse(ControlProtocol.mcpCallRequest("r27", "mcp__jetbrains__ping")).obj("request")
-        assertTrue(!request.containsKey("arguments"))
-    }
-
-    @Test
-    fun `applyFlagSettingsRequest carries settings object`() {
-        val settings = buildJsonObject { put("verbose", true) }
-        val request = parse(ControlProtocol.applyFlagSettingsRequest("r28", settings)).obj("request")
-        assertEquals("apply_flag_settings", request.string("subtype"))
-        assertEquals(settings, request["settings"])
-    }
-
-    @Test
     fun `userDialogCancelled replies with behavior cancelled`() {
         val root = parse(ControlProtocol.userDialogCancelled("r30"))
         val response = root.obj("response")
         assertEquals("success", response.string("subtype"))
         assertEquals("r30", response.string("request_id"))
         assertEquals("cancelled", response.obj("response").string("behavior"))
-    }
-
-    @Test
-    fun `userDialogCompleted carries behavior completed and result`() {
-        val result = buildJsonObject { put("choice", "yes") }
-        val inner = parse(ControlProtocol.userDialogCompleted("r31", result)).obj("response").obj("response")
-        assertEquals("completed", inner.string("behavior"))
-        assertEquals(result, inner["result"])
     }
 
     @Test

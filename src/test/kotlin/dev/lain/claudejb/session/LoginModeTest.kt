@@ -4,13 +4,6 @@ import dev.lain.claudejb.process.TerminalLauncher
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/**
- * The sign-in routes are argv, and the argv IS the route: `--console` bills API usage against an organization
- * and its consent carries `org:create_api_key`, while the plain form signs in to a personal subscription. A
- * silent mix-up here signs the user into the wrong thing and looks like a working login, so the flags are
- * pinned rather than trusted — including through [TerminalLauncher.loginCommand], the last-resort text the
- * user is told to run by hand, which must name the same subcommand the card would have run.
- */
 class LoginModeTest {
 
     @Test
@@ -37,7 +30,6 @@ class LoginModeTest {
         )
         assertEquals("\"/home/u/my tools/claude\" auth login --console", posix)
 
-        // PowerShell needs the call operator to execute a quoted path; POSIX must NOT get it (it would background).
         val windows = TerminalLauncher.loginCommand(
             "C:\\Program Files\\claude.exe",
             LoginCoordinator.Mode.SSO.args,
