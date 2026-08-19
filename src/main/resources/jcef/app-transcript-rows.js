@@ -125,6 +125,104 @@
     return { el: node, bodyNode: body, kind: isError ? 'text' : 'md' };
   }
 
+  /**
+   * How long the user may suspend a rule for, in the order shown.
+   *
+   * Mirrors `SecuritySuspensions.Duration` on the host, token for token — the host maps the token to an instant
+   * and rejects one it does not know, so a drift here can only ever produce a menu entry that does nothing. A
+   * test pins the two lists against each other rather than leaving that to review.
+   */
+  var SUSPEND_DURATIONS = [
+    { token: '5m', label: '5 minutes' },
+    { token: '15m', label: '15 minutes' },
+    { token: '30m', label: '30 minutes' },
+    { token: '4h', label: '4 hour' },
+    { token: '8h', label: '8 hour' },
+    { token: 'ide', label: 'Until IDE closes' },
+    { token: 'forever', label: 'Forever' },
+  ];
+
+  /**
+   * The notice for a call the security guard REFUSED, carrying the one control that can open the rule.
+   *
+   * **Why the block is where this lives.** A refusal used to be a dead end: the row said which rule stopped the
+   * call and the only way to act on it was to go and find the switch in Settings — where the only choice is to
+   * turn the rule off permanently, which is the most dangerous of the seven and the one nobody undoes. Offering
+   * it here, with an expiry, means the usual answer is the temporary one.
+   *
+   * **Nothing here is a bypass, and that is deliberate.** Suspending a rule downgrades it to ASK: the same call
+   * then stops and puts a permission card to the user, every time, whatever the permission mode says. So this
+   * control buys a question, never a pass — the responsibility is taken explicitly, on a card, about one command.
+   *
+   * **Every entry IS the action.** There is no pre-selected duration and no confirm button, so there is nothing
+   * a reflex click can accept: opening the menu commits to nothing, and the choice is the click that follows.
+   *
+   * A `button` styled as a link rather than an `<a>`: it performs an action instead of navigating, which is what
+   * decides the element for a keyboard and a screen reader. It looks exactly like the hyperlinked text it is.
+   */
+  function buildBlockNotice(rule) {
+    var node = el('div', { class: 'notice guard-block' });
+    var body = el('div', { class: 'body' });
+    node.appendChild(body);
+
+    var menu = el('div', {
+      class: 'guard-disable-menu',
+      attrs: { role: 'menu', hidden: 'hidden', 'aria-label': 'Disable this rule for' },
+    });
+    var link = el('button', {
+      class: 'guard-disable-link',
+      text: 'Disable rule',
+      attrs: { type: 'button', 'aria-expanded': 'false', 'aria-haspopup': 'menu' },
+    });
+
+    function setOpen(open) {
+      if (open) {
+        menu.removeAttribute('hidden');
+      } else {
+        menu.setAttribute('hidden', 'hidden');
+      }
+      link.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(link.getAttribute('aria-expanded') !== 'true');
+    });
+    // Escape closes it and returns the focus to the control that opened it — a menu that can only be dismissed
+    // by choosing something is a menu that pressures the choice.
+    menu.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        link.focus();
+      }
+    });
+
+    SUSPEND_DURATIONS.forEach(function (d) {
+      menu.appendChild(
+        el('button', {
+          class: 'guard-disable-option',
+          text: d.label,
+          attrs: { type: 'button', role: 'menuitem' },
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              safeSend({ type: 'guardSuspend', rule: String(rule), duration: d.token });
+              setOpen(false);
+            },
+          },
+        })
+      );
+    });
+
+    var actions = el('div', { class: 'guard-block-actions' });
+    actions.appendChild(link);
+    actions.appendChild(menu);
+    node.appendChild(actions);
+    return { el: node, bodyNode: body, kind: 'md' };
+  }
+
   function buildToolOutputStandalone() {
     var node = el('div', { class: 'notice tool-output' });
     var pre = el('pre', {});
@@ -154,8 +252,10 @@
         return buildToolOutputStandalone();
       case 'ERROR':
         return buildNotice(true);
+      // A guard block is a SYSTEM row with the rule that refused on it, and the only SYSTEM row that carries a
+      // control. The field's presence is the whole test: no rule, no way to offer to open one.
       case 'SYSTEM':
-        return buildNotice(false);
+        return entry && entry.blockedRule ? buildBlockNotice(entry.blockedRule) : buildNotice(false);
       default:
         return buildNotice(false);
     }

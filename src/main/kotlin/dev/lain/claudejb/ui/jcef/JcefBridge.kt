@@ -127,6 +127,29 @@ object JcefBridge {
         data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
         /**
+         * *Disable rule* was chosen on a guard block: suspend [rule] for [duration].
+         *
+         * A browser message that opens a security rule, so both halves are re-checked against a closed set on
+         * this side of the bridge — an unknown rule name or an unknown duration token is a no-op, never a
+         * guessed default. Nothing about it is trusted because of where it came from.
+         *
+         * **The most it can ever do is turn a refusal into a question.** A suspended rule is downgraded to ASK,
+         * so the same call stops and puts a card to the user for as long as the suspension lasts, whatever the
+         * permission mode says. There is no message on this bridge that can make the guard allow something.
+         */
+        data class GuardSuspend(val rule: String, val duration: String) : Settings
+
+        /**
+         * *Always allow* was pressed on a guard card: remember THIS command under the rule that stopped it.
+         *
+         * Carries only the card's id — the command itself is read from the pending request on the host, never
+         * taken from the page. That asymmetry is the point: the page is telling us which decision the user made,
+         * and the host already knows what they were deciding about, so letting the browser supply the command
+         * text would let a compromised renderer widen an approval past what the card actually showed.
+         */
+        data class GuardAllowAlways(val id: String, val scope: String = "") : Settings
+
+        /**
          * The ⚙ menu is being looked at: re-read the stored settings and push them back.
          *
          * **The settings are application-wide and the in-memory copy is loaded once**, so another IDE's change
@@ -413,6 +436,8 @@ object JcefBridge {
         "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
         "changeProvider" -> Msg.ChangeProvider(f.text("id"))
         "settingsToggle" -> Msg.SettingsToggle(f.text("key"), f.bool("on"))
+        "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
+        "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
         "settingsRefresh" -> Msg.SettingsRefresh
         "openSettings" -> Msg.OpenSettings
         else -> null

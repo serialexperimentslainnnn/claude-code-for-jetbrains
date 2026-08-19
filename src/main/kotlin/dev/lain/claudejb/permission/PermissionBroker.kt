@@ -109,8 +109,28 @@ class PermissionBroker(
      *  paths on disk under a timeout, and doing that twice per request is latency the user feels on the card. */
     private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
         { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
-    /** A call was refused by the sensitive-data guard — surface it in the transcript, with the guard's reason. */
-    private val onSensitiveDenied: (toolName: String, reason: String?) -> Unit = { _, _ -> },
+    /**
+     * A call was refused by the sensitive-data guard — surface it in the transcript, with the guard's reason
+     * **and the rule that refused it**.
+     *
+     * The rule travels because the transcript's block is where the user acts on it: it carries the *Disable
+     * rule* link, and a link has to know which rule it opens. Passed as the enum for the same reason
+     * [GuardAlert] carries one rather than prose — a block keyed on the wording would stop working the day
+     * somebody improves a sentence.
+     */
+    private val onSensitiveDenied: (toolName: String, reason: String?, rule: SecurityRule?) -> Unit =
+        { _, _, _ -> },
+    /**
+     * Whether the user explicitly answered "Allow always" to **this exact command** under **this exact rule** —
+     * see [dev.lain.claudejb.settings.SecurityCommandApprovals].
+     *
+     * The ONE thing that may skip a guard card, and every word of that sentence is load-bearing. It is asked
+     * only inside the ASK branch, i.e. only for a rule the user has already opened, so the approval cannot
+     * outlive the suspension that made it possible. It is per COMMAND: "Allow always" on a `terraform destroy`
+     * card opens that command and nothing else the same rule stops, which is why it is not the tool-level
+     * [isRemembered] that answers here.
+     */
+    private val isGuardCommandApproved: (rule: SecurityRule, command: String?) -> Boolean = { _, _ -> false },
     /**
      * True when this session must put **every** call to the user, whatever the permission mode says and whatever
      * they have marked "Always allow" — the Git integration's chat, whose turns the plugin itself starts
@@ -173,23 +193,30 @@ class PermissionBroker(
                 // path. SensitiveGuard.evaluate has produced the precise wording in its Decision.reason since
                 // 4.4.0; nothing was reading it, so the user never saw it.
                 respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
-                onSensitiveDenied(request.toolName, decision.reason)
+                onSensitiveDenied(request.toolName, decision.reason, decision.rule)
                 true
             }
 
             SensitiveGuard.Verdict.ASK -> {
-                // A rule the user switched OFF. The card is their decision point, and **"Always allow" is a real
-                // choice on it** — so a standing "always allow" for this tool is honoured here, and nothing else
-                // is. Specifically NOT the permission mode: `bypassPermissions` and `acceptEdits` must not make a
-                // guard card disappear, because the whole meaning of disabling a rule is "I want to decide this
-                // one myself", not "stop watching for it". That is why this consults [isRemembered] directly
-                // instead of falling through to [tryAutoApprove], which would also let the mode answer.
+                // A rule the user OPENED — in Settings, or by suspending it from a block. **Disabled means ASK,
+                // never bypass**: the card is mandatory, so that opening something the guard protects costs an
+                // explicit answer every time and the risk is knowingly taken rather than inherited.
                 //
-                // It cannot open a lock: this branch is only reachable for a rule already disabled in Settings,
-                // so the strongest thing "Always allow" can do is skip a card the user had already chosen to be
-                // asked about. An ENFORCED rule never arrives here at all — it is the DENY above.
+                // Nothing implicit may answer it. Not the permission mode — `bypassPermissions` and
+                // `acceptEdits` must not make a guard card disappear, because "I disabled this rule" means "I
+                // want to decide this one myself", not "stop watching for it"; that is why this never falls
+                // through to [tryAutoApprove]. And not the tool-level "Always allow" either, which used to be
+                // honoured here and was the one implicit pass left: one click on a `Bash` card opened every
+                // command `Bash` can run, including every other one the same rule exists to stop.
+                //
+                // The single exception is an answer the user gave ON a card of exactly this kind, about exactly
+                // this command — see [isGuardCommandApproved]. It cannot generalise past that command, and it
+                // cannot outlive the rule being open, since this branch is the only place it is ever consulted.
                 val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
-                if (!forceAsk() && isRemembered(request.toolName, request.input)) {
+                val approved = decision.rule?.let {
+                    isGuardCommandApproved(it, ToolInputScanner.commandText(request.input))
+                } == true
+                if (!forceAsk() && approved) {
                     autoAllow(requestId, request, reviewable)
                 } else {
                     present(presentable(requestId, request, reviewable, decision))

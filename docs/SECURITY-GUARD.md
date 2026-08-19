@@ -44,6 +44,13 @@ not make the guard ignore it. Detection always runs. All you change is who decid
 automatically, or you, on a card, every single time. There is no setting anywhere that makes a match
 disappear silently.
 
+**Nothing implicit answers that card.** Not the permission mode: `bypassPermissions` and `acceptEdits` mean
+"stop asking about my ordinary work", never "stop watching for this". And not a tool marked *Always allow*
+either — that used to skip it, which meant one click on a `Bash` card quietly opened every command `Bash` can
+run, including every other one the rule existed to stop. The only thing that can answer such a card without
+asking again is something you said **on a card of exactly that kind, about exactly that command** — see
+*Pre-approving one command*.
+
 Two consequences follow from that, and both are deliberate. A blocked action tells Claude what it can't
 do and why, but never where the off switch is: telling a possibly-hijacked model which lever to ask you
 to pull would be a workaround with extra steps. You get that link instead, on a red alert card that names
@@ -229,10 +236,20 @@ open that project at all. No exemption anywhere says "this kind of file is fine"
 
 Most people never open the security settings. Everything is on by default, and the default is the point.
 
-When something does get blocked, the fix comes to you rather than the other way round: the alert card
-names the rule in plain words and carries a link that disables **that one rule** — not its group, not the
+When something does get blocked, the fix comes to you rather than the other way round: the block names the
+rule in plain words and carries a **Disable rule** link that opens **that one rule** — not its group, not the
 category, not everything. That is why the rules are narrow in the first place. A one-click action can
 only ever be as safe as the smallest thing it can turn off.
+
+**And it asks for how long.** Seven choices — 5 minutes, 15 minutes, 30 minutes, 4 hours, 8 hours, until the
+IDE closes, or for ever — with no pre-selected default, so opening the menu commits to nothing and the choice
+is the click that follows. Five of the seven expire on their own, which is the point: before this existed the
+only way to open a rule was the Settings toggle, i.e. *for ever*, and a rule opened once for one command tended
+to stay open for months. A suspension is re-checked on every single call, so when it runs out the rule is
+enforced again immediately — nothing has to be remembered, run, or cleaned up.
+
+What it buys is a **question**, not a pass: for as long as it lasts, the same call stops and puts a card to you
+every time. Enforcing the rule again — from the ⚙ menu or Settings — cancels the suspension at once.
 
 The full catalogue lives in **Settings ▸ Claude Code ▸ Security**, one group at a time, with enable and
 disable for a whole group and a **Restore all protections** button that puts everything back. It is a
@@ -243,8 +260,6 @@ page for auditing or deliberate tuning, not somewhere you should need to visit.
 If `terraform destroy` is part of your actual job, the always-allow list takes a full command and runs it
 without asking. It is fenced fairly tightly, and each fence is there for a reason:
 
-- **Written in Settings, never from a card.** Pre-authorising something dangerous should be a decision
-  taken calmly, not a button offered while you are mid-task and impatient.
 - **Matched as the whole command**, de-obfuscated on both sides. `terraform destroy` does not authorise
   `terraform destroy && rm -rf /` — that is a different string — and `t""erraform destroy` cannot sneak
   past an entry written normally.
@@ -256,6 +271,29 @@ That last guarantee is structural rather than a promise: the walls are evaluated
 so a command that trips one is reported as the wall, and walls are not whitelistable. The flag that marks
 a rule liftable defaults to *off*, which means a rule added next year cannot be whitelisted past until
 somebody deliberately decides it can be.
+
+#### …and the other way in: *Always allow* on a card
+
+There is a second way to pre-approve a command, and it is worth being exact about it because it reverses a
+position this document used to state. It said pre-authorising belonged in Settings and **never** on a card,
+since a button offered mid-task is pressed while you are impatient. That reasoning stands; what changed is
+that refusing it entirely left the *permanent* toggle as the only unblock anyone was offered, which is worse.
+
+So: **Always allow** on a lock card pre-approves **that one command**, and every bound below is what pays for it.
+
+- **It takes two deliberate steps, not one.** The card only exists for a rule you have already opened, and
+  opening it is its own explicit choice with its own duration. A single click on a refusal can never reach here.
+- **The unit is the command, not the tool.** Answering it on a `terraform destroy` card authorises
+  `terraform destroy` — whole, exact, de-obfuscated. Not `terraform destroy -auto-approve`, not `Bash`.
+- **It dies with the rule.** The approval is honoured only while that rule is still open, so re-enabling it, or
+  simply letting a 15-minute suspension expire, revokes every command approved under it. Nothing has to be
+  cleaned up for that to be true — it is a condition, not a stored expiry.
+- **It cannot reach a wall.** Same fence as the Settings list: a credential, foreign-path, device, egress or
+  unreadable-script rule is not liftable, so there is no sequence of clicks that pre-approves
+  `cat ~/.ssh/id_rsa`.
+
+The Settings list remains the calmer surface, and it is still the right one for a command you run every day.
+This one is for the command in front of you, once, with the risk taken knowingly.
 
 ---
 

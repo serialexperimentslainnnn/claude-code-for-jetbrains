@@ -820,6 +820,63 @@ details.fold .fold-body p:first-child {
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
+/* ── a guard block, and the one control that can open the rule ──────────────
+   Read as a refusal, so it carries the danger colour like .notice.error: the guard stopped the call, and a
+   neutral grey row would read as information rather than as something that did not happen. */
+.notice.guard-block {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.guard-block-actions {
+  position: relative;
+  margin-top: 6px;
+}
+/* A button, because it acts rather than navigates — styled as the hyperlinked text it reads as. `currentColor`
+   so it inherits the row's danger colour instead of naming it twice. */
+.guard-disable-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: currentColor;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.guard-disable-menu {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* Opaque: it overlays the transcript, and a translucent menu over prose is unreadable at 12.5px. */
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
+}
+/* `[hidden]` alone loses to `display: flex` above — the attribute has to win, or the menu is always open. */
+.guard-disable-menu[hidden] {
+  display: none;
+}
+.guard-disable-option {
+  background: none;
+  border: 0;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.guard-disable-option:hover,
+.guard-disable-option:focus-visible {
+  background: var(--surface2);
+}
+
 /* ── search highlight ─────────────────────────────────────────────────────── */
 mark.cc-hit {
   background: var(--accent-soft);
