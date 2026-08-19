@@ -47,11 +47,13 @@ import kotlinx.serialization.json.JsonObject
  */
 object EnvIndirection {
 
-    /**
-     * Command substitution: `$(…)` and a backtick pair. Judged unresolvable rather than executed, obviously —
-     * evaluating it is exactly what the guard exists to decide about.
-     */
-    private val SUBSTITUTION = Regex("""\$\(|`[^`]*`""")
+    // There was a `SUBSTITUTION` blanket here that returned UNRESOLVED_VARIABLE for ANY `$(…)` or backtick, benign
+    // or not. It is gone, and the reasoning is the whole design principle: a substitution is not refused for
+    // BEING a substitution — `SensitiveGuard.substitutionFindings` recurses INTO the inner command and judges it
+    // with the entire rule set, so `$(cat /etc/shadow)` is the credential read it is and `$(nmap …)` the hacking
+    // tool it is. A benign inner command (`$(tty)`, `$(date)`, `$(git rev-parse HEAD)`) trips nothing and must
+    // pass — blocking it was the exact "I can't expand this, so I refuse" reflex the guard's own doc says a rule
+    // that refuses because it did not look is a rule that gets switched off. Expand and inspect, do not blanket.
 
     /** A variable reference left standing after expansion, in any spelling the guard understands. The dollar is
      *  `\x24` for the reason [GuardPaths]' own pattern spells it that way — see there; a literal one cannot be
@@ -62,8 +64,46 @@ object EnvIndirection {
         RegexOption.IGNORE_CASE,
     )
 
+    /**
+     * Names a command BINDS itself, so a reference to one is not a hidden destination — its value is either right
+     * there in the command text (a `for`'s `in` list, an assignment's right-hand side, both of which the other
+     * rules already judge) or supplied by the shell (a `read`). Flagging `$f` in `for f in a b c; do echo $f`
+     * as "a destination hidden behind a variable this session can't resolve" is a false positive: `f` is not
+     * hidden and not external, it is bound one clause earlier.
+     *
+     * **This loses no catch.** A loop over sensitive paths — a `for` whose `in` list is the `.ssh` directory with
+     * a trailing glob (spelled with an ellipsis here, since slash-star opens a nested comment) — is caught at the
+     * `in` list, because that `.ssh/…` glob is a path candidate the credential rule matches; the exemption is
+     * only for the ITERATOR reference, whose concrete values were already on the command line and already judged.
+     * Command substitution in the list — `for f in $(…)` — is deliberately NOT made resolvable by this: the list
+     * itself is unknowable then, and stays a card.
+     */
+    private val FOR_VAR = Regex("""\bfor\s+(?:\(\(\s*)?([A-Za-z_][A-Za-z0-9_]*)\b""")
+    private val READ_STMT = Regex("""\bread\b([^;&|\n]*)""")
+    private val LOCAL_ASSIGN = Regex("""(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=""")
+
     /** What a call's destinations turned out to be, once the guard had expanded everything it could. */
     internal class Verdict(val rule: SecurityRule, val text: String)
+
+    /** Every name the command binds itself — [FOR_VAR] iterators, [READ_STMT] targets, [LOCAL_ASSIGN] left sides. */
+    private fun locallyBoundNames(commands: List<String>): Set<String> {
+        val out = HashSet<String>()
+        for (command in commands) {
+            FOR_VAR.findAll(command).forEach { out += it.groupValues[1] }
+            LOCAL_ASSIGN.findAll(command).forEach { out += it.groupValues[1] }
+            READ_STMT.findAll(command).forEach { m ->
+                m.groupValues[1].trim().split(Regex("""\s+"""))
+                    .filter { it.isNotEmpty() && !it.startsWith("-") }
+                    .forEach { out += it }
+            }
+        }
+        return out
+    }
+
+    /** The bare NAME inside a residual reference — brace form, env: form, bare-dollar form, or percent form. The
+     *  last word-token is the name (so an `env:` prefix yields the variable, not the `env`). */
+    private fun refName(ref: String): String? =
+        Regex("""[A-Za-z_][A-Za-z0-9_]*""").findAll(ref).lastOrNull()?.value
 
     /**
      * The first destination whose value the guard could not pin down, with the rule that fits WHY — or null when
@@ -74,14 +114,24 @@ object EnvIndirection {
      * "unresolved" would downgrade a hard block to a card.
      */
     internal fun indirectionHit(input: JsonObject, policy: SensitiveGuard.Policy): Verdict? {
+        val bound = locallyBoundNames(ToolInputScanner.commandCandidates(input))
         for (raw in ToolInputScanner.destinationCandidates(input)) {
             if (raw.isBlank()) continue
             if (GuardPaths.exceedsEnvDepth(raw, policy.home, policy.envValues)) {
                 return Verdict(SecurityRule.RECURSION_LIMIT, raw)
             }
-            if (SUBSTITUTION.containsMatchIn(raw)) return Verdict(SecurityRule.UNRESOLVED_VARIABLE, raw)
+            // No blanket refusal of command substitution — `SensitiveGuard.substitutionFindings` has already
+            // recursed into the inner command and judged it, so a dangerous one was named as its real finding and
+            // a benign one (`$(tty)`, `$(date)`) is allowed to pass. See the deleted `SUBSTITUTION` note above.
             val expanded = GuardPaths.expandEnv(raw, policy.home, policy.envValues)
-            if (RESIDUAL_REF.containsMatchIn(expanded)) return Verdict(SecurityRule.UNRESOLVED_VARIABLE, raw)
+            // A residual reference is a finding ONLY when the name is not bound by the command itself: a `for`
+            // iterator, a `read` target or a local assignment is not a hidden external destination (see the
+            // helpers above). All other residual names — set by a sourced script, an earlier turn, the
+            // environment — remain genuinely unknowable, so they stay a card.
+            val unresolvedExternal = RESIDUAL_REF.findAll(expanded)
+                .mapNotNull { refName(it.value) }
+                .any { it !in bound }
+            if (unresolvedExternal) return Verdict(SecurityRule.UNRESOLVED_VARIABLE, raw)
         }
         return null
     }

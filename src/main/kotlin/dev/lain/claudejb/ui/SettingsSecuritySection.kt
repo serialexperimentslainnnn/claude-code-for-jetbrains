@@ -11,6 +11,7 @@ import java.awt.CardLayout
 import java.awt.Component
 import javax.swing.BoxLayout
 import javax.swing.DefaultListCellRenderer
+import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JList
 import javax.swing.JPanel
@@ -52,6 +53,33 @@ internal class SettingsSecuritySection : SettingsSection {
         emptyText.text = "One domain per line, e.g. paste.example.com — added to the built-in list, never replacing it"
     }
 
+    /**
+     * The always-allow list: exact commands that run without a card.
+     *
+     * **The only control on this page that weakens the guard**, and the only place it can be authored at all —
+     * there is deliberately no "always allow this" button on a permission card, because pre-authorising a
+     * dangerous command mid-task, under the pressure of a stalled turn, is the decision this whole design
+     * refuses to offer. It is fenced in `SensitiveGuard.liftedByWhitelist`: whole-command match, de-obfuscated on
+     * both sides, and only for a rule marked [SecurityRule.whitelistable] — an action rule, never a wall.
+     */
+    private val commandWhitelistArea = JBTextArea(WHITELIST_ROWS, 0).apply {
+        lineWrap = false
+        emptyText.text = "One full command per line, e.g. terraform destroy — matched exactly, and it can " +
+            "never lift a credential, foreign-path, device or egress block"
+    }
+
+    /**
+     * "Restore all protections" — one click back to the shipped default, which is every rule enforced.
+     *
+     * It exists because the safe state has to be reachable without reading the catalogue. A user who switched
+     * things off while chasing a problem should not have to remember which ones, or audit 25 checkboxes to find
+     * out; the empty disabled-set IS the original hard lock, so one button can state that honestly. It does not
+     * touch the always-allow list or the extra domains: those are the user's own data, not a protection level.
+     */
+    private val restoreAllButton = JButton("Restore all protections").apply {
+        addActionListener { checks.values.forEach { it.isSelected = true } }
+    }
+
     private val categoryCards = JPanel(CardLayout())
 
     private val categoryCombo = JComboBox(SecurityCategory.entries.toTypedArray()).apply {
@@ -84,6 +112,9 @@ internal class SettingsSecuritySection : SettingsSection {
         .addComponent(sectionLabel("Security — deterministic tool-call lock, evaluated before every permission"))
         .addLabeledComponent("Category:", categoryCombo)
         .addComponent(categoryCards)
+        .addComponent(restoreAllButton)
+        .addComponent(sectionLabel("Always allow these exact commands (no card)"))
+        .addComponent(JPanel(BorderLayout()).apply { add(commandWhitelistArea, BorderLayout.CENTER) })
         .addComponent(securityWarningLabel())
 
     /** One category's rules, plus whatever else that category owns — today only the egress domain list. */
@@ -107,6 +138,7 @@ internal class SettingsSecuritySection : SettingsSection {
         checks.forEach { (rule, box) -> box.isSelected = rule.name !in stored }
         unknownDisabled = stored.filter { SecurityRule.from(it) == null }
         extraDomainsArea.text = s.securityExtraBlockedDomains
+        commandWhitelistArea.text = s.securityCommandWhitelist
         if (categoryCombo.selectedItem == null) categoryCombo.selectedItem = SecurityCategory.entries.first()
         showSelectedCategory()
     }
@@ -114,12 +146,14 @@ internal class SettingsSecuritySection : SettingsSection {
     override fun apply(s: ClaudeSettings.State) {
         s.disabledSecurityRules = disabledCsv()
         s.securityExtraBlockedDomains = extraDomainsArea.text
+        s.securityCommandWhitelist = commandWhitelistArea.text
     }
 
     override fun changedFields(s: ClaudeSettings.State): List<Boolean> =
         listOf(
             disabledCsv() != s.disabledSecurityRules,
             extraDomainsArea.text != s.securityExtraBlockedDomains,
+            commandWhitelistArea.text != s.securityCommandWhitelist,
         )
 
     /** What is unchecked, in the one canonical spelling both writers of this field use. */
@@ -147,5 +181,8 @@ internal class SettingsSecuritySection : SettingsSection {
     private companion object {
         /** Tall enough to show a handful of domains without turning the page into a text editor. */
         const val EXTRA_DOMAIN_ROWS = 4
+
+        /** Deliberately small. A long always-allow list is a guard nobody is running any more. */
+        const val WHITELIST_ROWS = 3
     }
 }

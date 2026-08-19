@@ -1,6 +1,62 @@
 /* ════════════════════════════════════════════════════════════════════════════
    PERMISSIONS — cards above the composer
    ════════════════════════════════════════════════════════════════════════════ */
+/* ── the guard alert ───────────────────────────────────────────────────────────
+   Only ever drawn on a card raised by a security rule the user switched OFF, so its presence means an open lock
+   let something through. The BADGE carries the meaning as text: colour and motion are not information — neither
+   survives forced-colors, a screenshot, or a reader who cannot tell the two hues apart — so the red here is
+   reinforcement of a word that is already there, never the word itself. */
+.perm-guard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.perm-guard-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: var(--bg);
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.perm-guard-rule {
+  font-weight: 600;
+}
+
+/* Full width so the guard's own sentence sits under the badge rather than beside it. */
+.perm-guard-reason {
+  flex-basis: 100%;
+  color: var(--dim);
+}
+
+/* Re-enable, never disable: a card can only ever narrow the open surface (see buildGuardAlert). */
+.perm-guard-restore {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9em;
+}
+
+.perm-guard-restore:hover {
+  border-color: var(--danger);
+}
+
 /* The left edge in the accent is the cue that this one is waiting on the user. */
 .perm-card,
 .plan-card,

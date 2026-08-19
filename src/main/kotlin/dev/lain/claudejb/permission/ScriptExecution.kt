@@ -57,10 +57,37 @@ object ScriptExecution {
         RegexOption.IGNORE_CASE,
     )
 
-    /** Interpreters that take a script FILE as their first non-flag argument. */
+    /**
+     * Interpreters that take a script FILE as their first non-flag argument.
+     *
+     * The entry condition is exactly that shape, which is why several obvious names are NOT here. `awk` and `sed`
+     * take their program as an argument (`awk '{print}' data.csv`) and only read a file with `-f`, so listing them
+     * would make the DATA file look like the script. `cargo`/`dotnet` run a project rather than a file, so there
+     * is no single file to read. `java` is here only through [SOURCE_RUN] below, because `java -jar app.jar`
+     * points at a binary and reading a jar yields mojibake that matches nothing and refuses everything.
+     */
     private const val INTERPRETERS =
-        """sh|bash|zsh|ksh|dash|ash|fish|csh|tcsh|python\d?(?:\.\d+)?|perl|ruby|node|deno|bun|php|""" +
-            """pwsh|powershell|osascript|Rscript|lua|julia|tclsh|groovy|scala|kotlin|elixir|escript"""
+        """sh|bash|zsh|ksh|dash|ash|fish|csh|tcsh|nu|python\d?(?:\.\d+)?|perl|raku|ruby|node|deno|bun|php|""" +
+            """pwsh|powershell|osascript|Rscript|lua|julia|tclsh|wish|expect|groovy|scala|kotlin|elixir|escript|""" +
+            """swift|dart|crystal|clojure|bb|racket|guile|gosh|chez|sbcl"""
+
+    /**
+     * **Compiled languages have an interpreter mode, and it is script execution by any honest reading.**
+     *
+     * `go run main.go`, `java Foo.java` (single-file source launch, JEP 330), `swift x.swift`, `dart run x.dart`,
+     * `crystal run x.cr`, `nim r x.nim`, `tcc -run x.c`: source text in, running process out, with no build
+     * artifact anyone reviewed in between. Being compiled is a property of the toolchain, not a protection — what
+     * matters to this rule is whether a file's CONTENTS become behaviour in one step, and here they do.
+     *
+     * Kept separate from [INTERPRETED] because these are `tool subcommand file` rather than `tool file`, so the
+     * "first non-flag argument" rule would capture the subcommand. What is deliberately NOT here is the
+     * whole-project form — `cargo run`, `dotnet run`, `go build ./...` — which names no single file to read.
+     */
+    private val SOURCE_RUN = Regex(
+        """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?""" +
+            """(?:go\s+run|nim\s+[cr]|crystal\s+run|dart\s+run|tcc\s+-run|java)\s+([^\s;&|]+)""",
+        RegexOption.IGNORE_CASE,
+    )
 
     /**
      * Inline-code flags: the spelling where the code IS in the request and every other rule already judges it.
@@ -106,16 +133,35 @@ object ScriptExecution {
         for (raw in ToolInputScanner.commandCandidates(input)) {
             val command = CommandRules.deobfuscate(raw, policy.home, policy.envValues)
             SOURCED.findAll(command).forEach { m -> anchor(m.groupValues[1], policy)?.let { out += it } }
+            SOURCE_RUN.findAll(command).forEach { m -> anchor(m.groupValues[1], policy)?.let { out += it } }
             interpretedFiles(command).forEach { f -> anchor(f, policy)?.let { out += it } }
             launchedFiles(command).forEach { f -> anchor(f, policy)?.let { out += it } }
         }
         return out.toList()
     }
 
+    /**
+     * A token that could name a file: it carries at least one letter, digit or underscore.
+     *
+     * **This is what keeps the shell's grammar from being imposed on text that is not shell**, and it is a
+     * general fix rather than a per-language one, deliberately. `source` is a POSIX builtin and, in every other
+     * language, an ordinary variable name — so `source = path.read_text()` in Python, `source = File.read(f)` in
+     * Ruby and `const source = fs.readFileSync(f)` in JavaScript all match [SOURCED], whose `(\S+)` then captures
+     * the assignment operator. Anchoring `=` produces a path nobody wrote, the reader cannot open it, and the call
+     * is refused with a message naming a file that does not exist — the analyser's own limitation charged to the
+     * user, in a message that does not even describe what happened.
+     *
+     * A list of languages to exempt would be the same mistake this package already made once with a list of
+     * dangerous device nodes: it fails open on the language nobody listed. A path has to contain something a
+     * filesystem could name, in any language, and punctuation does not.
+     */
+    private val NAMEABLE = Regex("""[A-Za-z0-9_]""")
+
     /** One script path as the reader will be asked for it, or null when it is not a usable path at all. */
     private fun anchor(rawPath: String, policy: SensitiveGuard.Policy): String? {
         val token = rawPath.trim().trim('\'', '"')
         if (token.isEmpty()) return null
+        if (!NAMEABLE.containsMatchIn(token)) return null
         val normalized = GuardPaths.normalize(token, policy.home, policy.envValues)
         if (normalized.isBlank()) return null
         if (GuardPaths.isAbsolute(normalized)) return GuardPaths.fold(normalized)

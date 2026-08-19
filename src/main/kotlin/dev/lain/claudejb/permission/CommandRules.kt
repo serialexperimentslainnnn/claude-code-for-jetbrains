@@ -30,12 +30,21 @@ object CommandRules {
         re("""\b(printenv|env|set)\b\s*(\||>|$)"""),
         re("""\bcat\b[^|;&]*\b(shadow|master\.passwd|sudoers)\b"""),
         re("""BEGIN\s+(RSA|OPENSSH|EC|DSA|PGP)\s+PRIVATE\s+KEY"""),
+        // The cloud instance metadata service. Matched on the ADDRESS alone, with no verb in front of it, and
+        // that is deliberate: 169.254.169.254 is a link-local address with exactly one use on a cloud instance —
+        // handing out the machine's own IAM role credentials to whoever asks from inside it. It is the first
+        // thing an SSRF or an injected instruction reaches for, it needs no authentication, and there is no
+        // benign reason for an agent to name it. `metadata.google.internal` is the same service by DNS name.
+        re("""\b169\.254\.169\.254\b"""),
+        re("""\bmetadata\.(google\.internal|azure\.com)\b"""),
         // Windows / PowerShell secret dumps
         re("""\bcertutil\b[^|;&]*(-exportPFX|-store\b|-user\b|-urlcache\b)"""),
         re("""\b(Export-PfxCertificate|Get-Credential|ConvertFrom-SecureString|Get-ChildItem\s+Cert:)\b"""),
         re("""\breg\b[^|;&]*\b(save|export)\b[^|;&]*hk(lm|cu).*(sam|security|system)"""),
         re("""\b(vaultcmd|cmdkey)\b[^|;&]*(/list|/rlist)"""),
-        re("""\b(mimikatz|sekurlsa|lsadump)\b"""),
+        // `mimikatz`/`sekurlsa`/`lsadump` are intrusion TOOLING, moved to `IntrusionTechniques.HACKING_TOOL`
+        // (pypykatz/lsassy live there too). What stays here is a command that dumps a secret WITHOUT a dedicated
+        // attack tool — the Windows built-ins above, the cloud-CLI token reads, `cat shadow`.
         // Exfiltrate
         re("""\bcurl\b[^|;&]*(-T\b|--upload-file\b|-F\b|--data-binary\s*@|--data\s*@)"""),
         re("""\bwget\b[^|;&]*--post-file"""),
@@ -50,11 +59,10 @@ object CommandRules {
         re("""\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|python\d?|perl|ruby)\b"""),
         re("""\b(powershell|pwsh)\b[^|;&]*-e(nc|ncodedcommand)?\b\s+[A-Za-z0-9+/=]{16,}"""),
         re("""\b(bitsadmin|mshta|regsvr32|rundll32|installutil|msbuild)\b[^|;&]*(http|/i:|javascript:|scrobj)"""),
-        // Recognised offensive tooling — anchored to command position (see cmdStart below), not a bare-word match
-        cmdStart("""lazagne|secretsdump(\.py)?|impacket-\w+|responder|bloodhound|sharphound|crackmapexec|nxc"""),
-        cmdStart("""hashcat|johntheripper|hydra|medusa|patator|ophcrack|hashid"""),
-        cmdStart("""sqlmap|msfconsole|msfvenom|metasploit|beef-xss|setoolkit|empire|covenant|sliver"""),
-        cmdStart("""nmap|masscan|zmap|nikto|gobuster|dirbuster|feroxbuster|ffuf|wpscan"""),
+        // Recognised offensive TOOLING moved to `IntrusionTechniques` (SecurityRule.HACKING_TOOL): it is a
+        // different claim from "this dumps a secret", and it needed its own toggle so the whole intrusion set
+        // disables as one deliberate choice for an authorised engagement. What stays HERE is a command that
+        // exposes a secret at rest or exfiltrates a file — the things above this line.
     )
 
     private fun re(p: String) = Regex(p, RegexOption.IGNORE_CASE)
@@ -138,10 +146,77 @@ object CommandRules {
             if (next == s) break
             s = next
         }
-        // Base64 is appended AFTER the loop and exactly once: it GROWS the string, so inside the loop it would be
-        // a change on every pass and the fixpoint would never be reached.
+        // Base64 and brace expansion are appended AFTER the loop and exactly once: both GROW the string, so inside
+        // the loop each would be a change on every pass and the fixpoint would never be reached.
         decodeBase64Payloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
+        expandBraces(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
         return s
+    }
+
+    /** `$'…'` — the ANSI-C quoted form, whose body carries escapes the shell decodes before running anything. */
+    private val ANSI_C_QUOTED = Regex("""\$'((?:[^'\\]|\\.)*)'""")
+
+    /** `\xNN`, `\uNNNN`, `\NNN` (octal) and the usual single-letter escapes, in one alternation. */
+    private val ANSI_C_ESCAPE = Regex("""\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|[0-7]{1,3}|.)""")
+
+    /**
+     * The body of a `$'…'` string, with its escapes resolved — `\x2fetc\x2fshadow` → `/etc/shadow`.
+     *
+     * Unknown escapes yield the character itself, which is what the shell does and is also the safe direction
+     * here: this function only ever makes a hidden path MORE visible to the matchers, never less.
+     */
+    private fun decodeAnsiC(body: String): String = ANSI_C_ESCAPE.replace(body) { m ->
+        val esc = m.groupValues[1]
+        when {
+            esc.startsWith("x") || esc.startsWith("u") ->
+                esc.drop(1).toIntOrNull(16)?.toChar()?.toString() ?: esc
+
+            esc.length in 1..3 && esc.all { it in '0'..'7' } ->
+                esc.toIntOrNull(8)?.toChar()?.toString() ?: esc
+
+            else -> when (esc) {
+                "n" -> "\n"
+                "t" -> "\t"
+                "r" -> "\r"
+                "0" -> ""
+                else -> esc
+            }
+        }
+    }
+
+    /** How many brace expansions one command may contribute. A bound, because `{a,b}{c,d}{e,f}…` multiplies. */
+    private const val MAX_BRACE_EXPANSIONS = 32
+
+    /** A token carrying at least one `{a,b}` alternation — the only shape worth expanding. */
+    private val BRACE_TOKEN = Regex("""\S*\{[^{}\s]*,[^{}\s]*\}\S*""")
+
+    /**
+     * `~/.{ssh,aws}/credentials` → `~/.ssh/credentials`, `~/.aws/credentials`.
+     *
+     * Brace expansion happens in the shell before anything else, so a single written token can name several real
+     * files — and a literal matcher sees one token that matches no glob at all. The expansions are APPENDED
+     * rather than substituted, the same discipline the base64 decode follows and for the same reason: adding a
+     * spelling can only ever find one more match, while replacing one can lose the match that was already there.
+     *
+     * Bounded by [MAX_BRACE_EXPANSIONS] because the product of several groups grows fast, and this runs on the
+     * thread that reads the binary's entire stdout.
+     */
+    private fun expandBraces(command: String): List<String> {
+        val out = LinkedHashSet<String>()
+        for (token in BRACE_TOKEN.findAll(command).map { it.value }) {
+            var forms = listOf(token)
+            while (forms.size <= MAX_BRACE_EXPANSIONS) {
+                val next = forms.flatMap { form ->
+                    val group = Regex("""\{([^{}\s]*,[^{}\s]*)\}""").find(form) ?: return@flatMap listOf(form)
+                    group.groupValues[1].split(',').map { form.replaceRange(group.range, it) }
+                }
+                if (next == forms) break
+                forms = next
+            }
+            out += forms.filter { it != token }
+            if (out.size >= MAX_BRACE_EXPANSIONS) break
+        }
+        return out.toList()
     }
 
     /** One peeling pass. Idempotent by design, which is what lets [deobfuscate] iterate it safely. */
@@ -150,6 +225,13 @@ object CommandRules {
         if ('\\' in s) {
             // Line continuations first, so a command split across lines becomes one line.
             s = s.replace("\\\n", "").replace("\\\r\n", "")
+        }
+        if ("$'" in s) {
+            // ANSI-C quoting: `$'\x2fetc\x2fshadow'` IS `/etc/shadow` to the shell, and to a literal matcher it is
+            // a string with no slashes in it at all — so every path rule and every command pattern misses it while
+            // the command runs exactly as written. Decoded BEFORE the quote-collapsing steps below, which would
+            // otherwise strip the `$'…'` delimiters and leave the escapes stranded as ordinary text.
+            s = ANSI_C_QUOTED.replace(s) { m -> decodeAnsiC(m.groupValues[1]) }
         }
         if ('$' in s) {
             // $IFS (with or without braces, optionally $'...') → a plain space.

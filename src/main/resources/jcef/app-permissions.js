@@ -412,11 +412,51 @@
     return pre;
   }
 
+  /**
+   * The banner on a card the security guard raised, naming the rule that matched.
+   *
+   * It can only appear for a rule the user switched OFF — an enforced rule is denied outright and never becomes
+   * a card — so the action it offers is **re-enable**, never disable. That direction is the whole point: this
+   * banner can only ever narrow the open surface, and there is no way to widen protection away from a card, in
+   * the middle of a task, under the pressure of a stalled turn. Widening is a deliberate trip to Settings.
+   *
+   * The badge is TEXT. Colour and motion are not information: neither survives forced-colors mode, a screenshot,
+   * or a user who cannot see the difference.
+   */
+  function buildGuardAlert(g) {
+    var rule = g.rule != null ? String(g.rule) : '';
+    var children = [
+      h('span', { class: 'perm-guard-badge', text: 'Guard alert' }),
+      h('span', {
+        class: 'perm-guard-rule',
+        text: String(g.label || rule) + (g.category ? ' — ' + String(g.category) : '')
+      })
+    ];
+    if (g.reason) children.push(h('div', { class: 'perm-guard-reason', text: String(g.reason) }));
+    if (rule) {
+      children.push(
+        h('button', {
+          class: 'perm-guard-restore',
+          text: 'Re-enable this rule',
+          // `on: true` means ENFORCED — the inversion between the row and the stored disabled-set lives in
+          // JcefSettingsMenu.applyRule and nowhere else, so this sends the row's meaning, not the field's.
+          on: { click: function () { send({ type: 'settingsToggle', key: 'rule:' + rule, on: true }); } }
+        })
+      );
+    }
+    return h('div', { class: 'perm-guard' }, children);
+  }
+
   function buildPermCard(card) {
     var id = card.id;
     var tool = card.tool;
 
     var bodyChildren = [];
+    // The guard alert goes FIRST, above the summary, because it changes what the card IS. An ordinary permission
+    // card asks "may I"; this one says "a security rule you switched off just matched, and here is which".
+    // It only ever appears for a DISABLED rule — an enforced one is denied outright and never reaches a card — so
+    // its presence always means an open lock let something through, which must not be quiet.
+    if (card.guard) bodyChildren.push(buildGuardAlert(card.guard));
     var summary = card.summary != null ? String(card.summary) : '';
     var description = card.description != null ? String(card.description) : '';
     if (summary) bodyChildren.push(h('div', { class: 'perm-summary', text: summary }));

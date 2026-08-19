@@ -527,8 +527,8 @@ class ClaudeSession(
             // user — the permission mode and "Always allow" are answers they gave about their own work.
             forceAsk = { gitIntegration },
             // Credentials / private keys / credential-dumping commands: never auto-approved, whatever the mode.
-            sensitiveDecision = { toolName, input ->
-                ClaudeSettings.getInstance(project).sensitiveDecision(toolName, input, project.basePath)
+            sensitiveDecision = { input ->
+                ClaudeSettings.getInstance(project).sensitiveDecision(input, project.basePath)
             },
             onSensitiveDenied = { toolName, reason ->
                 edt {
