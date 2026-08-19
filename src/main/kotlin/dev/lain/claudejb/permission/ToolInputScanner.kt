@@ -74,6 +74,17 @@ object ToolInputScanner {
      */
     private val PATTERN_KEY = Regex("""^(pattern|glob|regex|regexp)$""", RegexOption.IGNORE_CASE)
 
+    // A payload that is a BLOCK COMMENT and nothing else. Two shapes, and the narrowness is the whole safety
+    // argument — see the use site in [locationCandidates].
+    //
+    //   ^/\*+$        a bare opener: slash-star, slash-star-star, …
+    //   ^/\*…\*/$     a complete comment, however many lines it spans
+    //
+    // What it deliberately does NOT match, because these are globs and not comments: slash-star-star-slash
+    // followed by anything (a recursive glob with a path after it), and any value opening with two slashes,
+    // which is a line comment and, on Windows, a UNC share. Those keep being judged.
+    private val BLOCK_COMMENT_ONLY = Regex("""^/\*+$|^/\*[\s\S]*\*/$""")
+
     /**
      * Keys whose value is the text this call SENDS — a message to another agent, a prompt, a question.
      *
@@ -200,6 +211,20 @@ object ToolInputScanner {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
             if (COMMAND_KEY.matches(key) || PATTERN_KEY.matches(key)) return@walkStrings
+            // …and one shape, under a payload key only: a value that is nothing but a block comment.
+            //
+            // It reaches this rule as an absolute path by pure syntax — a Kotlin doc-comment opener begins with
+            // a slash — so an `Edit` that touches a doc block is refused for a reason that has nothing to do
+            // with where the call acts. Same class of false match as a command's tokens and a `/pattern/`, which
+            // the two exclusions above already exist for.
+            //
+            // Bounded on BOTH sides, and each bound is load-bearing:
+            //  - the KEY must be a payload ([CONTENT_KEY]), so the call's real destination — `file_path` — is
+            //    still judged in full, and every other key still is;
+            //  - the SHAPE must be a whole comment ([BLOCK_COMMENT_ONLY]), so a recursive glob with a path after
+            //    it stays a candidate.
+            // [pathCandidates] is untouched either way: a payload naming a credential still trips CREDENTIALS.
+            if (CONTENT_KEY.matches(key) && BLOCK_COMMENT_ONLY.matches(value.trim())) return@walkStrings
             bothSpellings(value, home, env, out)
         }
         return out.toList()
