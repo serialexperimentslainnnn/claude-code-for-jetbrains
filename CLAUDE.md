@@ -1,4 +1,4 @@
-# Project rules
+t# Project rules
 
 ## ⛔ ABSOLUTE PROHIBITION — the plugin's security code is off limits
 
