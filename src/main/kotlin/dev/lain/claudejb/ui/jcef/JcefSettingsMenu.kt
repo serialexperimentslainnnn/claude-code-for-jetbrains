@@ -8,6 +8,7 @@ import dev.lain.claudejb.session.EffortLevel
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.ToolNaming
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.SecuritySuspensions
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.addJsonObject
@@ -193,9 +194,16 @@ internal object JcefSettingsMenu {
      */
     private fun JsonArrayBuilder.securityRows(s: ClaudeSettings.State) {
         val disabled = csvItems(s.disabledSecurityRules)
+        // A rule SUSPENDED from a block is open right now, so the row has to read open. Without this the menu
+        // showed it enforced while the guard was letting it through to a card — the one failure mode this file
+        // already refuses everywhere else, a switch that says something different from what is in force.
+        val now = System.currentTimeMillis()
+        val suspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
+            SecuritySuspensions.sessionSuspended()
         SecurityCategory.entries.forEach { category ->
             SecurityRule.of(category).forEach { rule ->
-                entry("$RULE:${rule.name}", "Security", rule.label, rule.name !in disabled, sub = category.label)
+                val enforced = rule.name !in disabled && rule !in suspended
+                entry("$RULE:${rule.name}", "Security", rule.label, enforced, sub = category.label)
             }
         }
     }
@@ -315,6 +323,15 @@ internal object JcefSettingsMenu {
         val rule = SecurityRule.from(value) ?: return false
         val next = csvToggle(state.disabledSecurityRules, rule.name, on = !on)
         state.disabledSecurityRules = SecurityRule.canonicalCsv(csvItems(next))
+        // Enforcing it again CANCELS whatever was suspending it, both storages. Otherwise the switch would not
+        // do what it says: the timed suspension would keep the rule open and the row would flip itself back at
+        // the next push. It is also what revokes every command approved under this rule — those are honoured
+        // only while the rule is open, so closing it is the revocation.
+        if (on) {
+            state.securityRuleSuspensions =
+                SecuritySuspensions.without(state.securityRuleSuspensions, rule, System.currentTimeMillis())
+            SecuritySuspensions.releaseSessionScoped(rule)
+        }
         return true
     }
 

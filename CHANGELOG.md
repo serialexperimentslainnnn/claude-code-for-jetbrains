@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.5.0] — 2026-08-18
+## [5.5.0] — 2026-08-19
 
 **This release needs IntelliJ Platform 2025.3.1 (build 253.29346.138) or newer.** On 2026.2 it is the fix:
 5.1.1 could not open a chat there at all. On 2025.1, 2025.2 or the first 2025.3, stay on 5.1.1 — it keeps
@@ -20,7 +20,8 @@ working — or update the IDE.
   tooltip. Selecting a chat centres it, which is what makes ordinary use need no scrolling at all.
 - **A *Chat settings* menu on the composer** — the wrench beside the prompt box — holding the settings worth
   changing without leaving the chat, in ten collapsible groups: model, effort, permission mode, the chat
-  toggles, the six rules of the security lock, setting sources, allowed / disallowed / always-allowed tools,
+  toggles, the security lock's rules — 28 of them, behind the nine groups they belong to, so the list is
+  navigable rather than a wall — setting sources, allowed / disallowed / always-allowed tools,
   and the two MCP switches. Model, effort and mode act on the chat you are in — they are the same controls as
   the pills beside them, so the two can never disagree — and anything that can only take effect the next time
   a chat starts says so over its group instead of quietly doing nothing. Everything else is one row away,
@@ -135,6 +136,11 @@ working — or update the IDE.
   better and lets you undo the undo.
 
 ### Fixed
+- **A cancelled agent, or one the session limit cut off, stayed on the running animation for ever.** Both leave
+  a transcript with no finished turn at the end, which read as work still in flight — and unlike a turn that is
+  genuinely open, nothing more was ever going to be written that could correct it. Both endings are now
+  recognised for what they are and the agent reads as stopped. Measured over the 672 agent transcripts on one
+  machine, 155 of them ended this way.
 - **Agents stayed "running" for the rest of the session after they had finished, failed or been killed** —
   and with them the Task card in the transcript and their row in Workloads, which take their state from the
   agent. That last part is why finished work never aged out of the diagram: the window deliberately never
@@ -211,6 +217,24 @@ working — or update the IDE.
   share one conversation; the same defect was also what drew a chat twice in the Workloads diagram.
 
 ### Security
+- **A block can now be answered where it happens, and the answer expires on its own.** A refusal used to be a
+  dead end: the row told you which rule stopped the call, and the only way to act on it was a trip to Settings —
+  where the only choice is to turn that rule off *permanently*, which is the most dangerous of the options and
+  the one nobody remembers to undo. The block now carries a **Disable rule** link offering 5 minutes, 15
+  minutes, 30 minutes, 4 hours, 8 hours, until the IDE closes, or for ever. Five of the seven heal themselves,
+  so the lock spends less time open than it did before this existed, not more. Opening the menu commits to
+  nothing — every entry *is* the action, so there is no default a reflex click can accept.
+- **Disabling a rule has never been a bypass, and now nothing implicit can answer for you.** A rule you switch
+  off is downgraded to a question: the same call still stops and puts a card to you, every time, whatever
+  permission mode you are in. One implicit pass remained and is gone — a tool marked "Always allow" used to
+  skip that card, which meant a single click on a `Bash` card silently opened *every command `Bash` can run*,
+  including every other one the rule existed to stop.
+- **"Always allow" on a guard card is now about the command, not the tool.** Answering it on a
+  `terraform destroy` card pre-approves `terraform destroy` — that exact command, whole, and nothing adjacent
+  to it: not `terraform destroy -auto-approve`, not another rule's blocks, not the tool. It lasts only while
+  the rule that stopped it is still open, so re-enabling the rule — or simply letting the suspension run out —
+  revokes it. Anything the guard protects therefore takes a deliberate choice from you, about one command, with
+  the risk knowingly accepted rather than inherited from a setting you made weeks ago.
 - **The release signing keys were rotated, and what vouches for them now travels with the release.** The
   key that signs the `vX.Y.Z` tag and the `.asc` beside each download is new, and it is certified by two
   hardware keys whose private halves have never existed as a file. Everything you need to check that

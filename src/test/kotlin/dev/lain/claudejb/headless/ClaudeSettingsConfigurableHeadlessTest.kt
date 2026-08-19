@@ -346,12 +346,19 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
          * **superseded** by `disabledSecurityRules` and are read exactly once, by `LegacySecurityToggles.adopt`,
          * so the form must neither draw them nor write them. Their presence in this bucket is what pins that —
          * a section that started writing one again would silently overwrite a migrated configuration.
+         *
+         * `securityRuleSuspensions` and `securityCommandApprovals` are off the form for a third reason, and it
+         * is the load-bearing one: they are what the user answered on a CARD, in front of the call it was about.
+         * The form is where a standing configuration is edited in the cold; a page that rewrote these on OK
+         * would silently cancel a suspension the user had just chosen, or resurrect one that had expired. They
+         * are written from the block and the card, and revoked by enforcing the rule again.
          */
         val NOT_ON_THE_FORM = setOf(
             "signedOut", "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs",
             "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
             "securityBlockForeignOtherUserHome", "securityBlockForeignNetworkMounts",
             "securityBlockForeignWslMounts", "securityBlockOutsideProject",
+            "securityRuleSuspensions", "securityCommandApprovals",
         )
 
         /** On the form, but written only on a real edit — see the assertion at the end of the test. */

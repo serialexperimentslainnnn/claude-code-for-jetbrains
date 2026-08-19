@@ -429,8 +429,8 @@
       h('span', { class: 'perm-guard-badge', text: 'Guard alert' }),
       h('span', {
         class: 'perm-guard-rule',
-        text: String(g.label || rule) + (g.category ? ' — ' + String(g.category) : '')
-      })
+        text: String(g.label || rule) + (g.category ? ' — ' + String(g.category) : ''),
+      }),
     ];
     if (g.reason) children.push(h('div', { class: 'perm-guard-reason', text: String(g.reason) }));
     if (rule) {
@@ -440,7 +440,11 @@
           text: 'Re-enable this rule',
           // `on: true` means ENFORCED — the inversion between the row and the stored disabled-set lives in
           // JcefSettingsMenu.applyRule and nowhere else, so this sends the row's meaning, not the field's.
-          on: { click: function () { send({ type: 'settingsToggle', key: 'rule:' + rule, on: true }); } }
+          on: {
+            click: function () {
+              send({ type: 'settingsToggle', key: 'rule:' + rule, on: true });
+            },
+          },
         })
       );
     }
@@ -516,7 +520,23 @@
         })
       );
     }
-    if (tool) {
+    // On a GUARD card the unit of the answer is the COMMAND, not the tool, and the label says so. "Always
+    // allow" on a `terraform destroy` card must open that command and nothing else the rule stops — the tool
+    // grain would be `Bash`, i.e. every command there is. It also lasts only while the rule stays open, so
+    // re-enabling the rule takes the approval with it.
+    if (card.guard) {
+      actions.push(
+        h('button', {
+          class: 'btn ghost perm-always',
+          text: 'Always allow this command',
+          on: {
+            click: function () {
+              sendFor(card, { type: 'guardAllowAlways', id: id });
+            },
+          },
+        })
+      );
+    } else if (tool) {
       actions.push(
         h('button', {
           class: 'btn ghost perm-always',

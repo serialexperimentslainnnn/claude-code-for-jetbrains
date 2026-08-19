@@ -8,10 +8,14 @@ import com.intellij.openapi.options.ShowSettingsUtil
 import dev.lain.claudejb.context.ImageAttachments
 import dev.lain.claudejb.context.ProjectTree
 import dev.lain.claudejb.diff.DiffPresenter
+import dev.lain.claudejb.permission.SecurityRule
+import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
+import dev.lain.claudejb.settings.SecurityCommandApprovals
+import dev.lain.claudejb.settings.SecuritySuspensions
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
@@ -86,6 +90,10 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.ChangeProvider -> session.changeProvider(Provider.fromId(m.id))
 
         is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
+
+        is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
+
+        is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
 
         // Another IDE may have changed these since this process read them: the safe is application-wide and
         // the in-memory copy is loaded once. Re-read, then push to EVERY chat — the settings are global, so a
@@ -253,6 +261,78 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
         ClaudeSettings.getInstance(panel.project).update { it.workloadWindowMinutes = minutes }
         JcefChatPanel.pushSessionToAll()
+    }
+
+    /**
+     * *Disable rule* on a guard block: opens exactly one rule, for exactly as long as was chosen.
+     *
+     * Both halves are validated against a closed set before anything is written — an unknown rule name or an
+     * unknown duration token is LOGGED and dropped, never defaulted. That direction matters more here than
+     * anywhere else in this file: a guessed default would be a security rule opened by a message nobody
+     * authored, and the failure would be silent.
+     *
+     * **Opening a rule is not a bypass.** `SensitiveGuard` downgrades a disabled rule's hit to ASK, and the
+     * broker refuses to let the permission mode answer it, so what the user gets for this click is a card on
+     * every matching call — for five minutes, or until the IDE closes, or for ever, as they chose.
+     *
+     * *Forever* is routed through [JcefSettingsMenu.apply] rather than written here, because that is where the
+     * row-means-enforced / field-means-disabled inversion lives, and a second copy of it is how the two
+     * surfaces would start disagreeing about what a switch means.
+     */
+    private fun onGuardSuspend(m: JcefBridge.Msg.GuardSuspend) {
+        val rule = SecurityRule.from(m.rule)
+        val duration = SecuritySuspensions.Duration.from(m.duration)
+        if (rule == null || duration == null) {
+            logger.warn("A guard block asked to suspend something this build does not have: ${m.rule}/${m.duration}")
+            return
+        }
+        val settings = ClaudeSettings.getInstance(panel.project)
+        when (duration) {
+            SecuritySuspensions.Duration.FOREVER ->
+                settings.update { JcefSettingsMenu.apply(it, "rule:${rule.name}", false, session.models.map { p -> p.value }) }
+
+            SecuritySuspensions.Duration.UNTIL_IDE_CLOSES -> SecuritySuspensions.suspendUntilIdeCloses(rule)
+
+            else -> settings.update {
+                it.securityRuleSuspensions = SecuritySuspensions.withSuspension(
+                    it.securityRuleSuspensions,
+                    rule,
+                    duration.millis ?: 0,
+                    System.currentTimeMillis(),
+                )
+            }
+        }
+        // The ⚙ menu draws a row per rule, so leaving it unpushed would show the rule still enforced — the same
+        // switch reading differently depending on where you looked at it.
+        JcefChatPanel.pushSettingsMenuToAll()
+        // And say so in the conversation. Suspending a rule has no other visible effect until the next matching
+        // call, so without this the link writes a security setting and looks like it did nothing at all.
+        session.systemNotice(
+            "${rule.label} is disabled ${duration.phrase}. Matching calls will ask you instead of being refused.",
+        )
+    }
+
+    /**
+     * *Always allow* on a guard card: remembers THIS command under the rule that stopped it, then allows the call.
+     *
+     * The command is read from the pending request, never from the message. The page is telling us which
+     * decision the user took; the host already knows what they were deciding about, so accepting the command
+     * text from the browser would let a compromised renderer approve something other than what the card showed.
+     *
+     * Only a GUARD card can do this — no `guard`, no approval — and the approval is per command, so it opens
+     * the one command the user read and nothing else the same rule stops. It dies when the rule closes again,
+     * without a write: the broker only consults it inside the branch that already knows the rule is open.
+     */
+    private fun onGuardAllowAlways(m: JcefBridge.Msg.GuardAllowAlways) {
+        val chat = cardSession(m.scope)
+        val target = chat.pendingPermissions().firstOrNull { it.requestId == m.id } ?: return
+        val rule = target.guard?.rule ?: return
+        val command = ToolInputScanner.commandText(target.input)
+        ClaudeSettings.getInstance(panel.project).update {
+            it.securityCommandApprovals =
+                SecurityCommandApprovals.withApproval(it.securityCommandApprovals, rule, command)
+        }
+        chat.resolvePermission(target.requestId, true)
     }
 
     private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {

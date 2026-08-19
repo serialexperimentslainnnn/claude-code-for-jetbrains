@@ -46,6 +46,16 @@ class TranscriptEntry(
      * showing only `{"success":true,…}` says the call worked and never says what was said. Null otherwise.
      */
     val messageText: String? = null,
+    /**
+     * Set on the [Speaker.SYSTEM] row that reports a security guard BLOCK, to the
+     * [dev.lain.claudejb.permission.SecurityRule] name that refused the call. Null on every other row.
+     *
+     * It is what makes the block actionable rather than a dead end: the row draws a *Disable rule* link, and the
+     * link has to know which rule it would open. The rule NAME travels rather than its prose, so the control
+     * keeps working when the wording of a message changes — the same reason
+     * [dev.lain.claudejb.permission.GuardAlert] carries the enum.
+     */
+    val blockedRule: String? = null,
 ) {
     var text: String = text
         internal set
@@ -153,10 +163,11 @@ class TranscriptModel {
         filePath: String? = null,
         commandText: String? = null,
         messageText: String? = null,
+        blockedRule: String? = null,
     ): TranscriptEntry {
         val entry = TranscriptEntry(
             nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath, commandText,
-            messageText,
+            messageText, blockedRule,
         )
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry

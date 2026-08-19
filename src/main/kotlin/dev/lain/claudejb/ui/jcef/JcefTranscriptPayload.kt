@@ -43,6 +43,9 @@ object JcefTranscriptPayload {
         // …and the text the call SENDS → its own block, also outside the collapse toggle. A card showing only
         // the reply says the call worked and never says what was said.
         e.messageText?.let { put("message", it) }
+        // The rule that refused a blocked call → the row draws the *Disable rule* control. Only a guard block
+        // carries one, so its presence is what tells the page this SYSTEM row is actionable at all.
+        e.blockedRule?.let { put("blockedRule", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         // A completed Edit/Write/MultiEdit card is reviewable: the frontend shows a "View diff"

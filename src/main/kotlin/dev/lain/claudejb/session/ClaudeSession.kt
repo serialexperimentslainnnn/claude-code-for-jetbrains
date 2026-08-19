@@ -42,6 +42,8 @@ import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SecurityCommandApprovals
+import dev.lain.claudejb.settings.approvedGuardCommands
 import dev.lain.claudejb.settings.requiresTrustPrompt
 import dev.lain.claudejb.settings.resolveEnv
 import dev.lain.claudejb.settings.sensitiveDecision
@@ -535,7 +537,16 @@ class ClaudeSession(
             sensitiveDecision = { input ->
                 ClaudeSettings.getInstance(project).sensitiveDecision(input, project.basePath)
             },
-            onSensitiveDenied = { toolName, reason ->
+            // Only ever consulted for a rule the user has already opened (the broker asks inside its ASK
+            // branch), so re-enabling the rule revokes every command approved under it with nothing to clean up.
+            isGuardCommandApproved = { rule, command ->
+                SecurityCommandApprovals.isApproved(
+                    ClaudeSettings.getInstance(project).approvedGuardCommands(),
+                    rule,
+                    command,
+                )
+            },
+            onSensitiveDenied = { toolName, reason, rule ->
                 edt {
                     // The guard's own words, not a fixed sentence. The previous text asserted "MCP servers and
                     // Skills may not read credentials or private keys" for EVERY denial — so a block on a
@@ -545,6 +556,9 @@ class ClaudeSession(
                         Speaker.SYSTEM,
                         reason?.let { "Blocked $toolName: it $it." }
                             ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code ▸ Security.",
+                        // What turns this row from a notice into the place the user can act: the block carries
+                        // the rule that refused, so it can offer to suspend THAT rule and no other.
+                        blockedRule = rule?.name,
                     )
                 }
                 fireState()
@@ -2310,7 +2324,15 @@ class ClaudeSession(
         }
     }
 
-    private fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
+    /**
+     * A plain notice in the conversation, on the EDT.
+     *
+     * Not private, because the security controls on a block are answered by [dev.lain.claudejb.ui.ChatBridgeRouter]
+     * and a control that writes a setting and shows nothing is indistinguishable from a broken one — which is
+     * the defect this project has shipped most often. Suspending a rule has no other visible consequence until
+     * the next matching call, so the row IS the confirmation.
+     */
+    internal fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
 
     /** Re-reads the agent directory off the EDT and tells the UI — see [AgentScanner]. */
     fun scanAgents() = agentScanner.scan()

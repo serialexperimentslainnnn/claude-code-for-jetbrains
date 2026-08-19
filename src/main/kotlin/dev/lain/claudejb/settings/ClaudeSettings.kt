@@ -143,6 +143,34 @@ class ClaudeSettings(internal val project: Project? = null) {
         @JvmField var disabledSecurityRules: String = ""
 
         /**
+         * Rules suspended WITH AN EXPIRY, as `RULE=<epochMillis>` entries, comma-separated.
+         *
+         * The timed half of [disabledSecurityRules], and deliberately a separate field rather than a richer
+         * encoding of that one: this is the set that **heals itself**, and the difference has to survive a
+         * misparse. An entry whose value is not a number, or whose rule name this build does not know, is
+         * dropped — the same fail-safe direction as the CSV above, since dropping can only ever fail to
+         * suspend a rule.
+         *
+         * Persisted, because a suspension long enough to be worth choosing (4 or 8 hours) outliving an IDE
+         * restart is the whole point; the "until the IDE closes" choice is process state and is NOT written
+         * here. "Forever" is not written here either — it is [disabledSecurityRules], which is exactly what
+         * "no expiry" already means.
+         *
+         * See [SecuritySuspensions].
+         */
+        @JvmField var securityRuleSuspensions: String = ""
+
+        /**
+         * Commands the user answered "Allow always" to on a guard card, as `RULE=<command>` lines.
+         *
+         * Honoured ONLY while that rule is still suspended or disabled, which is what makes it revocable
+         * without a write: re-enable the rule and every command approved under it stops matching. Per command
+         * and per rule, never per tool — see [SecurityCommandApprovals] for why that distinction is the whole
+         * safety property.
+         */
+        @JvmField var securityCommandApprovals: String = ""
+
+        /**
          * EXTRA blocked egress domains, one per line — **added** to
          * [dev.lain.claudejb.permission.DangerousDomains.BLOCKED_DOMAINS], never replacing it. Same additive-only
          * rule as [sensitiveExtraGlobs], for the same reason: the built-in half cannot be shrunk from here.

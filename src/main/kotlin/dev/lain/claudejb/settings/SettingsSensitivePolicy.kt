@@ -54,16 +54,40 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
 }
 
 /**
- * The rules the user switched OFF, parsed from the stored CSV.
+ * The rules that are OPEN right now — the permanent set, plus whatever is suspended and has not run out.
  *
  * An unknown id is **dropped**, not guessed at, and the direction of that failure is the reason the stored set is
  * the disabled one rather than the enabled one: a garbled or stale entry can only ever fail to turn a rule off,
  * i.e. fail safe. See [SecurityRule.from].
+ *
+ * Three sources, one answer, and it is recomputed on every `can_use_tool` — which is what makes a suspension
+ * expire *during* a turn rather than at the next restart. A rule whose 5 minutes are up is enforced again on the
+ * very next call, with nothing to write and nobody to remember to do it:
+ *  - [ClaudeSettings.State.disabledSecurityRules] — off with no expiry (Settings, or "Forever" on a block);
+ *  - [ClaudeSettings.State.securityRuleSuspensions] — off until an instant that has not passed yet;
+ *  - [SecuritySuspensions.sessionSuspended] — off until this IDE closes.
+ *
+ * **Open never means allowed.** Every one of these downgrades a hit to ASK, never to a pass:
+ * `SensitiveGuard.evaluate` produces a card for a disabled rule's hit, and the broker will not let the
+ * permission mode answer it. The only thing that can skip that card is an explicit, per-command "Allow always"
+ * the user gave on the card itself ([approvedGuardCommands]) — which is itself only honoured while the rule is
+ * in this set.
  */
-internal fun ClaudeSettings.disabledSecurityRules(): Set<SecurityRule> =
-    state.disabledSecurityRules.split(',')
-        .mapNotNull { SecurityRule.from(it.trim()) }
-        .toSet()
+internal fun ClaudeSettings.disabledSecurityRules(): Set<SecurityRule> {
+    val permanent = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
+    val timed = SecuritySuspensions.active(state.securityRuleSuspensions, System.currentTimeMillis())
+    return permanent.toSet() + timed + SecuritySuspensions.sessionSuspended()
+}
+
+/**
+ * Whether [command] was explicitly approved under [rule], as the raw stored lines — see
+ * [SecurityCommandApprovals].
+ *
+ * The caller must already have established that [rule] is open; this answers only the second half of the
+ * conjunction. Split that way on purpose: an approval that could be read without the rule's state beside it is
+ * one refactor away from becoming a standing bypass.
+ */
+internal fun ClaudeSettings.approvedGuardCommands(): String = state.securityCommandApprovals
 
 /** The user's own blocked domains, one per line, `#` comments ignored — **added** to the built-in set. */
 internal fun ClaudeSettings.extraBlockedDomains(): List<String> =

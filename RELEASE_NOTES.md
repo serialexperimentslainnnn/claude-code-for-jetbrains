@@ -1,4 +1,4 @@
-## v5.5.0 — 2026-08-18
+## v5.5.0 — 2026-08-19
 
 **This release requires IntelliJ Platform 2025.3.1 or newer, and it is not optional.** From build 262 the IDE
 ships its embedded browser as a separate bundled plugin, and a plugin that does not declare a dependency on it
@@ -43,7 +43,8 @@ starts, and the list behind "Open Previous Session…".
 
 **Everything worth changing mid-conversation is behind the wrench on the composer.** *Chat settings*, in ten
 collapsible groups: model, effort and permission mode — the same controls as the pills beside them, acting on
-the chat you are in, so the two can never tell you different things — plus the chat toggles, the six rules of the security lock, setting sources, your allowed,
+the chat you are in, so the two can never tell you different things — plus the chat toggles, the security lock's
+28 rules behind the nine groups they belong to, setting sources, your allowed,
 disallowed and always-allowed tools, and the two MCP switches. Anything that can only take effect the next
 time a chat starts says so above its group rather than looking as though it did nothing.
 
@@ -51,6 +52,21 @@ time a chat starts says so above its group rather than looking as though it did 
 Claude's built-in tools, without waiting for the tool to ask first. It does not widen the deterministic
 security lock: a credential file, a dangerous command, the system temp folder and anything outside your
 project still stop and ask you, for an always-allowed tool exactly as for any other.
+
+**When the lock refuses something, you can answer it there — and the answer expires on its own.** A refusal used
+to be a dead end: the row told you which rule stopped the call, and the only way to act on it was a trip to
+Settings, where the only choice is to turn that rule off *permanently*. The block now carries a **Disable rule**
+link with seven durations — 5 minutes, 15 minutes, 30 minutes, 4 hours, 8 hours, until the IDE closes, or for
+ever — and five of them heal themselves, so the lock ends up open for less time than it was before this existed.
+Opening the menu commits to nothing: each entry is the action, so there is no default to accept by reflex.
+
+**Nothing opens the lock without you saying so, once, about one command.** Disabling a rule has never granted
+anything silently — it turns a refusal into a question you answer, every time, whatever permission mode you are
+in — and the one implicit pass that remained is gone: a tool marked "Always allow" used to skip that question,
+so a single click on a `Bash` card quietly opened every command `Bash` can run. On a lock card, "Always allow"
+is now about **the command**: answer it on a `terraform destroy` card and you have pre-approved that exact
+command, not `terraform destroy -auto-approve`, not the tool, and not anything else the rule stops. It lasts
+only while that rule is open, so re-enabling the rule — or letting the suspension run out — takes it with it.
 
 **And the button rows never run off the edge again.** In a narrow tool window whatever does not fit is
 collected behind a `⋮` at the end of the row rather than being painted somewhere you cannot reach. Send is
@@ -195,7 +211,10 @@ become links you click; and that a deterministic guard may refuse a call outrigh
 rather than something to work around. It is fixed text — no machine name, no environment value, nothing from
 your project — and it is not a security control: nothing in it softens a rule or explains how to get past one.
 
-**Fixes:** with many chats open the tabs could not be scrolled at all (a vertical wheel does not move a
+**Fixes:** an agent you cancelled, or one the session limit cut off, kept the running animation for the rest of
+the session — both leave a transcript with no finished turn at the end, which read as work still in flight, and
+unlike a genuinely open turn nothing further was ever going to arrive to correct it (155 of the 672 agent
+transcripts on one machine end one of those two ways); with many chats open the tabs could not be scrolled at all (a vertical wheel does not move a
 horizontal row); the loading screen covered the chat tabs, so you could not switch chats while one was
 starting; `/btw` never showed you an answer at all — a side question is answered alongside the conversation
 and the transcript deliberately ignores anything that is not the main run, so the reply was dropped every
