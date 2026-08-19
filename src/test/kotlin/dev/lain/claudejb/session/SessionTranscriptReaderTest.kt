@@ -5,11 +5,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Tests [SessionTranscriptReader.parseEntries]'s pure JSONL→transcript mapping (no filesystem): user/assistant
- * text, thinking (empty omitted), tool_use, tool_result (string and array content), and that blank/corrupt
- * lines and unknown types are dropped without throwing.
- */
 class SessionTranscriptReaderTest {
 
     @Test
@@ -52,14 +47,9 @@ class SessionTranscriptReaderTest {
         assertEquals("Bash", e.meta)
         assertEquals("toolu_1", e.toolUseId)
         assertTrue(e.text.isNotBlank())
-        assertNull(e.filePath) // not a file tool → nothing to jump to
+        assertNull(e.filePath)
     }
 
-    /**
-     * Regression: a RESTORED conversation must render its tool cards exactly like a live one — project-relative
-     * path, and a jump-to-code link. The restore path used to call `formatToolUse` with no project root, so
-     * reopening the IDE turned every card into a bare absolute path with no link.
-     */
     @Test
     fun `a restored file tool keeps the project-relative path and its jump-to-code link`() {
         val root = "/home/u/proj"
@@ -223,8 +213,6 @@ class SessionTranscriptReaderTest {
 
     @Test
     fun `maxEntries drops a leading orphan TOOL_OUTPUT whose call was cut off`() {
-        // Sequence: TOOL(t1), TOOL_OUTPUT(t1), USER, ASSISTANT. Cap of 3 cuts the TOOL call, leaving an orphan
-        // output at the head of the window — it must be dropped so no result shows without its call.
         val lines = listOf(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}""",
             """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"out"}]}}""",
@@ -232,7 +220,6 @@ class SessionTranscriptReaderTest {
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}""",
         )
         val entries = SessionTranscriptReader.parseEntries(lines, maxEntries = 3)
-        // Window would be [TOOL_OUTPUT(t1), USER, ASSISTANT]; the orphan output is dropped.
         assertEquals(listOf("USER", "ASSISTANT"), entries.map { it.speaker })
         assertEquals(listOf("next prompt", "reply"), entries.map { it.text })
     }
@@ -250,9 +237,6 @@ class SessionTranscriptReaderTest {
 
     @Test
     fun `maxEntries drops an orphan TOOL_OUTPUT in the middle while keeping a coherent pair`() {
-        // Sequence: TOOL(t0), USER, TOOL_OUTPUT(t0 - call cut off), ASSISTANT, TOOL(t1), TOOL_OUTPUT(t1).
-        // Cap of 5 cuts the t0 TOOL call but leaves its output mid-window (after a surviving non-orphan entry);
-        // it must still be dropped, while the coherent t1 TOOL+TOOL_OUTPUT pair is kept, order preserved.
         val lines = listOf(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"a"}}]}}""",
             """{"type":"user","message":{"role":"user","content":"prompt"}}""",
@@ -262,7 +246,6 @@ class SessionTranscriptReaderTest {
             """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"good out"}]}}""",
         )
         val entries = SessionTranscriptReader.parseEntries(lines, maxEntries = 5)
-        // Window would be [USER, TOOL_OUTPUT(t0), ASSISTANT, TOOL(t1), TOOL_OUTPUT(t1)]; the mid orphan is dropped.
         assertEquals(listOf("USER", "ASSISTANT", "TOOL", "TOOL_OUTPUT"), entries.map { it.speaker })
         assertEquals(listOf("prompt", "reply", "good out"), entries.filter { it.speaker != "TOOL" }.map { it.text })
         assertEquals("t1", entries.last().toolUseId)
@@ -272,12 +255,6 @@ class SessionTranscriptReaderTest {
     fun `DEFAULT_RESTORE_CAP is a positive conservative cap`() {
         assertTrue(SessionTranscriptReader.DEFAULT_RESTORE_CAP > 0)
     }
-
-    // ── restore must render like LIVE, not like an older build ──────────────────────────────────────────────
-    // A reloaded transcript is reconstructed here, on a code path entirely separate from a live turn, so every
-    // rendering input a live TOOL row carries has to be reproduced — otherwise a restored card silently falls
-    // back to an older look. This bit the plugin once already (4.3.1: restored file cards lost their
-    // jump-to-code path) and again here (4.4.1: restored command cards lost the copyable code block).
 
     private fun bashLines(cmd: String, output: String = "ok", isError: Boolean = false) = listOf(
         """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"$cmd"}}]}}""",

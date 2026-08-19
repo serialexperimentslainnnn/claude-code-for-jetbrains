@@ -1,17 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   FIND BAR — a layer of the work area, hanging under the tab bar
-   ════════════════════════════════════════════════════════════════════════════
-   `absolute`, not `fixed`, and that is the whole change: the bar is mounted inside #work
-   (app-transcript-find.js), so `top: 12px` means 12px below the TAB BAR instead of 12px below the top of the
-   window — which is where the tabs are. In a narrow tool window the bar is nearly as wide as the row, so a
-   chat tab focused while the search was open could be hidden completely: WCAG 2.2 SC 2.4.11 (Focus Not
-   Obscured), which is not satisfied by "at this width they happen not to overlap". Contained in the stacking
-   context #work opens (base.css) there is no longer a number to keep in step with anything — the bar CANNOT
-   reach the tabs, at any width.
-
-   4 is the top of that context — above the transcript, above a panel over it, above the dock and above the
-   palette, because the search has to stay readable over whichever of them is up. Below the popups mounted on
-   `document.body`, which are always the newer thing on screen. */
 .find-bar {
   position: absolute;
   top: 12px;
@@ -22,8 +8,6 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px 6px 12px;
-  /* Bounded by the work area rather than by the viewport — same intent as the old `100vw`, measured against
-     the box it is now inside, so it cannot spill out of a narrow tool window. */
   max-width: calc(100% - 24px);
   box-sizing: border-box;
   background: var(--surface);
@@ -39,7 +23,6 @@
   color: var(--text);
   font-family: var(--font);
   font-size: 12.5px;
-  /* Fluid: shrink with the bar at narrow widths rather than a fixed 200px that forces overflow. */
   width: 200px;
   max-width: 100%;
   min-width: 80px;
@@ -59,7 +42,6 @@
   text-align: right;
   white-space: nowrap;
 }
-/* The same chip × as `.queue-x`/`.att-x` (composer.css), one size up because it closes a whole bar. */
 .find-x {
   width: 22px;
   height: 22px;
@@ -69,9 +51,6 @@
   background: var(--surface2);
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   TOOL ELAPSED — live RUNNING timer in the tool head  (Sprint 2)
-   ════════════════════════════════════════════════════════════════════════════ */
 .tool-elapsed {
   flex: 0 0 auto;
   color: var(--dim);
@@ -80,27 +59,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   SESSION DASHBOARD — overlay panel + cards  (Sprint 2)
-   ════════════════════════════════════════════════════════════════════════════ */
-/* The view buttons (`.dash-toggles` / `.dash-toggle`) are styled in composer.css, beside the model and mode
-   pills they are now shaped like and next to which they sit. What stays here is the panel they open. */
-
-/* A CONTAINED LAYER over the conversation area, never a full-window overlay and never a replacement for the
-   transcript. It shares the first cell of #work's grid with #conversation (base.css) and is stacked on top of
-   it, so the transcript stays laid out underneath and keeps its scroll position — a scroll container that
-   stops being displayed loses its scrollTop, and coming back from the dashboard then lands at the top of a
-   long conversation. What the cell does NOT contain is what makes the rest safe: the dock is the row below,
-   so the composer can never be covered, and the tab bar is not inside #work at all.
-
-   Opaque, because what is underneath is still painted: a translucent panel would show the transcript through
-   its own text. And the transcript underneath is `inert` while this is up (app-session.js): painted, so it
-   keeps its offset, but out of reach of the pointer, of Tab and of a screen reader — a focusable link under
-   an opaque panel is WCAG 2.2 SC 2.4.11.
-
-   `1` is one step over the transcript and no more, inside the stacking context #work opens (base.css). A
-   second layer over the transcript should REUSE it rather than climb past it: the next step up is the
-   dock's, and a panel that outranks the composer is the bug this whole arrangement exists to prevent. */
 .dashboard {
   grid-area: 1 / 1;
   z-index: 1;
@@ -108,26 +66,18 @@
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
-  /* Tighter than the transcript's own padding, and deliberately so: the transcript is prose and wants
-     breathing room, the dashboard is a dense readout and the same generosity turns it into a page you
-     scroll instead of a panel you glance at. */
   padding: 12px clamp(10px, 2.5vw, 20px) 18px;
   animation: fade 0.2s var(--ease);
 }
-/* a responsive column of cards, centred with the reading column */
 .dashboard > .dash-inner {
   max-width: var(--col);
   margin: 0 auto;
   display: grid;
-  /* 220, not 260: three columns fit where two did in the tool-window widths people actually use, which is
-     what stops a card of four numbers occupying half the panel. */
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
   align-items: start;
 }
 
-/* The card's own scale. Every number here was a third larger, and the panel read as a settings page rather
-   than an instrument: the content is short labels and figures, so the padding was most of what you saw. */
 .dash-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -139,14 +89,10 @@
   gap: 6px;
   font-size: 12px;
 }
-/* let wide cards (context bar, subagents, mcp) span the full row */
 .dash-card.wide {
   grid-column: 1 / -1;
 }
 
-/* The plan-mode plan. Prose and a numbered list rather than stat rows, so it is `wide` and reads at a
-   comfortable measure instead of wrapping into a ribbon in one grid column. The body is model-written
-   markdown, rendered through the same sanitized path as the transcript. */
 .plan-md {
   color: var(--text);
   line-height: 1.55;
@@ -161,7 +107,6 @@
   margin-bottom: 0;
 }
 
-/* Where the plan lives on disk. Dim and small: it is provenance, not content. */
 .plan-path {
   color: var(--dim);
   font-family: var(--mono);
@@ -169,9 +114,6 @@
   overflow-wrap: anywhere;
 }
 
-/* Workloads is a canvas, not a list of stats: it takes the height it is given instead of sitting in a strip
-   with the rest of the panel empty below it. `align-self: stretch` beats the grid's `align-items: start`,
-   and the fixed min-height is what stops it collapsing to the diagram's own height on a small tree. */
 .dash-card[data-card='workloads'] {
   align-self: stretch;
   min-height: min(520px, 60vh);
@@ -181,31 +123,15 @@
   flex: 1 1 auto;
   min-height: 0;
 }
-/* With no diagram there is nothing to give that height to, and a 520px empty box reads as a render that
-   failed rather than as a window that admits nothing. The card then sizes to the control and the one line
-   beside it. */
 .dash-card[data-card='workloads']:not(:has(.dg-view)) {
   align-self: start;
   min-height: 0;
 }
 
-/* ── the retention window, on the Workloads card ──────────────────────────────
-   The control the view cannot be read without: it decides which finished work is still listed, so a diagram
-   that has aged everything out and a project that never ran anything look the same. It sits under the card's
-   title rather than inside it because `.dash-title` is built by the shared card helper, and reaching into
-   another module's structure to inject a child is a coupling that breaks silently the day that helper
-   changes.
-
-   The `<select>` keeps its native appearance on purpose. `appearance: none` means drawing the arrow, and the
-   only ways to draw one are a `background-image` — `url()`, which this page's CSP forbids outright — or a
-   gradient/clip-path reimplementation of a glyph the platform already provides correctly at every zoom
-   level and in forced-colors mode. */
 .wl-window {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* Wrap rather than crush: in a narrow tool window the label drops above the control instead of squeezing
-     it down to the width of its arrow. */
   flex-wrap: wrap;
   font-size: 12.5px;
 }
@@ -225,14 +151,10 @@
   font-size: 12px;
   cursor: pointer;
 }
-/* The popup rows are painted by the browser, and it takes these two from the element rather than from the
-   page: without them a dark IDE theme gets the platform's default light list, i.e. the one control on the
-   page that ignores the theme. */
 .wl-window-select option {
   background: var(--surface);
   color: var(--text);
 }
-/* The panel is one full-height row when Workloads is the view, so the card can actually use the space. */
 .dashboard > .dash-inner:has(.dash-card[data-card='workloads']) {
   min-height: 100%;
   align-items: stretch;
@@ -247,7 +169,6 @@
   margin: 0;
 }
 
-/* label / value rows */
 .stat-row {
   display: flex;
   align-items: baseline;
@@ -271,8 +192,6 @@
   max-width: 60%;
 }
 
-/* ── segmented context bar ──────────────────────────────────────────────────── */
-/* ── plan-limit bars (session / weekly / per-model) ───────────────────────── */
 .usage-row {
   margin: 0 0 12px;
 }
@@ -302,23 +221,16 @@
   border-radius: var(--radius-pill);
   background: var(--surface2);
   border: 1px solid var(--border);
-  /* See `.usage-bars .ub-track`: the fill transitions its width, so containment keeps that layout inside. */
   contain: layout paint;
 }
 .usage-fill {
   height: 100%;
   border-radius: var(--radius-pill);
-  /* Grows into place rather than snapping: the number and the bar then tell the same story at the same time. */
   transition:
     width 0.35s var(--ease),
     background-color 0.35s var(--ease);
 }
 
-/* ── quota severity ────────────────────────────────────────────────────────
-   One scale, three levels, painted the same for BOTH bars — the dashboard's `.usage-fill` and the composer's
-   `.ub-track > i` — because they answer the same question and used to carry two copies of the answer: blue
-   under 65%, amber under 85%, red at or above. Status hues, never the product accent — the accent means
-   "Claude", and a quota bar that is coral at 10% and coral at 95% has told the user nothing. */
 .usage-fill.lvl-low,
 .usage-bars .ub-track > i.lvl-low {
   background: var(--info);
@@ -335,9 +247,6 @@
   color: var(--danger);
 }
 
-/* NB the composer's `.usage-dot` lived here until the plan limits moved to their own bar row under the
-   readout (`.usage-bars`, further up). Deleted rather than kept warm: an unused rule is a rule nobody
-   maintains, and the row it styled is not coming back. */
 .usage-reset {
   margin-top: 4px;
   font-size: 11.5px;
@@ -357,8 +266,6 @@
   height: 100%;
   min-width: 2px;
 }
-/* gentle accent-tint variation so adjacent segments read apart, no status hues. Every child is odd or even,
-   so these two ARE the default — a third "base" colour under them was only ever dead paint. */
 .seg:nth-child(odd),
 .legend > span:nth-child(odd)::before {
   background: color-mix(in srgb, var(--accent) 72%, var(--surface2));
@@ -387,10 +294,7 @@
   flex: 0 0 auto;
 }
 
-/* ── MCP server rows ────────────────────────────────────────────────────────── */
 .mcp-row {
-  /* Wrap (rather than crush) when the card is narrow: the actions drop to their own line instead of squeezing
-     the server name down to a single ellipsised character. */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -403,8 +307,6 @@
 .mcp-row:first-of-type {
   border-top: none;
 }
-/* min-width is a FLOOR, not 0: with `min-width: 0` the name yielded all its space to the status + buttons and
-   collapsed to "c…". It still ellipsises, just never below a readable width. */
 .mcp-row .mcp-name {
   flex: 1 1 auto;
   min-width: 12ch;
@@ -419,8 +321,6 @@
   font-size: 11px;
   font-family: var(--mono);
 }
-/* Actions live on ONE line next to the status. Without this the span was a plain inline box, so the Reconnect
-   button and the toggle switch wrapped onto separate lines and overlapped. */
 .mcp-row .mcp-actions {
   display: inline-flex;
   align-items: center;
@@ -461,15 +361,6 @@
   opacity: 0.6;
 }
 
-/* ── node diagram (CC.diagram / CC.panView) ──────────────────────────────────
-   Cards laid out by depth, joined by curved connectors, on a canvas you drag. Every coordinate is computed
-   by the layout, never measured from the DOM — which is what makes it right at every moment, unlike the
-   <svg> thread this design replaced. Used by the Workloads view, which is now its only caller — the subtab
-   popup that also drew it was removed with the tab bar's `⋮`, and the bar answers the same question in a
-   flat row of pills instead. */
-/* The canvas: a recessed sheet with a faint dot grid, so it reads as a surface things sit ON rather than as
-   an empty black rectangle. The grid also makes the drag legible — without it, moving the canvas moves
-   nothing the eye can hold on to. */
 .dg-view {
   position: relative;
   width: 100%;
@@ -495,7 +386,6 @@
   top: 12px;
   left: 12px;
   transform-origin: 0 0;
-  /* No transition: the canvas must sit exactly where the pointer is, not chase it. */
 }
 .dg-edges {
   position: absolute;
@@ -506,16 +396,9 @@
 }
 .dg-edge {
   fill: none;
-  /* A percentage over 100% makes the whole `color-mix()` INVALID, so the declaration is dropped — and an SVG
-     path with no `stroke` paints nothing at all. That is why the connectors were simply not there: not a
-     layout bug, a colour that never parsed. Brightening now means mixing towards --text, which is valid. */
   stroke: color-mix(in srgb, var(--border) 65%, var(--text) 35%);
   stroke-width: 1.5;
 }
-/* A node: a compact chip, sized to its own text up to a cap. It carries its state colour on the left edge
-   and lifts on hover, so the diagram reads as a set of places you can go rather than as a drawing.
-   `width: max-content` is what keeps it small: the first version fixed every card at 208px, so four nodes
-   filled a popup and a three-level tree did not fit anywhere. */
 .dg-card {
   position: absolute;
   display: flex;
@@ -528,8 +411,6 @@
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  /* Readable at a glance: the size the rest of the UI uses, and the size the cards are measured for
-     (`widthFor`). Smaller "fits more" and says less. */
   font-size: 12.5px;
   line-height: 1;
   text-align: left;
@@ -561,26 +442,15 @@
   font-size: 11.5px;
 }
 
-/* State, told exactly as a tool card tells it — same animation, same colours, same meaning.
-   A node in this diagram IS the thing whose card is in the transcript, so the two must not describe the
-   same state in two different visual languages: running fades sky-blue↔amber (`toolRun`, shared), a finished
-   one settles into green with the same single beat, and a failed one is red. */
 .dg-card.running {
   animation: toolRun 1.3s ease-in-out infinite;
 }
-/* No `settle` beat here, unlike a transcript card. That card is created ONCE, when the call finishes, so the
-   beat marks the moment; a diagram node is rebuilt on every state push, so the same beat would fire several
-   times a turn on every finished node at once — which reads as the whole diagram flickering. */
 .dg-card.completed {
   border-color: color-mix(in srgb, var(--success) 55%, var(--border));
 }
 .dg-card.failed {
   border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
 }
-/* ── arrival ─────────────────────────────────────────────────────────────────
-   A node that appears while you are watching announces itself: its connector draws out towards where the
-   card will be, and the card zooms in behind it. Only on FIRST sight (see `isNew` in app-core.js) — a
-   rebuild redraws everything, and animating all of it every time is the flicker, not the feature. */
 @keyframes dgDraw {
   to {
     stroke-dashoffset: 0;
@@ -603,20 +473,15 @@
     transform: scale(1);
   }
 }
-/* Delayed by the draw, so the line arrives first and the card lands at the end of it. */
 .dg-card.dg-pop {
   animation: dgPop 0.22s var(--ease) 0.24s both;
 }
-/* A new node that is ALSO running keeps both: the pop once, then the pulse, which starts after it. */
 .dg-card.dg-pop.running {
   animation:
     dgPop 0.22s var(--ease) 0.24s both,
     toolRun 1.3s ease-in-out 0.46s infinite;
 }
 
-/* The connector into a running node breathes with it, so a live branch is visible without reading a label.
-   The static stroke is what it settles on when motion is reduced — the animation is neutralised there, and a
-   live branch that then looks exactly like a dead one has lost the information, not just the movement. */
 .dg-edge.running {
   stroke: color-mix(in srgb, var(--info) 70%, transparent);
   animation: edgeRun 1.3s ease-in-out infinite;
@@ -630,24 +495,12 @@
     stroke: color-mix(in srgb, var(--warning) 75%, transparent);
   }
 }
-/* WHO GIVES WAY when a card is narrower than its contents, which is now the ordinary case rather than the
-   exception: the cap in `widthFor` is 230px, so anything with a long title is clipped by design.
-   The order is label, then meta, and never the action. It is not expressed as an order — flexbox has none —
-   but as shrink factors: negative space is distributed in proportion to each item's flex base size times its
-   shrink factor, so the label, whose base is several times the meta's, absorbs several times as much before
-   the meta has visibly lost anything. `flex-shrink: 0` on the action is the only hard rule of the three, and
-   it is the one that matters: a Stop button that shrinks is a Stop button you cannot hit. */
 .dg-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Shrinkable, where it used to be `flex: 0 0 auto`. At the old 460px cap that was free — the computed width
-   always had room for the meta in full — but a card clamped to 230 has a deficit, and an item that refuses
-   to shrink does not politely stay wide: it pushes its own text out through the card's rounded border, over
-   the connector behind it. `min-width: 0` is what makes the ellipsis reachable at all, since a flex item's
-   automatic minimum size is its min-content width and would otherwise stop the shrink first. */
 .dg-meta {
   flex: 0 1 auto;
   min-width: 0;
@@ -658,8 +511,6 @@
   font-size: 9.5px;
   white-space: nowrap;
 }
-/* An action inside a node (Stop). Pushed to the trailing edge, and small enough not to compete with the
-   label — it is available, not the point of the card. */
 .dg-action {
   flex: 0 0 auto;
   margin-left: auto;
@@ -667,7 +518,6 @@
   font-size: 10.5px;
 }
 
-/* The state dot: colour is never the only carrier — the card's tooltip and its meta line say it in words. */
 .dg-dot {
   flex: 0 0 auto;
   width: 7px;
@@ -685,8 +535,6 @@
 .dg-dot.failed {
   background: var(--danger);
 }
-/* Cut off: an agent from a previous run of the binary, whose process is long gone. RED, like a failure —
-   because that is what it is from the outside: it did not finish its work, and nothing is going to. */
 .dg-dot.stopped {
   background: var(--danger);
 }
@@ -695,150 +543,31 @@
   opacity: 0.85;
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   MINI SESSION VIEW — the standing facts, folded into the composer's metrics strip
-   ════════════════════════════════════════════════════════════════════════════
-   Built by app-composer-readout.js as a sibling of `.usage-bars`, i.e. a row of the DOCK — never a layer over
-   anything. It has no `z-index` and needs none: it is in the flow, so the transcript gives up the space and
-   the prompt box stays exactly where it was. What that costs is height, and the answer is that the block
-   cannot grow: two lines of at most four facts, bounded by construction rather than by a cap.
-
-   Everything here is DENSITY: the Session panel is a page you open, this is a strip you glance at, and the
-   same padding that reads as breathing room on the page reads as a scrollbar in the strip.
-
-   It does NOT draw the panel's cards — see the note above the grid for what it draws instead and why — and
-   with them went the disclosure control that a block of six cards needed: the button, its caret, its label
-   and the `[data-open]` state. Their rules lived on here afterwards, styling a control nothing builds, which
-   is this repository's signature defect in its cheapest form. A rule whose selector cannot match is not
-   inert: it is a description of a feature, and the next reader believes it. */
-
-/* The element the JS toggles with the `hidden` attribute, said out loud rather than left to the user-agent.
-   `[hidden] { display: none }` is a UA rule, and ANY author declaration beats it whatever its specificity —
-   which is why `.usage-bars` above, carrying `display: grid` in its own rule, stays laid out while it holds
-   the `hidden` attribute. The rule below declares no `display` of its own, so the UA rule would in fact
-   suffice today; stating it is what stops the next declaration added here from silently reopening that trap.
-   `.dash-mini-body` was listed here too and nothing has ever set the attribute on it: a selector that cannot
-   match is not a safety net, it is a claim about behaviour that does not exist. */
 .dash-mini[hidden] {
   display: none;
 }
 
-/* The strip's shared side inset, so this row starts and ends on the same pixels as the two above it. The
-   number lives once, on `#composer` in composer.css; it was written out here as `4px` and in each of those
-   two rules as well, which is the same defect as four type sizes with a different value in it. */
 .dash-mini {
-  /* Bottom margin from `--strip-row` for the same reason the inset comes from `--strip-inset`: what sits
-     under this block is the status line, i.e. the next ROW of the same readout, and a block margin standing
-     in for a row gap is how the strip ended up with four different distances between five rows. */
   margin: 0 var(--strip-inset) var(--strip-row);
 }
 
-/* NB `.dash-mini-body` is gone — the capped, scrolling box that used to wrap the grid. Two reasons, and the
-   second is why it could go rather than merely why it was awkward. An element with `overflow` cannot be
-   `display: contents`, so it could not let its rows sit on the strip's own columns, which is now the whole
-   point of the block. And the cap was guarding against a block that grows without bound: that was true of
-   the Session panel's six cards, and is not true of two lines of at most four facts, whose height is
-   bounded by construction. The dock is a grid row that sizes to its content, so nothing else depended on
-   the cap either. */
-
-/* ── the standing facts, two lines under the reset row ────────────────────────
-   NOT the Session view's cards, and not a two-column table either. Both were tried. The cards repeated what
-   is already on screen — the plan bars are the two lines directly above and the context figure is in the
-   status line below — and put page furniture in a strip; the table fixed the furniture and kept the wrong
-   shape, since a column of labels down the left is a reference table and this is five short facts.
-   So: `label: value` pairs across two lines, in the readout's own grammar. They WRAP rather than overflow,
-   because the tool window is often narrow and a strip that scrolls sideways is a strip nobody reads.
-
-   The third attempt was one `display: flex` per line with `justify-content: space-between`, and it is worth
-   stating why that failed too, because it looks right until there is text in it: space-between DISTRIBUTES
-   the leftover width between the items of ONE line, so a line of two pairs and a line of four spread their
-   gaps differently and nothing lines up vertically between them. It can only align two lines that happen to
-   hold the same number of items of the same width, which text never does — a grid drawn without a grid,
-   directly under `.usage-bars`, which is a real one.
-
-   So: ONE grid, shared by both lines — and, since the strip was unified, the SAME grid as the plan-limit
-   bars above them. The columns are not declared here: `--strip-cols` is declared once on `#composer` (see
-   "THE SESSION STRIP" in composer.css) and every row of the strip consumes it, which is what lets the eye
-   travel down a vertical instead of finding a new column system on each row. Here that is three tracks:
-   `Account · Plan · Provider` one each, `Model` one and `Working dir` the two remaining, and a fourth fact
-   wraps onto the next row of the same grid rather than widening the line. */
 .dash-mini-grid {
   display: grid;
   grid-template-columns: var(--strip-cols);
-  /* The column gap is what groups a pair, because nothing else does — no rule, no box, no colour. It has to
-     read as clearly wider than the gap between a key and its own value (`.mini-fact`, 4px), or the pairs
-     read as loose words. Which is why it is `var(--strip-gap)` and not a number: this row had `18px` and the
-     plan bars above had `14px`, and a `1fr` track is `(100% − 3 × gap) / 4`, so the two rows shared a
-     template and still put every gridline in a different place. The gap is part of the column system, not a
-     decoration on top of it. */
-  /* Both axes from the strip's own declarations, and the ROW gap for the same reason as the column one: two
-     lines of facts are two rows of the readout, and a row gap decided here is a distance that disagrees with
-     the four other rows without anything saying so. */
   gap: var(--strip-row) var(--strip-gap);
   min-width: 0;
   font-size: var(--strip-font);
-  /* `1.5` was written out here while the bars and the status line inherited the page's `1.6`, so the rows
-     were a pixel apart in HEIGHT even once their gaps agreed — see `--strip-line`. */
   line-height: var(--strip-line);
 }
-/* The lines stay ELEMENTS — they are what the JS builds, and what says which facts belong together — but not
-   boxes: `display: contents` places their pairs directly on the grid above, which is what lets two lines
-   share one set of columns.
-   The known accessibility hazard of this property does not reach here, and the reason is worth stating so it
-   is not rediscovered as a doubt: what browsers got wrong was dropping the element's own ROLE from the
-   accessibility tree, which cost a `<ul>` its list and a `<button>` its button. This is a plain `<div>` with
-   no role to lose and nothing focusable inside it, and the descendants — the pairs, which carry all the text
-   — are exposed either way. Chromium fixed the role case in 89, regressed it in 113 and fixed it again in
-   115; the page runs in a JCEF far past that, and there is no second engine to consider. */
 .mini-line {
   display: contents;
 }
-/* Every line starts a new grid row. Without it a line that lost a fact to an absent value would leave its row
-   part-empty and the next line would flow into the space — the two lines merging into one, which is the
-   defect this grid exists to prevent arriving by another door. */
 .mini-line > .mini-fact:first-child {
   grid-column-start: 1;
 }
-/* ── the one cell allowed to use the empty columns beside it ──────────────────
-   NO ROW STRETCHES ITS CELLS TO FILL, and that has not changed: `Model | Working dir` is two cells, not two
-   half-width ones, and a row that widened its cells to take up the slack would give itself a column layout
-   of its own — the defect the shared grid replaced. What this is instead is one cell using the columns that
-   are ALREADY EMPTY to its right, rather than clipping a filesystem path while there is room a millimetre
-   away. A path is the longest value on the strip and the only one with no natural break in it.
-
-   BOTH LINES ARE STATED, and the end line alone was the bug. `grid-column-end: -1` with an `auto` start does
-   NOT reach back to where the item would have fallen: an item with a definite end and an indefinite start
-   takes a span of ONE (CSS Grid Layout §8.3, "if the placement contains only one line, the other is auto and
-   the span is 1"), so it was placed in the LAST track — `Working dir` pinned against the right edge, one
-   column wide and clipping a path, with three empty columns sitting between it and `Model`. It read as a
-   right-aligned column of its own, which is the one thing the shared grid exists to prevent.
-
-   The start is column 2 because the cell before it is column 1: `.mini-line > .mini-fact:first-child` pins
-   that, and the selector below says `:nth-child(2)`, so the rule matches exactly the arrangement its numbers
-   assume and matches nothing when the line is built some other way. A fill fact that is not the second cell
-   simply gets no rule and clips in its own column, which is visible; a rule that guessed would be silent.
-
-   THE GRIDLINES DO NOT MOVE, and that is what makes this compatible with "no row stretches its cells" rather
-   than a compromise between them: what changes is where this ITEM ends, never a track. The tracks are
-   `minmax(0, 1fr)` (see `--strip-cols`), whose size comes from the free space and never from their content,
-   so no item's width can feed back into them. Every other row keeps its verticals exactly where they were.
-
-   DECLARED, NOT COUNTED: the class is put on by the JS at the one call site that means it
-   (`workingDirFact`), the same way the line's own class is decided there rather than derived from how many
-   facts survived. `:last-child` is a precondition and not the decision — a fact cannot spill over a
-   neighbour, so if anything is ever placed after it the fill stops on its own instead of overlapping.
-   The ellipsis stays underneath all of this: three columns are not infinite, and a genuinely absurd path
-   still clips with the whole of it in the pair's `title`. */
 .mini-line > .mini-fact.mini-fill:nth-child(2):last-child {
   grid-column: 2 / -1;
 }
-/* Each pair is one unit: the label and its value break together or not at all, so a wrap never leaves
-   "Organization:" at the end of one line and its value at the start of the next.
-   As a CELL of the strip's grid it must also be able to clip: `min-width: 0` overrides the automatic
-   minimum (a grid item's floor is its min-content width, which for `Working dir: /very/long/path` is the
-   whole path) and `overflow: hidden` keeps anything that still does not fit inside the column instead of
-   over the next one. WHAT clips inside the pair is decided below and is not negotiable: the value gives
-   way, never the key — a cell reading `Working d…` has lost the only part that said what it was. */
 .mini-fact {
   display: flex;
   align-items: baseline;
@@ -850,8 +579,6 @@
   flex: 0 0 auto;
   color: var(--dim);
 }
-/* The value can be a working directory — one long unbreakable token — so it is allowed to shrink and to be
-   cut rather than to widen the strip past the composer. The full text is in the pair's `title`. */
 .mini-val {
   min-width: 0;
   overflow: hidden;
@@ -861,20 +588,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The one child of the grid that is not a pair, so it takes the whole row rather than being squeezed into a
-   third of it and wrapping into three lines of one word. No `font-size`: it inherits the strip's, like
-   everything else in here. */
 .mini-empty {
   grid-column: 1 / -1;
   color: var(--dim);
 }
-/* NB there are no `@media` rules in this block any more, and their absence is the point. This row used to
-   halve and collapse its own columns at its own breakpoints while the bars above it reflowed at theirs, so
-   the two rows were mid-reflow at different widths — the three-systems defect, visible only when narrow.
-   The strip now folds as ONE thing, at one width, and the rule that does it names no row at all: it names
-   the cell class every row's cells share. Both live beside `--strip-cols` on `#composer` in composer.css. */
 
-/* ── toggle switch ──────────────────────────────────────────────────────────── */
 .toggle {
   position: relative;
   flex: 0 0 auto;

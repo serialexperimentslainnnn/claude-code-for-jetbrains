@@ -1,17 +1,9 @@
-// The guard BLOCK row and the one control on it — *Disable rule* with its durations.
-//
-// A refusal used to be a dead end: the row named the rule and the only way to act on it was Settings, where the
-// only choice is to turn the rule off for good. This is the surface that replaces that, so what is asserted here
-// is not the styling but the safety properties of the control: it appears ONLY on a block, it opens nothing on
-// its own, every entry IS the action (so there is no default a reflex click can accept), and each one sends the
-// rule it was drawn for and nothing wider.
 const { loadFrontend, readCss } = require('./helpers/load');
 
 function row(id, order, speaker, text, extra = {}) {
   return { id, order, speaker, text, state: 'FINISHED', elapsed: 0, ...extra };
 }
 
-/** The seven choices, in order — the same list `SecuritySuspensions.Duration` declares on the host. */
 const DURATIONS = [
   ['5m', '5 minutes'],
   ['15m', '15 minutes'],
@@ -37,7 +29,6 @@ describe('a guard block carries the control that can open the rule', () => {
   });
 
   it('draws nothing on an ordinary system notice', () => {
-    // The field's presence is the whole test on the host side too: no rule, no way to offer to open one.
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([row(1, 0, 'SYSTEM', 'Session resumed.')]);
 
@@ -54,8 +45,6 @@ describe('a guard block carries the control that can open the rule', () => {
   });
 
   it('starts closed, and opening it sends nothing', () => {
-    // Opening the menu must commit to nothing: the choice is the click that follows, so that opening a rule is
-    // always an explicit decision rather than something a single press can do by accident.
     const win = loadFrontend(['app-transcript.js']);
     const sent = [];
     win.CC.send = (m) => sent.push(m);
@@ -102,7 +91,6 @@ describe('a guard block carries the control that can open the rule', () => {
   });
 
   it('can be dismissed with Escape', () => {
-    // A menu that can only be left by choosing something from it is a menu that pressures the choice.
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
     const block = blockRow(win);
@@ -116,7 +104,6 @@ describe('a guard block carries the control that can open the rule', () => {
   });
 
   it('is a button, not a link — it acts rather than navigates', () => {
-    // Decides what a keyboard and a screen reader do with it. It still LOOKS like hyperlinked text.
     const win = loadFrontend(['app-transcript.js']);
     const link = blockRow(win).querySelector('.guard-disable-link');
 
@@ -126,8 +113,6 @@ describe('a guard block carries the control that can open the rule', () => {
   });
 
   it('the hidden menu really is hidden — the attribute has to beat display:flex', () => {
-    // `[hidden]` loses to a `display: flex` rule on the same element, which would leave the menu permanently
-    // open. jsdom lays nothing out, so this is asserted against the stylesheet's text like the rest of the suite.
     const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
     const at = css.indexOf('.guard-disable-menu[hidden]');
 

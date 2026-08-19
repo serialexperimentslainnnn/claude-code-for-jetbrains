@@ -7,11 +7,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Regression suite for the stream-json reader. The binary's protocol evolves between versions and is the
- * plugin's real runtime dependency (we drive `claude` directly, not the npm SDK), so these tests pin the
- * shape of every line we act on. A failure here means the binary changed something we depend on.
- */
 class ProtocolParserTest {
 
     private inline fun <reified T : ClaudeEvent> parseOne(line: String): T {
@@ -19,8 +14,6 @@ class ProtocolParserTest {
         assertEquals(1, events.size, "expected exactly one event from: $line")
         return assertInstanceOf(T::class.java, events.first())
     }
-
-    // --- robustness: the reader loop must never throw ---
 
     @Test
     fun `blank line yields nothing`() {
@@ -52,8 +45,6 @@ class ProtocolParserTest {
         assertEquals(listOf("a"), event.info.slashCommands)
     }
 
-    // --- system ---
-
     @Test
     fun `system init carries session id and commands`() {
         val line = """{"type":"system","subtype":"init","session_id":"abc","permissionMode":"plan","slash_commands":["clear","cost"]}"""
@@ -82,8 +73,6 @@ class ProtocolParserTest {
         )
         assertEquals("hello", event.content)
     }
-
-    // --- assistant ---
 
     @Test
     fun `assistant message fans out text thinking and tool_use in order`() {
@@ -117,8 +106,6 @@ class ProtocolParserTest {
         assertEquals("agent1", tool.parentToolUseId)
     }
 
-    // A subagent's reasoning carries the same `parent_tool_use_id` as its tool calls, and the parser used to
-    // drop it: every agent's "Thought process" then landed in the MAIN transcript, interleaved with the others.
     @Test
     fun `subagent thinking keeps parent_tool_use_id for nesting`() {
         val line = """{"type":"assistant","parent_tool_use_id":"agent1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}"""
@@ -131,8 +118,6 @@ class ProtocolParserTest {
         val line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}}"""
         assertNull(parseOne<ClaudeEvent.AssistantThinking>(line).parentToolUseId)
     }
-
-    // --- user / tool_result ---
 
     @Test
     fun `user tool_result with string content`() {
@@ -151,14 +136,6 @@ class ProtocolParserTest {
         assertTrue(event.isError)
     }
 
-    /**
-     * The CLI wraps a failed tool call's `content` in `<tool_use_error>…</tool_use_error>`. Verified against
-     * `claude` 2.1.222, which emits exactly:
-     *   `content: "<tool_use_error>Error: …</tool_use_error>", is_error: true`
-     * and carries the same message UNWRAPPED in the sibling `toolUseResult` field — i.e. the tag is framing for
-     * the model, not text for a human. Rendered verbatim it put raw markup in a native GUI's transcript, which
-     * is the "never mirror raw CLI output" antipattern. `is_error` already conveys the failure structurally.
-     */
     @Test
     fun `tool_use_error wrapper is stripped from the rendered text`() {
         val inner = "Error: No such tool available: Glob. Glob is not available in this session."
@@ -166,20 +143,16 @@ class ProtocolParserTest {
             """"tool_use_id":"t9","content":"<tool_use_error>$inner</tool_use_error>","is_error":true}]}}"""
         val event = parseOne<ClaudeEvent.ToolResult>(line)
         assertEquals(inner, event.content)
-        assertTrue(event.isError) // the failure survives structurally, which is what reddens the card
+        assertTrue(event.isError)
     }
 
     @Test
     fun `a tool result that merely mentions the tag is left intact`() {
-        // Only a wrapper enclosing the WHOLE payload is stripped — otherwise output that legitimately discusses
-        // the tag (this project's own source and tests do) would be silently mangled.
         val body = "see <tool_use_error> in the CLI bundle"
         val line = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result",""" +
             """"tool_use_id":"t10","content":"$body","is_error":false}]}}"""
         assertEquals(body, parseOne<ClaudeEvent.ToolResult>(line).content)
     }
-
-    // --- stream events (partial messages) ---
 
     @Test
     fun `stream message_start is a boundary`() {
@@ -207,8 +180,6 @@ class ProtocolParserTest {
 
     @Test
     fun `stream message_start also surfaces usage as a LiveUsage (so the live counter is right from t=0)`() {
-        // The binary emits the per-message usage at message_start; previously we ignored it and only updated
-        // on message_delta, which left input/cache out of the running total. Now MessageStart + LiveUsage flow.
         val events = ProtocolParser.parse(
             """{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":6,"cache_creation_input_tokens":29195,"output_tokens":1}}}}""",
         )
@@ -219,13 +190,8 @@ class ProtocolParserTest {
         assertEquals(1, live.outputTokens)
     }
 
-    // The following pin the direct-JsonObject-navigation hot delta path: with --include-partial-messages
-    // these stream_event lines arrive dozens/sec, so they're decoded by hand (str()/intField()) rather than
-    // via a serializer. Each test fixes one emission so a future refactor can't silently change behavior.
-
     @Test
     fun `stream message_start without usage yields only the boundary`() {
-        // No message.usage present -> exactly one MessageStart, no LiveUsage.
         val events = ProtocolParser.parse(
             """{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}""",
         )
@@ -241,9 +207,6 @@ class ProtocolParserTest {
         assertEquals("reasoning", event.text)
     }
 
-    // A subagent streams through the SAME channel as the main conversation and is told apart only by
-    // `parent_tool_use_id`, which `SDKPartialAssistantMessage` puts on the stream_event ROOT — NOT inside
-    // `event`. Reading it from the wrong level is the plausible mistake, so the fixture plants a decoy there.
     @Test
     fun `stream text_delta takes parent_tool_use_id from the root, not from event`() {
         val event = parseOne<ClaudeEvent.TextDelta>(
@@ -260,8 +223,6 @@ class ProtocolParserTest {
         assertEquals("agent7", event.parentToolUseId)
     }
 
-    // Absent and explicit-null both mean "the main conversation" (the SDK types the field `string | null`),
-    // and that is what routes a delta into this transcript rather than an agent's.
     @Test
     fun `main-transcript deltas carry no parent_tool_use_id`() {
         val absent = """{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}"""
@@ -321,8 +282,6 @@ class ProtocolParserTest {
         )
     }
 
-    // --- result ---
-
     @Test
     fun `result end of turn carries cost and session`() {
         val line = """{"type":"result","subtype":"success","result":"ok","total_cost_usd":0.12,"session_id":"s9"}"""
@@ -331,8 +290,6 @@ class ProtocolParserTest {
         assertEquals(0.12, event.result.totalCostUsd)
         assertEquals("s9", event.result.sessionId)
     }
-
-    // --- control protocol ---
 
     @Test
     fun `can_use_tool control_request becomes PermissionRequest`() {
@@ -353,8 +310,6 @@ class ProtocolParserTest {
 
     @Test
     fun `unknown control_request subtype must still be answered`() {
-        // A genuinely host->binary-only subtype the plugin never receives — must degrade to an answerable
-        // UnsupportedControlRequest (request_user_dialog / elicitation are now handled with their own branches).
         val line = """{"type":"control_request","request_id":"r2","request":{"subtype":"mcp_message"}}"""
         val event = parseOne<ClaudeEvent.UnsupportedControlRequest>(line)
         assertEquals("r2", event.requestId)
@@ -377,11 +332,8 @@ class ProtocolParserTest {
         assertEquals("boom", event.error)
     }
 
-    // --- rate limit ---
-
     @Test
     fun `rate_limit_event becomes RateLimit`() {
-        // 0.92, not 92: the event's scale is a fraction — see RateLimitInfo.utilizationPercent.
         val line = """{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","utilization":0.92}}"""
         val event = parseOne<ClaudeEvent.RateLimit>(line)
         assertEquals("allowed_warning", event.info.status)

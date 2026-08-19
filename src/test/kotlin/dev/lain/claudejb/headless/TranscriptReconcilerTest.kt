@@ -5,11 +5,6 @@ import dev.lain.claudejb.session.Speaker
 import dev.lain.claudejb.session.TranscriptModel
 import dev.lain.claudejb.session.TranscriptReconciler
 
-/**
- * Headless: [TranscriptReconciler] folds streaming deltas / finalized blocks / boundaries into a
- * [TranscriptModel] with the same semantics the session used inline. No platform service is needed, but it
- * runs as a headless test (EDT contract) for consistency with the other session-layer tests.
- */
 class TranscriptReconcilerTest : BasePlatformTestCase() {
 
     private lateinit var transcript: TranscriptModel
@@ -71,7 +66,6 @@ class TranscriptReconcilerTest : BasePlatformTestCase() {
 
     fun `test assistant delta ends a live thinking block`() {
         reconciler.appendThinking("reasoning")
-        // First assistant delta must not grow the thinking entry; it starts a new assistant entry.
         reconciler.appendAssistant("answer ")
         reconciler.appendAssistant("text")
 
@@ -109,15 +103,10 @@ class TranscriptReconcilerTest : BasePlatformTestCase() {
     fun `test finalize closes the block so next delta starts fresh`() {
         reconciler.appendAssistant("one")
         reconciler.finalizeAssistant("one final")
-        // No boundary needed: finalize already cleared the live pointer.
         reconciler.appendAssistant("two")
 
         assertEquals(2, entries().size)
         assertEquals("one final", entries()[0].text)
         assertEquals("two", entries()[1].text)
     }
-
-    // NB the `addSubagentText` test lived here until 5.5.0, when subagent output stopped going into this
-    // transcript at all — it belongs to that agent's own tab now, and the coverage moved to
-    // AgentRegistryTest, which reads the binary's per-agent file the way the UI does.
 }

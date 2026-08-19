@@ -5,12 +5,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Exercises [ProtocolParser.parse] for the two binary->host control requests added in 3.3.0:
- * `request_user_dialog` (→ [ClaudeEvent.UserDialogRequest], answered cancelled) and `elicitation`
- * (→ [ClaudeEvent.Elicitation], surfaced as a card). A malformed elicitation frame must still degrade to an
- * answerable [ClaudeEvent.UnsupportedControlRequest] rather than throwing in the reader loop.
- */
 class ProtocolParserControlTest {
 
     private fun parseSingle(line: String): ClaudeEvent = ProtocolParser.parse(line).single()
@@ -59,7 +53,6 @@ class ProtocolParserControlTest {
 
     @Test
     fun `malformed elicitation degrades to an answerable unsupported request`() {
-        // requested_schema typed as an array (not object) makes the strict decode fail → fallback path.
         val line = """
             {"type":"control_request","request_id":"r4",
              "request":{"subtype":"elicitation","mcp_server_name":"x","requested_schema":[1,2,3]}}

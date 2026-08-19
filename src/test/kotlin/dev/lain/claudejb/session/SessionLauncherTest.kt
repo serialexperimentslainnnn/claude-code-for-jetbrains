@@ -6,15 +6,8 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure unit tests for [SessionLauncher.buildArgs] (and [SessionLauncher.binaryPermissionMode]). No IDE: these pin the
- * exact flag set and ORDER the `claude` binary is launched with, the regression surface most likely to break silently
- * when options or defaults change. The `--mcp-config` value is injected directly (mcpConfigJson needs the IDE and is
- * covered by McpConfigBuilderTest), so the arg-vector assembly stays a pure function under test here.
- */
 class SessionLauncherTest {
 
-    /** A bare snapshot with everything off; individual tests flip the one field they exercise. */
     private fun opts(
         model: String? = null,
         effort: String? = null,
@@ -62,14 +55,6 @@ class SessionLauncherTest {
         "--permission-mode", "default",
     )
 
-    /**
-     * `--append-system-prompt <text>`: unconditional, a constant of every plugin launch rather than one of the
-     * user's options, and positioned AFTER every option group and BEFORE `--mcp-config`/`--resume`. Referenced by
-     * the constant, not spelled out: what these tests pin is the flag ORDER (the thing the binary parses and the
-     * thing that has broken here before), while the wording, the ASCII-only rule and the "nothing from this
-     * machine" rule are pinned separately and by shape in `PluginContextPromptTest`. Duplicating the prose here
-     * would only mean every edit to it reds nine order tests that are not about prose.
-     */
     private val promptTail = listOf("--append-system-prompt", PluginContextPrompt.TEXT)
 
     @Test
@@ -102,7 +87,6 @@ class SessionLauncherTest {
     fun `includePartialMessages adds the flag without a value`() {
         val args = SessionLauncher.buildArgs(opts(includePartialMessages = true), resume = false, mcpConfig = null)
         assertTrue(args.contains("--include-partial-messages"))
-        // It is a bare flag: the next token (if any) must not be its "value".
         assertEquals(baseHead + "--include-partial-messages" + promptTail, args)
     }
 
@@ -185,7 +169,6 @@ class SessionLauncherTest {
     @Test
     fun `resume appends the session id when requested and present`() {
         val args = SessionLauncher.buildArgs(opts(sessionId = "abc-123"), resume = true, mcpConfig = null)
-        // --resume goes LAST, after the appended context: the prompt is an option group, the resume is not.
         assertEquals(baseHead + promptTail + listOf("--resume", "abc-123"), args)
     }
 
@@ -291,7 +274,7 @@ class SessionLauncherTest {
                 "--input-format", "stream-json",
                 "--verbose",
                 "--permission-prompt-tool", "stdio",
-                "--permission-mode", "default", // acceptEdits → default
+                "--permission-mode", "default",
                 "--include-partial-messages",
                 "--setting-sources", "user,project",
                 "--model", "opus",
@@ -305,7 +288,7 @@ class SessionLauncherTest {
                 "--add-dir", "/a", "--add-dir", "/b",
                 "--betas", "x,y",
                 "--strict-mcp-config",
-                "--append-system-prompt", PluginContextPrompt.TEXT, // last option group, before mcp-config/resume
+                "--append-system-prompt", PluginContextPrompt.TEXT,
                 "--mcp-config", cfg,
                 "--resume", "sid",
             ),

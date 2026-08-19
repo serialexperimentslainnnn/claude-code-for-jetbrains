@@ -10,15 +10,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 
-/**
- * Reading, migrating and rewriting `agent-index.json`.
- *
- * Two failures are pinned here, both paid for by a real user. 5.5.0's first builds took the FILE NAME as an
- * agent's identity, so records said `agent-<id>`; when the identity became the bare id — the shape the
- * sidecars' own `parentAgentId` uses — every record stopped matching a node, and a restored chat came back
- * with its agents on disk, in the index, and not one tab. And the v1 file recorded ids only, which is why the
- * shape (parent, type, children, and background tasks at all) had to become part of the record.
- */
 class PluginAgentIndexMigrationTest {
 
     @TempDir
@@ -54,8 +45,6 @@ class PluginAgentIndexMigrationTest {
         val index = PluginAgentIndex()
         assertEquals(listOf("a6798878f17f074e4"), index.admittedAgents("s1"))
         assertEquals(listOf("a6798878f17f074e4"), index.openAgents("s1"))
-        // Stored bare, whichever spelling went in: the admission gate compares against this list after
-        // normalising with AgentMeta.bareAgentId, so nothing downstream has to know two spellings.
         val admitted = index.admittedAgents("s1")
         assertTrue(AgentMeta.bareAgentId("a6798878f17f074e4") in admitted)
         assertTrue(AgentMeta.bareAgentId("agent-a6798878f17f074e4") in admitted)
@@ -89,7 +78,6 @@ class PluginAgentIndexMigrationTest {
         val child = nodes.first { it.id == "a2" }
         assertEquals(PluginAgentIndex.Kind.SUBAGENT, child.type)
         assertEquals(PluginAgentIndex.Ref(PluginAgentIndex.Kind.AGENT, "a1"), child.parent)
-        // The chat is the root, and it is named as such rather than left as a null nobody can interpret.
         assertEquals(PluginAgentIndex.Kind.CHAT, nodes.first { it.id == "a1" }.parent?.type)
     }
 

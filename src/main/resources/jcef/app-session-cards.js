@@ -1,13 +1,3 @@
-/* app-session-cards.js — the Session view's own cards.
- *
- * One subject: what this session costs and what is left of it — the plan-limit bars, the context breakdown,
- * usage & cost, the account, and the plain session facts (model, working dir, version). Every one of them is a
- * pure builder over its slice of the `cc.session` payload: given the data it returns a card, given nothing it
- * returns null and the card simply does not appear.
- *
- * MCP servers and the Workloads diagram are their own files; the shell (`app-session.js`) decides which view
- * shows what.
- */
 (function () {
   'use strict';
 
@@ -20,14 +10,6 @@
   var statRow = D.statRow;
   var card = D.card;
 
-  /**
-   * Plan limits: one labelled bar per window (current session, all models, per model), plus the extra-credit
-   * balance. Sourced from the binary's `get_usage`, which returns every window at once.
-   *
-   * A window whose percentage is unknown renders its bar EMPTY and its value as "—", never as 0%. The binary
-   * reports `utilization` only when the API returned it, and "we do not know" is a different statement from
-   * "you have used none" — a bar cannot say both, so it says neither and the text carries the distinction.
-   */
   function buildUsageCard(usage) {
     if (!usage || typeof usage !== 'object') return null;
     var windows = Array.isArray(usage.windows) ? usage.windows : [];
@@ -45,11 +27,8 @@
     return card(title, rows, true);
   }
 
-  /** One window: label, a proportional bar, the percentage, and when it resets. */
   function usageBar(label, pct, resetsAt, exhausted) {
     var known = pct != null;
-    // Same blue/amber/red scale as the composer's dot — see usageLevel there. `exhausted` (the binary told us
-    // the window is spent) always wins over the percentage, which may be stale or absent.
     var level = exhausted ? 'lvl-high' : known ? usageLevel(pct) : 'lvl-low';
     var fill = h('div', {
       class: 'usage-fill ' + level,
@@ -63,7 +42,6 @@
         'div',
         { class: 'usage-head' },
         h('span', { class: 'usage-label', text: label == null ? '' : String(label) }),
-        // toFixed(1): one decimal, and it also kills the IEEE-754 tail (0.28*100 = 28.000000000000004).
         h('span', { class: 'usage-pct', text: known ? pct.toFixed(1) + '% used' : '—' })
       ),
       h('div', { class: 'usage-track' }, fill),
@@ -71,7 +49,6 @@
     );
   }
 
-  /** Pay-as-you-go balance, shown only once the user has actually enabled extra credits. */
   function extraCreditRow(extra) {
     var spent = num(extra.spent);
     var text =
@@ -93,14 +70,12 @@
     );
   }
 
-  /** Quota severity. Kept identical to app-composer.js's usageLevel; the class names are the shared contract. */
   function usageLevel(pct) {
     if (pct >= 85) return 'lvl-high';
     if (pct >= 65) return 'lvl-mid';
     return 'lvl-low';
   }
 
-  /** "Resets in 4h 50m" — one implementation, in app-core, shared with the composer's bar row. */
   function resetIn(iso) {
     return CC.resetIn(iso);
   }
@@ -114,7 +89,6 @@
 
     if (!cats.length && used == null && max == null) return null;
 
-    // Total tokens across categories, to compute proportional widths.
     var total = 0;
     var i;
     for (i = 0; i < cats.length; i++) {
@@ -124,7 +98,6 @@
 
     var children = [];
 
-    // Headline: used/max · pct%
     var headlineBits = [];
     if (used != null || max != null) {
       var u = fmtInt(used);
@@ -143,8 +116,6 @@
       );
     }
 
-    // Segmented bar. A simple, deterministic palette index for segment legend swatches: we do not hardcode
-    // colors here — the CSS owns them via .seg:nth-of-type / data attrs.
     if (cats.length && total > 0) {
       var segs = [];
       var legendItems = [];
@@ -154,7 +125,7 @@
         var tok = num(cat.tokens);
         if (tok == null || tok <= 0) continue;
         var widthPct = (tok / total) * 100;
-        var idx = String((i % 8) + 1); // CSS may key swatch color off data-seg
+        var idx = String((i % 8) + 1);
         segs.push(
           h('div', {
             class: 'seg',
@@ -202,9 +173,6 @@
       statRow('Plan', acct.plan),
       statRow('Provider', acct.provider),
     ];
-    // Sign in / Log out, from the VERIFIED auth state only (`loggedIn` comes from the host's
-    // `auth status` probe). When it is unknown the row is omitted — a button must not claim a state
-    // nobody checked. Signing in is a button here, not a slash command to know about.
     if (acct.loggedIn === true || acct.loggedIn === false) {
       var btn = document.createElement('button');
       btn.type = 'button';
@@ -230,16 +198,6 @@
     return card('Session', rows);
   }
 
-  /**
-   * The plan-mode plan, as the binary itself holds it (`get_plan`).
-   *
-   * Rendered as MARKDOWN through the same sanitizing path the transcript uses. A plan is written by the
-   * model, so it is exactly as untrusted as anything else the model emits — never `innerHTML` of raw text.
-   *
-   * Wide, because a plan is prose and a numbered list, not a stat row: at column width it would wrap into an
-   * unreadable ribbon. Absent when there is no plan, so the card omits itself rather than heading an
-   * empty panel — `get_plan` is read-only and never creates one, so "no plan" is an ordinary answer.
-   */
   function buildPlanCard(plan) {
     if (!plan || typeof plan !== 'object' || !plan.body) return null;
     var body = document.createElement('div');

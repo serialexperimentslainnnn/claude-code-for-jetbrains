@@ -10,16 +10,6 @@ import kotlinx.serialization.json.put
 import java.io.File
 import java.nio.file.Files
 
-/**
- * Headless: [RollbackManager.revertEdit] is what a transcript card's **Restore** falls back to when the binary
- * cannot rewind, and it writes to the user's disk — so the two things pinned here are that it restores the
- * captured contents *and* reseeds the binary's read state, and that it refuses a path outside the project.
- *
- * Both are silent failures if they regress: a Restore that reports success and leaves the file as Claude wrote
- * it, or a rollback that overwrites a file the user never opened this project to touch.
- *
- * Uses the light fixture's real [project] because the write gate is resolved against the project root.
- */
 class RollbackManagerHeadlessTest : BasePlatformTestCase() {
 
     private lateinit var transcript: TranscriptModel
@@ -40,8 +30,6 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test reverting an edit restores the captured contents and reseeds the read state`() {
-        // The light fixture's project root is an in-memory path with nothing behind it, and `FileRollback`
-        // writes through `LocalFileSystem` — so the root has to exist on disk for a real revert to be possible.
         val root = File(project.basePath!!).apply { mkdirs() }
         val file = File(root, "reverted.kt")
         file.writeText("original\n")
@@ -56,11 +44,8 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
             id,
         )
         assertNotNull(snap)
-        // The binary wrote after the snapshot was taken; that is the state the user asks to undo.
         file.writeText("claude's version\n")
 
-        // The read-state reseed is what stops the binary's NEXT Edit from validating against the pre-rollback
-        // contents, so it is part of the contract, not a side effect.
         val reseeded = mutableListOf<String>()
         val manager = RollbackManager(project, diffs) { path, _ -> reseeded += path }
 
@@ -70,8 +55,6 @@ class RollbackManagerHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test an edit outside the project root is refused, not written`() {
-        // The write gate is project-only on purpose: a transcript can name any path, and a rollback must never
-        // restore stale contents over a file outside the tree the user opened.
         val outside = tempFile("outside.kt", "untouched\n")
         val id = "toolu_outside"
         transcript.add(Speaker.TOOL, "Write", meta = "Write", toolUseId = id)

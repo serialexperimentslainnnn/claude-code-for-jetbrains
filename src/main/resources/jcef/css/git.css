@@ -1,17 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   GIT VIEW — repository header, action bar, and the single-rail history
-   ════════════════════════════════════════════════════════════════════════════
-   Drawn by app-session-git.js, inside the dashboard's own `.dash-card` grid — this part EXTENDS dashboard.css
-   and repeats none of it, which is why it is concatenated after it (see JcefHost.CSS_PARTS).
-
-   Every class here is prefixed `git-`. The view lives in the same document as the transcript, the composer
-   and the tab bar, so an unprefixed `.head` or `.node` would be a collision waiting for whoever adds the
-   next rule to that word. */
-
-/* ── header: the two destinations, then what repository this is ───────────────
-   The strip and the repository card travel as one full-width grid item, because the dashboard lays each
-   builder's node out as a column of its own — loose, the strip would sit *beside* the repository at 260px
-   rather than above the view it heads. */
 .git-viewhead {
   grid-column: 1 / -1;
   display: flex;
@@ -19,17 +5,12 @@
   gap: 12px;
   min-width: 0;
 }
-/* Two destinations, not a tablist: they are sibling containers, neither of them the other's `tabpanel`
-   (app-session-git.js). The row wraps rather than crushes — the tool window is often narrow. */
 .git-viewtabs {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--border);
 }
-/* Shaped like the view switcher in the composer's row rather than like a `.btn`: these two select where you
-   are, and the underline is the same grammar the dashboard already uses for that. The 24px floor is WCAG 2.2
-   SC 2.5.8, held even when the theme shrinks the type. */
 .git-viewtab {
   display: inline-flex;
   align-items: center;
@@ -52,8 +33,6 @@
 .git-viewtab:hover {
   color: var(--text);
 }
-/* Where you are. The underline is the accent, but `aria-current` is what actually carries it — 1.4.1 forbids
-   colour as the only channel, and an underline read as "selected" is exactly such a channel. */
 .git-viewtab.active {
   color: var(--text);
   font-weight: 600;
@@ -73,9 +52,6 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-/* The branch is the fact people look for first, so it is the one chip with the accent border. 1.4.11 asks for
-   3:1 on a control's boundary; mixing towards --text rather than lightening the border is what gets it there
-   over the card surface. */
 .git-branch {
   padding: 2px 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--text) 20%);
@@ -91,15 +67,12 @@
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
-/* Said in a full sentence, not as an empty rail: "no repository" is a state, and a blank card reads as a
-   failure to load rather than as an answer. */
 .git-empty {
   color: var(--dim);
   font-size: 12.5px;
   line-height: 1.5;
 }
 
-/* ── action bar: grouped exactly as the payload groups it ─────────────────── */
 .git-actions {
   display: flex;
   flex-direction: column;
@@ -110,7 +83,6 @@
   flex-direction: column;
   gap: 7px;
 }
-/* Same treatment as `.dash-title`, one step quieter: it labels a row inside an already titled card. */
 .git-group-name {
   font-size: 10.5px;
   font-weight: 600;
@@ -123,8 +95,6 @@
   flex-wrap: wrap;
   gap: 8px;
 }
-/* A real <button> wearing `.btn`. The floor here is 24x24 CSS px (SC 2.5.8) even before the padding, so a
-   long group in a narrow tool window can wrap but never shrink under the pointer. */
 .git-action {
   min-height: 24px;
   min-width: 24px;
@@ -134,11 +104,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── status chip ──────────────────────────────────────────────────────────────
-   The chip carries the WORD the host sent (`running` / `completed` / `failed`), never a colour alone — 1.4.1
-   forbids colour as the only carrier, and under forced colours the hue is replaced by the system anyway. The
-   page paints whatever word it is given; `.other` is what an unrecognised one lands on, so a new state from
-   the host still renders as a legible chip instead of as unstyled text. */
 .git-status {
   flex: 0 0 auto;
   padding: 1px 8px;
@@ -168,17 +133,6 @@
   color: var(--dim);
 }
 
-/* ── history: the graph, drawn as a list ──────────────────────────────────────
-   One row per commit: a gutter on the left carrying that row's slice of the graph, the commit's prose on the
-   right. A LIST rather than a canvas with the text placed over it — scrolling, wrapping, tab order and a
-   sensible reading order then come from the platform instead of being reimplemented over an image.
-
-   Every coordinate inside a gutter is set inline by the layout (computed, never measured — the same discipline
-   as app-core-diagram); everything here is appearance only. */
-/* **No `gap` between rows, and that is not a density decision — it is what keeps the graph joined up.** Each
-   row draws its own slice of the lanes inside its own gutter, so any space BETWEEN two rows is space no SVG
-   covers: a gap turns every lane into a dashed line with a hole at each commit. The separation lives inside
-   the row instead, as the body's padding, which the gutter stretches over. */
 .git-rail {
   display: flex;
   flex-direction: column;
@@ -187,11 +141,6 @@
   padding: 0;
   list-style: none;
 }
-/* `stretch`, and it is load-bearing: it is what gives the gutter the row's full height, which is what lets the
-   SVG inside it be sized against that height rather than against a row height nothing can know in advance.
-   Note the padding is the BODY's and not this element's, for the same reason: a flex item stretches to the
-   container's content box, so padding here would be height the gutter does not reach and the lane would break
-   at it. */
 .git-node {
   position: relative;
   display: flex;
@@ -200,10 +149,6 @@
   min-width: 0;
   border-radius: var(--radius-sm);
 }
-/* Rows touch, so the row under the pointer — or holding focus — says so. It is also the affordance for the
-   action strip, which fades in over this same row: without it the controls appear out of nothing. Both
-   selectors, and not just `:hover`, because the strip's own background is matched to this tint and a strip
-   revealed by Tab over an untinted row would draw its edge as a visible rectangle. */
 .git-commit:hover,
 .git-commit:focus-within {
   background: color-mix(in srgb, var(--text) 4%, transparent);
@@ -213,10 +158,6 @@
   flex: 0 0 auto;
   min-height: 26px;
 }
-/* The drawing is stretched vertically to whatever the row turns out to be (`preserveAspectRatio="none"` on the
-   element itself). A vertical line is the one shape that cannot show that stretch, which is what makes the
-   arrangement sound; `non-scaling-stroke` is what stops the curves thinning with it, since the stroke is then
-   measured in screen pixels, after the transform, rather than in the viewBox's own units. */
 .git-graph {
   position: absolute;
   inset: 0;
@@ -229,9 +170,6 @@
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
-/* An HTML element rather than an SVG circle: under the vertical stretch above, a circle arrives as an ellipse.
-   At 50% of the row it lands exactly where the viewBox's own midpoint does, so the lines meet it at any height.
-   The ring is the card colour, so a line appears to pass BEHIND the dot rather than through it. */
 .git-dot-node {
   position: absolute;
   top: 50%;
@@ -242,30 +180,16 @@
   background: var(--lane, var(--dim));
   box-shadow: 0 0 0 3px var(--surface);
 }
-/* A merge is wider than it is tall — a SHAPE, which survives forced colours where a hue does not. Never the
-   only signal even so: the row says the word (1.4.1). */
 .git-dot-node.merge {
   width: 16px;
   margin-left: -8px;
   border-radius: var(--radius-pill);
 }
-/* Uncommitted work is not a commit and must not read as one: a hollow dot in the accent, the same way every
-   other "in progress" state in this UI is drawn. */
 .git-wip .git-dot-node {
   background: var(--surface);
   border: 2px solid var(--accent);
 }
 
-/* ── the lane palette ─────────────────────────────────────────────────────────
-   Six slots, every one of them derived from the IDE's own theme variables (JcefTheme writes those from the
-   running colour scheme) — the page invents no colour of its own, so a light theme is not a special case.
-   `data-lane` carries the SLOT and not the lane index: the palette repeats, and one rule per lane a repository
-   might ever open is not a stylesheet.
-
-   These strokes are the only carrier of one thing — which commit descends from which — so they are graphical
-   objects under WCAG 1.4.11 and must stay at 3:1 against the card. Every value below is a status colour this
-   UI already paints TEXT with, which is a stricter bar. Everything else the graph shows is also in words: the
-   branch is a tag on its row, a merge says so, and the lane's identity is never the hue. */
 .git-gutter [data-lane='0'] {
   --lane: var(--accent);
 }
@@ -285,15 +209,6 @@
   --lane: color-mix(in srgb, var(--success) 50%, var(--info));
 }
 
-/* ── the row's prose ───────────────────────────────────────────────────────────
-   **The padding here is the separation between commits**, and it lives on the body rather than on the row so
-   that the gutter beside it — which stretches to the row's content box — covers it and the lanes stay
-   unbroken. Six each side puts twelve between one commit's last line and the next one's first, which is more
-   air than the `gap` it replaces put between two whole blocks, while the row itself is half the height.
-
-   The type is NOT smaller: the subject keeps 12.5px at 1.4, because the point of the card is reading a
-   history at a glance and a denser row that has to be squinted at costs more than it saves. What was taken
-   out is the space nothing was written in. */
 .git-body {
   min-width: 0;
   display: flex;
@@ -315,23 +230,17 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-/* The subject wraps rather than ellipsising: a commit message truncated at the tool window's width is exactly
-   the half that stops being useful, and there is vertical room here. */
 .git-subject {
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
-/* An explicit leading, because the inherited one is 1.6 — right for a paragraph of prose and three wasted
-   pixels on a one-line "author · when · how many files" that never wraps to a second. */
 .git-meta {
   color: var(--dim);
   font-size: 11px;
   line-height: 1.35;
 }
-/* The working copy's files. A plain list, monospaced because these are paths, and indented under the subject
-   rather than beside it — the column would collapse in a narrow tool window. */
 .git-files {
   margin: 4px 0 0;
   padding: 0;
@@ -347,11 +256,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── what points at a row ─────────────────────────────────────────────────────
-   The branch name in TEXT, on the row it points at. This is where a lane's identity lives: the gutter can only
-   say "these commits share a line", and which line it is may not be carried by a colour (1.4.1). It is also a
-   control — the third door onto the platform's branch popup — so it keeps the 24px floor of WCAG 2.2 SC 2.5.8
-   even sitting inside a line of running text. */
 .git-ref {
   display: inline-flex;
   align-items: center;
@@ -366,16 +270,12 @@
   font-family: var(--font);
   font-size: 10.5px;
 }
-/* Only the control form gets the pointer: with no branch action offered the tag is a plain span, and a hand
-   cursor over something that does nothing is a promise the page cannot keep. */
 button.git-ref {
   cursor: pointer;
 }
 button.git-ref:hover {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--text) 20%);
 }
-/* The checked-out branch. 1.4.11 wants 3:1 on a control's boundary; mixing towards --text is what gets the
-   accent there over the card surface, the same way `.git-branch` does. */
 .git-ref.current {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--text) 20%);
   background: var(--accent-soft);
@@ -384,7 +284,6 @@ button.git-ref:hover {
   font-family: var(--mono);
   overflow-wrap: anywhere;
 }
-/* `remote` and `HEAD` in words: those two are otherwise told apart from a plain local branch by hue alone. */
 .git-ref-kind {
   flex: 0 0 auto;
   color: var(--dim);
@@ -395,8 +294,6 @@ button.git-ref:hover {
 .git-ref.remote .git-ref-kind {
   color: color-mix(in srgb, var(--dim) 60%, var(--info) 40%);
 }
-/* The word the drawing cannot say. A merge is a wider dot in the gutter, and a shape is no more audible than a
-   colour is — nor does either survive forced colours. */
 .git-merge {
   flex: 0 0 auto;
   padding: 0 6px;
@@ -408,32 +305,6 @@ button.git-ref:hover {
   text-transform: uppercase;
 }
 
-/* ── what can be done to one commit ───────────────────────────────────────────
-   **This bar used to be a third line on every row, and that is where the card's height went.** Faded out it
-   still occupied its own line — `opacity` hides ink, not space — so four controls nobody was looking at cost
-   a button's height plus a margin on all hundred commits, in a card whose job is to be READ. Out of flow it
-   costs nothing at all: the row is exactly as tall hovered as not, which is a stronger guarantee than
-   reserving the space would have been, because there is no space left to get wrong.
-
-   Quiet is still OPACITY, and that is the accessibility argument. `display: none` and `visibility: hidden`
-   both take the buttons out of the tab order, so they would exist only under a pointer — a WCAG 2.1.1
-   (Keyboard) failure, and one nothing on screen would report. At `opacity: 0` they stay focusable and stay in
-   the accessibility tree, and the moment Tab lands on one the strip paints itself.
-
-   **The focus reveal is on the STRIP, not on the row, and that is SC 2.4.11 rather than a detail.** A row's
-   own branch tag is a button too, and it sits at the left of the same line the strip floats over: revealing
-   the strip whenever anything in the row took focus meant that tabbing onto that tag — in a tool window
-   narrow enough for the labels to reach it — painted the strip across the very control that had just been
-   focused. Keyed on the strip, the only focus that can summon it is focus already inside it, and that button
-   is the thing on top. This is the pattern a skip link uses: invisible until it is the thing you are on.
-
-   `pointer-events` is the half that only matters once it floats: an invisible strip lying over the subject
-   would otherwise swallow clicks meant for the text underneath it.
-
-   The strip is anchored right and centred on the row, and it fades in over the card's own background rather
-   than over nothing — a button with the subject showing through it is unreadable. In a narrow tool window the
-   labels wrap and the strip is taller than its row; it then paints over the row below **while the pointer is
-   on it**, which is what an overlay is for and is why nothing under it moves. */
 .git-commit-actions {
   position: absolute;
   top: 50%;
@@ -446,7 +317,6 @@ button.git-ref:hover {
   gap: 6px;
   max-width: calc(100% - 24px);
   padding: 3px 0 3px 16px;
-  /* The row's own hovered/focused tint, opaque, so the strip has no edge of its own against it. */
   background: linear-gradient(to right, transparent, color-mix(in srgb, var(--text) 4%, var(--surface)) 16px);
   opacity: 0;
   pointer-events: none;
@@ -457,9 +327,6 @@ button.git-ref:hover {
   opacity: 1;
   pointer-events: auto;
 }
-/* No pointer, no hover: on a touch or pen-only device the reveal has no trigger at all, so there is nothing
-   to reveal from — and a strip that is always visible must not be a strip that always covers the subject. It
-   goes back into the flow there, paying its line the way it used to on every device. */
 @media (hover: none) {
   .git-commit-actions {
     position: static;
@@ -473,8 +340,6 @@ button.git-ref:hover {
     pointer-events: auto;
   }
 }
-/* Smaller and flatter than the action bar's buttons — `.btn.ghost` supplies the flatness, this supplies the
-   scale — but never below the 24x24 CSS px of WCAG 2.2 SC 2.5.8. */
 .git-commit-action {
   min-height: 24px;
   min-width: 24px;
@@ -482,9 +347,6 @@ button.git-ref:hover {
   font-size: 11px;
 }
 
-/* ── the branch card, and what the forge says about it ────────────────────────
-   Both are plain rows of facts rather than a second graph: the question they answer is "what is happening to
-   this branch away from my machine", and a diagram would spend the card's height saying less than a line. */
 .git-fact {
   display: flex;
   align-items: baseline;
@@ -501,7 +363,6 @@ button.git-ref:hover {
   font-family: var(--mono);
   overflow-wrap: anywhere;
 }
-/* Provenance, not content — the same treatment `.plan-path` gets in the dashboard. */
 .git-note {
   color: var(--dim);
   font-size: 11px;
@@ -513,9 +374,6 @@ button.git-ref:hover {
   min-width: 0;
   font-size: 12px;
 }
-/* The run's dot, and the only `.git-dot` left in the view now that a commit row draws its own in the gutter.
-   It takes the four status colours the rest of the UI already uses — one vocabulary, one palette, so a failed
-   pipeline is the same red as a failed agent — and sits on the text baseline rather than on a rail. */
 .git-dot {
   flex: 0 0 auto;
   align-self: center;
@@ -540,7 +398,6 @@ button.git-ref:hover {
   font-family: var(--mono);
   font-size: 11px;
 }
-/* The one part that may be long. It takes the slack and ellipsises; everything beside it keeps its size. */
 .git-forge-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -556,8 +413,6 @@ button.git-ref:hover {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-/* A real <button>, so it is keyboard-operable and announced as a control: the destination is opened through
-   the host, which decides whether it may be, and never by the page navigating itself. */
 .git-link {
   flex: 0 0 auto;
   min-height: 24px;
@@ -575,12 +430,6 @@ button.git-ref:hover {
   background: var(--surface2);
 }
 
-/* ── The Git conversation's TRANSCRIPT, embedded in the view (app-session-gitchat.js) ──────────────────
-   Rows and nothing else. The page already has a composer and a place where request cards appear, both of
-   them shared by every destination, and this pane deliberately has neither of its own: the ONE composer
-   sends here while this is up, and the ONE permission region shows this conversation's cards. It had its
-   own text box and its own card region for about an hour, and the result looked exactly like what it was —
-   a second, worse chat UI grafted into a panel. */
 .gitchat {
   display: flex;
   flex: 1 1 auto;
@@ -592,8 +441,6 @@ button.git-ref:hover {
 .gitchat[hidden] {
   display: none;
 }
-/* `min-height: 0` because a flex item's default `auto` floor is its content: without it the rows grow the
-   pane instead of scrolling inside it, and the panel's own scrollbar ends up moving the whole view. */
 .gitchat-rows {
   flex: 1 1 auto;
   min-height: 0;
@@ -602,8 +449,6 @@ button.git-ref:hover {
   flex-direction: column;
   gap: 10px;
 }
-/* The one lifecycle this pane shows. With no tab there is no boot screen — which is the point — so the wait
-   for the binary is stated here, where the press that caused it happened. */
 .gitchat-status {
   flex: 0 0 auto;
   color: var(--dim);
@@ -613,9 +458,6 @@ button.git-ref:hover {
   display: none;
 }
 
-/* The branch chip in the header, once it became a real control. It keeps `.git-branch`'s appearance — the
-   fact people look for first should not move or change colour just because it can now be pressed — and adds
-   only what a button needs. */
 .git-branch-pick {
   min-height: 24px;
   cursor: pointer;

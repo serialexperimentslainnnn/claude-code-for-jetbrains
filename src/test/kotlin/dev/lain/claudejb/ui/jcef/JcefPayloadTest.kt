@@ -23,15 +23,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the OUTBOUND half of the JCEF bridge — [JcefTranscriptPayload] (transcript rows, agent
- * transcripts, jump-to-code links) and [JcefCardPayload] (permission / question / elicitation cards) → the
- * frontend's JSON shapes. The inbound half lives in [JcefBridgeTest]. No platform/browser is involved, so
- * together they are the load-bearing contract test.
- */
 class JcefPayloadTest {
-
-    // ── entry serialization ──────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `entryJson carries id order speaker text state elapsed and omits null optionals`() {
@@ -75,8 +67,6 @@ class JcefPayloadTest {
         assertEquals(5, arr[0].jsonObject["order"]!!.jsonPrimitive.int)
         assertEquals(2, arr[1].jsonObject["id"]!!.jsonPrimitive.int)
     }
-
-    // ── permission serialization ─────────────────────────────────────────────────────────────────────────
 
     private fun perm(
         reviewable: Boolean = false,
@@ -153,8 +143,6 @@ class JcefPayloadTest {
         assertEquals(2, arr.size)
     }
 
-    // ── jump-to-code links ───────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `entryJson carries the project-relative filePath of a file tool and omits it elsewhere`() {
         val tool = TranscriptEntry(
@@ -183,7 +171,7 @@ class JcefPayloadTest {
         val links = o["links"]!!.jsonArray
         assertEquals(2, links.size)
         assertEquals("src/Foo.kt", links[0].jsonObject["token"]!!.jsonPrimitive.content)
-        assertNull(links[0].jsonObject["line"]) // no line → the key is absent, not null
+        assertNull(links[0].jsonObject["line"])
         assertEquals("PermissionBroker", links[1].jsonObject["token"]!!.jsonPrimitive.content)
         assertEquals("src/permission/PermissionBroker.kt", links[1].jsonObject["path"]!!.jsonPrimitive.content)
         assertEquals(31, links[1].jsonObject["line"]!!.jsonPrimitive.int)

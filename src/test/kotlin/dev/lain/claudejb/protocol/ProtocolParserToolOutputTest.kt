@@ -4,18 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * `tool_use_result` — the tool's STRUCTURED output — as it reaches the stream.
- *
- * The SDK is explicit that this is the thing to read from: *"the tool's full Output object, not the string
- * content sent to the model […] render from it instead of parsing the tool_result text"*
- * (`SDKUserMessageReplay.tool_use_result`, SDK 0.3.223). It is also the ONLY place a background task's id
- * appears next to the tool call that started it — `background_tasks_changed` carries ids and nothing else —
- * so without this parse a background task has no owner, no card and no output.
- *
- * The fixture mirrors a real line from a session transcript (`claude` 2.1.226), where the same object is
- * spelled `toolUseResult`; on the stream it is `tool_use_result`.
- */
 class ProtocolParserToolOutputTest {
 
     private fun line(body: String) = ProtocolParser.parse(body).filterIsInstance<ClaudeEvent.ToolResult>()
@@ -32,7 +20,6 @@ class ProtocolParserToolOutputTest {
         )
         val result = events.single()
         assertEquals("beaz86nuu", result.output?.backgroundTaskId)
-        // The owner comes from the line, not from the structured object: it is the agent whose turn ran it.
         assertEquals("toolu_agent", result.parentToolUseId)
     }
 
@@ -60,7 +47,6 @@ class ProtocolParserToolOutputTest {
              "tool_use_result":{"type":"text","file":{"filePath":"/tmp/a"}}}
             """.trimIndent(),
         ).single()
-        // Not an empty object: "nothing here for us" and "a task with blank fields" are different claims.
         assertNull(result.output)
     }
 
@@ -76,8 +62,6 @@ class ProtocolParserToolOutputTest {
             """.trimIndent(),
         )
         assertEquals(2, results.size)
-        // The object sits at the line's root and describes ONE call, with no field saying which. Attaching it
-        // to both would invent a background-task link the protocol never stated.
         results.forEach { assertNull(it.output) }
     }
 

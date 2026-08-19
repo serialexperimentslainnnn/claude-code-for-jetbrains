@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** Pure tests for [parseElicitationFields]: only flat primitive properties become fields; anything else is empty. */
 class ElicitationFieldsTest {
 
     private fun schema(json: String): JsonObject = ClaudeJson.parseToJsonElement(json) as JsonObject

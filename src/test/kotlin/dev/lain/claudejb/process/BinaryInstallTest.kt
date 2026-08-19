@@ -8,16 +8,7 @@ import org.junit.Test
 import java.io.File
 import kotlin.io.path.createTempDirectory
 
-/**
- * [BinaryInstall]: the install-method catalogue and the "is this really the claude binary?" validation.
- *
- * The exec-based validation tests run a real process (a tiny shell script standing in for the binary), so
- * they are POSIX-only — Windows is excluded with `assumeTrue`, the same convention as the two established
- * Windows-only skips elsewhere in the suite.
- */
 class BinaryInstallTest {
-
-    // ── methods() ────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `methods exist for this OS, with unique ids and complete fields`() {
@@ -38,8 +29,6 @@ class BinaryInstallTest {
         assertEquals(first, BinaryInstall.method(first.id))
         assertEquals(null, BinaryInstall.method("no-such-method"))
     }
-
-    // ── validate() ───────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `blank and nonexistent paths are invalid`() {
@@ -78,7 +67,6 @@ class BinaryInstallTest {
             val byFile = BinaryInstall.validate(fake.absolutePath)
             assertTrue("by file: $byFile", byFile is BinaryInstall.Validation.Ok)
             assertTrue((byFile as BinaryInstall.Validation.Ok).version.contains("Claude Code"))
-            // Answering with the DIRECTORY is the question users can actually answer.
             val byDir = BinaryInstall.validate(fake.parentFile.absolutePath)
             assertTrue("by dir: $byDir", byDir is BinaryInstall.Validation.Ok)
         } finally {

@@ -1,44 +1,27 @@
-/* Claude Code — JCEF chat stylesheet (A5, the whole visual language).
- *
- * Aesthetic target: calm, generous, claude.ai-like. One card radius, hairline borders, a single
- * coral accent reserved for identity + interaction (never status). Every colour comes from a CSS
- * variable injected by the Kotlin host (cc.theme) so the UI tracks the live IDE theme; nothing is
- * hardcoded outside :root. Zero external resources — no @import, no url(), no web fonts. */
-
 :root {
-  /* ── theme tokens (host overrides these; dark-ish defaults below) ───────────── */
-  --bg: #1e1f22; /* app background                         */
-  --surface: #2b2d30; /* cards / raised panels                  */
-  --surface2: #26282b; /* recessed surfaces (tool cards, menus)  */
-  --text: #dfe1e5; /* primary text                          */
-  --dim: #8b8f95; /* secondary / metadata text             */
-  --border: #393b40; /* hairline borders                      */
-  --accent: #d97757; /* coral — identity + interaction ONLY   */
+  --bg: #1e1f22;
+  --surface: #2b2d30;
+  --surface2: #26282b;
+  --text: #dfe1e5;
+  --dim: #8b8f95;
+  --border: #393b40;
+  --accent: #d97757;
   --accent-soft: rgba(217, 119, 87, 0.14);
-  --code-bg: #1b1c1e; /* fenced code background                 */
-  --success: #5aa86f; /* status only (never the accent)        */
+  --code-bg: #1b1c1e;
+  --success: #5aa86f;
   --warning: #d8a657;
   --danger: #e06c64;
-  --info: #56c2e6; /* sky blue — tool loading/running status */
-  /* Neon orange, for the ONE selected view button and nothing else. Deliberately not `--accent`: the accent
-     is the product's identity colour and is already spread across the UI, so a glow made of it would not
-     read as "you are here". Brighter and more saturated than the warning amber so the two never look alike. */
+  --info: #56c2e6;
   --neon-orange: #ff9a3c;
-  /* The hairline that runs down each level of the Workloads tree. Derived from the border colour so it
-     follows the IDE theme, and deliberately fainter: it guides the eye, it is not a divider. */
   --tree-guide: color-mix(in srgb, var(--border) 75%, transparent);
   --font: -apple-system, 'Segoe UI', 'Inter', Roboto, 'Helvetica Neue', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --fs: 13.5px;
 
-  /* ── derived design tokens (one radius, one rhythm) ─────────────────────────── */
-  --radius: 14px; /* THE card radius — used everywhere      */
-  --radius-sm: 9px; /* nested elements (chips, code, options) */
+  --radius: 14px;
+  --radius-sm: 9px;
   --radius-pill: 999px;
   --gap: 14px;
-  /* The conversation column's cap. Every consumer applies it as `max-width`, so this declaration is the only
-     place the width is decided — `none` means the transcript, the dock and the dashboard's card grid use the
-     full width of the tool window, however wide the user drags it. */
   --col: none;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 28px rgba(0, 0, 0, 0.22);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -66,31 +49,14 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* The `hidden` attribute must always hide, even on elements whose class/id selectors set
-   an explicit `display:` (those outrank the UA [hidden] rule). JS toggles visibility via
-   the hidden attribute throughout, so enforce it globally. */
 [hidden] {
   display: none !important;
 }
 
-/* What a control row could not fit, collected behind its ⋮ (app-composer-base.js). Hidden the same way, and
-   for a stronger reason: a collected control must leave the tab order and the accessibility tree as well as
-   the paint, because a control nobody can see that Tab still stops on is worse than one that was never
-   offered. `visibility` or an opacity would leave it in both.
-
-   THE `!important` IS NOT CAUTION, it is the only thing that works. Both rows style their occupants through
-   DESCENDANT selectors — `.composer-bar .pill`, `.composer-views .dash-toggle`, each (0,2,0) — so a single
-   class loses on specificity however late it is declared, and the control would stay on screen while the
-   arithmetic that put it here believed it was gone. That failure is silent, which is what earns the flag.
-
-   Its own class and deliberately NOT the `hidden` attribute: `hidden` already has owners on these rows —
-   `renderPills` hides an unlabelled pill, the dashboard hides Plan and Git until the session has them — and
-   one attribute with two writers is decided by whichever wrote last. */
 .cc-collapsed {
   display: none !important;
 }
 
-/* thin, calm scrollbars */
 ::-webkit-scrollbar {
   width: 11px;
   height: 11px;
@@ -109,9 +75,6 @@ body {
   background: transparent;
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   LAYOUT
-   ════════════════════════════════════════════════════════════════════════════ */
 #app {
   display: flex;
   flex-direction: column;
@@ -119,23 +82,6 @@ body {
   overflow: hidden;
 }
 
-/* The work area: two rows of one column — everything that belongs to the open chat, then the dock, which
-   belongs to every chat.
-
-   `z-index: 0` on a positioned element is what makes the layering a RULE rather than an arrangement: it
-   opens a stacking context, so every number declared inside the work area is scoped to the work area. A
-   layer added here tomorrow stacks against its siblings whatever value it picks — it cannot out-number the
-   tab bar, which is not in this context at all. What is defended is the ORDER of the roles, not the digits:
-   the transcript is the floor, a panel over it comes next, then the dock, and last whatever hangs over the
-   composer. Each number is declared at its own rule, with the reason beside it; a role inserted between two
-   of them later changes the numbers and not the rule.
-
-   ONE criterion decides what is mounted outside all this, and it is not "it floats" — it is having
-   something to escape. #tabsbar clips its overflow, so a menu hanging off a tab is put on `document.body`
-   or it is cut off, and no rule inside the bar can save it. The find bar has nothing to escape: on the body
-   it was positioned against the VIEWPORT, which is where the tab row is, and it could hide a focused tab
-   outright (WCAG 2.2 SC 2.4.11). It is a child of #work now — the reason lives with its rule, in
-   dashboard.css. */
 #work {
   position: relative;
   z-index: 0;
@@ -146,19 +92,6 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* THE CHAT'S OWN AREA — the group that would be swapped if two chats ever shared one browser, which is
-   exactly why it is a group and not four siblings of the dock.
-
-   ONE cell, and everything in it is placed there (`grid-area: 1 / 1`): the transcript at the bottom of the
-   stack, the dashboard panel and the three waiting screens over it. Layers rather than replacements,
-   because a scroll container that stops being displayed loses its scrollTop — returning from the dashboard
-   would land at the top of a long conversation, and coming back from a waiting screen would do the same.
-
-   The waiting screens are NOT rows of #conversation: that element's children belong to `cc.clear()`, which
-   deletes them. Input while the binary starts is blocked by `#app.booting`; navigation is not.
-
-   The dock is the row BELOW this, so nothing laid over the conversation can reach the composer, and the tab
-   bar is outside #work altogether. Both containments are structural, not tuned insets. */
 #tabview {
   grid-area: 1 / 1;
   min-height: 0;
@@ -167,9 +100,6 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The base of the shared cell, and the floor of the stack: a layer over the transcript declares a higher
-   number (`.dashboard`, dashboard.css), and the transcript itself never competes. Explicit rather than
-   `auto`, which also keeps anything positioned INSIDE the transcript — a card, a sticky header — inside it. */
 #conversation {
   grid-area: 1 / 1;
   z-index: 0;
@@ -179,18 +109,12 @@ body {
   scroll-behavior: smooth;
   padding: 22px clamp(16px, 5vw, 40px) 30px;
 }
-/* centred reading column with generous breathing room */
 #conversation > * {
   max-width: var(--col);
   margin-left: auto;
   margin-right: auto;
 }
 
-/* dock = permissions + composer, pinned to the bottom with a soft blur veil.
-   Its row is not the layer's row, and it also outranks it: a grid row is not a clip, so a layer that
-   overflows the cell above would otherwise paint straight over the composer — which is the exact failure
-   the waiting screens produced when they were `inset: 0` panels. Being LATER in the document already won
-   that fight by accident; `z-index: 2` is the same outcome stated on purpose, and it survives a reorder. */
 #dock {
   grid-area: 2 / 1;
   z-index: 2;
@@ -199,7 +123,6 @@ body {
   padding: 10px clamp(16px, 5vw, 40px) 16px;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  /* No `-webkit-` twin: the embedded browser is Chromium ≥ 122, which took the property unprefixed in 76. */
   backdrop-filter: blur(14px) saturate(1.1);
 }
 #dock > * {
@@ -213,16 +136,12 @@ body {
 #permissions > * + * {
   margin-top: 10px;
 }
-/* Cap the request-cards stack (permission / question / elicitation / plan all live here) at half
-   the height; beyond that it scrolls within itself, so the transcript always keeps ≥50% and the
-   dock never eats the view. */
 #permissions {
   max-height: 50vh;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* ── empty state ──────────────────────────────────────────────────────────── */
 #empty {
   display: flex;
   flex-direction: column;

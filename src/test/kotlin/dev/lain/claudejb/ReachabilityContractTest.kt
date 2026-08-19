@@ -103,14 +103,6 @@ class ReachabilityContractTest {
         }
     }
 
-    /**
-     * Exclusion 2 has two halves and this pins both: the literal's own text goes, the template expressions inside
-     * it stay. The second half is what makes an interpolated call count as the call it is, and it is invisible
-     * when it breaks — [TEMPLATE] matching nothing costs no error and no failure here, it silently reports every
-     * symbol referenced only by interpolation as an orphan, i.e. live code as dead. Asserted against the
-     * reduction itself, never against the pattern's source text: the way this breaks is a pattern that reads
-     * correctly and matches nothing.
-     */
     @Test
     fun `a symbol named only inside a string template survives the reduction`() {
         val bare = withoutStringLiterals("""    val key = "${'$'}BARE_PREFIX${'$'}suffix" to window""")
@@ -131,7 +123,6 @@ class ReachabilityContractTest {
         }
     }
 
-    /** True when [block]'s name appears in any main source, anywhere except inside the block itself. */
     private fun referencedOutsideItself(owner: Source, block: Block): Boolean {
         val name = Regex("""\b${block.name}\b""")
         return sources.any { source ->
@@ -148,10 +139,6 @@ class ReachabilityContractTest {
             if (memberReferenced(owner, obj, member, index)) null else "$id — ${owner.file.path}:${index + 1}"
         }
 
-    /**
-     * A member is referenced when another file spells it out (`Owner.member`, `Owner::member`, or an import of
-     * it followed by a bare use), or when the object's own body uses it to build something else it exposes.
-     */
     private fun memberReferenced(owner: Source, obj: Block, member: String, line: Int): Boolean {
         val qualified = Regex("""\b${obj.name}\s*(?:\.|::)\s*$member\b""")
         val imported = Regex("""import\s+[\w.]*\.${obj.name}\.(?:$member\b|\*)""")
@@ -164,7 +151,6 @@ class ReachabilityContractTest {
             bare.containsMatchIn(owner.textWhere { it > obj.from && it < obj.to && it != line })
     }
 
-    /** The simple names the plugin descriptors declare: these are entered from the platform, not from Kotlin. */
     private fun entryPoints(): Set<String> =
         DESCRIPTORS
             .map { resourceRoot().resolve(it) }
@@ -179,15 +165,6 @@ class ReachabilityContractTest {
             .toList()
             .sortedBy { it.file.path }
 
-    /**
-     * The file's CODE, one entry per original line so that line numbers survive: comment lines are blanked, and
-     * inside the rest every string literal is replaced by the template expressions it contained, if any.
-     *
-     * The body of a MULTI-LINE raw string is left as it stands, and that is the one place this scan is
-     * deliberately generous: a symbol named inside one still counts as a reference. Tracking the fences would
-     * make the gate stricter in a corner it has never been fooled by, at the price of a second parser state that
-     * can mis-close and start reporting live declarations as dead — and a gate that cries wolf gets deleted.
-     */
     private fun codeOf(file: File): List<String> {
         var inBlockComment = false
         return file.readLines().map { raw ->
@@ -210,7 +187,6 @@ class ReachabilityContractTest {
 
     private fun withoutLineComment(line: String): String = line.substringBefore("//")
 
-    /** Resolves a main-source directory whether the test runs from the module dir or the repo root. */
     private fun sourceRoot(): File = resolveFromEitherRoot("src/main/kotlin")
 
     private fun resourceRoot(): File = resolveFromEitherRoot("src/main/resources/META-INF")
@@ -219,14 +195,12 @@ class ReachabilityContractTest {
         sequenceOf(File(path), File("../$path")).firstOrNull { it.isDirectory }
             ?: error("could not locate $path from ${File("").absolutePath}")
 
-    /** The name a top-level `object` member declares, or null when the line is not one this scan can judge. */
     private fun memberName(line: String): String? {
         if (SKIPPED_MODIFIER.containsMatchIn(line)) return null
         val match = MEMBER_DECLARATION.find(line) ?: return null
         return match.groupValues[1].takeIf { match.groupValues[2].isEmpty() }
     }
 
-    /** One Kotlin file, reduced to code, with its top-level declarations located. */
     private class Source(val file: File, val code: List<String>) {
 
         val blocks: List<Block> = parse(code)
@@ -238,7 +212,6 @@ class ReachabilityContractTest {
 
         private companion object {
 
-            /** Each top-level declaration owns the lines from its own down to the next one's. */
             fun parse(code: List<String>): List<Block> {
                 val found = code.indices.mapNotNull { index -> blockAt(code, index) }
                 return found.mapIndexed { position, block ->
@@ -256,12 +229,10 @@ class ReachabilityContractTest {
         }
     }
 
-    /** A top-level declaration and the half-open line range `[from, to)` that belongs to it. */
     private data class Block(val name: String, val kind: String, val from: Int, val to: Int)
 
     private companion object {
 
-        /** The descriptors the platform reads. Whatever they name is entered from outside Kotlin. */
         val DESCRIPTORS = listOf("plugin.xml", "claude-git.xml", "claude-terminal.xml")
 
         const val MIN_SOURCES = 100
@@ -271,22 +242,14 @@ class ReachabilityContractTest {
 
         val STRING_LITERAL = Regex("\"(?:\\\\.|[^\"\\\\])*\"")
 
-        /**
-         * The two spellings of an interpolated reference, `${expr}` and `$ident`. The dollar is escaped for the
-         * REGEX as well as produced for Kotlin: unescaped it is the end-of-input anchor, so the pattern compiles
-         * and matches nothing — which costs no error anywhere and turns every symbol referenced only by
-         * interpolation into a reported orphan.
-         */
         val TEMPLATE = Regex("""\${'$'}\{([^}]*)}|\${'$'}(\w+)""")
 
-        /** Group 1 is the keyword, 2 the name, 3 a receiver dot — an extension, which this scan does not judge. */
         val TOP_LEVEL_DECLARATION = Regex(
             """^(?:@\w+(?:\([^)]*\))?\s+)*""" +
                 """(?:internal |public |abstract |open |sealed |data |value |enum |annotation |inline |const )*""" +
                 """(class|object|interface|fun|val|var)\s+(?:<[^>]+>\s+)?([A-Za-z_]\w*)(\.?)""",
         )
 
-        /** The same shape one level in: a member of a top-level object. Group 2 is again the receiver dot. */
         val MEMBER_DECLARATION = Regex(
             """^ {4}(?:@\w+(?:\([^)]*\))?\s+)*""" +
                 """(?:internal |public |open |const |inline |suspend |operator |infix )*""" +

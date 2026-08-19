@@ -7,14 +7,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * The wording of the gear menu's Git entries — pure, no platform, no repository — plus the two contracts that
- * matter more than the wording: that the entries are actually **wired into the menu**, and that the UI layer
- * did not grow a Git write path of its own.
- */
 class GitContextActionsTest {
-
-    // ── menuText ──────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `no branch means no branch in the label`() {
@@ -37,8 +30,6 @@ class GitContextActionsTest {
         assertTrue(text.length < "Recent Commits on feature/an-extremely-long-branch-name-that-nobody-should-write…".length, text)
     }
 
-    // ── popupTitle ────────────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `the chooser title carries the branch and the short head revision`() {
         assertEquals(
@@ -53,8 +44,6 @@ class GitContextActionsTest {
         assertEquals("Recent commits · detached HEAD", GitContextActions.popupTitle("  ", "   "))
         assertEquals("Recent commits · main", GitContextActions.popupTitle("main", null))
     }
-
-    // ── commitRow ─────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a commit row is hash, subject, author, age and file count`() {
@@ -93,11 +82,6 @@ class GitContextActionsTest {
         assertFalse(row.contains("x".repeat(100)), "the subject should have been truncated: $row")
     }
 
-    /**
-     * The row is **plain text**: a subject is content the plugin did not write, and a Swing renderer handed a
-     * string that starts with `<html>` interprets the rest as markup. Passing it through verbatim — and never
-     * opening an HTML document — is what keeps that impossible.
-     */
     @Test
     fun `markup in a commit subject is not markup in the row`() {
         val row = GitContextActions.commitRow(commit(subject = "<b>bold</b> & <i>italic</i>"), NOW)
@@ -105,12 +89,6 @@ class GitContextActionsTest {
         assertTrue(row.contains("<b>bold</b> & <i>italic</i>"), row)
     }
 
-    // ── the contracts ─────────────────────────────────────────────────────────────────────────────────────────
-
-    /**
-     * The whole point of this file. A service nothing calls is a dead feature — this plugin has shipped that
-     * once (the `/login` terminal lookups) — so the wiring itself is pinned, not just its behaviour.
-     */
     @Test
     fun `the gear menu wires the git entries`() {
         val factory = File("src/main/kotlin/dev/lain/claudejb/ui/ClaudeToolWindowFactory.kt").readText()
@@ -120,11 +98,6 @@ class GitContextActionsTest {
         )
     }
 
-    /**
-     * The Git integration is read-only, and `GitReadOnlyContractTest` enforces that over `git/`. This is the
-     * other half: the UI must not route around the gateway by naming Git4Idea, spawning a process or reaching
-     * for a mutating API. The only Git the menu may touch is the two read-only collaborators.
-     */
     @Test
     fun `the ui git entries reach nothing but the read-only service and navigator`() {
         val code = File("src/main/kotlin/dev/lain/claudejb/ui/GitContextActions.kt").readLines()
@@ -143,24 +116,6 @@ class GitContextActionsTest {
         )
     }
 
-    /**
-     * **The scope of a commit read is part of what a surface claims, and the two surfaces claim opposite
-     * things.** This entry names the checked-out branch in its label and again in the chooser's title, so its
-     * rows must come from that branch; the dashboard's commit graph needs every line of development or it can
-     * only draw a rail. Both ask the SAME method, and the two answers are indistinguishable — a list of commits
-     * looks identical whichever refs produced it, so widening the read one layer down changes what this menu
-     * says without touching a line of this file. That is precisely how it broke: the graph needed every ref,
-     * the gateway was widened for it, and this chooser started listing other branches' work under a title
-     * naming one, silently.
-     *
-     * Three assertions, one behaviour: this file does not opt into the wide scope, the dashboard does opt in
-     * explicitly rather than inheriting it, and the default the two of them lean on is still the narrow one.
-     *
-     * The dashboard's call is pinned WHOLE, limit included, because the two halves fail the same way. Twenty
-     * commits is right for a chooser about one branch and wrong for a graph over every line — shared out, it
-     * is four or five per branch and draws no fork — so a graph that quietly inherits this file's window is
-     * the straight rail again, arrived at from the other end.
-     */
     @Test
     fun `the branch-titled chooser reads one branch, and only the graph reads every line`() {
         val menu = File("src/main/kotlin/dev/lain/claudejb/ui/GitContextActions.kt").readLines()
@@ -184,12 +139,6 @@ class GitContextActionsTest {
         )
     }
 
-    /**
-     * **Absent, not greyed.** With no Git plugin and no working copy these entries can do nothing at all, and a
-     * dead menu item that reports nothing is worse than a missing one. The decision is one line of `update`, and
-     * a line is exactly the kind of thing a later "let's grey it out instead" turns around silently — so it is
-     * pinned here, the way this repo pins the things it cannot exercise headlessly (see `JcefDependencyContractTest`).
-     */
     @Test
     fun `the entries hide themselves when git is unavailable, they do not grey out`() {
         val source = File("src/main/kotlin/dev/lain/claudejb/ui/GitContextActions.kt").readLines()
@@ -216,7 +165,6 @@ class GitContextActionsTest {
 
     private companion object {
 
-        /** The `GitLogScope` constant only the graph may name. Spelled once, so the two halves cannot drift. */
         const val WIDE_SCOPE = "EVERY_LINE_OF_DEVELOPMENT"
 
         const val COMMITTED_AT = 1_700_000_000_000L

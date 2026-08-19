@@ -4,29 +4,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * The plugin does not ask the platform whether it is running under Remote Development. It finds out by failing to
- * deliver the page, and [nextPageRoute] is the whole answer.
- *
- * Every platform type that can answer the question directly is `@ApiStatus.Internal`, verified with
- * `javap -v` against the compiled build classpath — `PlatformUtils`, `AppMode`, `AppModeAssertions`, `ClientId`,
- * `ClientKind`, `ClientSessionsManager` and `ClientAppSession`. `INTERNAL_API_USAGES` is a `failureLevel` in
- * `build.gradle.kts`, so naming one is a red build today; the Marketplace has already blocked a release of this
- * plugin over an internal API once, so it is also a publication risk rather than a lint.
- *
- * The reason this is a source scan and not a review note is the *other* way of answering the question — reading
- * `idea.platform.prefix` out of the system properties. That passes the verifier by being invisible to it: no type
- * is named, so nothing is flagged, and when the property changes the detection silently returns the wrong answer
- * with no error anywhere. That is the exact shape of the 4.4.1 terminal regression, where three reflective lookups
- * for classes that were not in the IDE at all each returned false instead of throwing and `/login` quietly stopped
- * working for a whole release. So the ban is on the API, and the escape hatch is banned with it.
- *
- * A hit here means the plugin has started asking the question directly again. The answer is not to widen this
- * list: it is to get the information from a delivery that failed.
- */
 class RemoteDevApiContractTest {
 
-    /** The types that answer "is this a remote frontend?", all of them internal. */
     private val bannedTypes = listOf(
         "PlatformUtils",
         "AppMode",
@@ -37,7 +16,6 @@ class RemoteDevApiContractTest {
         "ClientAppSession",
     )
 
-    /** The property those types are read from, and therefore the way round them that must not appear either. */
     private val bannedProperty = "idea.platform.prefix"
 
     @Test
@@ -73,7 +51,6 @@ class RemoteDevApiContractTest {
     private fun ktFiles(): List<File> =
         sourceRoot().walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
 
-    /** Resolves `src/main/kotlin` whether the test runs from the module dir or the repo root. */
     private fun sourceRoot(): File =
         sequenceOf(File("src/main/kotlin"), File("../src/main/kotlin"))
             .firstOrNull { it.isDirectory }

@@ -13,20 +13,10 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 
-/**
- * Pure-JVM coverage of the rules behind the attach menu's in-place project browser: the containment gate
- * ([ProjectTree.resolve]), the listing order, what counts as attachable, and the bounded expansion.
- *
- * The IDE-bound entry points are deliberately absent: [ProjectTree.children] and [ProjectTree.expand] are the
- * thin part — a read action, a VFS lookup and an index question — while everything that can be got wrong is
- * here, reachable without a `Project`. The containment tests follow the shape of `DiffPresenterIsWithinRootTest`
- * on purpose: it is the same gate, reused rather than reimplemented, so these pin that it is really being asked.
- */
 class ProjectTreeTest {
 
     private companion object {
 
-        /** See `DiffPresenterIsWithinRootTest`: built, never written as a literal — a NUL is invisible in a diff. */
         val NUL: Char = 0.toChar()
 
         fun dir(path: String) = ProjectTree.Entry(path.substringAfterLast('/'), path, true)
@@ -34,7 +24,6 @@ class ProjectTreeTest {
         fun file(path: String) = ProjectTree.Entry(path.substringAfterLast('/'), path, false)
     }
 
-    /** A tree the walk can only learn about by asking — the point of every expansion test below. */
     private class DeclaredTree(private val children: Map<String, List<ProjectTree.Entry>>) {
         val asked = mutableListOf<String>()
 
@@ -43,8 +32,6 @@ class ProjectTreeTest {
             children[entry.path].orEmpty()
         }
     }
-
-    // ---------------------------------------------------------------- containment
 
     @Test
     fun `the root itself resolves`(@TempDir root: Path) {
@@ -76,11 +63,6 @@ class ProjectTreeTest {
         assertNull(ProjectTree.resolve(root.canonicalPath, "../proj-evil/secret.txt"))
     }
 
-    /**
-     * An absolute input is not refused by inspecting its spelling — it is resolved and then judged. Either it
-     * lands inside the root (POSIX `File(parent, "/etc/passwd")` folds the leading separator away) or the
-     * containment gate refuses it. What must never happen is the third outcome: a path outside the root.
-     */
     @Test
     fun `an absolute path either folds into the root or is refused`(@TempDir root: Path) {
         val canonicalRoot = root.toFile().canonicalPath
@@ -117,7 +99,6 @@ class ProjectTreeTest {
         assertNull(ProjectTree.resolve("   ", "src"))
     }
 
-    /** Fail-closed on a path the filesystem cannot resolve at all, exactly as the gate it delegates to does. */
     @Test
     fun `a path that cannot be canonicalized is refused`(@TempDir root: Path) {
         val canonicalRoot = root.toFile().canonicalPath
@@ -128,11 +109,6 @@ class ProjectTreeTest {
         assertNull(ProjectTree.resolve(canonicalRoot, "a${NUL}b"))
     }
 
-    /**
-     * The input comes from a browser, so the nasty spellings are the ordinary ones. None of them may produce a
-     * path outside the root, and none of them may produce an exception either — a thrown resolve is a menu that
-     * dies instead of a menu that shows nothing.
-     */
     @Test
     fun `no hostile spelling escapes the root`(@TempDir root: Path) {
         val canonicalRoot = root.toFile().canonicalPath
@@ -157,8 +133,6 @@ class ProjectTreeTest {
         }
     }
 
-    // ---------------------------------------------------------------- order
-
     @Test
     fun `directories come first, then files, both case-insensitively alphabetical`() {
         val ordered = ProjectTree.ordered(
@@ -167,7 +141,6 @@ class ProjectTreeTest {
         assertEquals(listOf("alpha", "Zebra", "Apple.txt", "apple.txt", "b.txt"), ordered.map { it.name })
     }
 
-    /** Two openings of the same folder must produce the same rows in the same places, or it cannot be memorised. */
     @Test
     fun `the order does not depend on the order the entries arrived in`() {
         val entries = listOf(dir("src"), file("README.md"), dir("Docs"), file("build.gradle.kts"), file("a.md"))
@@ -176,8 +149,6 @@ class ProjectTreeTest {
             ProjectTree.ordered(entries.reversed()).map { it.path },
         )
     }
-
-    // ---------------------------------------------------------------- what is attachable
 
     @Test
     fun `a text file within the size ceiling is attachable`() {
@@ -199,14 +170,11 @@ class ProjectTreeTest {
         assertTrue(ProjectTree.isAttachableFile("SHOT.PNG", 1_024, binary = true))
     }
 
-    /** An extension the platform has no rule for is "undetermined", not "opaque": a `.env` must stay attachable. */
     @Test
     fun `an unrecognised extension is judged by size alone`() {
         assertTrue(ProjectTree.isAttachableFile("config.envrc", 512, binary = false))
         assertTrue(ProjectTree.isAttachableFile("Makefile", 512, binary = false))
     }
-
-    // ---------------------------------------------------------------- expansion
 
     private fun sampleTree() = DeclaredTree(
         mapOf(
@@ -232,10 +200,6 @@ class ProjectTreeTest {
         assertFalse(expansion.truncated)
     }
 
-    /**
-     * The same folder, the two modes, two different answers — which is the whole reason the mode is carried into
-     * the walk instead of being applied to its result by the caller.
-     */
     @Test
     fun `the two modes disagree about the same folder`() {
         val files = ProjectTree.walk(dir("src"), ProjectTree.Mode.FILES, sampleTree().provider()).paths
@@ -245,12 +209,6 @@ class ProjectTreeTest {
         assertEquals(listOf("src", "src/main"), dirs)
     }
 
-    /**
-     * **The walk may only report what it was handed.** An excluded directory is one the index never mentions, so
-     * the test hands over a tree that omits it while the same names exist FOR REAL on disk under the path the
-     * start entry names. An implementation that reached for `File.listFiles` instead of asking would attach the
-     * build output, which is precisely the failure this rule exists to prevent — and it would do it silently.
-     */
     @Test
     fun `an excluded directory is invisible to the expansion, even though it exists on disk`(@TempDir root: Path) {
         val onDisk = root.toFile()
@@ -275,7 +233,6 @@ class ProjectTreeTest {
         }
     }
 
-    /** The same rule for the listing: it is `ordered` over what was declared, and it invents nothing. */
     @Test
     fun `the listing shows exactly what was declared, in order`() {
         val declared = sampleTree()
@@ -283,8 +240,6 @@ class ProjectTreeTest {
 
         assertEquals(listOf("src", "README.md"), rows.map { it.path })
     }
-
-    // ---------------------------------------------------------------- the ceiling
 
     @Test
     fun `an expansion under the ceiling is not reported as truncated`() {
@@ -306,10 +261,6 @@ class ProjectTreeTest {
         }
     }
 
-    /**
-     * The ceiling is a CUT, not a trim: the answer "more than N" is reached without finishing the tree. Proven by
-     * what the walk never asked about — a sibling folder it would have had to descend to finish the job.
-     */
     @Test
     fun `the ceiling stops the walk instead of truncating a finished one`() {
         val declared = DeclaredTree(
@@ -327,11 +278,8 @@ class ProjectTreeTest {
         }
     }
 
-    /** A tree that yields nothing still has to end: the visit ceiling is what a directory-only tree runs into. */
     @Test
     fun `a tree of empty directories terminates and says it was cut short`() {
-        // A chain, keyed by short names on purpose: nesting the keys would make the map quadratic in memory
-        // and would be measuring the test harness rather than the walk.
         val deep = HashMap<String, List<ProjectTree.Entry>>()
         deep[""] = listOf(dir("d0"))
         repeat(25_000) { step -> deep["d$step"] = listOf(dir("d${step + 1}")) }

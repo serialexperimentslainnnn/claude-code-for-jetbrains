@@ -13,21 +13,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Unit tests for [DiffPresenter]'s pure reconstruction logic — proposedContent (and the private applyEdit it
- * drives) plus filePathOf. The diff-opening methods need a Project/EDT and are exercised manually, not here:
- * what matters for correctness is that the right-hand "Proposed by Claude" content we preview matches exactly
- * what the binary will write when we answer `allow`.
- */
 class DiffPresenterTest {
-
-    // --- diff tab title ---
-    //
-    // ChainDiffVirtualFile takes its title AS ITS FILE NAME, so the title is not cosmetic: the IDE reads it as
-    // a filename and hands it to whatever machinery claims that extension. The old title, "Claude · <name>",
-    // ended in the file's own extension — so reviewing build.gradle.kts produced a virtual file called
-    // "Claude · build.gradle.kts", which Kotlin's script support tried to resolve and could not, raising
-    // "Circular script import — Not a kotlin file" at the user on every Gradle edit. These pin the shape.
 
     @Test
     fun `diff title does not end in the reviewed file's extension`() {
@@ -47,8 +33,6 @@ class DiffPresenterTest {
         assertTrue(DiffPresenter.diffTitle("App.kt").contains("Claude"))
     }
 
-    // --- Write ---
-
     @Test
     fun `Write returns content verbatim`() {
         val input = buildJsonObject {
@@ -63,8 +47,6 @@ class DiffPresenterTest {
         val input = buildJsonObject { put("file_path", "a.kt") }
         assertEquals("", DiffPresenter.proposedContent("Write", input, "ignored"))
     }
-
-    // --- Edit ---
 
     @Test
     fun `Edit replaces first occurrence by default`() {
@@ -97,8 +79,6 @@ class DiffPresenterTest {
         assertEquals(" bar", DiffPresenter.proposedContent("Edit", input, "foo bar"))
     }
 
-    // --- MultiEdit ---
-
     @Test
     fun `MultiEdit applies edits in chain`() {
         val input = buildJsonObject {
@@ -113,7 +93,6 @@ class DiffPresenterTest {
                 }
             }
         }
-        // "a" -> "b" -> "c"
         assertEquals("c", DiffPresenter.proposedContent("MultiEdit", input, "a"))
     }
 
@@ -126,7 +105,6 @@ class DiffPresenterTest {
                     put("new_string", "b")
                 }
                 addJsonObject {
-                    // not present in "b" — replaceFirst no-ops, acc kept
                     put("old_string", "zzz")
                     put("new_string", "x")
                 }
@@ -141,12 +119,6 @@ class DiffPresenterTest {
         assertNull(DiffPresenter.proposedContent("MultiEdit", input, "a"))
     }
 
-    /**
-     * A MALFORMED element (no `old_string`) makes `applyEdit` return null, which is a different case from an
-     * `old_string` that is simply not found. The fold must keep the accumulator and carry on: the alternative
-     * is one bad element either aborting the whole reconstruction or — far worse — collapsing the preview to
-     * something that is not what the binary would write, on the screen the user approves the write from.
-     */
     @Test
     fun `MultiEdit skips a malformed edit and keeps applying the rest`() {
         val input = buildJsonObject {
@@ -156,7 +128,6 @@ class DiffPresenterTest {
                     put("new_string", "b")
                 }
                 addJsonObject {
-                    // no old_string at all → applyEdit returns null → accumulator preserved
                     put("new_string", "IGNORED")
                 }
                 addJsonObject {
@@ -168,11 +139,6 @@ class DiffPresenterTest {
         assertEquals("c", DiffPresenter.proposedContent("MultiEdit", input, "a"))
     }
 
-    /**
-     * `replace_all` is only honoured when it is genuinely a boolean. Anything else defaults to false —
-     * replace the FIRST occurrence. Defaulting the other way would silently widen a one-line edit into a
-     * whole-file substitution, which is the sort of write nobody reviews closely because the card says "Edit".
-     */
     @Test
     fun `replace_all that is not a boolean defaults to replacing only the first occurrence`() {
         val notPrimitive = buildJsonObject {
@@ -190,15 +156,11 @@ class DiffPresenterTest {
         assertEquals("bar foo", DiffPresenter.proposedContent("Edit", notBoolean, "foo foo"))
     }
 
-    // --- unknown tool ---
-
     @Test
     fun `unknown tool returns null`() {
         val input = buildJsonObject { put("content", "x") }
         assertNull(DiffPresenter.proposedContent("Read", input, "current"))
     }
-
-    // --- filePathOf ---
 
     @Test
     fun `filePathOf returns file_path when present`() {

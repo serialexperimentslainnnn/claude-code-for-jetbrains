@@ -1,6 +1,3 @@
-// Transcript rendering (app-transcript.js). Drives cc.batch([...]) and asserts the DOM, covering the bugs from
-// the 4.0.4 / 4.2.0 passes: user prompts rendered VERBATIM (never Markdown), the code-block Copy affordance, and
-// coloured inline diffs. Batch item shape mirrors JcefBridge.entryJson: { id, order, speaker, text, meta?, ... }.
 const { loadFrontend, readCss } = require('./helpers/load');
 
 function row(id, order, speaker, text, extra = {}) {
@@ -8,14 +5,6 @@ function row(id, order, speaker, text, extra = {}) {
 }
 
 describe('transcript — the user row is a row, not a card', () => {
-  /**
-   * REGRESSION. The user's body was a bordered, padded, shadowed box carrying `white-space: pre-wrap`. Both
-   * were right for the `kind: 'text'` body it had until 4.0.4 and both became wrong when `buildUser` moved to
-   * `kind: 'md'`: `pre-wrap` over ALREADY-RENDERED markup turns every newline in that markup into a visible
-   * break, so a prompt with a list came out with each bullet a blank line apart and the `1.` on a line of its
-   * own — reported with a screenshot. jsdom lays nothing out, so this is asserted against the stylesheet's
-   * TEXT, the same way the rest of the CSS contracts in this suite are.
-   */
   const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
   const userBody = () => {
     const at = css.indexOf('\n.msg.user .body {');
@@ -35,14 +24,11 @@ describe('transcript — the user row is a row, not a card', () => {
   });
 
   it('keeps what the container was actually needed for: wrapping an unbreakable path', () => {
-    // Without these a pasted path or token sets the row's width, which is a different visible bug.
     expect(userBody()).toMatch(/word-break:\s*break-word/);
     expect(userBody()).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it('still says whose row it is, and still offers Copy', () => {
-    // The header is what marks the row as the user's now that no box does, so removing the chrome must not
-    // have taken it with it.
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([row(1, 0, 'USER', 'hello')]);
     const head = win.document.querySelector('.msg.user .msg-head');
@@ -52,17 +38,8 @@ describe('transcript — the user row is a row, not a card', () => {
 });
 
 describe('transcript — a user prompt goes through the same parser as Claude’s', () => {
-  /**
-   * It rendered VERBATIM for three releases, and the reason it no longer does is what the plugin PUTS in that
-   * text: an attachment is folded into the prompt as `[@name](jb://open?file=…)`, so verbatim meant the user
-   * read the link syntax rather than the link — a wall of percent-encoded paths, reported as exactly that.
-   *
-   * The trade is stated in `buildUser` and asserted here so nobody has to rediscover it: markdown the USER
-   * typed is interpreted now, which is the defect 4.0.4 fixed by choosing verbatim. What is NOT traded is the
-   * payload — `__rawText` still holds what was typed, which is what Copy gives.
-   */
   it('renders a USER row as Markdown, so an attachment link is a link', () => {
-    const win = loadFrontend(['app-transcript.js']); // vendored marked/DOMPurify → real markdown
+    const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([row(1, 0, 'USER', 'Look at this\n\n[@certs/root.crt](jb://open?file=%2Ftmp%2Fx&line=1)')]);
 
     const body = win.document.querySelector('.msg.user .body');
@@ -70,8 +47,6 @@ describe('transcript — a user prompt goes through the same parser as Claude’
     const link = body.querySelector('a');
     expect(link).not.toBeNull();
     expect(link.textContent).toBe('@certs/root.crt');
-    // The `jb://` scheme survives DOMPurify's URI filter — it is in the allow-list precisely so these open —
-    // and the visible text is the file, not the encoded path.
     expect(link.getAttribute('href')).toBe('jb://open?file=%2Ftmp%2Fx&line=1');
     expect(body.textContent).not.toContain('jb://');
   });
@@ -82,21 +57,19 @@ describe('transcript — a user prompt goes through the same parser as Claude’
     const body = win.document.querySelector('.msg.user .body');
     expect(body.querySelector('strong')).not.toBeNull();
     expect(body.querySelector('code')).not.toBeNull();
-    // …and what was typed is still in the payload, which is what the Copy button hands back.
     expect(body.__rawText).toBe('**bold** and `code`');
   });
 });
 
 describe('transcript — assistant Markdown + code blocks', () => {
   it('an ASSISTANT row renders Markdown and decorates code blocks with a Copy control', () => {
-    const win = loadFrontend(['app-transcript.js']); // vendored marked/DOMPurify loaded → real markdown
+    const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([row(2, 0, 'ASSISTANT', 'Here:\n\n```js\nconst x = 1;\n```')]);
 
     const body = win.document.querySelector('.msg.assistant .body');
     expect(body).not.toBeNull();
     const pre = body.querySelector('pre');
     expect(pre).not.toBeNull();
-    // Decoration: a code-head with a Copy affordance.
     const copy =
       pre.parentElement.querySelector('.code-head .copy') || body.querySelector('.code-head .copy');
     expect(copy).not.toBeNull();
@@ -111,13 +84,10 @@ describe('transcript — assistant Markdown + code blocks', () => {
 
     const copy = win.document.querySelector('.code-head .copy');
     expect(copy).not.toBeNull();
-    copy.click(); // delegated document handler resolves the sibling <code> text
+    copy.click();
     expect(sent.some((m) => m.type === 'copy' && /hello world/.test(m.text))).toBe(true);
   });
 
-  // A Copy button that copies and says nothing is reported as a broken Copy button — it happened. The
-  // message-level buttons carry their own click handler, so they never reach the delegated code-head path
-  // that flashes; both must confirm, and via the SAME helper so the wording cannot drift apart.
   it('every Copy affordance confirms with "Copied", message-level ones included', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
@@ -163,7 +133,7 @@ describe('transcript — inline diff colouring', () => {
   });
 
   it('a diff on a known-extension file gets hljs syntax highlighting layered under the add/remove colour', () => {
-    const win = loadFrontend(['app-transcript.js']); // vendored hljs loaded → real highlighting
+    const win = loadFrontend(['app-transcript.js']);
     win.cc.batch([
       row(20, 0, 'TOOL', 'Edit(src/Foo.kt)', {
         meta: 'Edit',
@@ -192,7 +162,6 @@ describe('transcript — inline diff colouring', () => {
   });
 });
 
-// ── syntax highlighting on a file tool's plain output (Read/Write/Edit) ─────────────────────────────────────
 describe("transcript — a file tool's plain output is a highlighted, copyable code block", () => {
   it("a Read on a .kt file gets code-head chrome and hljs highlighting from the file's extension", () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -223,12 +192,6 @@ describe("transcript — a file tool's plain output is a highlighted, copyable c
   });
 });
 
-// ── command output as a copyable code block ──────────────────────────────────────────────────────────────
-// meta is a space-separated tag set for TOOL_OUTPUT (see ClaudeSession.kt): "command", "error", or "command
-// error" together — a failing command's stderr is still command output you want to copy. Covers Bash,
-// PowerShell, and any MCP tool that executes something. The backend decides in TranscriptModel.isCommandCall,
-// which is true when ToolInputScanner.commandText found a command in the tool's INPUT — the shape, not the
-// tool name; the frontend only ever sees the resulting meta tag.
 describe('transcript — command output renders as a copyable code block', () => {
   it("a Bash tool's output gets the code-head + Copy chrome, like a markdown fence", () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -295,12 +258,6 @@ describe('transcript — command output renders as a copyable code block', () =>
   });
 });
 
-// ── the command ITSELF as a copyable code block, ALWAYS visible (not gated by collapse) ─────────────────────
-// Distinct from the block above: that one is the command's OUTPUT (TOOL_OUTPUT), still behind the collapse
-// toggle. This is the command TEXT — entry.command (JcefBridge "command" field, from SensitiveGuard.commandText)
-// renders it as its own code-head+Copy block in .tool-cmd, a SIBLING of .tool-out (not nested inside it), so
-// it's visible whether the card is open or collapsed. The header no longer carries the raw command text — it
-// just names the tool ("Bash"), and the card gets a `cmd-tool` class for its own distinct look.
 describe('transcript — the executed command renders as its own always-visible code block', () => {
   it('a Bash tool with entry.command gets a command-src block in .tool-cmd, visible while collapsed', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -313,15 +270,13 @@ describe('transcript — the executed command renders as its own always-visible 
       row(17, 1, 'TOOL_OUTPUT', 'src/Foo.kt:1:foo', { meta: 'command', toolUseId: 'tu-src1' }),
     ]);
     const card = win.document.querySelector('.tool');
-    expect(card.classList.contains('open')).toBe(false); // collapsed by default
+    expect(card.classList.contains('open')).toBe(false);
     expect(card.classList.contains('cmd-tool')).toBe(true);
     const srcBlock = card.querySelector('.tool-cmd pre.command-src');
     expect(srcBlock).not.toBeNull();
     expect(srcBlock.querySelector('code').textContent).toBe('grep -R foo src');
     expect(srcBlock.querySelector('.code-head .copy')).not.toBeNull();
-    // The command block is NOT inside .tool-out (which stays hidden until expanded) — it's a sibling.
     expect(card.querySelector('.tool-out pre.command-src')).toBeNull();
-    // The header no longer shows the raw command text — just the tool name.
     const nameEl = win.document.querySelector('.tool-head .name');
     expect(nameEl.textContent).toBe('Bash');
   });
@@ -347,11 +302,6 @@ describe('transcript — the executed command renders as its own always-visible 
   });
 });
 
-// ── jump-to-code links (jb://open) ───────────────────────────────────────────────────────────────────────
-// Two halves of the same feature: a file tool's card links its path straight away (the host already told us the
-// path is real), while paths/symbols *guessed* in model text are only linked after the host confirms them via
-// cc.links — so a path that doesn't exist never becomes a dead link.
-
 describe('transcript — jump-to-code on tool cards', () => {
   it('a file tool renders its project-relative path as a jb://open link inside the label', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -367,7 +317,6 @@ describe('transcript — jump-to-code on tool cards', () => {
     expect(a).not.toBeNull();
     expect(a.textContent).toBe('src/main/Foo.kt');
     expect(a.getAttribute('href')).toBe('jb://open?file=' + encodeURIComponent('src/main/Foo.kt'));
-    // The tool name around the link survives — the label still reads Read(<path>).
     expect(a.parentNode.textContent).toBe('Read(src/main/Foo.kt)');
   });
 
@@ -397,7 +346,6 @@ describe('transcript — jump-to-code in model text', () => {
     win.CC.send = () => {};
     win.cc.batch([row(13, 0, 'ASSISTANT', 'See `src/main/Foo.kt` and `ghost/Nope.kt`.')]);
 
-    // Host resolved only the first one (the second file does not exist).
     win.cc.links({ rowId: 13, links: [{ token: 'src/main/Foo.kt', path: 'src/main/Foo.kt', line: 12 }] });
 
     const links = win.document.querySelectorAll('a.jb-link');
@@ -406,11 +354,9 @@ describe('transcript — jump-to-code in model text', () => {
     expect(links[0].getAttribute('href')).toBe(
       'jb://open?file=' + encodeURIComponent('src/main/Foo.kt') + '&line=12'
     );
-    expect(win.document.body.textContent).toContain('ghost/Nope.kt'); // still there, just not a link
+    expect(win.document.body.textContent).toContain('ghost/Nope.kt');
   });
 
-  /** Regression: a resolved token was linkified as a plain substring, so `src/main/ui` (a real directory) lit up
-   *  INSIDE `src/main/ui/Fantasma.kt` (a file that does not exist), and `Session` inside `ClaudeSession`. */
   it('a token is only linked as a whole token, never inside a longer path or word', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.CC.send = () => {};
@@ -431,10 +377,9 @@ describe('transcript — jump-to-code in model text', () => {
     });
 
     const links = win.document.querySelectorAll('a.jb-link');
-    // Exactly ONE link: the standalone directory. Not the prefix of the ghost path, not inside ClaudeSession.
     expect(links.length).toBe(1);
     expect(links[0].textContent).toBe('src/main/ui');
-    expect(links[0].parentNode.textContent).toBe('src/main/ui'); // the whole code span, nothing dangling
+    expect(links[0].parentNode.textContent).toBe('src/main/ui');
     expect(win.document.body.textContent).toContain('src/main/ui/Fantasma.kt');
     expect(win.document.body.textContent).toContain('ClaudeSession');
   });
@@ -467,13 +412,11 @@ describe('transcript — jump-to-code for directories', () => {
 
     const req = sent.find((m) => m.type === 'resolveLinks');
     expect(req.paths).toContain('build/');
-    expect(req.paths).toContain('~/.claude'); // anchored → no trailing slash needed
-    expect(req.paths).toContain('src/main/kotlin'); // several segments → no trailing slash needed
+    expect(req.paths).toContain('~/.claude');
+    expect(req.paths).toContain('src/main/kotlin');
     expect(req.paths).toContain('src/main/Foo.kt');
   });
 
-  /** The bug this guards: a long path used to match only up to its last slash, linking the prefix and leaving the
-   *  final segment dangling outside the link (`src/main/kotlin/dev/ui` → link on `src/main/kotlin/dev/` + `ui`). */
   it('a path is captured WHOLE — never chopped into a linked prefix plus a dangling last segment', () => {
     const win = loadFrontend(['app-transcript.js']);
     const sent = [];
@@ -482,7 +425,7 @@ describe('transcript — jump-to-code for directories', () => {
 
     const req = sent.find((m) => m.type === 'resolveLinks');
     expect(req.paths).toContain('src/main/kotlin/dev/lain/claudejb/ui');
-    expect(req.paths).not.toContain('src/main/kotlin/dev/lain/claudejb/'); // the prefix is NOT a candidate
+    expect(req.paths).not.toContain('src/main/kotlin/dev/lain/claudejb/');
   });
 
   it('a bare word is never treated as a path', () => {
@@ -509,13 +452,6 @@ describe('transcript — jump-to-code for directories', () => {
   });
 });
 
-// A tool card must carry a STATE CLASS the moment it appears, not only once something updates it.
-//
-// This is the regression these tests exist for: the binary emits NO `tool_progress` for an ordinary Bash call
-// (verified live — zero progress frames across a 12-second `sleep`), so a running tool row is inserted once
-// with state LOADING and then nothing touches it again until its result lands. If the insert path does not
-// apply the class, the card sits grey for the whole call and the fade/spin never runs — which is exactly what
-// a user sees, with no error anywhere to explain it.
 describe('transcript — tool state class on FIRST render', () => {
   it('a TOOL row inserted as LOADING gets the .loading class (no second update needed)', () => {
     const win = loadFrontend(['app-transcript.js']);
@@ -544,14 +480,6 @@ describe('transcript — tool state class on FIRST render', () => {
   });
 });
 
-// The page half of the transcript memory cap. `TranscriptModel` drops the OLDEST rows past MAX_ENTRIES and
-// calls `window.cc.trimRows({ids:[…], total:N})` through `ChatTranscriptView.trimNotice`, where `total` is the
-// CUMULATIVE count over the life of the transcript, not the size of this batch.
-//
-// The two edge cases below are the whole reason the contract is shaped this way, and each has a caller:
-//   - `ids: []` is `ChatTranscriptView` on (re)attach, restating the count after `cc.clear()` took the notice
-//     away — it must refresh the notice and remove NOTHING (neither "remove everything" nor a no-op);
-//   - `total: 0` means the transcript has never been trimmed, so the row is absent, not present and empty.
 describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
   const three = () => [
     row(101, 0, 'USER', 'first'),
@@ -565,8 +493,6 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
     win.cc.trimRows({ ids: [101, 102], total: 2 });
 
     const bodies = [...win.document.querySelectorAll('#conversation .msg .body')];
-    // Trimmed, because every row is markdown now: a paragraph's `textContent` carries the newline marked
-    // leaves after `</p>`. This test is about WHICH rows survive, not about their whitespace.
     expect(bodies.map((b) => b.textContent.trim())).toEqual(['third']);
     const notice = win.document.querySelector('.trim-notice');
     expect(notice).not.toBeNull();
@@ -599,7 +525,7 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
     win.cc.trimRows({ ids: [102], total: 2 });
 
     expect(win.document.querySelectorAll('.trim-notice').length).toBe(1);
-    expect(win.document.querySelector('.trim-notice')).toBe(first); // the same node, rewritten
+    expect(win.document.querySelector('.trim-notice')).toBe(first);
     expect(first.textContent).toContain('2 earlier rows were dropped');
   });
 
@@ -615,17 +541,12 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch(three());
     win.cc.trimRows({ ids: [101], total: 1 });
-    // A row pushed afterwards must not land above it.
     win.cc.batch([row(104, 3, 'USER', 'fourth')]);
 
     const first = win.document.querySelector('#conversation > .trim-notice, #conversation > .msg');
     expect(first.classList.contains('trim-notice')).toBe(true);
   });
 
-  // 4.1.3 Status Messages: the rows vanish without focus ever moving, so a screen-reader user gets no signal
-  // unless the page says so. It goes through the SHARED live region declared in shell.html — never a second
-  // one — and it is announced ONCE, when the notice appears: past the cap nearly every added row trims one,
-  // and a live region rewritten that often talks over itself and gets switched off.
   it('announces the first trim through the shared live region, and does not re-announce on every later trim', () => {
     const win = loadFrontend(['app-transcript.js']);
     win.cc.batch(three());
@@ -635,7 +556,7 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
     expect(region.textContent).toContain('1 earlier row was dropped');
 
     win.cc.trimRows({ ids: [102], total: 2 });
-    expect(region.textContent).toContain('1 earlier row was dropped'); // unchanged; only the row updates
+    expect(region.textContent).toContain('1 earlier row was dropped');
     expect(win.document.querySelector('.trim-notice').textContent).toContain('2 earlier rows were dropped');
   });
 
@@ -649,19 +570,7 @@ describe('transcript — trimmed-rows notice (cc.trimRows)', () => {
   });
 });
 
-// What the auto-follow ASKS FOR, which is the only part of it this harness can see.
-//
-// jsdom lays nothing out and scrolls nothing: `Element.prototype` carries no scrollTo/scrollBy/scrollIntoView
-// at all, and scrollTop/scrollLeft are plain properties with none of the CSSOM semantics. So the effect of a
-// scroll is unobservable here BY CONSTRUCTION, and asserting a position would be asserting on the assignment
-// the test itself made. What IS observable, and is exactly the thing that was wrong, is the argument the call
-// carries: `#conversation` declares `scroll-behavior: smooth`, and both a bare `scrollTop` assignment and a
-// `behavior: 'auto'` scroll take their behaviour from that declaration — so the case deliberately routed away
-// from smooth animated anyway. Naming the behaviour at the call site is the fix, and it is what is pinned.
 describe('transcript — the auto-follow names its scroll behaviour', () => {
-  // Geometry and the frame callback, both of which jsdom lacks. `distance` = scrollHeight - scrollTop -
-  // clientHeight, which is what the module branches on; the frame callback is made synchronous so the scroll
-  // happens inside the call instead of a frame later.
   const armed = (distance) => {
     const win = loadFrontend(['app-transcript.js'], { vendor: false });
     const c = win.document.getElementById('conversation');
@@ -677,8 +586,8 @@ describe('transcript — the auto-follow names its scroll behaviour', () => {
     return { win, c, asked };
   };
 
-  const NEAR = 40; // inside NEAR_BOTTOM (80): the transcript is following without being told to
-  const FAR = 1200; // past SMOOTH_SCROLL_MAX_PX (400): the jump at the end of a restore
+  const NEAR = 40;
+  const FAR = 1200;
 
   it('a small step glides — the one case that is meant to animate', () => {
     const { win, asked } = armed(NEAR);
@@ -689,12 +598,8 @@ describe('transcript — the auto-follow names its scroll behaviour', () => {
   });
 
   it('a long jump asks for INSTANT, and does not leave the answer to the stylesheet', () => {
-    // The defect. This branch exists to jump — a fixed-duration animation over a long distance is a crawl the
-    // user waits out, and re-issuing one every streaming delta re-aims it so it never arrives. It used to be
-    // written `c.scrollTop = c.scrollHeight`, which inherits `scroll-behavior: smooth` from #conversation and
-    // therefore did the exact opposite of what it says. 'auto' would not fix it: 'auto' IS "ask the CSS".
     const { win, asked } = armed(FAR);
-    win.CC.emit('follow', true); // past NEAR_BOTTOM, so follow is what keeps it sticking
+    win.CC.emit('follow', true);
     asked.length = 0;
     win.cc.batch([row(901, 0, 'ASSISTANT', 'a delta')]);
 
@@ -704,9 +609,6 @@ describe('transcript — the auto-follow names its scroll behaviour', () => {
   });
 
   it('reduced motion makes even the small step instant', () => {
-    // WCAG 2.3.3. The preference is host-driven (`CC.reducedMotion`, set by cc.theme) because JCEF renders
-    // off-screen and the media query answers "reduce" for everyone. Before the fix this case was the sharpest
-    // one: switching motion OFF routed the scroll to the branch that animated.
     const { win, asked } = armed(NEAR);
     win.cc.theme({ reducedMotion: true });
     asked.length = 0;
@@ -717,8 +619,6 @@ describe('transcript — the auto-follow names its scroll behaviour', () => {
   });
 
   it('and it still scrolls where scrollTo does not exist', () => {
-    // The capability guard is not decoration: jsdom is that environment, so this is the path the rest of the
-    // suite runs on. Removing the guard would throw here rather than fail an assertion.
     const win = loadFrontend(['app-transcript.js'], { vendor: false });
     const c = win.document.getElementById('conversation');
     expect(typeof c.scrollTo).toBe('undefined');
@@ -733,22 +633,12 @@ describe('transcript — the auto-follow names its scroll behaviour', () => {
   });
 });
 
-// The find bar: where it is allowed to be, and the three things it does that have each been broken once.
-//
-// ORDER MATTERS HERE, and it is the harness rather than the product: every `loadFrontend` re-evaluates the
-// modules into the SAME window, so each load leaves another `document` keydown listener behind, holding its
-// own (now detached) find bar. Escape is answered by the FIRST of them that has an open bar, and that handler
-// stops the event dead — so a test that leaves a bar open swallows the Escape of every test after it. The
-// Escape case therefore runs before the two that open one. In the page there is exactly one instance.
 describe('transcript — the find bar', () => {
   const openFind = (win) =>
     win.document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }));
   const bar = (win) => win.document.querySelector('.find-bar');
 
   it('Escape closes it without interrupting the running turn', () => {
-    // The composer's Escape handler sits on its textarea and sends `interrupt`. The find bar's own handler is
-    // on `document` in the CAPTURE phase and stops the event there, which is what keeps closing a find bar
-    // from also killing the turn — and it is the reason this survives the bar moving in the DOM at all.
     const win = loadFrontend(['app-transcript.js', 'app-composer.js'], { vendor: false });
     const sent = [];
     win.CC.send = (m) => sent.push(m);
@@ -770,10 +660,6 @@ describe('transcript — the find bar', () => {
     const found = bar(win);
     expect(found).not.toBeNull();
     expect(found.hidden).toBe(false);
-    // On the BODY it was positioned against the viewport, and in a narrow tool window it spanned the whole
-    // width at the top — over the tabs. Focus that lands on something covered is WCAG 2.2 SC 2.4.11, and the
-    // fix is structural rather than a z-index kept out of their way: `#work` does not contain `#tabsbar`, so
-    // a bar inside it cannot reach the tabs whatever the stylesheet later says.
     expect(found.parentElement.id).toBe('work');
     expect(win.document.getElementById('work').contains(win.document.getElementById('tabsbar'))).toBe(false);
   });
@@ -783,8 +669,6 @@ describe('transcript — the find bar', () => {
     win.cc.batch([row(910, 0, 'ASSISTANT', 'needle one'), row(911, 1, 'ASSISTANT', 'needle two')]);
     openFind(win);
 
-    // jsdom has no scrollIntoView at all and the module guards for it, so the stub is what makes "it went to
-    // the hit" observable — the counter alone would pass with the scroll deleted.
     const into = [];
     win.Element.prototype.scrollIntoView = function (opts) {
       into.push([this.textContent, opts.block]);
@@ -796,7 +680,7 @@ describe('transcript — the find bar', () => {
 
       const count = () => bar(win).querySelector('.find-count').textContent;
       expect(count()).toBe('1 / 2');
-      expect(into.length).toBe(1); // a fresh query goes to the first hit
+      expect(into.length).toBe(1);
 
       input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       expect(count()).toBe('2 / 2');

@@ -13,68 +13,13 @@ import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 
-/**
- * The Git entries that **change** something — and the plugin runs none of them.
- *
- * Each one writes a prompt into the Git chat and lets the agent do the work. That is not a shortcut: it is what
- * keeps the `git/` package read-only by construction (`GitReadOnlyContractTest`), and it means every write
- * arrives as a `can_use_tool` request, through [dev.lain.claudejb.permission.SensitiveGuard] and a card the user
- * has to accept — the same route as any other tool call, with the command in plain sight before it runs.
- *
- * **The card is the control, not the prompt.** The text below names one command and forbids the rest, but a
- * model can wander off it; what stops a wandering turn is the approval, which is why the Git chat runs with
- * forced approval whatever the permission mode says ([ClaudeSession.gitIntegration]).
- *
- * **It talks in its own tab** ([TabSessionCommands.gitChat]), never in the chat you are working in, and it is a
- * conversation rather than a button press: answer it (*"squash those two"*, *"not that file"*) and it carries
- * on from there.
- *
- * Read-only Git — the branch, the history, the log — is [GitContextActions]; the split is deliberate, so that
- * file can keep naming nothing but its two read-only collaborators.
- */
 internal object GitPromptedActions {
 
-    /**
-     * The write entries, in menu order. Each hides itself when it does not apply — no repository yet, nothing to
-     * commit, no changed file in the editor — so the caller adds them unconditionally.
-     */
-    // No *Initialize repository* here: creating a repository is a fixed command with nothing to decide, so it
-    // runs directly (GitIntegration, GitActionCatalog.Kind.DIRECT) from the Git view's own button. An entry
-    // asking Claude to do the same thing would be a second path to one action, differing only in whether a
-    // model is in the way.
     fun gearEntries(project: Project, gitChat: () -> ClaudeSession): List<AnAction> = listOf(
         CommitChangesAction(project, gitChat),
         RevertFileAction(project, gitChat),
     )
 
-    // NB the integration's front door is no longer an `AnAction` here. It was a title-bar button, and the
-    // title bar is gone: it is the Git icon on the composer's action row (`app-composer-actions.js`), which
-    // reaches the chat through `ClaudeToolWindowFactory.gitChat`. The reason it exists at all is unchanged —
-    // the gear entries below hide themselves, so on a project with no repository the one entry that matters
-    // was three clicks deep in a menu you had to already suspect, and a feature nobody can find is a feature
-    // that is not there.
-
-    // ── what gets asked (pure: this is what the tests pin) ─────────────────────────────────────────────────────
-
-    // NB no `initPrompt`. Creating a repository is a fixed command with nothing to decide and no *why* an agent
-    // could contribute, so it runs directly ([GitIntegration]) instead of being described to a model. Every
-    // prompt that remains here says what to do and then what NOT to do: the prohibition is the load-bearing
-    // half, because a capable agent asked to "commit this" will also reasonably push, amend or branch.
-
-    /**
-     * Stage and commit, with the message left to the agent — the one thing it is better placed to write than the
-     * IDE is, since it has just done the work and knows why.
-     *
-     * [changed] is listed so the turn does not start by re-deriving what the plugin already knows; it is also
-     * what makes "commit **these**" unambiguous when the user has other work in flight.
-     *
-     * **Every path goes through [oneLine], and the prohibitions stay last.** The list is repository content —
-     * a clone, or a tree an earlier compromised turn wrote — and the threat model this repository declares
-     * (ADR 0002, `docs/adr/0002-threat-model.md`) assumes prompt injection succeeds rather than pretending to
-     * detect it. A name is allowed to contain anything but `/` and NUL, so an unrendered one puts
-     * attacker-chosen *lines* into the plugin's own control text, at the same level as the prohibitions and
-     * ahead of them.
-     */
     fun commitPrompt(changed: List<String>): String {
         val files = changed.take(MAX_LISTED_FILES).joinToString("\n") { "- ${oneLine(it)}" }
         val more = (changed.size - MAX_LISTED_FILES).takeIf { it > 0 }?.let { "\n- …and $it more\n" }.orEmpty()
@@ -85,19 +30,6 @@ internal object GitPromptedActions {
             "not rebase, and do not create, switch or delete any branch. Tell me the subject line you used."
     }
 
-    /**
-     * Restore one file to its committed state.
-     *
-     * The path is repeated in the prohibition on purpose: `git checkout --` and `git restore` both take a
-     * pathspec that quietly means *everything* when it is wrong, and this is the one action here that destroys
-     * work rather than recording it.
-     *
-     * The path is rendered through [oneLine] for the reason [commitPrompt] gives, and it matters more here: this
-     * prompt names a **destructive** command, so a path carrying a newline could append a second, unprohibited
-     * instruction to it. The trade-off is deliberate and is the safe side of the two — a path that had to be
-     * altered names a file that does not exist, so the turn fails with an error instead of restoring the wrong
-     * one.
-     */
     fun revertFilePrompt(path: String): String {
         val safe = oneLine(path)
         return "Restore `$safe` to its committed state, using `git restore -- $safe` (or `git checkout -- $safe` " +
@@ -107,24 +39,6 @@ internal object GitPromptedActions {
             "discards uncommitted work in that file, so run exactly the command above and nothing more."
     }
 
-    /**
-     * Put the tree back the way commit [hash] left it — **on a branch of its own**, which is the whole request
-     * and not a precaution added to it.
-     *
-     * Creating a branch *at* that commit is the one shape of "go back" that destroys nothing: no commit stops
-     * existing, the branch the user was on still points exactly where it did, and `git switch -` is the way
-     * back. The alternatives a model will reach for otherwise are the two that lose work — `git reset --hard`
-     * moves the current branch and drops every commit after this one, and a `git restore` of the whole tree
-     * quietly overwrites uncommitted work — so both are named in the prohibitions rather than left out of the
-     * instruction and hoped against.
-     *
-     * The branch name is derived here rather than left to the model: a fixed name is what lets the prohibition
-     * say *that* branch and no other, and it is what makes a name collision something to stop on instead of
-     * something to work around by inventing a second one.
-     *
-     * Null for a [hash] that is not a Git object name ([GitActionCatalog.isCommitHash]) — the value comes off
-     * the browser wire, and a prompt is built from it only once it cannot be anything but a hash.
-     */
     fun revertToCommitOnNewBranchPrompt(hash: String): String? {
         if (!GitActionCatalog.isCommitHash(hash)) return null
         val branch = revertBranchName(hash)
@@ -139,21 +53,6 @@ internal object GitPromptedActions {
             "when you are done."
     }
 
-    /**
-     * Undo one commit by recording another — the additive revert, on the branch the user is on.
-     *
-     * This one *does* touch the current branch, and that is what `git revert` is: it appends a commit rather
-     * than rewriting anything, so nothing is lost and the undo is itself in the history. The prohibitions are
-     * therefore aimed at the ways the same sentence could be carried out destructively — a `reset` back to the
-     * parent, an interactive rebase dropping the commit, an amend — each of which changes commits that already
-     * exist and any of which a capable agent might reasonably prefer as "cleaner".
-     *
-     * A conflict is left standing on purpose. Resolving it means choosing a side on the user's behalf, in a
-     * turn they asked for a one-command revert; the way out is named in the answer so a half-finished revert is
-     * not a state they are stranded in.
-     *
-     * Null for a [hash] that is not a Git object name, for the reason [revertToCommitOnNewBranchPrompt] gives.
-     */
     fun revertCommitPrompt(hash: String): String? {
         if (!GitActionCatalog.isCommitHash(hash)) return null
         return "Revert commit `$hash` in this repository, keeping the history: run `git revert --no-edit $hash`, " +
@@ -165,47 +64,13 @@ internal object GitPromptedActions {
             "the way back; do not resolve the conflict yourself and do not take one side wholesale."
     }
 
-    /**
-     * The branch a *revert to this commit* creates: `revert-to-<short hash>`.
-     *
-     * Abbreviated through [GitCommitInfo.shortHash] rather than with a second `take(…)` here, so the plugin has
-     * one rule for how long a short hash is. Safe as a ref name by construction — the caller has already
-     * established that the hash is hexadecimal, and hex contains none of the characters `git check-ref-format`
-     * rejects.
-     */
     private fun revertBranchName(hash: String): String = "revert-to-${GitCommitInfo.shortHash(hash)}"
 
-    /**
-     * One repository path, rendered so that it can only ever *be* a path: one line, no control characters, no
-     * backticks.
-     *
-     * Three separate things are being prevented and they are not the same one. A control character — `\n` above
-     * all — ends the line the path was written on and lets the rest of the name become prose the model reads as
-     * the plugin speaking, **before** the prohibition block that every one of these prompts ends with; being the
-     * last word is precisely what makes that block work. A backtick closes the code span the path sits inside,
-     * so the remainder is no longer marked as a literal. And the two Unicode separator categories — `Zl`
-     * (`U+2028`) and `Zp` (`U+2029`) — are line breaks to plenty of renderers while not being ISO controls, so
-     * they are excluded BY CATEGORY rather than by naming the code points: a character literal for either would
-     * be an invisible line break sitting in this source file, which is the same class of trick the rule exists
-     * to defeat.
-     *
-     * **Replaced, never deleted, and never trimmed.** The rendered path stays the same length and keeps its
-     * leading and trailing spaces, both of which can be part of a real POSIX name; a deletion would silently
-     * turn one existing path into another. Nothing bounds the length either, because the operating system
-     * already does — the caller's list is capped at [MAX_LISTED_FILES] entries and each is at most a `PATH_MAX`.
-     *
-     * This is a rendering rule, not a security control: what stops a turn that wanders off the prompt is the
-     * approval card, which the Git chat forces regardless of permission mode.
-     */
     private fun oneLine(path: String): String = path.map { if (isRenderable(it)) it else ' ' }.joinToString("")
 
-    /** True when a character may appear in a rendered path verbatim — see [oneLine] for what each exclusion is. */
     private fun isRenderable(ch: Char): Boolean =
         ch != '`' && !Character.isISOControl(ch) && Character.getType(ch) !in SEPARATOR_CATEGORIES
 
-    // ── the entries ───────────────────────────────────────────────────────────────────────────────────────────
-
-    /** Offered while the working tree has something to record. */
     private class CommitChangesAction(project: Project, gitChat: () -> ClaudeSession) :
         PromptEntry(
             project,
@@ -221,7 +86,6 @@ internal object GitPromptedActions {
             history.workingTreeChanges().takeIf { it.isNotEmpty() }?.let { commitPrompt(it) }
     }
 
-    /** Offered when the file in the editor is one of the changed ones — otherwise there is nothing to restore. */
     private class RevertFileAction(project: Project, gitChat: () -> ClaudeSession) :
         PromptEntry(
             project,
@@ -234,13 +98,6 @@ internal object GitPromptedActions {
 
         override fun prompt(history: GitHistoryService): String? = changedFile(history)?.let { revertFilePrompt(it) }
 
-        /**
-         * The editor's file as a repository-relative path, but only if Git reports it as changed.
-         *
-         * Matched against [GitHistoryService.workingTreeChanges] rather than just relativised: an unchanged file
-         * would produce a prompt that restores nothing, and a file outside the repository would produce one that
-         * names a path `git restore` cannot resolve. Both are answered by hiding the entry.
-         */
         private fun changedFile(history: GitHistoryService): String? {
             if (!history.isAvailable()) return null
             val absolute = EditorContextProvider.currentFilePath(project) ?: return null
@@ -250,14 +107,6 @@ internal object GitPromptedActions {
         }
     }
 
-    /**
-     * Shared behaviour: find the service, decide whether the entry applies, and — when clicked — put the prompt
-     * into the Git chat.
-     *
-     * **Absent, not greyed**, the same rule [GitContextActions] follows: an "Initialize Git Repository" that
-     * does nothing because there already is one is worse than no entry. Visibility is re-derived on every menu
-     * open, so `git init` (or a first edit) takes effect without reopening the tool window.
-     */
     private abstract class PromptEntry(
         protected val project: Project,
         private val gitChat: () -> ClaudeSession,
@@ -265,10 +114,8 @@ internal object GitPromptedActions {
         description: String,
     ) : AnAction(text, description, null) {
 
-        /** True when this entry means something in the project's current state. */
         abstract fun isApplicable(history: GitHistoryService): Boolean
 
-        /** What to ask, or null if the state changed between the menu opening and the click. */
         abstract fun prompt(history: GitHistoryService): String?
 
         protected fun history(): GitHistoryService? =
@@ -280,36 +127,16 @@ internal object GitPromptedActions {
 
         override fun actionPerformed(e: AnActionEvent) {
             val text = history()?.let { prompt(it) } ?: return
-            // `gitChat()` finds the tab or opens one, and `send` queues — so a chat whose process is still
-            // starting keeps the prompt and writes it when there is one, instead of dropping it silently.
             gitChat().send(text)
         }
 
-        /**
-         * BGT: every read behind [isApplicable] is in-memory platform state — the repository registry, the
-         * change list the Local Changes view already computed, and the selected editor. Nothing spawns a
-         * process (`GitHistoryService.recentCommits` is the one that does, and none of these calls it).
-         */
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
     }
 
-    /** How many changed paths are listed in the commit prompt before the rest become a count. */
     private const val MAX_LISTED_FILES = 40
 
-    /**
-     * The Unicode general categories that are a line break without being an ISO control: `Zl` (`U+2028`) and
-     * `Zp` (`U+2029`). Named by category rather than by code point — see [oneLine].
-     */
     private val SEPARATOR_CATEGORIES =
         setOf(Character.LINE_SEPARATOR.toInt(), Character.PARAGRAPH_SEPARATOR.toInt())
 
-    /**
-     * What a repository created from here is called.
-     *
-     * Not left to Git's default: a bare `git init` lands on `master` unless `init.defaultBranch` is set, which
-     * is not a default anyone chose. `GitIntegration.gitInit` is what passes it — creating a repository is the
-     * one Git command the plugin runs itself rather than asking the agent for, so there is no prompt here to
-     * point at.
-     */
     const val INITIAL_BRANCH = "main"
 }

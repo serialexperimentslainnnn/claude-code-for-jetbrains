@@ -1,7 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   🌈 VIBE MODE  (the colours themselves are animated from JS via the theme vars)
-   ════════════════════════════════════════════════════════════════════════════ */
-/* go full gag: every bit of text bold + italic + underlined while vibing */
 body.vibe,
 body.vibe .body,
 body.vibe .composer-input,
@@ -13,10 +9,6 @@ body.vibe .notice {
   font-style: italic;
   text-decoration: underline;
 }
-/* NB no `body.vibe .body *` here. A rule whose rightmost selector is `*` lands in the browser's universal
-   bucket and is matched against EVERY element in the transcript, which is the one container that grows
-   without bound — for a gag, and for nothing the underline above does not already propagate into. */
-/* Nyan Cat for the Vibe toggle icon + the assistant avatar */
 .vibe-emoji {
   display: inline-flex;
   align-items: center;
@@ -40,80 +32,29 @@ body.vibe .msg.assistant .avatar {
   background: transparent;
   box-shadow: none;
 }
-/* a gentle rainbow ring on the cards/composer so the whole UI joins in */
 body.vibe .composer-card:focus-within {
   box-shadow:
     var(--shadow),
     0 0 0 3px var(--accent-soft);
 }
 
-/* ── Accessibility: visible keyboard focus (WCAG 2.2 AA — 2.4.7, 1.4.11) ─────────────────────────────────────
-   Baseline for EVERY interactive element, including the ones built as <span role="button"> (the code-block
-   Copy control, menu items, tool cards). Those are not native buttons, so nothing gives them a focus ring for
-   free — without this, a keyboard user cannot see where they are.
-
-   `:focus-visible` rather than `:focus` on purpose: it shows the ring for keyboard interaction and keeps it
-   away from mouse clicks, which is exactly what makes designers reach for `outline: none` in the first place.
-
-   Two layers so it is visible on ANY background: a solid outline plus a contrasting offset ring. 1.4.11 asks
-   for 3:1 against adjacent colours for the focus indicator itself, and a single hairline in the accent colour
-   does not reliably clear that over the card backgrounds used here. `outline-offset` keeps it from being
-   clipped by the element's own border-radius. */
 :where(a, button, input, textarea, select, summary, [tabindex], .copy, .menu-item, .tool-head):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-/* The find bar's input suppressed its outline with no replacement — focus was simply invisible there.
-   It sits inside a floating bar, so it gets the ring treatment its siblings already had via :focus-within. */
 .find-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-/* Windows/forced-colors mode: honour the system's own focus colour instead of ours (the interface must stay
-   usable under prefers-contrast / forced colours, and overriding system colours defeats the point). Not the
-   list above but ANYTHING focusable: there, the system owns the palette, so there is no element we would want
-   to leave without its ring — and no list to keep in sync. */
 @media (forced-colors: active) {
   :focus-visible {
     outline: 2px solid Highlight;
   }
 }
 
-/* ── tab bar: the chats, and the subtabs of the one you are in ───────────────────────────────────────
-   Drawn by app-tabs.js. Two rows, both of fixed height: the chats' capsule, and the subtabs of the chat on
-   screen (its agents, its subagents at every depth and its background tasks, led by the chat itself). It
-   replaced a stack of one capsule per level tied together by an <svg> thread — see the module header for
-   why. Nothing here wraps or grows: a bar that changes height as the agent tree deepens moves the transcript
-   under the pointer while you are reading it, which is why the second row is FLAT — no indent, no grouping,
-   one pill per destination whatever started it — and why the hierarchy is read in the Workloads diagram,
-   which has room to draw it.
-
-   ONE scale governs both rows and it is declared in one place, further down. A chat tab is 123×22 with the
-   open one 27px tall; a subtab is the same rule two pixels under it, 121×20 and 25px open. Both rows are
-   FIXED-WIDTH, so each reads as a strip of equal ovals rather than as a run of titles of whatever length
-   they happen to be. **The oval is the `.pill-wrap`, not the `.pill`** — the chat's own button goes
-   transparent inside it — which is what puts the × inside the tab while leaving it a DOM sibling of the
-   button rather than a child of it.
-
-   That puts the whole bar a clear STEP below the composer's control row (`.composer-bar .pill`,
-   composer.css: 26px tall, `0 9px`, 11.5px type), which is the register the shared `.pill` base still
-   declares. Deliberate, and the direction matters: the tab bar is permanent chrome above every chat while
-   the composer's controls are aimed at on purpose, so the bar is where the pixels come from. Keep it a step
-   — 22 against 26 reads as two registers, whereas landing within a pixel or two of the composer reads as
-   one of them being wrong. */
-/* `#tabsbar` is a `<nav>` in the shared shell and a flex row, not this feature's own element: what it holds
-   today is `.tab-rows` and nothing else, but the dashboard's view switcher was a second item here until it
-   moved into the composer, and the layout is written so a second tenant lands BESIDE the rows rather than
-   over them. Overlapping a focusable tab is WCAG 2.2 SC 2.4.11 (Focus Not Obscured), which is what took the
-   switcher out of a `fixed` corner stack in the first place. */
-/* Above the work area, and above it by declaration rather than by being drawn somewhere else. The bar and
-   #work do not overlap today, so this changes no pixel — what it changes is what a future layer can do:
-   #work is a stacking context (base.css), so nothing laid over the transcript can out-number this row and
-   cover a chat tab. A layer that hides a focusable tab is WCAG 2.2 SC 2.4.11 (Focus Not Obscured), which
-   is how the dashboard's view buttons came out of a `fixed` corner stack and into this bar. */
 #tabsbar {
   position: relative;
   z-index: 1;
@@ -124,22 +65,13 @@ body.vibe .composer-card:focus-within {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--bg) 85%, transparent);
   flex: 0 0 auto;
-  /* The bar NEVER grows past the tool window. Every container down to the capsule has to say so, or the
-     overflow escapes the panel instead of landing inside the one box that can scroll — and tabs painted
-     outside the panel cannot be reached by any means at all. */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
 }
-/* `hidden` is a user-agent rule, and ANY author `display` beats it whatever the specificity — so the
-   `display: flex` above quietly cancelled the attribute `app-tabs.js` sets when there is nothing to draw.
-   What that left was not a hidden bar but a 6px strip of padding and border, which reads as "there is no tab
-   bar" rather than as "the bar is empty". Anything that declares `display` and is also hidden by script needs
-   this line; it is the other half of that declaration, not a defensive extra. */
 #tabsbar[hidden] {
   display: none;
 }
-/* The chats' row and the subtabs' row, stacked; they take whatever the switcher leaves. */
 .tab-rows {
   flex: 1 1 auto;
   min-width: 0;
@@ -154,40 +86,10 @@ body.vibe .composer-card:focus-within {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Bounded, like everything above it: this is what makes the capsule's own `overflow-x` the place the
-     extra tabs land, instead of the row quietly growing to fit them off-screen where nothing can reach
-     them. */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
 }
-/* THE TAB is the wrapper — and since the × had to move INSIDE the tab, the wrapper is also the OVAL. The
-   border, the radius, the surface and the selected accent are declared here; the chat's own `<button>` goes
-   transparent inside it (next rule), and the close stays its SIBLING and now falls within the oval because
-   the oval is the box that holds them both.
-
-   **That is the whole point, and it is the only way to get the × inside the tab.** Putting the
-   `<button class="pill-x">` inside the `<button class="pill">` is where this came from and it cost a day:
-   interactive content in a place the `button` content model forbids, the ARIA `button` role being *Children
-   Presentational* so a conforming browser deletes its descendants from the accessibility tree, and — the
-   part that was visible — Chromium never delivering the press to the inner handler, so the × did nothing,
-   with no error and no log. jsdom dispatched it happily, which is why the suite stayed green with the button
-   dead. Visual containment without DOM nesting is what satisfies both: the user sees one tab, the tree still
-   sees two siblings. `tabs.test.js` pins the non-nesting AND pins that the oval is declared here.
-
-   **The width lives here too, and moving it here made the guarantee stronger rather than weaker.** It sat on
-   `.pill` while the oval was the pill, on the argument that fixing the wrapper would make ovals unequal by
-   the width of whichever glyph siblings a tab happened to carry. That argument died with the `⋮` and the
-   pin: the close is the only sibling left, and it is present on every chat tab and on exactly the open
-   subtab. So a width on the wrapper now means every tab in a row measures the same **by construction**,
-   whether or not it carries a close — where before equality merely happened to hold because every chat tab
-   had one.
-
-   No cap of any kind, and that absence is deliberate: a `22ch` cap lived here while a tab was as wide as its
-   title, and a cap is a maximum rather than a measure, which is what produced the accordion it was meant to
-   prevent. A cap and a fixed width are two answers to one question and the leftover is a rule nothing can
-   reach. **The full title lives in the `title` attribute**, which is not a nicety — at a fixed width almost
-   every chat title is truncated on screen. */
 .pill-wrap {
   flex: 0 0 auto;
   display: inline-flex;
@@ -203,32 +105,10 @@ body.vibe .composer-card:focus-within {
 .pill-wrap:hover {
   background: color-mix(in srgb, var(--surface) 70%, var(--text) 8%);
 }
-/* Declared AFTER the hover so pointing at the open tab does not wash the accent off it — same specificity,
-   so source order is the tie-break and this is the side of it that must win. */
 .pill-wrap.selected {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-/* Inside the bar the chat's own button paints NOTHING: the oval above it is the surface, and a second border
-   and background here would draw a pill inside a pill. What it keeps is the type, the colour and the weight —
-   the things that belong to the text rather than to the box. The composer's `.pill` is untouched by this,
-   which is why the base still carries the chrome and this rule takes it off in one place.
-
-   **`align-self: stretch` + `height: auto` is the click target**, and it is the easiest thing here to get
-   wrong. Strip the background off a button and it keeps the size of its text unless something says
-   otherwise, which leaves a dead band inside the oval where a click selects nothing — the tab would look
-   pressable across its whole width and only respond over the letters. Stretch makes it fill the oval's
-   content box; `flex: 1 1 auto` makes it take every pixel the close does not. `height: auto` is what lets
-   stretch apply at all, because the base declares an explicit `height` and a definite height defeats it.
-
-   `min-width: 0` is load-bearing for the fixed width and does not look it: a flex item's `min-width`
-   defaults to `auto`, which resolves to its CONTENT minimum and **overrides a smaller `width`** — so one
-   long unbreakable word would push the tab past its declared box, for that one tab, only sometimes. Zero is
-   what lets the label ellipsise instead.
-
-   Nothing here says `flex-shrink`. The base `.pill` declares `flex: 0 0 auto` and the wrapper inherits that
-   role now: the tab is what must not squash, and the label is what gives way inside it — a truncated title
-   is still a tab you can read and close, a truncated × is a tab you cannot. */
 .tab-capsule .pill {
   flex: 1 1 auto;
   align-self: stretch;
@@ -242,22 +122,6 @@ body.vibe .composer-card:focus-within {
 .tab-capsule .pill.selected {
   background: none;
 }
-/* The focus ring follows the OVAL, not the element that takes focus (WCAG 2.2 SC 2.4.7, 1.4.11).
-   What takes focus is the inner button, and the baseline ring at the top of this file would draw a 9px-radius
-   rectangle around it at a 2px offset: taller than the 22px oval, so it crosses the tab's own border top and
-   bottom, and stopping short of the close, so three quarters of the tab looks focused and the rest does not.
-   Drawn on the wrapper it is the shape the user sees.
-
-   The inner ring is SUPPRESSED WITH A REPLACEMENT, never merely removed — `outline: none` with nothing behind
-   it is the single most repeated one-line accessibility defect there is, and `accessibility.test.js` exists
-   because of it.
-
-   `:has(.pill:focus-visible)` and not `:focus-within`: the close is a child of this wrapper too, and
-   `:focus-within` would put a ring round the whole tab while focus sat on the ×, on top of the ×'s own ring.
-   Two rings, and neither says which control would fire. The × keeps its own; it fits its own box.
-
-   Forced colours are re-stated because the suppression above outranks the blanket rule at the top of the
-   file: there the system owns the palette, so the ring has to be `Highlight` and not our accent. */
 .tab-capsule .pill:focus-visible {
   outline: none;
 }
@@ -270,12 +134,6 @@ body.vibe .composer-card:focus-within {
     outline-color: Highlight;
   }
 }
-/* The capsule around the chats' pills — the oval that encloses the set. */
-/* The capsule scrolls; the ROW is what bounds it.
-   `min-width: 0` alone was not enough: the row is a flex container, and a flex item refuses to shrink below
-   its content unless the row lets it — so with enough tabs the capsule grew past the tool window, pushed the
-   last tabs under the dashboard buttons, and there was no way to reach them. `max-width: 100%` plus the row's
-   own `min-width: 0` (below) is what makes the overflow land INSIDE the capsule, where the wheel can move it. */
 .tab-capsule {
   display: flex;
   align-items: center;
@@ -288,13 +146,7 @@ body.vibe .composer-card:focus-within {
   background: color-mix(in srgb, var(--surface2) 55%, transparent);
   overflow-x: auto;
   overflow-y: hidden;
-  /* NO scrollbar — the platform one is a grey slab across a rounded capsule, and aiming at it to walk a row
-     of tabs is tedious. Three better ways to move the row, none of which need a target to hit: GRAB IT and
-     drag (`dragToScroll`), the wheel, and — the one that covers ordinary use — selecting a chat CENTRES it,
-     so the row moves under you as you switch and its neighbours are always one click away. */
   scrollbar-width: none;
-  /* The fade at the edges is the affordance that remains: a tab cut off mid-way says "there is more this
-     way" without anything to click. */
   mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
   scroll-behavior: smooth;
   cursor: grab;
@@ -302,48 +154,16 @@ body.vibe .composer-card:focus-within {
 .tab-capsule::-webkit-scrollbar {
   display: none;
 }
-/* While dragging: the row follows the pointer, and it must not also select text or animate towards where it
-   would have smooth-scrolled — both make the grab feel like it is fighting you. */
 .tab-capsule.dragging {
   cursor: grabbing;
   scroll-behavior: auto;
   user-select: none;
 }
 
-/* ── the subtabs row ─────────────────────────────────────────────────────────
-   The chat on screen, then everything it started. It carries no caption: the chats' row above has none
-   either, and in a tool window a word of label is a chunk of the only scarce dimension there is.
-
-   It is deliberately QUIETER than the row above it — a recessed capsule and no border of its own. The two
-   rows are not peers: the chats are the navigation, the subtabs belong to whichever chat is open and change
-   under you as a turn runs. Making them look identical made the bar read as four rows of equals. */
 .subtab-capsule {
   border-color: transparent;
   background: color-mix(in srgb, var(--surface2) 35%, transparent);
 }
-/* **The subtab follows the chat tab's rule, two pixels under it in every box measure**: 121×20 against
-   123×22, and 25px open against 27px. Same type as the chats' row (the type is what makes a label legible
-   and it is already at the floor), and no border until hovered or open — the row stays the quieter of the
-   two through its chrome rather than through its geometry. The box is on the WRAPPER, because the wrapper is
-   the oval on this row too and the close has to fall inside it.
-
-   The padding is symmetric here and asymmetric on the chats' row, and that is not an inconsistency: there
-   every tab carries a close, whose own 20px-wider-than-its-ink box supplies the right-hand inset, while here
-   only the OPEN pill has one and the other dozens end in bare text that would otherwise touch the border.
-
-   Two label boxes follow from that, and the difference is worth knowing rather than hiding: 121 − 2 − 14 =
-   **105px** on a closed subtab, and 84px on the open one, which gives up 21px to the close it alone carries.
-   The open pill therefore truncates sooner than its neighbours — acceptable, because it is the one whose
-   transcript is on screen, and it is the one whose full title is also in the `title` attribute.
-
-   **What a fixed width costs here, recorded because it is a real trade and not a free win.** Content-sized,
-   this row spent exactly what each label needed; fixed, a four-letter `Chat` pill occupies the full 121px
-   like everything else. On a row of short labels that is a straightforwardly longer row — more scroll
-   distance in the one row that can hold dozens of pills, which is the cost the drag, the wheel and the
-   centring exist to keep down. It cuts the other way for long agent descriptions, which used to run to the
-   wrapper's 22ch cap (~165px) and now stop at 121. The gain bought with it is the one the chats' row bought:
-   the row is a strip of equal ovals, and dozens of unequal blobs are unreadable as a strip whatever each is
-   worth alone. */
 .subtab-capsule .pill-wrap {
   width: 121px;
   height: 20px;
@@ -355,16 +175,6 @@ body.vibe .composer-card:focus-within {
   border-color: color-mix(in srgb, var(--text) 20%, transparent);
   background: color-mix(in srgb, var(--surface) 70%, var(--text) 8%);
 }
-/* The agent whose subagents are in the row below. **This is not `selected` and must never become it**: the
-   accent means "this transcript is on screen", exactly one pill in the whole bar wears it, and it carries
-   `aria-current` with it. `branch-open` means "the row underneath is yours", which stays true while you read
-   one of those subagents — so the two are simultaneously true on one pill and simultaneously true on none.
-   A washed-out accent border says "open" without competing with "here".
-
-   DECLARED BEFORE `.selected`, and that is load-bearing: both selectors are (0,3,0), so source order is the
-   whole of the tie-break. Moved after it, an agent you are actually reading would lose the accent to this
-   rule the moment it also had a branch open — which is every time, because opening it is what opened the
-   branch. */
 .subtab-capsule .pill-wrap.branch-open {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -374,7 +184,6 @@ body.vibe .composer-card:focus-within {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-/* Only the TYPE is the button's; the box above is the oval's. */
 .subtab-capsule .pill {
   font-size: 10.5px;
 }
@@ -382,60 +191,12 @@ body.vibe .composer-card:focus-within {
   font-size: 11.5px;
 }
 
-/* ── the branch rows: what each agent you opened started ─────────────────────
-   One per open level, and there can be several (`openBranches`, app-tabs-base.js). Each carries
-   `.subtab-capsule` too, deliberately — they are the same kind of thing at the same size, and one register for
-   "a subtab" is what stops the bar reading as a stack of unrelated strips — plus this class for the one thing
-   that differs: they are INSIDE the pill above them.
-
-   **Every branch row takes the SAME indent, on purpose.** A stair, one step per level, is the obvious
-   alternative and it is not free: the margin and the `max-width` below are one arithmetic pair (see the next
-   paragraph), so a per-level indent means computing both in JS, where they can drift apart — and the failure
-   mode of drifting is a row that overflows where nothing can scroll to it. What actually distinguishes the
-   rows is what they hold and the `aria-label` each carries (`Started by …`, set in app-tabs.js), which is also
-   the only thing that says it to anyone not looking at the screen. Indentation is not information.
-
-   `max-width` is reduced by exactly the margin. Every container from `#tabsbar` down bounds its width so the
-   overflow lands in the capsule's own `overflow-x`, where the wheel and the drag can reach it; a margin added
-   without taking it off the maximum pushes that much of the row outside the row's `overflow: hidden`, where
-   nothing can scroll to it — the same failure the chats' row was reported for twice. */
 .branch-capsule {
   margin-left: 16px;
   max-width: calc(100% - 16px);
   background: color-mix(in srgb, var(--surface2) 22%, transparent);
 }
 
-/* The tab's close. It sits BESIDE the chat's own button inside `.pill-wrap`, not inside it: it is a
-   `<button>`, and a button inside a button is what made the × dead (see `.pill-wrap`). It needs a real hit
-   area — the version before this was a bare glyph a few pixels wide.
-
-   A declared box rather than padding around a glyph, and it is the box that matters: `padding: 0 4px` around
-   a `×` gives a target roughly 13px wide. Stated as a square the size stops being whatever the glyph happens
-   to measure in the IDE's font.
-
-   **20×20 is the SUBTAB row's size, and there it is a declared gap rather than a claim of conformance**: it
-   is short of the 24×24 CSS pixels WCAG 2.2 SC 2.5.8 (Target Size (Minimum), AA) asks for, and the spacing
-   exception does not rescue it — it sits against the pill, so the 24px circles centred on the two intersect.
-   The exception is `docs/adr/0004-target-size-exception.md`, scoped to this one class precisely so nothing
-   else inherits it.
-
-   **The row's height is no longer what forces it.** It was, while the subtab pill was 21px: a 24px control
-   made the row grow three pixels the moment a subtab was opened, which moves the transcript under the reader
-   on every navigation. At the sizes declared below the open subtab is 25px, and only the OPEN one carries a
-   close, so 24×24 would fit inside it and the row's height would not move. What holds the 20 here is the
-   ADR, not this rule.
-
-   **On the chats' row the gap is CLOSED** at 24×24, and the two pixels by which that exceeds the 22px oval
-   are deliberate. The oval declares its own height, so the target OVERFLOWS it by a pixel top and bottom
-   rather than stretching it: the hit area is the conformant 24×24 while the tab stays the height that was
-   asked for. Nothing clips it — the capsule's content box is the open tab's 27px — and nothing shows,
-   because this control paints no surface of its own.
-
-   **Which is exactly why the hover is a colour and not a filled circle.** A 24px tinted disc inside a 22px
-   oval spills a sliver past the tab's own border at the top and bottom, which reads as a rendering fault.
-   The disc existed to give a bare glyph a hit affordance while it floated outside any surface; the glyph now
-   sits on the tab's own surface, so the colour change is the affordance and a second surface behind it is
-   what would look wrong. Do not shrink either set, and do not give this a background. */
 .pill-x {
   flex: 0 0 auto;
   display: inline-flex;
@@ -458,18 +219,6 @@ body.vibe .composer-card:focus-within {
   color: var(--danger);
 }
 
-/* A pill: the IDE's own surface colour, a hairline outline, and the accent only when selected — where it
-   carries the outline AND the text AND the weight, so selection never rests on colour alone.
-
-   The size is the composer's control register (see the section header). `height` rather than vertical
-   padding, because the row's job is to be exactly as tall as it says it is whatever the type does.
-
-   NB **almost none of this reaches the tab bar any more.** The composer's control row overrides `height`,
-   `padding`, `font-size` and `gap` at `.composer-bar .pill` (composer.css); in the tab bar the box, the
-   border and the background belong to `.pill-wrap` — the oval — and `.tab-capsule .pill` strips them off
-   the button, leaving it the type, the colour, the weight and the `gap` between the dot and the label.
-   What is left of the numbers below is the composer's neighbour and the fallback for any `.pill` outside
-   those places. `line-height` is overridden by nobody: that one is the one to think twice about. */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -495,11 +244,6 @@ body.vibe .composer-card:focus-within {
 .pill:hover {
   background: color-mix(in srgb, var(--surface) 70%, var(--text) 8%);
 }
-/* The open tab wears the product's OWN accent (the coral), not the neon orange.
-   `--neon-orange` exists for exactly one thing — the selected dashboard view button — and spending it on the
-   tab bar as well made two unrelated "you are here" markers compete in the same corner of the screen, in a
-   colour that belongs to neither. The coral is the identity colour the composer, the links and the cards
-   already use, so a selected tab now looks like part of the same product. */
 .pill.selected {
   border-color: var(--accent);
   color: var(--accent);
@@ -507,71 +251,6 @@ body.vibe .composer-card:focus-within {
   background: var(--accent-soft);
 }
 
-/* ── the chats' row: the scale, and ONE width for all of them ────────────────────────────────────────────
-   Scoped with `:not(.subtab-capsule)` rather than declared on `.pill-wrap` itself, because specificity is
-   what keeps the two rows independent instead of source order. Both rows declare their own box and their own
-   `.selected` variant on the same element, so a measure raised on the shared wrapper lands in the other row
-   too. This pair is (0,3,0) and (0,4,0) and the subtab pair is (0,2,0) and (0,3,0) — different elements
-   either way, so neither can reach the other. The ties that DO exist are between the wrapper's own base
-   rules (`:hover` against `.selected`), and each is resolved by source order at its own declaration with the
-   reason written there.
-
-   **The width is FIXED, and that is the rule.** Sized to their titles the tabs were an accordion: three
-   sentences at the cap beside a four-letter one, and a row of unequal blobs cannot be read as a strip
-   whatever each blob is worth alone. A short title fills its tab and a long one ellipsises, so the row is a
-   run of identical ovals. A cap is a maximum, not a measure, which is why the `ch` cap this replaced
-   produced the accordion rather than preventing it.
-
-   **123px, derived and not chosen — and it is the OVAL's width now, close included.** The chrome is fixed:
-   2px of border, 10px of padding, and the close's own 25px (a 24px box plus the 1px that separates it from
-   the label). Another 11px goes whenever the attention dot is up — a 6px dot and the base's 5px gap. That
-   leaves **86px of label**, of which the ellipsis takes about 4. `--font` resolves to Segoe UI / Inter /
-   Roboto, whose sentence-case advance runs about 0.50–0.55em — 5.25 to 5.8px at 10.5px type — so **14 to 15
-   characters**, and 12 to 13 with a dot showing. That is the FLOOR and it is what fixes the number: a chat is
-   named after its first prompt, and under about a dozen characters "Take this repo…" and "Take that repo…"
-   stop being different tabs. **86px is deliberately the same label budget the tab had while the × sat
-   outside it**: pulling the close in must not cost the title 25 characters' worth of room, so the oval grew
-   by what the close needs and the row did not — the tab measured 129px end to end before (a 104px oval and a
-   25px close beside it) and measures 123px now, because the gap that used to sit between the two is inside
-   the padding. **Never express it in `ch`**: `ch` resolves against each pill's OWN font-size, so the open
-   chat would come out a different width from its neighbours — the accordion again, by another route.
-
-   **The padding is asymmetric on purpose**: 8px on the label side, 2px after the close. The close is a 24px
-   box around 11px of ink, so it brings roughly 6px of its own inset — declaring a full 8px there would
-   double it and push the glyph away from the edge it belongs to.
-
-   **Which is also why the open chat is NOT wider.** It already reads as the open one four ways — 5px taller,
-   accent border, accent text, weight 600 — and a width that moves with the selection reflows the row on
-   every click: the total width changes, and with it the offset the capsule restores after a repaint and the
-   point `scrollIntoView` centres on. Equal widths make the row's geometry independent of which tab is open.
-   It carries no extra padding for the same reason: at a fixed width padding no longer defends the oval's
-   proportions, it only takes space from the label, so the tab you are actually in would show fewer
-   characters than the ones you are not.
-
-   **Everything moves together, or it is a squashed pill rather than a smaller one**: the box, the type, and
-   the label's share of it. The only thing NOT restated here is the gap between the dot and the label —
-   proportion lands it on the base's own 5px, and an override repeating the value it inherits is a line that
-   goes stale silently the day the base changes.
-
-   **Size REINFORCES the selected state and never carries it** (WCAG 2.2 SC 1.4.1). Everything that already
-   distinguished the open chat is untouched and each still answers on its own: the accent border, the accent
-   text, the weight, and `aria-current` — which stays on the BUTTON, because that is the control being
-   announced, while the colour that says the same thing visually is on the oval around it.
-
-   **The shape.** `--radius-pill` is 999px, which every engine clamps to half the shorter side, so the ends
-   stay true semicircles at both heights — 11px on a 123×22 tab, 13.5px on a 123×27 one. The proportion is
-   the part worth checking rather than assuming, and it is the price of bringing the close inside:
-   **5.6:1 here and 4.6:1 open**, against 4.7:1 and 3.9:1 while the × hung outside the oval. Longer, because
-   the oval now contains a control it did not, and still a stadium rather than a bar — the alternative was to
-   take the room out of the title, and 86px of label is the floor above.
-
-   **Alignment: centred across, flush left along.** The capsule is an oval enclosing ovals, not a strip of
-   folder tabs resting on a content edge — a taller tab sitting on the bottom edge would push out of the
-   capsule's own curve and leave a wedge of dead space above it. `.tab-capsule`, `.pill-wrap` and `.pill` all
-   centre on the cross axis, which stops the dot, the label and the close sliding up and down as the
-   selection moves. Along the row the label stays at the tab's leading edge (the flex default) rather than
-   centred in the fixed width: titles that start at the same x read as a column, and centring each one inside
-   its own tab would make the text jitter left and right down the row. */
 .tab-capsule:not(.subtab-capsule) .pill-wrap {
   width: 123px;
   height: 22px;
@@ -580,18 +259,12 @@ body.vibe .composer-card:focus-within {
 .tab-capsule:not(.subtab-capsule) .pill-wrap.selected {
   height: 27px;
 }
-/* Only the TYPE is the button's; the box above is the oval's. */
 .tab-capsule:not(.subtab-capsule) .pill {
   font-size: 10.5px;
 }
 .tab-capsule:not(.subtab-capsule) .pill.selected {
   font-size: 11.5px;
 }
-/* 24×24 — the figure WCAG 2.2 SC 2.5.8 (Target Size (Minimum), AA) names, not 20 scaled by anything. The
-   box is deliberately not tied to the pill's size: it is a floor, and it is already the only control on the
-   row that meets it. Only the INK follows the tab down, which is what a hit area larger than its glyph is
-   for — and it costs no height, because the open chat is 27px and there is always exactly one open, so the
-   capsule is never sized by this control. */
 .tab-capsule:not(.subtab-capsule) .pill-x {
   width: 24px;
   height: 24px;
@@ -599,15 +272,12 @@ body.vibe .composer-card:focus-within {
 }
 
 .pill-label {
-  /* `min-width: 0` is what lets it actually shrink — without it a flex item refuses to go below its content
-     and the ellipsis never appears, however small the cap on the pill. */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* State as a dot — the tooltip says it in words, so colour is never the only carrier. */
 .pill-dot {
   flex: 0 0 auto;
   width: 6px;
@@ -615,12 +285,6 @@ body.vibe .composer-card:focus-within {
   border-radius: var(--radius-pill);
   background: var(--dim);
 }
-/* Running fades sky blue ↔ amber, the SAME two hues and the same 1.3s beat as the tool card the work belongs
-   to (`toolRun` / `toolRunIc`, transcript.css). One vocabulary for "this is happening": a third palette in the
-   tab bar would mean the row and the transcript disagreeing about a colour for the same running agent. Its own
-   keyframes because that one animates `border-color` and this is a filled dot; the timing is what is shared.
-   The movement is also the non-colour half of the signal — a dot that pulses reads as live where a static blue
-   one does not — and the word itself is in the pill's tooltip and accessible name (WCAG 2.2 SC 1.4.1). */
 .pill-dot.running {
   background: var(--info);
   animation: pillRun 1.3s ease-in-out infinite;
@@ -634,12 +298,6 @@ body.vibe .composer-card:focus-within {
     background: var(--warning);
   }
 }
-/* An animation that loops forever is exactly what SC 2.3.3 is about, and the state must survive it being off:
-   the dot keeps the sky blue it starts on, and the word in the tooltip is unchanged.
-   Gated on `body.reduced-motion`, NOT on `@media (prefers-reduced-motion)` — this page's motion switch is the
-   HOST's (the IDE setting, mirrored onto the body), and a media query would be a second, independent answer
-   that the user's own preference in Settings could not turn off. The blanket rule at the end of boot.css
-   already stops every animation on that class; this one is here to say what the dot falls back TO. */
 body.reduced-motion .pill-dot.running {
   animation: none;
   background: var(--info);
@@ -647,7 +305,6 @@ body.reduced-motion .pill-dot.running {
 .pill-dot.completed {
   background: var(--success);
 }
-/* Interrupted reads as a failure, not as a warning: the work did not finish and nothing will finish it. */
 .pill-dot.failed,
 .pill-dot.stopped {
   background: var(--danger);
@@ -656,20 +313,6 @@ body.reduced-motion .pill-dot.running {
   background: var(--neon-orange);
 }
 
-/* NB `.pill-x` is declared further up, beside the pill it sits next to, and it is now the ONLY glyph control
-   in the row: the `⋮` that opened the agent tree and the `⇱` that pinned a subtab as a tab of its own shared
-   that box and went with the features behind them. Do not add a glyph to that rule to save writing a second
-   one — it carries a declared WCAG 2.2 SC 2.5.8 shortfall on the subtab row (20×20, see the note at the
-   declaration and `docs/adr/0004-target-size-exception.md`), and a new control would inherit a gap nobody
-   decided to accept. `accessibility.test.js` names the two that went, so it catches those coming back; a
-   glyph under a NEW class it has never heard of is exactly the case no gate sees — give it 24×24, or its
-   own declared exception.
-   It also had a second block here with a negative right margin, which pulled it into the pill's own padding
-   back when it was a child of the pill. It is a sibling now, so that margin would pull it out of the tab. */
-
-/* Visually hidden but present for assistive technology. NOT `display:none` or `visibility:hidden` — both
-   remove the node from the accessibility tree, which would silence the live region entirely. The clip-path
-   technique keeps it rendered (and therefore announced) while occupying no visible space. */
 .visually-hidden {
   position: absolute !important;
   width: 1px;

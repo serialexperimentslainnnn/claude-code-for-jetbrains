@@ -5,13 +5,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The one-release fold that turns the seven `securityBlock*` booleans into `disabledSecurityRules`.
- *
- * It is worth its own test for one reason: [SettingsStore] is versionless and field-agnostic, so getting this
- * wrong does not fail — it silently re-enables a rule the user deliberately switched off, which is the one class
- * of settings bug nobody reports because it looks like the plugin working.
- */
 class LegacySecurityTogglesTest {
 
     private fun state(block: ClaudeSettings.State.() -> Unit = {}) = ClaudeSettings.State().apply(block)
@@ -28,7 +21,6 @@ class LegacySecurityTogglesTest {
         val s = state { securityBlockTempDirs = false }
         LegacySecurityToggles.adopt(s)
         assertEquals(SecurityRule.TEMP_DIR.name, s.disabledSecurityRules)
-        // Retired, so nothing reads it as configuration again — and so the fold is a no-op from here on.
         assertTrue(s.securityBlockTempDirs)
     }
 
@@ -56,7 +48,6 @@ class LegacySecurityTogglesTest {
             ).map { it.name }.toSet(),
             s.disabledSecurityRules.split(',').toSet(),
         )
-        // …and the rules that did not exist as a boolean are NOT disabled by the migration.
         listOf(
             SecurityRule.SHELL_FILE_WRITE,
             SecurityRule.SYSTEM_DEVICE,
@@ -91,7 +82,6 @@ class LegacySecurityTogglesTest {
 
     @Test
     fun `an id from a NEWER version is preserved, not pruned`() {
-        // Pruning it here would re-enable, on the next save, a rule the user turned off in a later IDE.
         val s = state {
             disabledSecurityRules = "A_RULE_FROM_THE_FUTURE"
             securityBlockCredentials = false

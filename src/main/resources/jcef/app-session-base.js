@@ -1,23 +1,9 @@
-/* app-session-base.js — the dashboard family's shared plumbing.
- *
- * One subject: what every dashboard file needs before it can build anything — the `CC.dash` namespace (there
- * is no module system here, so that object IS the interface between these scripts), the safe accessors onto
- * app-core, and the formatting helpers the cards render their numbers with.
- *
- * The namespace is `CC.dash`, not `CC.session`: the method the host calls is `cc.session`, and two objects one
- * letter apart (`cc` / `CC`) each holding a `session` is a trap rather than an interface.
- *
- * Load order inside the family is deliberate: this file FIRST (it creates the namespace), then the card
- * modules, then `app-session.js` LAST — the panel builds itself eagerly at the bottom of that file, so
- * everything its first render touches has to exist by the time it runs.
- */
 (function () {
   'use strict';
 
   var CC = window.CC || (window.CC = {});
   var D = (CC.dash = CC.dash || {});
 
-  // ---- Safe accessors --------------------------------------------------------
   function core() {
     return window.CC || null;
   }
@@ -39,9 +25,6 @@
     if (c && typeof c.send === 'function') c.send(obj);
   }
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
   function num(v) {
     return typeof v === 'number' && isFinite(v) ? v : null;
   }
@@ -72,17 +55,7 @@
     );
   }
 
-  // `wide` cards span the whole grid row (.dash-card.wide { grid-column: 1 / -1 }). Use it for anything with rows
-  // that need horizontal room — the context legend, and the server/task lists whose name column would otherwise
-  // collapse to an ellipsis inside a 260px column.
-  /**
-   * A dashboard card. [anchor], when given, tags it `data-card="…"` — which is how the stylesheet reaches
-   * ONE card without a class of its own (`.dash-card[data-card='workloads']` gives the diagram the height a
-   * grid row would otherwise deny it). It was a scroll target back when the buttons scrolled one long panel;
-   * the views are exclusive now, and the tag survives because the CSS still needs to name that card.
-   */
   function card(title, body, wide, anchor) {
-    // body may be a node, an array of nodes, or empty. Hide when nothing renders.
     var children = [];
     if (Array.isArray(body)) {
       for (var i = 0; i < body.length; i++) {
@@ -109,12 +82,5 @@
   D.statRow = statRow;
   D.card = card;
 
-  /**
-   * Leaves the dashboard if it is open — assigned by the shell (`app-session.js`), which owns the panel's
-   * visibility, and a no-op until then.
-   *
-   * The Workloads diagram needs it: going to an agent means LEAVING the panel that is covering the transcript
-   * you were sent to read (see [revealAndLeave]), and the panel is not this file's to close.
-   */
   D.leaveDashboard = function () {};
 })();

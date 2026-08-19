@@ -5,26 +5,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **The state the page needs in order to exist has to survive a load that failed, and be reposted on the one
- * that worked.** Two halves of one recovery, in two files, and the bug only showed when both were broken.
- *
- * REGRESSION THIS PINS. `JcefHost.onLoadEnd` drained the queued host→web pushes on every load-end, without
- * asking whether the load had delivered anything — so a dead rung of the delivery ladder spent the queue, and
- * `promote()` handed the next rung an empty one. Meanwhile the `Ready` message re-pushed the theme, the meta
- * state, the permissions, the tray, the dashboard, MCP, the version, Git and the whole transcript — and not
- * the tab bar, whose only emitter is [ChatAgentTabs.render], reached otherwise only from events (a chat
- * added, an agent scanned, a tab revealed or closed). A page that came up between two of those events
- * therefore had `chats == []`, and `app-tabs.js` hides `#tabsbar` when there is nothing in it — taking the
- * dashboard's Chat/Workloads/Git/Plan buttons with it, because they are appended into that same node.
- *
- * The user-visible result was a chat with neither tabs nor dashboard views, in the delivery route that exists
- * so that Remote Development works at all.
- *
- * Deliberately a source scan, like [InitOrderContractTest] and for the same reason: reaching either code path
- * for real needs a live IDE and a JCEF browser (and, for the interesting case, a browser whose load fails).
- * Reading the two files costs nothing and pins the decision rather than the plumbing.
- */
 class PageStateRecoveryContractTest {
 
     @Test
@@ -51,12 +31,6 @@ class PageStateRecoveryContractTest {
         }
     }
 
-    /**
-     * The other half of the same guard: the status code alone cannot tell a dead rung from a live one, because
-     * Chromium answers a failed navigation with its own error page and a plausible-looking end. The verdict
-     * comes from `onLoadError`, and it has to be CLEARED when the next navigation starts or the first failure
-     * would condemn every load after it.
-     */
     @Test
     fun `the failure verdict is recorded, cleared and actually consulted`() {
         val text = source("ui/jcef/JcefHost.kt").readText()
@@ -89,11 +63,6 @@ class PageStateRecoveryContractTest {
         }
     }
 
-    /**
-     * The premise of the test above: `render()` is the tab-bar push because it is the only thing that emits
-     * `window.cc.tabs`. A second emitter would not be wrong in itself, but it would mean this contract is
-     * pinning the wrong call — so it fails here, where the message can say so, rather than passing hollow.
-     */
     @Test
     fun `the tab bar has exactly one emitter, and it is the one Ready calls`() {
         val emitters = File(mainRoot(), "dev/lain/claudejb").walkTopDown()
@@ -110,7 +79,6 @@ class PageStateRecoveryContractTest {
         assertTrue(it.isFile) { "missing source file: $it" }
     }
 
-    /** Resolves `src/main/kotlin` whether the test runs from the module dir or the repo root. */
     private fun mainRoot(): File =
         sequenceOf(File("src/main/kotlin"), File("../src/main/kotlin"))
             .firstOrNull { it.isDirectory }

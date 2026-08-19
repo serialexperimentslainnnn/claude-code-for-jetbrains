@@ -5,33 +5,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **The Git integration is read-only, and this is what makes that true rather than merely written down.**
- *
- * The decision it enforces was taken before a line was written, and it is not a preference:
- *  - **no `git reset`, no history rewriting** — the plugin never moves a ref the user did not move. Undoing a
- *    change is a NEW commit, made by the user through the IDE's own Git UI;
- *  - **remotes are read-only** — no push, no fetch-and-merge behind the user's back;
- *  - **`pull` / `rebase` / `merge` are local operations that need an explicit human yes** — which means they are
- *    the IDE's actions, not ours.
- *
- * A comment saying so ages badly; a *test* saying so fails the build. The mechanism is an **allowlist**, not a
- * denylist: the only `git4idea` imports permitted in this package are the read-only ones enumerated in
- * [READ_ONLY_GIT_API], so adding a write path is not something that can happen by accident during a refactor — it
- * takes editing that list, in a diff a reviewer reads. (The list is the count. A number written here goes stale on
- * the next entry and is then quoted as if it had not.)
- *
- * The second contract here is the **degradation** one. `git4idea` may be entirely absent from this plugin's
- * classloader (the dependency is optional), and a class's supertypes and annotations are resolved EAGERLY at
- * load time while the classes named inside method bodies are not. Keeping every git4idea reference inside one
- * object — reached only behind [GitAvailability] — is what turns "Git is disabled" into an empty list instead of
- * a `NoClassDefFoundError` in the middle of a chat.
- *
- * Comment and KDoc lines are skipped — a line whose trimmed form starts with an asterisk, a double slash, or a
- * block-comment opener — because this very file's neighbours discuss `git4idea`, `reset` and `rebase` in prose;
- * the scan is over code. (Spelled out rather than shown: a literal block-comment opener inside KDoc nests, and
- * Kotlin then reports an unclosed comment for the whole file.)
- */
 class GitReadOnlyContractTest {
 
     private val sources: List<File> = File("src/main/kotlin/dev/lain/claudejb/git")
@@ -92,7 +65,6 @@ class GitReadOnlyContractTest {
         )
     }
 
-    /** Code lines only: KDoc and comments in this package discuss git4idea, reset and rebase in prose. */
     private fun codeLines(file: File): List<String> = file.readLines().filterNot { line ->
         val trimmed = line.trimStart()
         trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*")
@@ -102,40 +74,8 @@ class GitReadOnlyContractTest {
 
         const val GATEWAY = "GitGateway.kt"
 
-        /** Any `git4idea.Something` reference, qualified — an import or an inline fully-qualified name. */
         val GIT4IDEA_REFERENCE = Regex("""\bgit4idea\.[A-Za-z]""")
 
-        /**
-         * The complete set of Git4Idea API this plugin may touch. Every entry is a pure reader — a registry, a
-         * value, or a query that prints and returns:
-         *  - `GitRepositoryManager` / `GitRepository` — the registry and one repository;
-         *  - `GitHistoryUtils` — the readers of `git log`, `git rev-list --count` and `git merge-base`. All three
-         *    print to stdout and change nothing: no ref moves, the index is untouched, and none of them contacts
-         *    a remote, which is also why the ahead/behind counts answer "since the last fetch" and this package
-         *    may not make them fresher;
-         *  - `GitCommit` / `GitRevisionNumber` — the values those readers return;
-         *  - `GitBranchTrackInfo` — the local branch, the branch it tracks and the remote, as three fields. It is
-         *    what `branch.<name>.remote` and `.merge` already say in the config; reading it establishes nothing
-         *    and setting an upstream is not on its surface at all;
-         *  - `GitRemote` — a name, its URLs and its refspecs, again straight out of the parsed config. It is on
-         *    this list for its `ORIGIN` constant as much as its fields: the remote's conventional name belongs to
-         *    Git, and hardcoding the string here is how the plugin ends up disagreeing with the IDE about which
-         *    remote is which;
-         *  - `GitRepositoryChangeListener` — the notification interface the IDE calls when a repository moves,
-         *    which is handed a repository and returns nothing, so it can observe a checkout but never cause one;
-         *  - `GitBranchesCollection` — **the one entry from `git4idea.branch`, admitted deliberately.** That
-         *    package is where the branch-manipulation machinery lives, which is exactly why it is worth being
-         *    explicit about what this is and is not: the class is a VALUE, three maps handed over by
-         *    `GitRepository.getBranches()` (local branch to hash, remote branch to hash, recent checkouts) plus
-         *    lookups over them. Its whole public surface is getters and finders; it declares no mutator, so
-         *    there is nothing on it that could move a ref even by accident. It is read for one reason nothing
-         *    else can supply: a commit's parents give the SHAPE of the history, and only a ref says which of
-         *    those lines is `main` and which one `HEAD` is on. `GitBrancher` — the actual write surface of that
-         *    package, the thing that checks out, creates and deletes — remains in [FORBIDDEN_SYMBOLS], so
-         *    admitting the value type does not admit the package.
-         *
-         * Nothing here can change a ref, a worktree or a remote.
-         */
         val READ_ONLY_GIT_API = setOf(
             "git4idea.GitCommit",
             "git4idea.GitRevisionNumber",
@@ -148,11 +88,6 @@ class GitReadOnlyContractTest {
             "git4idea.repo.GitRepositoryManager",
         )
 
-        /**
-         * Symbols that would mean the plugin had grown its own way to run Git. The first three are process
-         * spawning in any form; the rest are Git4Idea's own execution and branch-manipulation surface — the
-         * things `git4idea.commands` / `git4idea.branch` exist to do.
-         */
         val FORBIDDEN_SYMBOLS = listOf(
             "GeneralCommandLine",
             "ProcessBuilder",

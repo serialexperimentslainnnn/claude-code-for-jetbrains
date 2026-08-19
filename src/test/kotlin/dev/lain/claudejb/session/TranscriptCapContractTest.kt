@@ -5,18 +5,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.fail
 import java.io.File
 
-/**
- * The transcript's memory cap is one number held in two languages, and they cannot be allowed to disagree.
- *
- * [TranscriptModel.MAX_ENTRIES] is what actually drops rows; the JCEF page mirrors it as `MAX_ENTRIES` in
- * `app-transcript.js` so the trimmed-rows notice can state the ceiling the model enforces. Nothing at build
- * time connects the two — one is Kotlin, the other is a string in a resource file — so a change to either
- * side alone is invisible: the page would keep telling the user a number that stopped being true, and no
- * test, linter or compiler anywhere would notice. That silence is the whole reason this gate exists.
- *
- * The JS value is PARSED out of the served source rather than written down here. A test that repeated the
- * number would be a third copy to keep in sync, and the first one to go stale.
- */
 class TranscriptCapContractTest {
 
     private val jsConstant = Regex("""\bvar MAX_ENTRIES = (\d+);""")
@@ -37,7 +25,6 @@ class TranscriptCapContractTest {
         }
     }
 
-    /** Resolves the served JS whether the test runs from the module dir or the repo root. */
     private fun transcriptJs(): File =
         sequenceOf(
             File("src/main/resources/jcef/app-transcript.js"),

@@ -5,25 +5,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **A gesture must not end in a nullable chain that quietly evaluates to nothing.** Three orderings in the
- * tool window's wiring decide that, none of them visible at the call site, and each one fails the same way:
- * the button is pressed, a `?.` resolves to null, and nothing happens anywhere — no exception, no log, no
- * change on screen. That failure cannot be observed by a test that drives the UI either, because "did
- * nothing" is what it looks like from outside as well.
- *
- * A source scan for the same reason as [PageStateRecoveryContractTest] and `InitOrderContractTest`: reaching
- * any of these for real needs a live IDE and a JCEF browser, while the decision itself is one line in each
- * file. Comments are stripped first ([MainSources]), so a KDoc that *describes* the shape being forbidden
- * cannot be mistaken for the code doing it.
- */
 class ToolWindowWiringContractTest {
 
-    /**
-     * The tool window holds ONE content and its component is the strip, so selection decides nothing — while
-     * asking for the selected one adds a way to answer null that has nothing to do with us, taking every
-     * caller outside the tool window down with it.
-     */
     @Test
     fun `the strip is resolved by type, never by which content is selected`() {
         val body = bodyOf(codeOf("ui/ClaudeToolWindowFactory.kt"), "private fun tabsPanel(")
@@ -38,10 +21,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /**
-     * `restoreOrCreate` goes to a pooled thread and comes back to build the tabs, so the strip is on screen
-     * and taking gestures for the whole of it — and every tab-level command reaches it through this field.
-     */
     @Test
     fun `the tab commands are published before anything is restored`() {
         val code = codeOf("ui/ClaudeToolWindowFactory.kt")
@@ -59,11 +38,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /**
-     * A chat's browser starts loading from `JcefHost`'s constructor, so showing the tab at once shows a blank
-     * frame assembling the whole document. The tab is added immediately (the pill is the acknowledgement) and
-     * only the switch waits.
-     */
     @Test
     fun `a new chat is shown only once its page can draw`() {
         val code = codeOf("ui/ClaudeToolWindowFactory.kt")
@@ -82,11 +56,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /**
-     * The other half of the same decision, and the one that keeps it from becoming the defect it is closing:
-     * a page that never announces itself must not turn *New chat* into a dead button, so the wait is capped
-     * and the block runs anyway.
-     */
     @Test
     fun `the wait for the page is bounded, and the deadline runs the block`() {
         val code = codeOf("ui/jcef/JcefHost.kt")
@@ -108,22 +77,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /**
-     * **Closing a tab disposes that tab's `claude` process, unconditionally — and it is only allowed to
-     * because no second tab can ever hold the same session.**
-     *
-     * That was not always true. A subtab could be *pinned* as a tab of its own: a second `JcefChatPanel` over
-     * the SAME [dev.lain.claudejb.session.ClaudeSession], sitting in the strip beside the chat that spawned
-     * the agent. Closing it disposed that session — the chat's own tab was left painting a dead process, and
-     * the chat dropped out of the restorable set. The fix was not a better condition in the close handler; it
-     * was removing the only state that made two tabs over one session representable.
-     *
-     * So this is asserted where it can still be broken, which is not the close handler: it is the ONE place
-     * that builds a chat panel. A `ChatTab` holds a session only by holding a `JcefChatPanel`
-     * ([ChatTabsPanel.ChatTab.session]), and `openChat` builds exactly one per session it is handed. A second
-     * construction site is a second tab over a live session, and the defect is back with no line of the close
-     * path having changed — which is precisely why a test that read the close path would not see it coming.
-     */
     @Test
     fun `only one place builds a chat panel, so no two tabs can hold one session`() {
         val built = MainSources.files()
@@ -144,13 +97,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /**
-     * The other half of the same invariant, from the side that would revive it: the strip has no notion of a
-     * tab that is a *view* of another tab's chat, and the close handler therefore asks no question.
-     *
-     * A condition reappearing on that line is the visible symptom of the state reappearing behind it, and it
-     * is the cheaper of the two to catch — `pin`, `pinnedAgent` and `isPinnedView` were the whole mechanism.
-     */
     @Test
     fun `the strip has no second view of a chat, and the close handler has nothing to ask`() {
         val strip = codeOf("ui/ChatTabsPanel.kt")
@@ -172,7 +118,6 @@ class ToolWindowWiringContractTest {
         }
     }
 
-    /** [declaration]'s line plus its body, up to the line that closes it. */
     private fun bodyOf(code: List<String>, declaration: String): List<String> {
         val start = code.indexOfFirst { it.contains(declaration) }
         assertTrue(start >= 0) { "no `$declaration` in the sources — this contract needs rewriting, not deleting" }
@@ -181,7 +126,6 @@ class ToolWindowWiringContractTest {
         return listOf(code[start]) + if (end >= 0) rest.take(end) else rest
     }
 
-    /** [relative]'s code, comments and string literals reduced away — the same reducer every gate here uses. */
     private fun codeOf(relative: String): List<String> {
         val file = File(MainSources.root("src/main/kotlin"), "dev/lain/claudejb/$relative")
         assertTrue(file.isFile) { "missing source file: $file" }

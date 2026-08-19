@@ -1,9 +1,3 @@
-/* app-session-mcp.js — the MCP servers card.
- *
- * One subject: the servers this session registered, what state each is in, and the two things you can do about
- * it (reconnect, enable/disable). The payload arrives by its own method (`cc.mcp`) and from more than one
- * shape of reply, which is why finding the list is a function of its own.
- */
 (function () {
   'use strict';
 
@@ -13,7 +7,6 @@
   var send = D.send;
   var card = D.card;
 
-  // status → mcp-dot class. Defensive: unknown maps to nothing extra.
   var MCP_STATUS_CLASS = {
     connected: 'connected',
     pending: 'pending',
@@ -28,12 +21,10 @@
 
   function mcpServersFrom(payload) {
     if (!payload || typeof payload !== 'object') return [];
-    // The control response uses camelCase `mcpServers`; system/init uses snake `mcp_servers`. Accept both.
     var list = payload.mcpServers;
     if (!Array.isArray(list)) list = payload.servers;
     if (!Array.isArray(list)) list = payload.mcp_servers;
     if (!Array.isArray(list)) {
-      // Some shapes nest one level (e.g. { mcp_status: { servers: [...] } }).
       var inner = payload.mcp_status || payload.status || payload.mcp;
       if (inner && typeof inner === 'object') {
         if (Array.isArray(inner.mcpServers)) list = inner.mcpServers;
@@ -66,7 +57,7 @@
       if (extra) dotClass += ' ' + extra;
 
       var disabled = statusLower === 'disabled';
-      var enabledNext = disabled; // toggling sets the opposite of current
+      var enabledNext = disabled;
 
       var reconnectBtn = h('span', {
         class: 'btn',
@@ -83,9 +74,6 @@
         },
       });
 
-      // `.toggle` is a 32x18 switch whose knob is an absolutely-positioned ::after — it must NOT carry text, or the
-      // label overflows the pill and the knob paints on top of it ("Dis●ble"). The state is conveyed by the switch
-      // itself; the accessible name lives in title/aria-label.
       var toggleEl = h('span', {
         class: disabled ? 'toggle' : 'toggle on',
         attrs: {

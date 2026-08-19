@@ -7,23 +7,6 @@ import java.io.File
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
-/**
- * The live half of drift detection: **updates both tools to latest first** (`npm update` for the vendored
- * SDK, `claude --update` for the binary), then measures the resulting protocol surface and diffs it against
- * what the plugin models via the pure [DriftDetector]. Prints an agent-consumable [DriftReport] and **fails**
- * when the latest surface exposes a kind the parser doesn't handle — so `./gradlew checkDrift` exits non-zero
- * on real, actionable drift (a bare version bump with a covered surface passes).
- *
- * Tagged `driftLive` so it is **excluded from the normal `test` task** (it touches the network and spawns the
- * binary) and runs only via the on-demand `checkDrift` task, which feeds it these system properties:
- *   - `claudejb.drift.projectDir` — repo root (cwd for `npm update`)
- *   - `claudejb.drift.sdkDir`     — vendored SDK dir (`sdk.d.ts` + `package.json`, read AFTER the update)
- *   - `claudejb.drift.binary`     — path to the `claude` executable
- *   - `claudejb.drift.baseline`   — `scripts/drift-baseline.properties` (last-reconciled sdk + binary versions)
- *
- * Reconciling a report: add the missing branches/serializers in `protocol/`, extend the `KNOWN_*` sets in
- * [ProtocolSurface], bump the baseline versions, then re-run to confirm green.
- */
 @Tag("driftLive")
 class DriftLiveCheck {
 
@@ -34,11 +17,9 @@ class DriftLiveCheck {
         val binary = File(requireProp("claudejb.drift.binary"))
         val baseline = loadBaseline(File(requireProp("claudejb.drift.baseline")))
 
-        // 1) Bring both tools to latest BEFORE measuring (the whole point: test against current reality).
         updateSdk(projectDir)
         updateBinary(binary)
 
-        // 2) Read the now-updated surfaces.
         val latestDts = File(sdkDir, "sdk.d.ts").readText()
         val sdkLatestVersion = readJsonVersion(File(sdkDir, "package.json"))
         val installedBinary = binaryVersion(binary)
@@ -64,36 +45,25 @@ class DriftLiveCheck {
         )
     }
 
-    /** `npm update` the vendored SDK in-place (within its semver range) so node_modules holds the latest. */
     private fun updateSdk(projectDir: File) {
         runProcess(
             listOf("npm", "update", SDK_PKG),
             timeoutSec = 180,
             cwd = projectDir,
-            // node-24 on this host aborts on the system openssl.cnf; an empty config sidesteps it and is a
-            // harmless no-op elsewhere. (The JVM does its own TLS, so this only affects the spawned npm.)
             env = mapOf("OPENSSL_CONF" to "/dev/null"),
         )
     }
 
-    /** `claude --update`: best-effort self-update. Already-latest or a transient failure must not fail the check. */
     private fun updateBinary(binary: File) {
         runCatching {
             runProcess(listOf(binary.absolutePath, "--update"), timeoutSec = 120, ignoreExit = true)
         }
     }
 
-    /** `claude --version | awk '{print $1}'` — the version is the first whitespace-delimited token. */
     private fun binaryVersion(binary: File): String =
         runProcess(listOf(binary.absolutePath, "--version"), timeoutSec = 20)
             .trim().substringBefore(' ').ifBlank { "?" }
 
-    /**
-     * Drives the binary exactly as the plugin does (stream-json in/out, stdio permission tool), feeds one
-     * canned user message, closes stdin, and captures stdout. Mirrors `scripts/probe-binary.sh`. The point is
-     * only *which* event `type`s the updated binary emits — even an auth error surfaces as recognizable
-     * `system`/`result` frames.
-     */
     private fun probeBinary(binary: File): String {
         val proc = ProcessBuilder(
             binary.absolutePath,
@@ -125,10 +95,6 @@ class DriftLiveCheck {
     private fun loadBaseline(file: File): Properties =
         Properties().apply { file.inputStream().use { load(it) } }
 
-    /**
-     * Runs [command] (optionally in [cwd] with extra [env]), returns combined stdout/stderr. Throws on timeout
-     * and, unless [ignoreExit], on a non-zero exit — surfacing the captured output for diagnosis.
-     */
     private fun runProcess(
         command: List<String>,
         timeoutSec: Long,

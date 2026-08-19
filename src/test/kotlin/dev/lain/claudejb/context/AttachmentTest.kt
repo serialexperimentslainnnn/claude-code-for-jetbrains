@@ -3,11 +3,6 @@ package dev.lain.claudejb.context
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of [Attachment.toPromptText] and the [Attachment.Selection] display name.
- * These are the prompt-text fallbacks the context actions emit until the composer grows a real
- * attachment sink, so the exact `@path` / fenced `path:line` shapes are load-bearing.
- */
 class AttachmentTest {
 
     @Test

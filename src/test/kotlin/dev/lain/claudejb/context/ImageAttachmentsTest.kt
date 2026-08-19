@@ -12,12 +12,6 @@ import java.nio.file.Path
 import java.util.Base64
 import javax.imageio.ImageIO
 
-/**
- * Pure-JVM coverage of [ImageAttachments]: the extension→media-type map, [ImageAttachments.imageFromFile]
- * reading a real on-disk PNG and encoding it to non-empty base64, and — the part that is a security control
- * rather than a convenience — [ImageAttachments.fromWebPayload]'s validation of what the browser hands the
- * bridge: the size cap, the magic-byte sniff that overrules the renderer's declared type, and the bounded name.
- */
 class ImageAttachmentsTest {
 
     @Test
@@ -47,7 +41,6 @@ class ImageAttachmentsTest {
         assertEquals("pic.png", attachment.displayName)
         assertEquals("image/png", attachment.mediaType)
         assertTrue(attachment.base64.isNotEmpty(), "base64 must not be empty")
-        // round-trips to the on-disk bytes
         assertTrue(Base64.getDecoder().decode(attachment.base64).contentEquals(png.readBytes()))
     }
 
@@ -76,8 +69,6 @@ class ImageAttachmentsTest {
         assertNull(ImageAttachments.imageOf(ByteArray(4), "image/png"))
     }
 
-    // ---- fromWebPayload: the trust boundary for {type:'attach'} coming out of the browser ----
-
     private val pngMagic = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
     private val jpegMagic = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0x00) + ByteArray(8)
     private val gifMagic = "GIF89a".toByteArray() + ByteArray(4)
@@ -105,8 +96,6 @@ class ImageAttachmentsTest {
 
     @Test
     fun `fromWebPayload ignores the declared media type and trusts the bytes`() {
-        // The browser guesses `file.type` from the extension, so a renamed file arrives announced as an image.
-        // What matters is that the type we put on the wire is the SNIFFED one, never the claimed one.
         val img = ImageAttachments.fromWebPayload("shot.png", "image/png", b64(jpegMagic))
         requireNotNull(img) { "the payload is a real JPEG, so it is accepted" }
         assertEquals("image/jpeg", img.mediaType)
@@ -114,7 +103,7 @@ class ImageAttachmentsTest {
 
     @Test
     fun `fromWebPayload rejects a non-image announced as an image`() {
-        val executable = byteArrayOf(0x4D, 0x5A) + ByteArray(32) // "MZ" — a PE binary renamed to .png
+        val executable = byteArrayOf(0x4D, 0x5A) + ByteArray(32)
         assertNull(ImageAttachments.fromWebPayload("payload.png", "image/png", b64(executable)))
     }
 
@@ -128,7 +117,6 @@ class ImageAttachmentsTest {
     fun `fromWebPayload enforces the size cap`() {
         val oversized = pngMagic + ByteArray(ImageAttachments.MAX_IMAGE_BYTES) { 0x00 }
         assertNull(ImageAttachments.fromWebPayload("huge.png", "image/png", b64(oversized)))
-        // and one byte under the cap still passes, so the guard is a ceiling and not a blanket refusal
         val atLimit = pngMagic + ByteArray(ImageAttachments.MAX_IMAGE_BYTES - pngMagic.size) { 0x00 }
         assertNotNull(ImageAttachments.fromWebPayload("big.png", "image/png", b64(atLimit)))
     }
@@ -137,7 +125,6 @@ class ImageAttachmentsTest {
     fun `fromWebPayload rejects an empty or undecodable payload`() {
         assertNull(ImageAttachments.fromWebPayload("x.png", "image/png", ""))
         assertNull(ImageAttachments.fromWebPayload("x.png", "image/png", "!!!not base64!!!"))
-        // shorter than any signature we could match
         assertNull(ImageAttachments.fromWebPayload("x.png", "image/png", b64(byteArrayOf(0x89.toByte(), 0x50))))
     }
 
@@ -157,7 +144,6 @@ class ImageAttachmentsTest {
             "shot.png",
             ImageAttachments.fromWebPayload("C:\\Users\\u\\shot.png", "image/png", b64(pngMagic))?.displayName,
         )
-        // control characters (a chip label is rendered) are dropped, and a nameless payload still gets a label
         assertEquals(
             "ab.png",
             ImageAttachments.fromWebPayload("a\u0000b\n.png", "image/png", b64(pngMagic))?.displayName,

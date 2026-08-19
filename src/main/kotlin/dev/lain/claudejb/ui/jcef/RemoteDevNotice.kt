@@ -4,29 +4,11 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 
-/**
- * The page shown in place of the chat when the client cannot reach the loopback port the IDE backend serves it
- * on. Under Remote Development the document lives on the backend and the thin client reaches it through a port
- * forward; with no forward the browser would paint its own network error, which names neither the port nor the
- * command that fixes it. This says both.
- *
- * Two invariants, and they are what the tests pin:
- *  - **Only the port leaves the host.** The real URL carries a one-shot token; nothing here may carry a token,
- *    a path, an environment value, a host name or any other credential. The port is the whole of the input.
- *  - **The document runs nothing and fetches nothing.** It carries its own CSP with `default-src 'none'`, has
- *    no script, no event-handler attribute and no remote resource, and its one `<style>` block is hash-pinned
- *    the same way [JcefHost] pins the app's — so `'unsafe-inline'` appears nowhere, `style-src-attr` included,
- *    which is why nothing here uses a `style` attribute either.
- */
 internal object RemoteDevNotice {
 
-    /** The command the user runs on their own machine to open the forward, for the given backend [port]. */
     fun sshCommand(port: Int): String = "ssh -L 127.0.0.1:$port:127.0.0.1:$port <user>@<remote-host>"
 
-    /** A complete, self-contained document explaining that the forward is missing and how to open it. */
     fun html(port: Int): String {
-        // The CSS is spliced in AFTER trimIndent: interpolating a multi-line value first would make its own
-        // lines part of the indent calculation, and the markup would keep the indentation of this source file.
         val document = """
             <!doctype html>
             <html lang="en">
@@ -61,7 +43,6 @@ internal object RemoteDevNotice {
         return document.replace("@STYLE@", STYLE)
     }
 
-    /** The one style block, hash-pinned by [csp]. Legible on its own, in either colour scheme, at any width. */
     private val STYLE = """
         :root { color-scheme: light dark; --bg: #ffffff; --fg: #1c1c1e; --dim: #4a4a4f; --line: #d0d0d5; --code: #f2f2f4; }
         @media (prefers-color-scheme: dark) {
@@ -96,13 +77,11 @@ internal object RemoteDevNotice {
         code { font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; font-size: 13px; }
     """.trimIndent()
 
-    /** Scripts are refused outright; the only relaxation is the exact hash of the one style block. */
     private fun csp(style: String): String =
         "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; " +
             "script-src 'none'; img-src 'none'; connect-src 'none'; font-src 'none'; " +
             "style-src 'sha256-${sha256Base64(style)}'"
 
-    /** Markup-escapes anything interpolated into the document, so a future caller cannot inject either. */
     private fun esc(s: String): String =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 

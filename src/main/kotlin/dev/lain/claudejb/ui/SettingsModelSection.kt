@@ -14,16 +14,6 @@ import javax.swing.DefaultListCellRenderer
 import javax.swing.JComboBox
 import javax.swing.JList
 
-/**
- * Model, effort, permission mode and the chat-wide toggles — the top of the Settings page.
- *
- * It owns the one genuinely stateful widget on the page: a model combo populated ASYNCHRONOUSLY from the
- * binary's catalogue while the dialog is already open. Everything about [shownModel] and [modelToSave] is
- * there because of that, and it is why this section is its own file rather than a handful of fields.
- *
- * [sessionOf] is a supplier rather than a session: the active chat can change between two openings of the
- * Settings dialog, and the listener has to follow it.
- */
 internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) : SettingsSection {
 
     private val modelCombo = JComboBox<String>().apply { isEditable = true }
@@ -34,12 +24,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
     private val restoreChatsCheck = JBCheckBox("Restore open chats on startup")
     private val reduceMotionCheck = JBCheckBox("Reduce motion (flatten chat animations)")
 
-    /**
-     * How long a finished agent or task stays listed. Live work is never hidden by it, whatever it is set to.
-     *
-     * The values and their order come from [WorkloadWindow]; restating them here would be a second list to
-     * keep in step with the rule that actually applies the window.
-     */
     private val workloadWindowCombo = JComboBox(WorkloadWindow.WINDOW_MINUTES.toTypedArray()).apply {
         renderer = object : SimpleListCellRenderer<Int>() {
             override fun customize(list: JList<out Int>, value: Int?, index: Int, selected: Boolean, focused: Boolean) {
@@ -48,20 +32,13 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         }
     }
 
-    /** Snapshot of the current session's model list, consulted by [modelRenderer] to pretty-print values. */
     private var currentModels: List<ModelInfo> = emptyList()
 
-    /** SessionListener kept so the combo repopulates when `initialize` lands with fresh models. Disposed below. */
     private var modelListener: SessionListener? = null
     private var modelListenerSession: ClaudeSession? = null
 
-    /** What [reset] last displayed in the model combo — the baseline [modelToSave] compares against. */
     private var shownModel: String = ""
 
-    /** Renders a model value (e.g. `sonnet`) as its versioned human label ("Sonnet 5"); falls back to the raw
-     *  value for custom/unknown entries. Shares the exact label logic the composer uses ([JcefModelLabels]), so the two
-     *  selectors never disagree. Only affects the dropdown popup — the editable text field still shows the value
-     *  (what we send to the binary), so power users can type a custom id. */
     private val modelRenderer = object : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?,
@@ -105,8 +82,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
     }
 
     override fun reset(s: ClaudeSettings.State) {
-        // A legacy install may still have the removed "default" alias persisted — show the concrete tier it now
-        // resolves to, so the dialog never displays an option we no longer offer (saving then pins it).
         shownModel = if (s.model == ClaudeSession.RECOMMENDED_ALIAS) ClaudeSession.DEFAULT_MODEL else s.model
         modelCombo.selectedItem = shownModel
         effortCombo.selectedItem = s.effort
@@ -115,8 +90,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         partialCheck.isSelected = s.includePartialMessages
         restoreChatsCheck.isSelected = s.restoreOpenChatsOnStartup
         reduceMotionCheck.isSelected = s.reduceMotion
-        // A value the list does not offer (an older document, a hand-edited one) falls back to the default
-        // rather than leaving the combo on whatever happened to be first.
         workloadWindowCombo.selectedItem =
             s.workloadWindowMinutes.takeIf { it in WorkloadWindow.WINDOW_MINUTES } ?: WorkloadWindow.DEFAULT_MINUTES
     }
@@ -132,7 +105,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         s.workloadWindowMinutes = workloadWindowMinutes()
     }
 
-    /** The selected window, defaulting when the combo has no selection (it always does, but null is a type). */
     private fun workloadWindowMinutes(): Int =
         (workloadWindowCombo.selectedItem as? Int) ?: WorkloadWindow.DEFAULT_MINUTES
 
@@ -153,22 +125,16 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         modelListenerSession = null
     }
 
-    /** Repopulate the model combo from the active session's `modelOptions()`, preserving the current selection
-     *  (so an unsaved choice or a custom-typed value survives a refresh). Called once at create and again
-     *  whenever the session reports fresh metadata (the binary's `initialize` lands asynchronously). */
     private fun rebuildModelCombo() {
         val opts = sessionOf().modelOptions()
         currentModels = opts
         val preserved = (modelCombo.editor?.item as? String)
             ?: (modelCombo.selectedItem as? String)
-        // Drop the floating "default" alias — the concrete tier is what we offer (matches the composer list).
         val values = opts.map { it.value }.filter { it != ClaudeSession.RECOMMENDED_ALIAS }
         modelCombo.model = DefaultComboBoxModel(values.toTypedArray())
         if (!preserved.isNullOrBlank()) modelCombo.selectedItem = preserved
     }
 
-    /** Subscribe to the active session so the combo refreshes when `initialize` returns real models. Idempotent
-     *  per session; swaps if the active session changes between Settings dialog opens. */
     private fun ensureModelListener() {
         val s = sessionOf()
         if (modelListenerSession === s) return
@@ -185,19 +151,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
 
     private fun modelText() = (modelCombo.editor.item as? String ?: modelCombo.selectedItem as? String).orEmpty().trim()
 
-    /**
-     * The model to persist: [current], unless the user actually changed it in this dialog.
-     *
-     * **Saving whatever the widget happens to hold is not safe here, and that is not hypothetical.** The
-     * combo is repopulated from the binary's catalogue, asynchronously, while the page is open — the
-     * `initialize` reply lands seconds after the dialog does — and a freshly populated `DefaultComboBoxModel`
-     * selects its own first entry. Any moment where that lands on the widget without [shownModel] following
-     * turns a plain OK on an unrelated setting (the binary path, a security toggle) into a silent change of
-     * model. A user's pinned Opus came back as `haiku`, which is simply what that catalogue lists first.
-     *
-     * Comparing against what [reset] PUT on screen — rather than trusting the widget — makes the write
-     * deliberate by construction: no edit, no write. A blank field is never a choice either.
-     */
     private fun modelToSave(current: String): String {
         val typed = modelText()
         if (typed.isBlank()) return current

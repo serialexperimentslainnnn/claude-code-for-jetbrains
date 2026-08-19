@@ -3,11 +3,6 @@ package dev.lain.claudejb.context
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of [FilePickerHelper.displayName] (the project-root-relative label promoted
- * out of `ExplainSelectionAction.relativize`). The IDE-bound overloads/pickers are exercised by the
- * headless suite; only the string logic is load-bearing here.
- */
 class FilePickerHelperTest {
 
     @Test
@@ -37,7 +32,6 @@ class FilePickerHelperTest {
 
     @Test
     fun `a sibling directory sharing the base prefix is not treated as inside`() {
-        // "/proj-other/..." must not be relativized against "/proj"
         assertEquals("X.kt", FilePickerHelper.displayName("/proj", "/proj-other/X.kt"))
     }
 

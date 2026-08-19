@@ -1,16 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   THE WAITING SCREENS — loading, "Claude Code was not found", sign-in
-   ════════════════════════════════════════════════════════════════════════════
-   The three screens that stand in front of a conversation which cannot happen yet. Each is a LAYER OVER THE
-   TRANSCRIPT — a sibling of #conversation sharing the first cell of #work's grid — never a panel over the
-   app and never a row inside the transcript. See the boot screen below for what that buys and what each of
-   the two rejected shapes cost.
-
-   Two blocks here are about the whole page rather than those screens: the narrow-width tightening
-   immediately below, and the `body.reduced-motion` block that closes the file. The second is `!important`
-   on a universal selector, so its position in `JcefHost.CSS_PARTS` decides nothing — it reaches every rule
-   of every part. */
-/* responsive: tight panels (the tool window can be narrow) look professional, not cramped */
 @media (max-width: 600px) {
   #conversation {
     padding: 16px 12px 24px;
@@ -18,44 +5,15 @@
   #dock {
     padding: 8px 12px 12px;
   }
-  /* NB `.composer-bar { flex-wrap: wrap }` used to be repeated here; the bar wraps at every width now. */
   .dashboard .dash-inner {
     grid-template-columns: 1fr !important;
   }
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   BOOT SCREEN — shown while the `claude` binary launches
-   ════════════════════════════════════════════════════════════════════════════
-   A LAYER OVER THE TRANSCRIPT, and the shape is the same one `.dashboard` uses (dashboard.css): the same
-   grid cell as #conversation, one step over it, opaque. It has been the other two shapes and both were
-   wrong in a way worth keeping written down.
-
-   `position: absolute; inset: 0` over #app covered whatever it was laid over — first the chat tabs (so you
-   could not switch chats while one was starting), then, once that was fixed, the composer. Moving it INSIDE
-   #conversation fixed that by construction and broke something quieter: `cc.clear()` owns that element's
-   children and empties it on every transcript switch and every session stop, so the first clear removed all
-   three screens from the document for good. Nothing threw — `renderBoot` looks the element up and returns
-   when it is absent — so a tab that later lost its binary, its login or its process simply showed no screen
-   at all, and only a newly opened chat (a fresh page) still had one.
-
-   As a sibling of #conversation both go away at once: the layer covers exactly the transcript, and the
-   transcript's own lifecycle cannot reach it.
-
-   The composer stays usable: a prompt typed while the binary starts is queued and sent when it is ready
-   (`ClaudeSession.send` starts the process and enqueues; `pump` writes once there is a session). */
 #boot {
   grid-area: 1 / 1;
-  /* Same rank as the dashboard, deliberately: a second layer over the transcript reuses that step rather
-     than climbing past it, because the next number up is the dock's and a screen that outranks the composer
-     is the failure this whole arrangement exists to prevent. Which of the two paints when both are up is
-     document order, and it comes out right: app-session.js inserts the dashboard directly after
-     #conversation, i.e. BEFORE these, so a waiting screen covers the panel and not the other way round. */
   z-index: 1;
   min-height: 0;
-  /* Opaque, or the transcript reads through the screen's own text; and scrollable, because the install card
-     is taller than a narrow tool window. `safe center` is the pair to that scroll: plain centring pushes
-     overflow out of BOTH ends of the box, and the top one cannot be scrolled back to. */
   background: var(--bg);
   overflow-y: auto;
   overflow-x: hidden;
@@ -63,10 +21,6 @@
   align-items: safe center;
   justify-content: center;
   padding: clamp(24px, 12vh, 90px) clamp(16px, 5vw, 40px);
-  /* A short grace before it draws. The screen is visible by default — the honest initial state is "waiting",
-     not "idle" — but a start that takes 100 ms does not deserve a panel: `both` holds it at opacity 0 for
-     the delay, so a fast start never draws it and a slow one still says "wait" immediately after. The wait
-     itself is unchanged; only whether it is worth showing. */
   --wait-grace: 0.35s;
   animation: fade 0.14s var(--ease) var(--wait-grace) both;
 }
@@ -78,18 +32,6 @@
   text-align: center;
   padding: 0 24px;
 }
-/* ── the sequence ───────────────────────────────────────────────────────────
-   The rows of a waiting screen arrive one beat apart instead of the whole panel landing at once, so the eye
-   is led down it in reading order: the mark, then what is happening, then what is being waited for or asked.
-
-   `--wait-grace` is inherited from the screen itself, which is what keeps every beat behind the loading
-   screen's grace while letting the sign-in card start on its first frame. `--wait-beat` is the row's place in
-   the order; a row that does not set one is the first.
-
-   Staggered by CLASS, never by `:nth-child()`. All five `.auth-step` containers are in the markup at once and
-   all but one carry `hidden`, so counting position would hand the error step five beats for being sixth in a
-   list of which exactly one is ever displayed. And `animation-delay` is a longhand AFTER the shorthand
-   deliberately: the shorthand resets it, so the two lines have to be in that order. */
 .boot-inner > *,
 .auth-inner > * {
   --wait-in: 0.2s;
@@ -108,13 +50,6 @@
 #boot-missing {
   --wait-beat: 3;
 }
-/* The Claude starburst, same glyph as the empty state — a character, not an asset, because the CSP forbids
-   url() and every external resource. Breathes gently so the screen is alive without a spinner competing with
-   the dots for attention.
-
-   Two animations, and both have to be named here: `animation` is a shorthand, so declaring the breathing
-   alone would drop the entrance every other row gets. It takes the first beat, and starts breathing only once
-   that entrance has finished — otherwise the fade and the breath fight over the same opacity. */
 .boot-mark {
   font-size: 30px;
   line-height: 1;
@@ -139,12 +74,6 @@
   font-weight: 600;
   color: var(--text);
 }
-/* Dots cycle . → .. → ... and repeat.
-
-   `steps(1, end)` with content swapped at each third holds each state for a full beat instead of easing
-   between them — the point is a discrete count, not a fade. Rendered in a ::after so the dots are not part of
-   the text node: the element is aria-hidden, so a screen reader announces "Loading Claude Code" once rather
-   than re-reading the phrase three times a second as the content mutates. */
 .boot-dots::after {
   content: '.';
   animation: bootDots 1.2s steps(1, end) infinite;
@@ -160,9 +89,6 @@
     content: '...';
   }
 }
-/* Reduced motion: the universal reset would freeze both at their first frame, leaving a single dot and a
-   half-faded mark that read as "stuck". Show the settled state instead — all three dots, mark at full
-   opacity — which is the honest still image of this screen. */
 body.reduced-motion .boot-mark {
   animation: none !important;
   opacity: 1;
@@ -175,14 +101,9 @@ body.reduced-motion .boot-dots::after {
   font-size: 12px;
   color: var(--dim);
 }
-/* The wait is real: block interaction rather than letting keystrokes fall on the floor. */
-/* NB `#app.booting` used to make the transcript and the dock inert while the binary came up. It went with
-   the overlay: the composer is usable now, because a prompt typed during those few seconds is queued and
-   sent the moment there is a session — which is better than a field that looks live and refuses you. */
 
-/* ── "Claude Code was not found" card (the boot overlay's fourth state) ─────── */
 #boot.missing .boot-dots {
-  display: none; /* nothing is loading — the card asks for a decision, not patience */
+  display: none;
 }
 #boot-missing {
   display: flex;
@@ -218,9 +139,6 @@ body.reduced-motion .boot-dots::after {
 .boot-install-btn.installing {
   opacity: 0.75;
 }
-/* "Check again", for an install the user ran outside the IDE. `#boot-missing` is a flex column, so a bare
-   button stretches to the card's full width and reads as one more primary decision — which it is not: it asks
-   the host to look again, it does not install anything. Sized to its label, at the start of its own line. */
 .boot-recheck {
   align-self: flex-start;
 }
@@ -230,7 +148,6 @@ body.reduced-motion .boot-dots::after {
   gap: 6px;
   min-width: 0;
 }
-/* The small print of both cards: field labels, the command hint, the API-key hint. */
 .boot-path-label,
 .auth-label,
 .auth-hint,
@@ -264,8 +181,6 @@ body.reduced-motion .boot-dots::after {
   align-items: center;
   min-width: 0;
 }
-/* Everything else about these fields is THE themed field, shared with the elicitation cards — see
-   `.elicit-card input` in permissions.css. Only their behaviour in this row belongs here. */
 .boot-path-controls input,
 .auth-row input {
   flex: 1;
@@ -278,11 +193,6 @@ body.reduced-motion .boot-dots::after {
   min-height: 1em;
 }
 
-/* ── sign-in card ───────────────────────────────────────────────────────────── */
-/* A layer over the transcript, like the boot screen and for the same reasons — see it for why this is a
-   sibling of #conversation and not a row inside it. The z-index the two share says where they sit relative
-   to the TRANSCRIPT, and nothing about each other: which of them is up is still decided by the host
-   (`cc.state`), which raises exactly one — no binary beats no login — rather than by stacking. */
 #auth-card {
   grid-area: 1 / 1;
   z-index: 1;
@@ -294,10 +204,6 @@ body.reduced-motion .boot-dots::after {
   align-items: safe center;
   justify-content: center;
   padding: clamp(24px, 10vh, 70px) clamp(16px, 5vw, 40px);
-  /* No grace, unlike the loading screen. That one is hidden for a third of a second because a start which
-     takes 100 ms does not deserve a panel; this card is not a wait but the control that repairs the session,
-     and it is raised only once the host has decided it is needed. Its rows still arrive in sequence — they
-     just start on the first frame. */
   --wait-grace: 0s;
 }
 .auth-inner {
@@ -313,9 +219,6 @@ body.reduced-motion .boot-dots::after {
   font-size: 15px;
   font-weight: 600;
 }
-/* A step of the card, and the collapsed API-key route nested inside one: both are flex columns of their own.
-   Neither needs a `[hidden]` twin — `[hidden] { display: none !important }` in base.css already outranks
-   every display rule here, which is the whole reason it carries that `!important`. */
 .auth-step,
 #auth-key-fields {
   display: flex;
@@ -358,31 +261,6 @@ body.reduced-motion .boot-dots::after {
   font-size: 12px;
 }
 
-/* Reduced motion — driven by the HOST (body.reduced-motion), deliberately NOT by
-   `@media (prefers-reduced-motion: reduce)`.
-
-   REGRESSION THIS FIXES (5.0.0): the accessibility pass added exactly this rule set behind that media query,
-   and inside JCEF it killed every animation in the chat for everyone — the tool cards' sky↔amber fade and
-   spinner, the rise/pop of new rows, the permission-card entrance. The UI went rigid, with nothing in any log
-   to explain it. The one animation that survived was Vibe Mode's rainbow, and that is the tell: it is driven
-   by `setInterval` in JS, so no CSS rule can touch it. Everything that was a `@keyframes` died; the one thing
-   that was not, lived.
-
-   The cause is that the browser here cannot answer the question. JCEF renders off-screen: there is no GTK
-   window, and under native Wayland no XSETTINGS bridge either, so Chromium has no desktop preference to read
-   and the query does not reflect what the user actually asked for. Toggling GNOME's animation setting changed
-   nothing, which is what proved it was not the user's preference being honoured.
-
-   So the authority moves to the host, which CAN answer: [JcefTheme] reads the IDE's own animation preference
-   and sends `reducedMotion`. That also makes the behaviour testable and keeps the preference honoured —
-   motion is still reduced when the user asks for it, just asked of something that knows.
-
-   A DELAY IS NOT A DURATION, and that is why both are zeroed here. A `both`-fill animation holds its element
-   at the from-state for the whole of its delay, so flattening only the duration leaves a staggered entrance
-   running: each row is blank for as long as the stagger says, then snaps in. The sequence survives, only
-   faster and uglier. Reducing motion has to flatten WHEN a row arrives as well as how long it takes to get
-   there — which is also what stops the loading screen sitting blank through its grace before appearing at
-   once. */
 body.reduced-motion *,
 body.reduced-motion *::before,
 body.reduced-motion *::after {

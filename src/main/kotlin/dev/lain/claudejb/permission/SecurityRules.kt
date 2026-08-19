@@ -1,162 +1,33 @@
 package dev.lain.claudejb.permission
 
-/**
- * The two-level vocabulary of [SensitiveGuard]: a **category** is what the UI groups by, a **rule** is what one
- * toggle switches and what one hit names.
- *
- * ### Why one enum replaced two enums and seven booleans
- * The guard used to carry a flat `Category`, a `ForeignReason` sub-enum for the one category that needed finer
- * grain, and one `enforce*` boolean per rule on `SensitiveGuard.Policy`. Three consequences, all of them paid
- * for more than once: the sub-enum existed only because FOREIGN had three rules and nothing else did, so the
- * shape said "this category is special" when the real fact is that a category has rules; `isEnforced` was a
- * five-branch `when` with a nested three-branch `when` inside it, which is a lookup written as control flow;
- * and **a new rule was enforced only if somebody remembered to add its boolean and wire it**, which is a
- * security default decided by diligence.
- *
- * The set of DISABLED rules is the storage instead (`SensitiveGuard.Policy.disabledRules`), and zero-trust falls
- * out of the default: an empty set enforces everything, so a rule added tomorrow is on the moment it exists, and
- * forgetting to wire its toggle fails safe rather than silently off.
- *
- * ### Granularity is what keeps the off switch survivable
- * Every rule here is deliberately **narrow**, and that is a security property rather than a cosmetic one. The
- * permission card carries a one-click "disable this rule" link, so **a rule is the blast radius of that click**:
- * a single "block destructive operations" toggle would mean a user who needs `terraform destroy` also opens
- * `DROP DATABASE` and `git push --force` in the same gesture. Seven destructive rules instead of one is what lets
- * the click open exactly the vector that fired and leave every other one — including the ones nobody has thought
- * of yet — enforced. Bulk toggles exist, but only on the Settings surfaces, reached on purpose.
- *
- * ### The constant names are the persisted ids, and they are a wire format
- * `ClaudeSettings.State.disabledSecurityRules` stores them by [Enum.name], the composer's ⚙ menu sends them as
- * `rule:<NAME>`, and both are verified through [SecurityRule.from]. **Renaming a constant therefore silently
- * re-enables that rule** for everyone who had turned it off — the id would no longer resolve and the CSV entry
- * would be dropped. Add constants freely; rename one only with a migration.
- */
 enum class SecurityCategory(val label: String) {
-    /** What an attacker comes for, and the commands that fetch it. */
     SENSITIVE_DATA("Sensitive data"),
 
-    /** Where a call is allowed to act, and how it is allowed to act there. */
     FILESYSTEM_BOUNDARY("Filesystem boundary"),
 
-    /** Space that is not this machine's own: another user, another host, another OS' drive. */
     FOREIGN_TERRITORY("Foreign territory"),
 
-    /** The machine underneath the filesystem. */
     SYSTEM_INTEGRITY("System integrity"),
 
-    /** Where the call talks to, and through what. */
     NETWORK_EGRESS("Network egress"),
 
-    /**
-     * **The second axis, and the only one that is not about an attacker.**
-     *
-     * Every other category answers "is somebody stealing something". This one answers "is this action
-     * irreversible", and a misread instruction is enough to trip it — no hostile model required. `terraform
-     * destroy` against the wrong workspace, a `DROP DATABASE` meant for the test instance, an `rm -rf` whose
-     * variable turned out empty: legitimate commands with no undo, which is why they are judged by shape and
-     * never by where they run.
-     */
     DESTRUCTIVE_OPERATION("Destructive operations"),
 
-    /**
-     * Turning this machine into something that runs someone else's code — now, or after the session ends.
-     *
-     * Not a path and not a domain, so nothing in the location or egress families can see any of it: a package
-     * install runs its author's post-install script, a cron entry or a git hook runs again tomorrow, and an
-     * `LD_PRELOAD` runs inside a process that was trusted to do something else.
-     */
     CODE_EXECUTION("Code execution & persistence"),
 
-    /**
-     * **Intrusion techniques — the attacker's own kill chain, recognised so it can be stopped.**
-     *
-     * This is the category the guard exists FOR: a prompt injection is an attacker acting through the agent, and
-     * an attacker does not stop at one file — they walk a chain (reconnaissance, credential access, defence
-     * evasion, lateral movement, C2). Every other category protects one resource; this one recognises the
-     * *adversary's methods*, mapped to MITRE ATT&CK tactics, so the deepest coverage in the whole set lives here.
-     *
-     * **It is a detector, not an attacker.** Nothing here runs a technique — each rule reads a command and
-     * decides to STOP it, exactly as a Yara signature or an EDR rule names malware in order to catch it. Knowing
-     * how an intrusion works is the precondition for detecting one, which is the whole of detection engineering.
-     *
-     * **Two design lines keep it from rotting or crying wolf**, and both are lessons this package already paid
-     * for:
-     *  - A curated list of tool names is a *blacklist*, and a blacklist is what you miss the next tool with (the
-     *    `/dev` enumeration, the stale `AGENT_TOOLS`). So the curated half is paired with SHAPE-based rules that
-     *    catch the unknown — an outbound connection to an undeclared host by its form, not by a name.
-     *  - The dual-use floor is intact: `whoami`, `id`, `ps`, `find`, `sudo` are what an honest agent runs all
-     *    day, so discovery is closed by *reading an enumeration FILE*, never by a command name. A rule that
-     *    interrupts routine work is a rule switched off, taking the rest of the category with it.
-     *
-     * **The whole category disables as one toggle** — the population that legitimately needs these techniques
-     * (an authorised red-team engagement on the user's own machine) turns the category off in Settings, in the
-     * cold, does the work, and turns it back on. Disabling it opens NONE of the confidentiality or destructive
-     * walls: it is one deliberate choice with a bounded blast radius, which is the whole point of the grouping.
-     */
     INTRUSION_TECHNIQUE("Intrusion techniques"),
 
-    /**
-     * **What the guard cannot read, it cannot judge** — and a call it cannot judge must not be waved through.
-     *
-     * Every other category answers "is this thing bad". These answer "is this thing knowable", which is the
-     * question a rule set gets walked around at: a destination hidden behind a variable whose value lives in the
-     * process environment, and a command hidden inside a file. Both were reachable with no rule saying a word,
-     * because each ends in the guard matching a string that does not contain what will actually happen.
-     */
     OPAQUE("Opaque to the guard"),
 }
 
-/**
- * How deep the guard follows an indirection before it stops following and starts refusing — one bound, shared by
- * the two things that can nest: a variable defined in terms of another variable, and a script that runs a script.
- *
- * Five is past any real configuration and any real build wrapper, and the number is not the point: **reaching it
- * is itself the finding**. Anything that needs a sixth hop to say where it is going, or a sixth file to say what
- * it runs, is structured to be unanalysable, and [SecurityRule.RECURSION_LIMIT] answers that with a block rather
- * than a shrug — a card is for "the plugin cannot see this", and this is "something went to trouble so it could
- * not be seen".
- *
- * It is also what makes both recursions TERMINATE on the thread that reads the binary's entire stdout, which is
- * the thread nothing in this package may hang (see [GuardPaths.expandWithResolved]).
- */
 internal const val MAX_ANALYSIS_DEPTH = 5
 
-/**
- * One switchable rule of [SensitiveGuard]. See [SecurityCategory] for why this shape.
- *
- * Four strings, each with one audience, because the same sentence cannot serve all of them:
- *  - [label] is the row both settings surfaces draw (the composer's ⚙ menu and Settings ▸ Security);
- *  - [hint] is the examples only the Settings page has room for;
- *  - [blockedReason] and [blockedWhy] are what the **model** is told when the rule fires — what it cannot do,
- *    and why that is worth refusing.
- *
- * One string per purpose, in one place, because the two surfaces disagreeing about what a rule is called is how a
- * user turns off a rule they thought was another one — and because a block message assembled at the call site is
- * a message that drifts from the toggle it is telling the user about.
- *
- * **[blockedReason] and [blockedWhy] deliberately never name the Settings path.** The model is not told where the
- * off switch is: telling a possibly-hijacked agent which lever to ask the user to pull is a workaround with extra
- * steps. The human gets that link instead, on the card.
- */
 enum class SecurityRule(
     val category: SecurityCategory,
     val label: String,
     val hint: String,
-    /** What the model is told it cannot do — one sentence, second person, no jargon and no rule id. */
     val blockedReason: String,
-    /** Why that is refused — the mechanism, so the answer reads as a reason rather than as a policy citation. */
     val blockedWhy: String,
-    /**
-     * May the always-allow list lift this rule's block for one exact command? **Defaults to false**, and the
-     * default is the security property: a rule added next year cannot be whitelisted past until somebody
-     * deliberately decides it can be.
-     *
-     * True only on rules that judge an ACTION — a destructive command, an install, a shell write, a version-control
-     * safeguard being skipped. Never on a wall: credentials, foreign territory, a device, egress, or something the
-     * guard could not read. That guarantee is structural rather than a promise, because the walls are asked first
-     * in [SensitiveGuard]'s severity ordering, so a command that trips one is reported AS the wall — and a wall is
-     * not whitelistable. There is no way to allow-list `cat ~/.ssh/id_rsa`.
-     */
     val whitelistable: Boolean = false,
 ) {
     CREDENTIALS(
@@ -412,33 +283,10 @@ enum class SecurityRule(
 
     companion object {
 
-        /**
-         * The rule this id names, or null — **case-sensitive and exact**, because it is a wire format.
-         *
-         * Every id reaching the guard comes from somewhere the user could have typed (a stored CSV) or from a
-         * browser (the ⚙ menu's `rule:<NAME>` key), and an unknown id resolves to null, which the callers turn
-         * into "no such rule": a garbled entry can therefore only ever fail to DISABLE something. That direction
-         * is the whole reason the storage is the disabled set rather than the enabled one.
-         */
         fun from(id: String): SecurityRule? = entries.firstOrNull { it.name == id }
 
-        /** The rules of one category, in declaration order — the order both UIs draw them in. */
         fun of(category: SecurityCategory): List<SecurityRule> = entries.filter { it.category == category }
 
-        /**
-         * The ONE canonical spelling of a stored disabled set: known ids in declaration order, then any id this
-         * build cannot resolve, in the order it arrived.
-         *
-         * It exists because **two surfaces write this field** — the Settings page rebuilds it from one checkbox
-         * per rule, the composer's ⚙ menu toggles one entry of it — and a set has no inherent order, so
-         * without one owner for the spelling the two produce different strings for the same configuration. The
-         * visible cost of that is small and confusing: the Settings page compares its own rendering against the
-         * stored text to decide whether anything was edited, so a menu-written order made the page open with
-         * *Apply* already enabled and nothing on it changed.
-         *
-         * Unknown ids are kept rather than pruned: one can only come from a newer version, and dropping it here
-         * would re-enable, on somebody's next OK, a rule they turned off in a later IDE.
-         */
         fun canonicalCsv(ids: Collection<String>): String {
             val trimmed = ids.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             val known = trimmed.mapNotNull { from(it) }.distinct().sortedBy { it.ordinal }.map { it.name }

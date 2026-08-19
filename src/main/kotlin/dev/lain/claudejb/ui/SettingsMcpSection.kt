@@ -11,12 +11,6 @@ import javax.swing.JComboBox
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
 
-/**
- * The JetBrains MCP server (opt-in) and any number of custom MCP servers.
- *
- * The custom-server JSON is [validate]d before anything is written: an unparseable object here is what the
- * trust gate falls back to treating as "no extra risk", so the page is where it has to be caught.
- */
 internal class SettingsMcpSection : SettingsSection {
 
     private val ideMcpCheck = JBCheckBox("Enable JetBrains MCP server — lets Claude query the IDE")
@@ -86,11 +80,9 @@ internal class SettingsMcpSection : SettingsSection {
     )
 
     private companion object {
-        /** TCP port bounds for the JetBrains MCP server spinner (0 is not a listenable port). */
         const val MIN_PORT = 1
         const val MAX_PORT = 65_535
 
-        /** Visible rows of the custom-server JSON area, i.e. how tall it is before scrolling. */
         const val CUSTOM_MCP_ROWS = 7
     }
 }

@@ -9,11 +9,6 @@ import kotlinx.serialization.json.put
 import java.io.File
 import java.nio.file.Files
 
-/**
- * Headless: [DiffLifecycleManager] owns snapshot capture, the auto-opened diff registry and the write-safe
- * VFS refresh for one session. Uses the light-fixture [project] so [DiffPresenter.openDiff] (FileEditorManager)
- * has a real project to open the diff tab in.
- */
 class DiffLifecycleManagerTest : BasePlatformTestCase() {
 
     private lateinit var manager: DiffLifecycleManager
@@ -24,7 +19,6 @@ class DiffLifecycleManagerTest : BasePlatformTestCase() {
         OpenedDiffsService.getInstance(project).closeAll()
     }
 
-    /** Writes a temp file under the test root and returns its absolute path. */
     private fun tempFile(name: String, content: String): String {
         val dir = Files.createTempDirectory("difflifecycle").toFile()
         val f = File(dir, name)
@@ -43,7 +37,6 @@ class DiffLifecycleManagerTest : BasePlatformTestCase() {
         assertEquals("Write", snap!!.toolName)
         assertEquals(path, snap.filePath)
         assertEquals("fun a() {}\n", snap.beforeText)
-        // Persisted under the id for the transcript's "View diff".
         assertSame(snap, manager.snapshot("toolu_1"))
     }
 
@@ -53,11 +46,6 @@ class DiffLifecycleManagerTest : BasePlatformTestCase() {
         assertNull(manager.snapshot("toolu_x"))
     }
 
-    // NOTE: we exercise the manager's logic via captureForReview/onToolResult (synchronous, UI-free), NOT
-    // autoOpenDiff — the latter calls DiffPresenter.openDiff → FileEditorManager.openFile(ChainDiffVirtualFile),
-    // which the light BasePlatformTestCase fixture (TestEditorManagerImpl) cannot open (NPE). Opening the real
-    // diff tab is DiffPresenter's responsibility (covered by its own tests + runtime); here we assert the
-    // load-bearing behaviour of the auto-approve path: the pre-write snapshot is captured and retrievable.
     fun `test captureForReview captures the snapshot for an auto-approved edit`() {
         val path = tempFile("b.kt", "old\n")
         val input = buildJsonObject {
@@ -80,8 +68,6 @@ class DiffLifecycleManagerTest : BasePlatformTestCase() {
         }
         manager.captureForReview("Write", input, "toolu_3")
 
-        // No auto-opened diff tab was registered (we didn't call autoOpenDiff), so onToolResult just returns the
-        // persisted pre-write snapshot for the inline diff and must not throw.
         val snap = manager.onToolResult("toolu_3")
         com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
         assertNotNull(snap)
@@ -96,9 +82,7 @@ class DiffLifecycleManagerTest : BasePlatformTestCase() {
         val path = tempFile("d.kt", "x\n")
         manager.markForRefresh(path)
         manager.refreshTouched()
-        // refreshTouched dispatches a write-safe (nonModal) VFS refresh — drain and ensure it runs cleanly.
         com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
-        // Calling again with nothing pending is a no-op.
         manager.refreshTouched()
     }
 }

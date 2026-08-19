@@ -7,13 +7,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure logic of [InfoDialogs]: the binary-version and effective-settings formatting. No session, no Swing
- * display — these pin the contract the dialogs render.
- */
 class InfoDialogsTest {
-
-    // --- formatBinaryVersion ---
 
     @Test
     fun `formats the version key`() {
@@ -31,8 +25,6 @@ class InfoDialogsTest {
         assertEquals("Binary version unavailable.", InfoDialogs.formatBinaryVersion(null))
         assertEquals("Binary version unavailable.", InfoDialogs.formatBinaryVersion(buildJsonObject {}))
     }
-
-    // --- formatEffectiveSettings ---
 
     @Test
     fun `formats top-level settings sorted by key, scalars inline`() {

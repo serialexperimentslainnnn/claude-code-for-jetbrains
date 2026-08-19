@@ -9,13 +9,6 @@ import javax.swing.DefaultListCellRenderer
 import javax.swing.JComboBox
 import javax.swing.JList
 
-/**
- * Which API provider a session runs against, and that provider's own key.
- *
- * The key is the one thing on this page that never reaches the settings document: it goes to the IDE password
- * safe, in the selected provider's OWN slot, so a DeepSeek key and an Anthropic key can never overwrite each
- * other. That is also why this section needs the [settings] service and not just the state.
- */
 internal class SettingsProviderSection(private val settings: ClaudeSettings) : SettingsSection {
 
     private val providerCombo = JComboBox(Provider.entries.toTypedArray()).apply {
@@ -55,9 +48,6 @@ internal class SettingsProviderSection(private val settings: ClaudeSettings) : S
     override fun validate() {
         val provider = selectedProvider()
         val apiKey = String(apiKeyField.password).trim()
-        // A third-party provider MUST carry its own key — without it we'd emit nothing and the binary would
-        // fall back to your Anthropic login (which doesn't work there). And the key must NOT be an Anthropic
-        // key: your Anthropic credentials are never used for another provider.
         if (provider.requiresApiKey && apiKey.isEmpty()) {
             throw ConfigurationException(
                 "${provider.label} requires its own API key. Enter the key, or switch the provider back to Anthropic.",
@@ -75,13 +65,11 @@ internal class SettingsProviderSection(private val settings: ClaudeSettings) : S
         val provider = selectedProvider()
         val apiKey = String(apiKeyField.password).trim()
         s.provider = provider.id
-        // Save only the selected provider's own key (Anthropic has none; leave other providers' keys intact).
         if (provider.requiresApiKey) settings.setProviderApiKey(provider, apiKey)
     }
 
     override fun changedFields(s: ClaudeSettings.State): List<Boolean> {
         val provider = selectedProvider()
-        // The key only participates when the provider actually has one; otherwise it is not a difference.
         val apiKeyChanged = provider.requiresApiKey &&
             String(apiKeyField.password).trim() != settings.getProviderApiKey(provider)
         return listOf(
@@ -92,12 +80,6 @@ internal class SettingsProviderSection(private val settings: ClaudeSettings) : S
 
     private fun selectedProvider(): Provider = providerCombo.selectedItem as? Provider ?: Provider.DEFAULT
 
-    /**
-     * Reflect the selected provider in the API-key field: enabled only for a third-party provider, and loaded
-     * with THAT provider's own isolated stored key (so switching the combo shows each provider's key, and
-     * Anthropic — which needs none — shows an empty, disabled field). Discards unsaved edits to the previously
-     * shown key, which is the intended trade-off for per-provider isolation in a simple form.
-     */
     private fun onProviderSelectionChanged() {
         val p = selectedProvider()
         apiKeyField.isEnabled = p.requiresApiKey

@@ -8,15 +8,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * The dashboard account card's fallback chain, on the pure JVM: which of the four sources answers for Email
- * and Organization, and what makes the card exist at all.
- *
- * The vaulted [AccountProfile] identity is the source under test. On the plugin's primary authentication
- * route the credential reaches the binary as `CLAUDE_CODE_OAUTH_TOKEN` and `auth status` answers without an
- * email, so the safe is the only place those two rows can come from — and it is also the one source that must
- * not be able to conjure a card for an identity the session is not running as.
- */
 class JcefAccountDataTest {
 
     private val vaulted = AccountProfile.Identity(email = "vaulted@example.com", org = "Vaulted Org")
@@ -25,7 +16,6 @@ class JcefAccountDataTest {
     fun `the vaulted profile fills email and organization when the earlier sources carry neither`() {
         val card = JcefAccountData.accountJson(
             account = AccountInfo(),
-            // The reduced identity `auth status` returns when asked with our own token: a route, no account.
             probe = AuthCli.AuthState(loggedIn = true, authMethod = "oauth_token", apiProvider = "firstParty"),
             stored = null,
             vaultedPlan = null,

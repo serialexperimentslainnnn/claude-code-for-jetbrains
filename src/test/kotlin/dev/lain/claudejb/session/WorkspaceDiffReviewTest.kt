@@ -4,13 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * [WorkspaceDiffReview] — rebuilding the BASE side of a whole-session diff.
- *
- * The binary sends hunks, the IDE's diff viewer needs two whole texts, and the left-hand one has to be
- * reconstructed. The property that matters most here is the refusal: a review tool that shows a fabricated
- * "before" is worse than one that shows nothing, because nothing on screen tells the user which it is.
- */
 class WorkspaceDiffReviewTest {
 
     private fun hunk(oldStart: Int, oldLines: Int, newStart: Int, newLines: Int, vararg lines: String) =
@@ -34,7 +27,6 @@ class WorkspaceDiffReviewTest {
 
     @Test
     fun `several hunks in one file all land`() {
-        // Applied bottom-up, or the first replacement shifts the line numbers of the second.
         val current = "A\n2\n3\n4\nB"
         val base = WorkspaceDiffReview.baseOf(
             current,
@@ -43,12 +35,8 @@ class WorkspaceDiffReviewTest {
         assertEquals("a\n2\n3\n4\nb", base)
     }
 
-    // ── the refusal ───────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a hunk that does not match the file on disk reconstructs nothing`() {
-        // The file moved between the diff being computed and being read — ordinary on a tree an agent is
-        // still editing. Guessing here would put a base on screen that never existed.
         val hunks = listOf(hunk(1, 3, 1, 3, " one", "-two", "+TWO", " three"))
         assertNull(WorkspaceDiffReview.baseOf("one\nSOMETHING ELSE\nthree", hunks))
     }
@@ -58,8 +46,6 @@ class WorkspaceDiffReviewTest {
         assertNull(WorkspaceDiffReview.baseOf("short", listOf(hunk(40, 2, 40, 2, " x", "+y"))))
         assertNull(WorkspaceDiffReview.baseOf("short", listOf(hunk(1, 1, 0, 1, "+y"))))
     }
-
-    // ── what each kind of file is allowed to show ─────────────────────────────────────────────────────────
 
     @Test
     fun `each reason produces the side it should`() {
@@ -88,7 +74,6 @@ class WorkspaceDiffReviewTest {
 
         assertEquals(WorkspaceDiffReview.Reason.OK, byPath["edited.kt"]!!.reason)
         assertEquals("was", byPath["edited.kt"]!!.base)
-        // Untracked is not "unknown": the whole file IS the addition, so the empty left side is the truth.
         assertEquals(WorkspaceDiffReview.Reason.UNTRACKED, byPath["new.kt"]!!.reason)
         assertEquals("", byPath["new.kt"]!!.base)
         assertEquals(WorkspaceDiffReview.Reason.BINARY, byPath["logo.png"]!!.reason)
@@ -99,7 +84,6 @@ class WorkspaceDiffReviewTest {
 
     @Test
     fun `a file that cannot be read is skipped, not shown as empty`() {
-        // An empty pane reads as "the whole file was deleted", which is a different and alarming claim.
         val diff = WorkspaceDiff(perFileStats = listOf(stats("gone.kt")))
         assertEquals(emptyList<WorkspaceDiffReview.Side>(), WorkspaceDiffReview.sides(diff) { null })
     }

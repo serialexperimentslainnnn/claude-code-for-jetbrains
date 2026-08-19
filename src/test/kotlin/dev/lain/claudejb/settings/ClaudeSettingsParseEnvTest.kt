@@ -4,10 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Unit tests for [ClaudeSettings.parseEnv]. Exercises the `KEY=VALUE` line parsing directly via the
- * plain no-arg constructor (no IDE/service runtime needed); the env source is the persisted state.
- */
 class ClaudeSettingsParseEnvTest {
 
     private fun settingsWithEnv(env: String): ClaudeSettings =

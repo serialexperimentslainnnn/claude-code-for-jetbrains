@@ -5,15 +5,8 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * [WorkloadWindow] — the single visibility rule the tab bar and the dashboard both defer to.
- *
- * Every instant here is a literal, and the clock is the parameter it is: a rule about elapsed time that reads
- * its own clock cannot be tested at its boundary, only near it.
- */
 class WorkloadWindowTest {
 
-    /** The instant every case is judged at. 15 minutes before it is 999_100_000. */
     private val now = 1_000_000_000L
 
     @Test
@@ -35,9 +28,6 @@ class WorkloadWindowTest {
 
     @Test
     fun `a workload with no completion stamp has not settled yet, so it is visible`() {
-        // Nothing that has finished reaches this rule unstamped: a workload inherited already finished is
-        // stamped at admission with the instant this run started. Hiding a null here would hide live work
-        // whose ending has simply not been observed.
         assertTrue(WorkloadWindow.isVisible(running = false, completedAtMillis = null, windowMinutes = 5, nowMillis = now))
         assertTrue(WorkloadWindow.isVisible(running = false, completedAtMillis = null, windowMinutes = 240, nowMillis = now))
     }
@@ -59,8 +49,6 @@ class WorkloadWindowTest {
 
     @Test
     fun `the widest window still measures elapsed time rather than overflowing it`() {
-        // 240 minutes is 14_400_000 ms — well past what the minute count itself is, which is why the
-        // multiplication is done in Long.
         assertTrue(WorkloadWindow.isVisible(running = false, completedAtMillis = 985_600_000L, windowMinutes = 240, nowMillis = now))
         assertFalse(WorkloadWindow.isVisible(running = false, completedAtMillis = 985_599_999L, windowMinutes = 240, nowMillis = now))
     }
@@ -74,18 +62,11 @@ class WorkloadWindowTest {
 
     @Test
     fun `the run stamp is a real wall-clock instant`() {
-        // It is what an already-finished workload is stamped with, so an unset or zero value would date every
-        // restored workload to 1970 and hide the lot. That it is ONE instant shared by everything restored in
-        // the same run is pinned where it is applied, in the registry tests.
         assertTrue(WorkloadWindow.RUN_STARTED_AT > 1_700_000_000_000L, "the run stamp must come from the wall clock")
     }
 
-    // ── The set, not the single workload: what `visible` decides that `isVisible` cannot ──────────────────
-
-    /** Out of the window by a wide margin at [WINDOW]. */
     private val aged = 999_000_000L
 
-    /** Inside the window at [WINDOW]. */
     private val recent = 999_700_000L
 
     private fun settled(id: String, parentId: String? = null, at: Long = aged) =
@@ -129,8 +110,6 @@ class WorkloadWindowTest {
 
     @Test
     fun `an aged-out agent that owns a live task is still emitted`() {
-        // A task's stamp is sealed where the task settles and has no relation to its owner's, so the two can
-        // fall on opposite sides of the window. The owner is named by every task row that is drawn.
         val shown = visible(listOf(settled("owner")), listOf(live("task", parentId = "owner")))
         assertEquals(setOf("task"), shown.tasks)
         assertTrue("owner" in shown.agents, "a task row names its owner, so that owner has to be in the payload")
@@ -151,8 +130,6 @@ class WorkloadWindowTest {
 
     @Test
     fun `a parent id naming nothing admits nobody and leaves the child alone`() {
-        // The parent links come from the binary, and a sidecar whose parent's own file never parsed leaves a
-        // link to an agent that is not in the map at all.
         val shown = visible(listOf(live("child", parentId = "never-existed")))
         assertEquals(setOf("child"), shown.agents)
     }
@@ -176,7 +153,6 @@ class WorkloadWindowTest {
     }
 
     private companion object {
-        /** The window every set case is judged under; 15 minutes before [now] is 999_100_000. */
         const val WINDOW = 15
     }
 }

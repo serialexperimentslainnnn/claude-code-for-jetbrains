@@ -14,20 +14,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
 
-/**
- * Matrix coverage of [PermissionBroker.handle]: the cross-product of {permissionMode} x {tool} x
- * {withinRoot} x {alwaysAllowed} drives three observable outcomes — a `control_response` written
- * via [respond], a [PendingPermission] surfaced via [present], and/or an [onAutoReviewed] callback
- * when an auto-approved write needs its pre-write snapshot captured for the persistent diff.
- *
- * Encodes the contract documented in [PermissionBroker] / [autoAllow]: reviewable writes outside
- * the project root NEVER auto-approve, regardless of mode or remembered "always allow".
- */
 class PermissionBrokerMatrixTest {
 
-    // --- Helpers ------------------------------------------------------------------------------------
-
-    /** A recorder that captures every observable side effect of one handle() call. */
     private class Observation {
         var respond: String? = null
         var presented: PendingPermission? = null
@@ -105,8 +93,6 @@ class PermissionBrokerMatrixTest {
             toolUseId = "tu_r",
         )
 
-    // --- bypassPermissions --------------------------------------------------------------------------
-
     @Test
     fun `bypass + Edit inside root auto-approves and captures snapshot`(@TempDir root: Path) {
         val f = File(root.toFile(), "a.kt").apply { writeText("a") }
@@ -142,8 +128,6 @@ class PermissionBrokerMatrixTest {
         assertNull(obs.autoReviewed)
     }
 
-    // --- acceptEdits --------------------------------------------------------------------------------
-
     @Test
     fun `acceptEdits + Write inside root auto-approves`(@TempDir root: Path) {
         val f = File(root.toFile(), "new.txt")
@@ -173,8 +157,6 @@ class PermissionBrokerMatrixTest {
         assertTrue(obs.manualCard, "Bash under acceptEdits must surface a card")
     }
 
-    // --- default / plan ------------------------------------------------------------------------------
-
     @Test
     fun `default mode surfaces manual card for any tool`(@TempDir root: Path) {
         val f = File(root.toFile(), "a.kt").apply { writeText("a") }
@@ -196,8 +178,6 @@ class PermissionBrokerMatrixTest {
         val obs = run("auto", bashReq("ls"), root.toFile().canonicalPath)
         assertTrue(obs.manualCard, "auto/dontAsk are not auto-approve modes in the broker")
     }
-
-    // --- Always-allow remembered --------------------------------------------------------------------
 
     @Test
     fun `always-allowed Bash auto-approves under default mode`(@TempDir root: Path) {
@@ -225,7 +205,6 @@ class PermissionBrokerMatrixTest {
 
     @Test
     fun `always-allowed Edit OUTSIDE root still surfaces a manual card`(@TempDir root: Path) {
-        // Containment is non-negotiable, even for "remembered" tools.
         val obs = run(
             "default",
             editReq("/etc/hosts"),
@@ -235,13 +214,6 @@ class PermissionBrokerMatrixTest {
         assertTrue(obs.manualCard)
         assertNull(obs.autoReviewed)
     }
-
-    // --- forceAsk (the Git integration's chat) -------------------------------------------------------
-    //
-    // These are the assertions the feature rests on, and the failure mode is SILENT: if `forceAsk` ever stops
-    // being consulted, a prompted git action under bypassPermissions runs with no card and nothing on screen
-    // says so. Note the "Always allow" case in particular — forcing the mode to `default` would NOT cover it,
-    // because `isRemembered` is a second, independent auto-approval.
 
     @Test
     fun `forceAsk beats bypassPermissions`(@TempDir root: Path) {
@@ -272,14 +244,10 @@ class PermissionBrokerMatrixTest {
 
     @Test
     fun `forceAsk only ever downgrades an approval — it never denies`(@TempDir root: Path) {
-        // The card is presented; the request is left OPEN for the user to answer. A `respond` here would mean
-        // the broker had already answered the binary, which is the one thing forceAsk must not do.
         val obs = run("bypassPermissions", bashReq("git commit"), root.toFile().canonicalPath, forceAsk = true)
         assertNull(obs.respond, "forceAsk turns an auto-approval into a question, not into a refusal")
         assertNotNull(obs.presented)
     }
-
-    // --- AskUserQuestion ----------------------------------------------------------------------------
 
     @Test
     fun `AskUserQuestion is always presented, never auto-approved`(@TempDir root: Path) {
@@ -288,15 +256,12 @@ class PermissionBrokerMatrixTest {
             input = buildJsonObject { put("questions", kotlinx.serialization.json.JsonArray(emptyList())) },
             toolUseId = "tu_ask",
         )
-        // Even on bypass with the tool remembered → still presented (it carries questions, not a permission).
         val obs = run("bypassPermissions", req, root.toFile().canonicalPath, alwaysAllowedTools = setOf("AskUserQuestion"))
         assertTrue(obs.manualCard)
         assertFalse(obs.autoApproved)
         assertEquals("tu_ask", obs.presented?.toolUseId)
         assertNotNull(obs.presented?.questions, "AskUserQuestion card must carry parsed questions")
     }
-
-    // --- tool_use_id plumbing on auto-approval ------------------------------------------------------
 
     @Test
     fun `auto-approved edit forwards tool_use id verbatim`(@TempDir root: Path) {

@@ -1,9 +1,3 @@
-// The model pill's "Other models" group (app-composer.js).
-//
-// The host tags previous-generation models with `group: 'other'` (JcefState.modelJson) because the binary does
-// not offer them at all — they are a curated list. What is pinned here is the rendering contract: tagged options
-// are folded away behind one header, untagged ones keep the flat menu they always had, and a selection that
-// lives inside the group is never hidden from the user.
 const { loadFrontend } = require('./helpers/load');
 
 function state(modelOptions) {
@@ -50,7 +44,6 @@ describe('composer — the model menu groups older models', () => {
     const group = menu.querySelector('.menu-group');
     expect(group).not.toBeNull();
     expect(group.querySelector('.menu-group-header').textContent).toContain('Other models');
-    // The two current models are direct children; the two older ones live inside the group.
     expect(menu.querySelectorAll(':scope > .menu-item').length).toBe(CURRENT.length);
     expect(group.querySelectorAll('.menu-group-items .menu-item').length).toBe(LEGACY.length);
   });
@@ -61,7 +54,6 @@ describe('composer — the model menu groups older models', () => {
     expect(menu).not.toBeNull();
     expect(menu.querySelector('.menu-group').classList.contains('open')).toBe(false);
 
-    // Selecting an older model must not hide the ✓ behind a collapsed row.
     const selectedLegacy = [
       { value: 'opus[1m]', label: 'Opus 5 with 1M context', selected: false },
       { value: 'claude-opus-4-7', label: 'Opus 4.7', selected: true, group: 'other' },
@@ -74,8 +66,6 @@ describe('composer — the model menu groups older models', () => {
   });
 
   test('a menu with no tagged options renders exactly as before', () => {
-    // The regression guard for every OTHER pill (mode, effort, thinking): they send no `group`, so they must
-    // not grow a group container.
     win.cc.state(state(CURRENT));
     const menu = openModelMenu();
     expect(menu).not.toBeNull();

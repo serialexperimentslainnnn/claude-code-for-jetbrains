@@ -1,9 +1,3 @@
-/* app-composer-pills.js — the provider / model / mode / effort / thinking chips.
- *
- * One subject: the five pills on the composer's control bar — what each one is called, what it sends when you
- * pick something, what it looks like, and how an already-open menu is kept in step with a streaming state.
- * The popup they open lives in app-composer-menus.js.
- */
 (function () {
   'use strict';
 
@@ -12,7 +6,6 @@
 
   var h = CX.h;
 
-  // pill key → which state field + how to map a chosen option to a message
   var PILL_DEFS = [
     {
       key: 'provider',
@@ -57,8 +50,6 @@
   ];
   CX.PILL_DEFS = PILL_DEFS;
 
-  // Inline chip icons for the composer pills (themeable via currentColor; ride Vibe Mode).
-  // Ported from resources/icons/chip-*.svg + provider marks.
   var CHIP_ICONS = {
     model:
       '<rect x="5" y="5" width="6" height="6" rx="1.2"/><path d="M6.5 3v1.8M9.5 3v1.8M6.5 11.2V13M9.5 11.2V13M3 6.5h1.8M3 9.5h1.8M11.2 6.5H13M11.2 9.5H13"/>',
@@ -67,8 +58,6 @@
     thinking:
       '<path d="M7.5 2.4c.5 2.9 1.6 4 4.5 4.5-2.9.5-4 1.6-4.5 4.5-.5-2.9-1.6-4-4.5-4.5 2.9-.5 4-1.6 4.5-4.5z"/>',
   };
-  // Provider brand marks keep their own colours (as in the previous UI), so they're separate
-  // from the monochrome currentColor chips. provider.svg from resources/icons/provider-*.svg.
   var PROVIDER_MARKS = {
     anthropic:
       '<g stroke="#D97757" stroke-width="1.7" stroke-linecap="round" fill="none"><path d="M8 2.4v11.2M3.15 5.2l9.7 5.6M12.85 5.2l-9.7 5.6"/></g>',
@@ -80,7 +69,7 @@
     return '<svg viewBox="0 0 16 16" aria-hidden="true">' + inner + '</svg>';
   }
   function chipIconSvg(key) {
-    if (key === 'provider') return providerMarkSvg('anthropic'); // refreshed per selection in renderPills
+    if (key === 'provider') return providerMarkSvg('anthropic');
     var inner = CHIP_ICONS[key];
     if (!inner) return null;
     return (
@@ -116,7 +105,6 @@
     return { el: el, label: label, def: def, icon: icon };
   };
 
-  // ---- pills label ----------------------------------------------------------
   function pillLabelFor(s, def) {
     var f = s[def.field];
     if (!f) return null;
@@ -139,24 +127,16 @@
       } else {
         pill.el.removeAttribute('hidden');
         pill.label.textContent = label;
-        // The pill's own name, which it did not have: the chip shows a VALUE (`Opus 5 with 1M context`,
-        // `High`) and nothing on it says which setting that value belongs to. It is the tooltip, and it is
-        // also what the overflow menu reads when the pill does not fit on the bar — a row that says only
-        // "High" there is a menu entry nobody can act on.
         pill.el.title = def.key.charAt(0).toUpperCase() + def.key.slice(1) + ': ' + label;
         if (hasOpts) pill.el.removeAttribute('disabled');
         else pill.el.setAttribute('disabled', 'disabled');
       }
-      // Provider chip shows the active brand mark (Anthropic / DeepSeek).
       if (def.key === 'provider' && pill.icon && f && f.id) {
         pill.icon.innerHTML = providerMarkSvg(String(f.id));
       }
     }
   };
 
-  // If a pill menu is open, only rebuild it when its selection actually changed — reopening on every state
-  // push (frequent during streaming) made the menu flicker and de-selected the item under the cursor. The
-  // attach menu (__attach) is never touched here; it has its own refresh path (cc.attachData).
   CX.syncOpenMenu = function () {
     var openMenu = CX.openMenu;
     if (openMenu && openMenu.pill !== '__attach') {

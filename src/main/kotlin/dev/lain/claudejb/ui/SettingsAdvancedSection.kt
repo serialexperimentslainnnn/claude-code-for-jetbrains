@@ -8,7 +8,6 @@ import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
 
-/** The advanced launch flags, all with a neutral default that omits the flag entirely (0 / blank). */
 internal class SettingsAdvancedSection : SettingsSection {
 
     private val maxTurnsSpinner = JSpinner(SpinnerNumberModel(0, 0, MAX_TURNS, 1))
@@ -61,14 +60,11 @@ internal class SettingsAdvancedSection : SettingsSection {
     private fun maxBudgetValue() = (maxBudgetSpinner.value as Number).toDouble()
 
     private companion object {
-        /** Upper bound of the turn cap spinner. */
         const val MAX_TURNS = 1_000
 
-        /** Upper bound of the per-turn budget spinner, in USD, and the step it moves in. */
         const val MAX_BUDGET_USD = 10_000.0
         const val BUDGET_STEP_USD = 0.5
 
-        /** Visible rows of the additional-directories area, i.e. how tall it is before scrolling. */
         const val ADD_DIRS_ROWS = 3
     }
 }

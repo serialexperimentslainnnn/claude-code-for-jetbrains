@@ -14,12 +14,6 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 
-/**
- * Pure-JVM coverage of the loopback fallback that serves the chat document in Remote Development. Every test here
- * asserts a security property of that open socket rather than an implementation detail: that it is reachable only
- * from this host, that its port is not predictable, that the document is served with its headers intact exactly
- * once, that every refusal looks the same, and that stopping it really closes the port.
- */
 class LoopbackPageServerTest {
 
     private val html = "<!doctype html><html><body>página ✓</body></html>"
@@ -55,7 +49,6 @@ class LoopbackPageServerTest {
         }
     }
 
-    /** Everything after `?k=` in the served URL — the one place the secret is allowed to appear. */
     private fun tokenOf(server: LoopbackPageServer): String = server.url.substringAfter("?k=")
 
     @Test

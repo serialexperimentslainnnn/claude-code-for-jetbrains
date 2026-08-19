@@ -9,11 +9,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the exact wire shape of every line the plugin writes to the binary's stdin. These are built
- * explicitly (not via the lenient [ClaudeJson]) precisely because the binary's runtime schema is stricter
- * than the published .d.ts (e.g. `updatedInput` is required), so the shapes must not drift silently.
- */
 class ControlProtocolTest {
 
     private fun parse(line: String): JsonObject =
@@ -28,7 +23,6 @@ class ControlProtocolTest {
         assertEquals("user", root.string("type"))
         assertEquals("hello", root.obj("message").string("content"))
         assertEquals("user", root.obj("message").string("role"))
-        // The protocol expects the key present and explicitly null, not omitted.
         assertEquals(JsonNull, root["parent_tool_use_id"])
     }
 
@@ -41,7 +35,6 @@ class ControlProtocolTest {
     @Test
     fun `userMessageWithImages falls back to plain string content when no images`() {
         val root = parse(ControlProtocol.userMessageWithImages("just text", emptyList()))
-        // No images → identical to userMessage: content is a plain string, not an array.
         assertEquals("just text", root.obj("message").string("content"))
     }
 
@@ -81,7 +74,6 @@ class ControlProtocolTest {
         assertEquals("r1", response.string("request_id"))
         val inner = response.obj("response")
         assertEquals("allow", inner.string("behavior"))
-        // updatedInput MUST be present (binary rejects the response otherwise).
         assertEquals(input, inner["updatedInput"])
     }
 

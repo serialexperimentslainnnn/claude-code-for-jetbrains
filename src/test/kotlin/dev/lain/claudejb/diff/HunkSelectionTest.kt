@@ -10,11 +10,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 
-/**
- * Unit tests for [HunkSelection.encodeInput] — narrowing the tool input so the binary writes exactly the
- * text the user accepted. What matters for correctness is that the input we encode is exactly right: the
- * binary, not the IDE, performs the write from it.
- */
 class HunkSelectionTest {
 
     @Test
@@ -64,13 +59,6 @@ class HunkSelectionTest {
         assertSame(original, out)
     }
 
-    /**
-     * `file_path` is copied only when the original carried one — the encoder must never INVENT the key.
-     * The binary resolves a pathless Edit against its own context; emitting `"file_path": null`, or an
-     * empty string, would turn "the tool input said nothing about the path" into "the tool input named
-     * a path", which is a different write. Both branches of the `?.let` are exercised here, and the rest
-     * of the narrowing still has to be produced.
-     */
     @Test
     fun `encodeInput omits file_path entirely when the original has none`() {
         val editOut = HunkSelection.encodeInput(

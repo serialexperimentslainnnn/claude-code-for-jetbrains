@@ -14,21 +14,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The composer's ⚙ menu, tested on the pure half.
- *
- * The menu shows three values that belong to the running session, so [JcefSettingsMenu.json] has an overload
- * that takes them as data ([JcefSettingsMenu.Selected]) instead of a `ClaudeSession` — which is what lets the
- * rows, their keys and every write be exercised without an IDE.
- *
- * The subject under test is a settings write driven by strings that arrive from a browser, and six of the rows
- * are the deterministic guard's own switches while a seventh pre-authorises a tool. So the assertions are
- * about refusal as much as about writing: an unrecognised suffix must change nothing, and every key the menu
- * emits must have a destination that accepts it.
- */
 class JcefSettingsMenuTest {
 
-    // The catalogue the binary reports, plus the floating alias the menu must not offer as a choice.
     private fun models() = listOf(
         ModelInfo("opus[1m]", "Opus (1M context)", "Opus 5 with 1M context · Best for everyday, complex tasks"),
         ModelInfo("sonnet", "Sonnet", "Sonnet 5 · Efficient for routine tasks"),
@@ -49,11 +36,8 @@ class JcefSettingsMenuTest {
 
     private fun JsonObject.bool(key: String): Boolean = getValue(key).jsonPrimitive.boolean
 
-    /** [JcefSettingsMenu.apply] against this catalogue. Named apart from `kotlin.apply`, used below. */
     private fun write(state: ClaudeSettings.State, key: String, on: Boolean) =
         JcefSettingsMenu.apply(state, key, on, modelIds())
-
-    // ── The rows ─────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `the groups are drawn in the declared order`() {
@@ -76,14 +60,12 @@ class JcefSettingsMenuTest {
             assertTrue(rows.none { it.bool("deferred") }, "$group takes effect on the live session")
         }
 
-        // A check that applies now: the guard reads it per call, and the auto-approval set is read per call too.
         listOf("Chat", "Security", "Always allowed tools").forEach { group ->
             val rows = byGroup.getValue(group)
             assertTrue(rows.all { it.str("type") == "check" }, "$group must be a checkbox group")
             assertTrue(rows.none { it.bool("deferred") }, "$group takes effect immediately")
         }
 
-        // …and a check that is a launch flag: it only reaches the binary through the next `applyTo`.
         listOf("Setting sources", "Allowed tools", "Disallowed tools", "MCP").forEach { group ->
             val rows = byGroup.getValue(group)
             assertTrue(rows.all { it.str("type") == "check" }, "$group must be a checkbox group")
@@ -102,7 +84,6 @@ class JcefSettingsMenuTest {
 
     @Test
     fun `the effort and mode groups mark what the SESSION has, not what is stored`() {
-        // The stored defaults deliberately differ from the session's live values.
         val state = ClaudeSettings.State().apply {
             effort = "low"
             permissionMode = "default"
@@ -126,15 +107,6 @@ class JcefSettingsMenuTest {
         assertFalse(on.contains("deny:Read"))
     }
 
-    // ── Writing ──────────────────────────────────────────────────────────────────────────────────────────
-
-    /**
-     * The defect this prevents is a key renamed on one side and not the other. It is not cosmetic here: six of
-     * these rows are the guard's own switches and one pre-authorises a tool, so a row that reaches no
-     * destination is a security control the user can press while nothing answers.
-     *
-     * The two destinations are exactly the ones `ChatBridgeRouter.writeSettingsToggle` tries, in its order.
-     */
     @Test
     fun `every key the menu emits has a destination that accepts it`() {
         menu().forEach { row ->
@@ -174,7 +146,6 @@ class JcefSettingsMenuTest {
         assertNull(JcefSettingsMenu.alwaysAllowTool("always:rm -rf /"))
         assertNull(JcefSettingsMenu.alwaysAllowTool("always:"))
         assertNull(JcefSettingsMenu.alwaysAllowTool("allow:Bash"))
-        // It is not a field of the settings document, so the document's writer must not claim it either.
         assertFalse(write(ClaudeSettings.State(), "always:Bash", true))
     }
 
@@ -188,7 +159,7 @@ class JcefSettingsMenuTest {
         assertTrue(write(state, "allow:Read", true))
         assertEquals("Bash,Read", state.allowedTools)
 
-        assertTrue(write(state, "allow:Bash", true)) // idempotent: pressing an already-checked row
+        assertTrue(write(state, "allow:Bash", true))
         assertEquals("Bash,Read", state.allowedTools)
 
         assertTrue(write(state, "allow:Bash", false))
@@ -197,7 +168,6 @@ class JcefSettingsMenuTest {
         assertTrue(write(state, "allow:Read", false))
         assertEquals("", state.allowedTools)
 
-        // Removing something that was never there leaves the field alone rather than emptying it.
         assertTrue(write(state, "allow:Grep", false))
         assertEquals("", state.allowedTools)
     }
@@ -212,7 +182,7 @@ class JcefSettingsMenuTest {
 
     @Test
     fun `setting sources are their own catalogue`() {
-        val state = ClaudeSettings.State() // "user,project,local"
+        val state = ClaudeSettings.State()
 
         assertTrue(write(state, "source:project", false))
         assertEquals("user,local", state.settingSources)
@@ -238,12 +208,6 @@ class JcefSettingsMenuTest {
         assertEquals("max", state.effort)
     }
 
-    /**
-     * A deselection has no valid outcome for a group that must always hold a value, so it is accepted and
-     * ignored. Accepted, because the key exists — answering false would make the caller log a rename that
-     * never happened; ignored, because clearing the field would mean launching the next chat with no
-     * permission mode, which is the "reset to default" bug wearing a different hat.
-     */
     @Test
     fun `switching a radio option off leaves the group as it was`() {
         val state = ClaudeSettings.State().apply { permissionMode = "plan" }
@@ -269,11 +233,6 @@ class JcefSettingsMenuTest {
         assertTrue(state.reduceMotion)
     }
 
-    // ── the guard's rules: a verified `rule:` suffix, and the polarity is inverted ────────────────────────
-    // The row is ON when the rule is ENFORCED, and the stored field is the set of rules switched OFF — so an
-    // `on:false` ADDS to it. That inversion is the one thing about this group that can be got backwards, and
-    // getting it backwards means the menu disables the rule the user just switched on.
-
     @Test
     fun `turning a rule off adds it to the disabled set, and on takes it out again`() {
         val state = ClaudeSettings.State()
@@ -282,8 +241,6 @@ class JcefSettingsMenuTest {
         assertEquals("TEMP_DIR", state.disabledSecurityRules)
 
         assertTrue(write(state, "rule:CREDENTIALS", false))
-        // Canonical order, not toggle order: the Settings page rebuilds this same field from its checkboxes and
-        // compares the two spellings to decide whether anything was edited.
         assertEquals("CREDENTIALS,TEMP_DIR", state.disabledSecurityRules)
 
         assertTrue(write(state, "rule:TEMP_DIR", true))
@@ -295,7 +252,7 @@ class JcefSettingsMenuTest {
         val state = ClaudeSettings.State().apply { disabledSecurityRules = "TEMP_DIR" }
 
         assertFalse(write(state, "rule:NOT_A_RULE", false))
-        assertFalse(write(state, "rule:temp_dir", false)) // ids are exact: a wire format, not a label
+        assertFalse(write(state, "rule:temp_dir", false))
         assertEquals("TEMP_DIR", state.disabledSecurityRules)
     }
 
@@ -308,7 +265,6 @@ class JcefSettingsMenuTest {
             assertNotNull(rule, row.toString())
             assertEquals(rule!!.category.label, row.str("sub"))
             assertEquals(rule.label, row.str("label"))
-            // Nothing disabled in a default state, so every row is ON — the empty set IS the hard lock.
             assertTrue(row.bool("on"), row.str("key"))
         }
     }

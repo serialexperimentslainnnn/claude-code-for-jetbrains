@@ -9,16 +9,8 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/**
- * One builder per composer pill — each is an independent `{ label, options[…] }` shape.
- *
- * They live apart from [JcefState] for the reason its own comment gave: inlining all five made `stateJson`
- * longer than the whole rest of that file. The web layer stays a pure renderer — the option lists arrive with
- * the selected flag already computed, and every branching rule is decided here.
- */
 internal object JcefComposerOptions {
 
-    /** provider { id, label, options[{id,label,selected}] } */
     fun providerJson(provider: Provider) = buildJsonObject {
         put("id", provider.id)
         put("label", provider.label)
@@ -36,13 +28,6 @@ internal object JcefComposerOptions {
         )
     }
 
-    /**
-     * model { label, options[{value,label,selected}] }
-     *
-     * The list is autodetected from the binary's `initialize` catalog. We drop the floating "default" alias (it
-     * duplicated the concrete tier and showed no version) and label each entry with its version (see
-     * [JcefModelLabels.modelDisplayLabel]), so Opus 5 vs Sonnet 5 vs Haiku 4.5 read at a glance.
-     */
     fun modelJson(session: ClaudeSession) = buildJsonObject {
         val selectedModel = session.model ?: session.preferredDefaultModel()
         put("label", JcefModelLabels.modelLabel(session))
@@ -57,10 +42,6 @@ internal object JcefComposerOptions {
                         put("selected", m.value == selectedModel)
                     }
                 }
-                // Previous generations, tagged so the composer can fold them into an "Other models" submenu
-                // instead of burying the four current models in a list of seventeen. The GROUPING is decided
-                // here, not in the web app: the host owns which models exist and what they are called, and a
-                // frontend that had to recognise "old" ids would be a second, divergent copy of that rule.
                 LegacyModels.offeredAlongside(catalog.map { it.value }).forEach { entry ->
                     addJsonObject {
                         put("value", entry.value)
@@ -73,7 +54,6 @@ internal object JcefComposerOptions {
         )
     }
 
-    /** mode { wire, label, options[{wire,label,selected}] } */
     fun modeJson(mode: String) = buildJsonObject {
         put("wire", mode)
         put("label", PermissionMode.labelFor(mode))
@@ -91,7 +71,6 @@ internal object JcefComposerOptions {
         )
     }
 
-    /** effort { label, options[{value:String?,label,selected}] } — includes a null "Default" option. */
     fun effortJson(effort: String?) = buildJsonObject {
         put("label", effort?.replaceFirstChar { it.uppercase() } ?: "Default")
         put(
@@ -113,7 +92,6 @@ internal object JcefComposerOptions {
         )
     }
 
-    /** thinking { on, options[{on,label,selected}] } */
     fun thinkingJson(thinkingOn: Boolean) = buildJsonObject {
         put("on", thinkingOn)
         put(

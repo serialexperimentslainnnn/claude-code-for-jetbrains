@@ -4,17 +4,6 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.context.Attachment
 import dev.lain.claudejb.ui.AttachmentTray
 
-/**
- * Pinning a batch is ONE operation on the page, not one per file.
- *
- * The defect this pins is invisible at the size anyone tests by hand: attaching two files one at a time costs
- * two repaints and two caret moves and nobody notices, while the case the project browser exists to serve —
- * a folder of two hundred — is a stalled panel and a caret that will not sit still. The cost was never in the
- * message (there is one) but in the PUSH, so the assertions are on how many times the host spoke to the page
- * and how many times it took the focus, which is the only place that distinction is visible.
- *
- * The seams are the constructor's: `exec` and `focusInput` are handed in, so counting them needs no browser.
- */
 class AttachmentTrayBatchHeadlessTest : BasePlatformTestCase() {
 
     private val pushes = mutableListOf<String>()
@@ -32,8 +21,6 @@ class AttachmentTrayBatchHeadlessTest : BasePlatformTestCase() {
         assertEquals(3, tray.all().size)
         assertEquals(1, pushes.size)
         assertEquals(1, focuses)
-        // …and the one push describes the WHOLE tray, not the first file of it: a single `exec` carrying a
-        // prefix would be the same bug wearing a better number.
         val json = pushes.single()
         assertTrue(json, json.contains("a.txt"))
         assertTrue(json, json.contains("c.txt"))
@@ -55,7 +42,7 @@ class AttachmentTrayBatchHeadlessTest : BasePlatformTestCase() {
         tray.addPaths(listOf("/p/a.txt", "/p/b.txt", "/p/a.txt"))
         assertEquals(listOf("/p/a.txt", "/p/b.txt"), paths(tray))
 
-        tray.addPath("/p/a.txt") // already a chip from the batch above
+        tray.addPath("/p/a.txt")
         assertEquals(listOf("/p/a.txt", "/p/b.txt"), paths(tray))
     }
 
@@ -73,8 +60,6 @@ class AttachmentTrayBatchHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test the de-duplication is about file paths, not about attachments`() {
-        // A selection and an image are legitimately repeatable — two selections from the same file are two
-        // different pieces of text — so the rule stops at [Attachment.FileRef] and `add` keeps its behaviour.
         val tray = tray()
 
         tray.add(Attachment.Selection("/p/a.kt", 3, "one", "kotlin"))

@@ -5,16 +5,6 @@ import dev.lain.claudejb.session.SessionTranscriptReader
 import java.nio.file.Files
 import java.nio.file.Path
 
-/**
- * Resume path: the `claude` binary's own JSONL sidecar under `~/.claude/projects/<encoded>/<id>.jsonl` is the
- * source of truth for past conversations. [SessionTranscriptReader.readEntries] reconstructs the transcript
- * from it. This test redirects `user.home` to a temp tree (so [SessionStore] reads our fixture file, not the
- * real home) and verifies the round-trip: user prompt, assistant text, a tool_use TOOL row, and its
- * tool_result TOOL_OUTPUT.
- *
- * No process is started — this is pure JSONL reconstruction (the same code [ClaudeSession.restore] feeds on).
- * The pure parser is also covered by SessionTranscriptReaderTest; here we exercise the IO-backed entry point.
- */
 class ResumeFlowIntegrationTest : BasePlatformTestCase() {
 
     private var savedHome: String? = null
@@ -36,8 +26,6 @@ class ResumeFlowIntegrationTest : BasePlatformTestCase() {
         savedHome = System.getProperty("user.home")
         System.setProperty("user.home", home.toString())
 
-        // The folder name is the binary's cwd-encoding; locate() finds the file by UUID regardless, so any
-        // project subfolder works.
         val projectDir = home.resolve(".claude").resolve("projects").resolve("-tmp-project")
         Files.createDirectories(projectDir)
         val jsonl = listOf(

@@ -1,5 +1,3 @@
-// Permission cards (app-permissions.js). Covers the 4.0.5 change (a read-only diff replaced the per-line hunk
-// checkboxes) and the 4.0.4 fix (cards reconcile by id on re-push instead of wiping the region's innerHTML).
 const { loadFrontend } = require('./helpers/load');
 
 const editCard = (id, diff) => ({
@@ -25,7 +23,6 @@ describe('permission card — read-only diff, no per-line checkboxes', () => {
     expect(region.querySelector('.perm-diff')).not.toBeNull();
     expect(region.querySelector('.perm-diff .diff-line.dl-add').textContent).toContain('new value');
     expect(region.querySelector('.perm-diff .diff-line.dl-del').textContent).toContain('old value');
-    // The old per-hunk checkbox UI is gone (accepting a subset of an edit broke code).
     expect(region.querySelector('.perm-hunk')).toBeNull();
     expect(region.querySelector('input[type="checkbox"]')).toBeNull();
   });
@@ -41,8 +38,6 @@ describe('permission card — read-only diff, no per-line checkboxes', () => {
   });
 });
 
-// A card raised by the security guard. It can ONLY exist for a rule the user switched off — an enforced rule is
-// denied outright and never becomes a card — which is why the action offered is re-enable and never disable.
 const guardCard = (id, guard) => ({
   id,
   tool: 'Bash',
@@ -66,8 +61,6 @@ describe('permission card — the guard alert', () => {
     const win = loadFrontend(['app-permissions.js']);
     win.cc.permissions([guardCard('g1', alert)]);
     const region = win.CC.els.permissions;
-    // The badge is a word. Colour and motion survive neither forced-colors, a screenshot, nor a reader who
-    // cannot tell two hues apart, so the alert must read correctly with every style stripped.
     expect(region.querySelector('.perm-guard-badge').textContent).toBe('Guard alert');
     expect(region.querySelector('.perm-guard-rule').textContent).toContain('Block credential files');
     expect(region.querySelector('.perm-guard-rule').textContent).toContain('Sensitive data');
@@ -80,8 +73,6 @@ describe('permission card — the guard alert', () => {
     const sent = [];
     win.CC.send = (m) => sent.push(m);
     win.CC.els.permissions.querySelector('.perm-guard-restore').click();
-    // `on: true` is the ROW's meaning (enforced). The inversion against the stored disabled-set lives in
-    // JcefSettingsMenu.applyRule and nowhere else.
     expect(sent).toEqual([{ type: 'settingsToggle', key: 'rule:CREDENTIALS', on: true }]);
   });
 
@@ -100,25 +91,18 @@ describe('permission cards — reconcile by id on re-push', () => {
     const nodeA1 = region.querySelector('[data-card-id="reqA"]');
     expect(nodeA1).not.toBeNull();
 
-    // A second card arrives — the first card's node must survive (its in-progress input would otherwise be wiped).
     win.cc.permissions([editCard('reqA', '@@\n-a\n+b'), editCard('reqB', '@@\n-c\n+d')]);
     const nodeA2 = region.querySelector('[data-card-id="reqA"]');
     const nodeB = region.querySelector('[data-card-id="reqB"]');
-    expect(nodeA2).toBe(nodeA1); // SAME element, not rebuilt
+    expect(nodeA2).toBe(nodeA1);
     expect(nodeB).not.toBeNull();
 
-    // Resolving reqA removes only it.
     win.cc.permissions([editCard('reqB', '@@\n-c\n+d')]);
     expect(region.querySelector('[data-card-id="reqA"]')).toBeNull();
     expect(region.querySelector('[data-card-id="reqB"]')).toBe(nodeB);
   });
 });
 
-// Keeping the NODE is only half of keeping the card: a node re-appended to the parent it is already in is
-// removed and inserted again — the DOM has no move — and a subtree that leaves the document comes back with
-// its scroll offsets at zero and its focus gone. Both were happening on every push, and every push is a
-// second request arriving or another one resolving, which is exactly when there is something on screen to
-// lose. The card body is a scroll container (`.perm-diff`, capped at 28vh), so a real diff scrolls.
 describe('permission cards — a push that changes nothing moves nothing', () => {
   const elicitCard = (id) => ({
     id,
@@ -127,7 +111,6 @@ describe('permission cards — a push that changes nothing moves nothing', () =>
     elicitation: { description: 'Credentials', fields: [{ name: 'user', title: 'User', required: true }] },
   });
 
-  /** Every childList mutation the region records while `fn` runs, as [removed, added] pairs. */
   const mutations = (win, region, fn) => {
     const records = [];
     const observer = new win.MutationObserver((list) => list.forEach((m) => records.push(m)));
@@ -144,9 +127,6 @@ describe('permission cards — a push that changes nothing moves nothing', () =>
     const list = [editCard('reqA', '@@\n-a\n+b'), editCard('reqB', '@@\n-c\n+d')];
     win.cc.permissions(list);
 
-    // The identical push the host makes on any permission change. `appendChild` on a node already in place
-    // reports a removal AND an addition — measured here, not assumed — so the assertion is that there is no
-    // record at all, which is the only state in which the offset and the caret survive.
     expect(mutations(win, region, () => win.cc.permissions(list))).toEqual([]);
   });
 
@@ -158,8 +138,6 @@ describe('permission cards — a push that changes nothing moves nothing', () =>
     field.focus();
     expect(win.document.activeElement).toBe(field);
 
-    // A second card arriving must not evict the first one from the document: jsdom blurs a focused element
-    // whose subtree is detached, exactly as the browser does.
     win.cc.permissions([elicitCard('reqA'), editCard('reqB', '@@\n-c\n+d')]);
     expect(win.document.activeElement).toBe(field);
   });
@@ -171,8 +149,6 @@ describe('permission cards — a push that changes nothing moves nothing', () =>
     const ids = () => [...region.children].map((n) => n.getAttribute('data-card-id'));
     expect(ids()).toEqual(['reqA', 'reqB']);
 
-    // Only what MOVED may move: the region ends in the pushed order, and the untouched card is still the
-    // same node it was.
     const nodeB = region.querySelector('[data-card-id="reqB"]');
     win.cc.permissions([editCard('reqB', '@@\n-c\n+d'), editCard('reqA', '@@\n-a\n+b')]);
     expect(ids()).toEqual(['reqB', 'reqA']);

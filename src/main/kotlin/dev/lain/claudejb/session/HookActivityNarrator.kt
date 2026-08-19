@@ -4,20 +4,9 @@ import dev.lain.claudejb.protocol.HookProgressInfo
 import dev.lain.claudejb.protocol.HookResponseInfo
 import dev.lain.claudejb.protocol.HookStartedInfo
 
-/**
- * Turns the binary's native hook telemetry (system/hook_started → hook_progress → hook_response) into ONE
- * evolving transcript row per hook, keyed by hook id (falling back to hook name): started inserts the row,
- * progress mutates it in place (last non-blank output line), response finalizes it (✓/✗) and drops the key — so
- * a chatty hook can't flood the transcript with separate rows.
- *
- * EDT-confined: every method mutates the [TranscriptModel], which (like the rest of the session) is touched only
- * on the EDT. Distinct from [HookBroker], which answers the hook_callback *control request*; this narrates only
- * the informational system events.
- */
 class HookActivityNarrator(private val transcript: TranscriptModel) {
 
     private companion object {
-        /** A hook's last output line is a status label on one transcript row, not its log — keep it to a line. */
         const val MAX_NARRATION_CHARS = 120
     }
 
@@ -36,7 +25,6 @@ class HookActivityNarrator(private val transcript: TranscriptModel) {
     fun onResponse(info: HookResponseInfo) {
         val label = label(info.hookEvent, info.hookName)
         val row = rows.remove(keyOf(info.hookId, info.hookName)) ?: run {
-            // No started row (e.g. we joined mid-hook): surface a failure, silently drop a success.
             if (info.outcome == "error") transcript.add(Speaker.SYSTEM, "✗ Hook $label failed")
             return
         }
@@ -48,7 +36,6 @@ class HookActivityNarrator(private val transcript: TranscriptModel) {
         transcript.replaceText(row, text)
     }
 
-    /** Drops all tracked rows (stop/terminate) so a later session reuse starts clean. */
     fun clear() = rows.clear()
 
     private fun running(event: String, name: String, tail: String?): String =
