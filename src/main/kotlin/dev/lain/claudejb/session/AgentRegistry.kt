@@ -335,11 +335,13 @@ class AgentRegistry(
     /**
      * What this agent is doing, in order of evidence — and, with the same rule, when it stopped.
      *
-     * 1. **Its own `task_notification`** — the plugin saw the Task call that started it, and saw it settle.
-     *    The stamp is the one sealed for that call in [observeSettled], so it is the instant the ending was
-     *    observed and not the instant this scan happens to run. It answers first and it is not permanent:
-     *    [reopenIfGrown] drops it when the agent's transcript grows, and the rules below then answer a resumed
-     *    agent as the live work it is.
+     * 1. **Its OWN transcript is read FIRST, and it is authoritative.** The stream's own word
+     *    ([statusByToolUse], written by [observeSettled] from `task_notification`) no longer answers ahead of
+     *    the file — that ordering WAS this bug. The notification carries `started`/`running`/`in_progress` for
+     *    work in flight, every one of them a RUNNING here, so answering it first pinned an agent RUNNING and
+     *    never let the scan see it finish on disk. Now a terminal status from the stream is consulted only
+     *    where the file has not closed a turn yet (a genuine ending the file has not caught up to), and a
+     *    RUNNING from the stream is ignored, because the file is the thing that says whether it is still going.
      * 2. **Its OWN transcript, when it closed a turn** ([AgentEnding.Ending.COMPLETED]). An ending of its own
      *    outranks everything below it, its parent included, and that ordering is the whole point of the rule:
      *    a subagent finishes and hands its answer back while the agent that spawned it goes on working, which
@@ -379,25 +381,56 @@ class AgentRegistry(
      * [resolved] holds the agents already built by this scan, parents first — see the sort in [scan].
      */
     private fun observedStateOf(meta: AgentMeta, resolved: Map<String, AgentNode>, lines: List<String>): Settled {
-        // Every lookup goes through `?.let`: a nested agent has NO toolUseId, and these are concurrent
-        // collections, which throw on a null key rather than answering false.
-        meta.toolUseId?.let { id ->
-            statusByToolUse[id]?.let { return Settled(it, completedAtByToolUse[id]) }
-        }
+        // The transcript is read FIRST, and it is authoritative for an ending. The stream's own record
+        // ([statusByToolUse]) is consulted only when the file has NOT closed a turn — as a witness that the
+        // agent stopped when the process cannot see the file say so, never as an override of one that did.
+        //
+        // This is the whole of the "constantly running" bug: `task_notification` sends `started`/`running`/
+        // `in_progress` for work in flight, each landing here as RUNNING, and the old order returned that
+        // before the file was ever read. So a live progress notification pinned the agent RUNNING and the
+        // scan that could have seen it finish on disk was short-circuited — for the rest of the session,
+        // because the stream never re-says "done" for an ending it delivered without a `tool_use_id` (which
+        // several of the binary's call sites omit) or delivered while the main session sat idle.
+        val ending = AgentEnding.of(lines)
+        val streamStatus = meta.toolUseId?.let { statusByToolUse[it] }
         val parent = meta.parentAgentId?.let { resolved[it] }
         val live = meta.toolUseId?.let { it in observedToolUse } == true ||
             parent?.status == AgentStatus.RUNNING ||
             !restoring
-        return when (AgentEnding.of(lines)) {
+        return when (ending) {
+            // The file closed a turn: it is done, whatever the stream last said. The instant is the sealed
+            // ending's when something live is behind it, otherwise stamped at admission by the caller.
             AgentEnding.Ending.COMPLETED -> Settled(AgentStatus.COMPLETED, if (live) sealCompletion(meta) else null)
 
+            // The file grew past a turn it had already closed: working again, whoever is asking.
             AgentEnding.Ending.RESUMED -> Settled(AgentStatus.RUNNING, null)
 
-            AgentEnding.Ending.UNFINISHED, null ->
-                parent?.takeIf { it.status != AgentStatus.RUNNING }
-                    ?.let { Settled(it.status, it.completedAtMillis) }
-                    ?: Settled(if (live) AgentStatus.RUNNING else AgentStatus.STOPPED, null)
+            // The file has NOT closed a turn — see [unfinishedFileState] for who decides then.
+            AgentEnding.Ending.UNFINISHED, null -> unfinishedFileState(meta, streamStatus, parent, live)
         }
+    }
+
+    /**
+     * State for an agent whose transcript has NOT closed a turn, in order of evidence:
+     *  - a **terminal status from the stream** ([observeSettled], e.g. FAILED/STOPPED/COMPLETED) — an ending
+     *    the file has not caught up to yet, honoured with its sealed instant. This is the ONE place the stream
+     *    speaks, and only because a file that never closed a turn cannot say "failed" on its own;
+     *  - the **parent's ending**, for a nested child that stopped when the turn that spawned it did;
+     *  - otherwise **live or cut off**, on whether anything is behind it.
+     * A RUNNING from the stream is deliberately not consulted — the fall-through already reads live as RUNNING.
+     */
+    private fun unfinishedFileState(
+        meta: AgentMeta,
+        streamStatus: AgentStatus?,
+        parent: AgentNode?,
+        live: Boolean,
+    ): Settled {
+        if (streamStatus != null && streamStatus != AgentStatus.RUNNING) {
+            return Settled(streamStatus, meta.toolUseId?.let { completedAtByToolUse[it] })
+        }
+        return parent?.takeIf { it.status != AgentStatus.RUNNING }
+            ?.let { Settled(it.status, it.completedAtMillis) }
+            ?: Settled(if (live) AgentStatus.RUNNING else AgentStatus.STOPPED, null)
     }
 
     /**

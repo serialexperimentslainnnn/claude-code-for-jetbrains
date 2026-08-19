@@ -149,7 +149,12 @@ class AgentRegistryTest {
 
     @Test
     fun `a settled agent keeps its tab and gains its status`() {
-        agent("mine", toolUseId = "toolu_ours", text = "work")
+        // An UNFINISHED transcript on purpose: a FAILED agent did not close a turn — the file cannot say
+        // "failed", only "not finished", so FAILED is a status the stream carries and the file does not. Now
+        // that the file is read FIRST, the stream's terminal status is honoured exactly here — where the file
+        // has NOT completed a turn. (A file that DID close a turn cleanly cannot be a failure, so it would win.)
+        agent("mine", toolUseId = "toolu_ours")
+        writeTranscript("mine", openTurn)
         val reg = registry()
         reg.observeSpawn("toolu_ours")
         reg.scan()
@@ -574,12 +579,13 @@ class AgentRegistryTest {
     }
 
     @Test
-    fun `the first scan of a settled agent reopens nothing, however long its transcript`() {
-        // The evidence of growth is a comparison, so the first pass has nothing to compare against: it records
-        // the baseline and reopens nobody. Otherwise an agent whose file was already long — every restored
-        // chat — would be declared resumed the moment the plugin first looked at it.
+    fun `a completed transcript keeps the instant sealed when the stream saw it end`() {
+        // A COMPLETED file (the stream agreed and sealed the instant): status is COMPLETED and the instant is
+        // the sealed one, not the scan's clock. A file that had RESUMED instead would read RUNNING off the file
+        // now that the file is authoritative — that case is `a restored agent whose transcript went past a
+        // closed turn is running`.
         agent("mine", toolUseId = "toolu_ours")
-        writeTranscript("mine", closedTurn, deliveredResult, openTurn, deliveredResult)
+        writeTranscript("mine", closedTurn)
         val reg = registry()
         reg.observeSpawn("toolu_ours")
         clock = 1_000_000_000L
