@@ -298,6 +298,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         // non-canonical fixture would make "opening the page is not an edit" fail for a reason that is not a bug.
         disabledSecurityRules = "CREDENTIALS,TEMP_DIR"
         securityExtraBlockedDomains = "paste.example.com"
+        securityCommandWhitelist = "terraform destroy"
         maxTurns = 7
         maxBudgetUsd = 12.5
         fallbackModel = "sonnet"
@@ -320,7 +321,9 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             // SettingsSecuritySection — one field for every rule the user switched off, plus its own egress list.
             // The seven `securityBlock*` booleans that used to be here are NOT on the form any more: they are
             // migration inputs read once by LegacySecurityToggles, and the section must leave them alone.
-            "disabledSecurityRules", "securityExtraBlockedDomains",
+            // `securityCommandWhitelist` is the one control on the page that WEAKENS the guard, and Settings is
+            // the only place it can be authored — there is deliberately no "always allow this" on a card.
+            "disabledSecurityRules", "securityExtraBlockedDomains", "securityCommandWhitelist",
             // SettingsProviderSection (the key itself is not a state field — it is in the password safe)
             "provider",
             // SettingsExecutableSection

@@ -41,6 +41,57 @@ describe('permission card — read-only diff, no per-line checkboxes', () => {
   });
 });
 
+// A card raised by the security guard. It can ONLY exist for a rule the user switched off — an enforced rule is
+// denied outright and never becomes a card — which is why the action offered is re-enable and never disable.
+const guardCard = (id, guard) => ({
+  id,
+  tool: 'Bash',
+  title: 'Bash',
+  summary: 'cat ~/.aws/credentials',
+  headline: 'Bash',
+  reviewable: false,
+  isPlan: false,
+  guard,
+});
+
+describe('permission card — the guard alert', () => {
+  const alert = {
+    rule: 'CREDENTIALS',
+    label: 'Block credential files',
+    category: 'Sensitive data',
+    reason: 'reads credentials or key material: ~/.aws/credentials',
+  };
+
+  it('names the rule in words, and carries the meaning as TEXT rather than as colour', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    win.cc.permissions([guardCard('g1', alert)]);
+    const region = win.CC.els.permissions;
+    // The badge is a word. Colour and motion survive neither forced-colors, a screenshot, nor a reader who
+    // cannot tell two hues apart, so the alert must read correctly with every style stripped.
+    expect(region.querySelector('.perm-guard-badge').textContent).toBe('Guard alert');
+    expect(region.querySelector('.perm-guard-rule').textContent).toContain('Block credential files');
+    expect(region.querySelector('.perm-guard-rule').textContent).toContain('Sensitive data');
+    expect(region.querySelector('.perm-guard-reason').textContent).toContain('credentials or key material');
+  });
+
+  it('offers re-enable — and sends the ONE rule that fired, never a group or a category', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    win.cc.permissions([guardCard('g1', alert)]);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    win.CC.els.permissions.querySelector('.perm-guard-restore').click();
+    // `on: true` is the ROW's meaning (enforced). The inversion against the stored disabled-set lives in
+    // JcefSettingsMenu.applyRule and nowhere else.
+    expect(sent).toEqual([{ type: 'settingsToggle', key: 'rule:CREDENTIALS', on: true }]);
+  });
+
+  it('is absent from an ordinary permission card, so its presence always means an open lock', () => {
+    const win = loadFrontend(['app-permissions.js']);
+    win.cc.permissions([editCard('req1', '@@\n-a\n+b')]);
+    expect(win.CC.els.permissions.querySelector('.perm-guard')).toBeNull();
+  });
+});
+
 describe('permission cards — reconcile by id on re-push', () => {
   it('keeps the existing card DOM node when the region is re-pushed (no innerHTML wipe)', () => {
     const win = loadFrontend(['app-permissions.js']);

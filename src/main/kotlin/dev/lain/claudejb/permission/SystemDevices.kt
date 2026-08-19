@@ -1,86 +1,89 @@
 package dev.lain.claudejb.permission
 
 /**
- * [SecurityRule.SYSTEM_DEVICE] — **raw system devices**: reading or writing the block device, physical
- * memory, or kernel-memory node directly, bypassing the filesystem and every permission check it would
- * normally apply.
+ * [SecurityRule.SYSTEM_DEVICE] — **system devices**: any node under `/dev`, the Windows device namespace
+ * (`\\.\…`), and another process's or the kernel's live memory. Addressing hardware directly, bypassing the
+ * filesystem and every permission check it would normally apply.
  *
- * ### Why this is worth a rule of its own
- * A path candidate that names `/dev/sda` or `/proc/1/mem` is not "a file the agent shouldn't read" in the
- * sense [CredentialPaths] means it — it is a request to read or write the device that BACKS the filesystem,
- * or another process's live memory. Nothing about ordinary agentic development touches these nodes; a hit
- * here is either a mistake with catastrophic blast radius (`dd` into the wrong block device) or a deliberate
- * attempt to read past filesystem permissions (`/dev/mem`, `/proc/<pid>/mem`) or to fingerprint/exfiltrate raw
- * disk contents a file-level scan would never surface.
+ * ### One pattern, not an enumeration
+ * A path candidate that names `/dev/sda`, `/dev/nvidia0` or `/proc/1/mem` is not "a file the agent shouldn't
+ * read" in the sense [CredentialPaths] means it — it is a request to talk to the machine underneath the
+ * filesystem. Nothing about agentic development names a device, which is what makes the whole tree cheap to
+ * hold: a hit is either a mistake with catastrophic blast radius (`dd` into the wrong block device), an attempt
+ * to read past filesystem permissions (`/dev/mem`, `/proc/<pid>/mem`), or an attempt to reach hardware nobody
+ * asked it to reach.
  *
- * ### The benign exemption, and why it has to exist
- * `/dev/null`, `/dev/zero`, `/dev/random`/`/dev/urandom`, `/dev/full`, and the three standard-stream nodes are
- * pseudo-devices with no persistent state and no way to read another process's or another user's data through
- * them — `2>/dev/null` and `< /dev/urandom` are ordinary shell idioms, not device access. Without this
- * allowlist every redirect to `/dev/null` in every command would be a card, which is exactly the "cries wolf"
- * failure [SensitiveGuard]'s own class doc warns about.
+ * This replaced a careful list of the dangerous nodes, and the replacement is the security change. **A list of
+ * the bad ones is a blacklist, and a blacklist is what you miss the next item with**: the enumeration that was
+ * here covered no GPU (`/dev/nvidia…`, `/dev/dri/…`, `/dev/kfd`), no virtualisation (`/dev/kvm`,
+ * `/dev/vhost-net`), no bus (`/dev/bus/usb/…`, `/dev/i2c-…`), no capture device — and, worst of the set, not
+ * `/dev/tcp/<host>/<port>`, which is bash opening a **network socket** spelled as a file and whose entire user
+ * base is reverse shells. `^/dev(/|$)` covers all of them, and every node that ships next year.
  *
- * ### What deliberately is NOT covered
- * Terminal devices (`/dev/tty…`, `/dev/pts/…` — spelled with an ellipsis rather than a star, since a slash
- * followed by a star OPENS a nested block comment in Kotlin and leaves this KDoc unclosed) and non-raw disk
- * device NAMES that only ever appear as a mount
- * source in ordinary tooling output are left alone — this rule is about a call that NAMES the device as its
- * own target, not every string that happens to look like one. Matching is by SHAPE, not by an exhaustive
- * enumeration of every possible device node on every OS; widening it is a matter of adding a pattern, never of
- * trusting a caller.
+ * ### The two exemptions, and why an allowlist is the right shape for them
+ * `/dev/null` and `/dev/urandom` are exempt, matched **exactly**. They are inert: no persistent state, and no
+ * route through either to another process's or another user's data. The reason they need naming at all is that
+ * `2>/dev/null` is not device access in any meaningful sense — it is punctuation, present in a large share of
+ * ordinary commands — and a rule that refuses it is a rule the user switches off within an afternoon, taking
+ * `/dev/tcp` and every disk and memory node with it. The exemption buys the rest of the tree.
+ *
+ * This is an **allowlist over a total pattern**, which is the opposite of the enumeration that was deleted: an
+ * unknown node fails CLOSED, because it is unknown to a list of two rather than absent from a list of the bad
+ * ones. Anything else under `/dev` — `/dev/zero`, `/dev/random`, `/dev/full`, `/dev/stdin`, `/dev/tty`,
+ * `/dev/fd/<n>` — is still refused. Widen it only by adding a name here, deliberately, one at a time.
+ *
+ * **The accepted cost, stated rather than discovered:** output can be silenced. `2>/dev/null` hides a command's
+ * failure from the transcript and from the reviewer, which is an obfuscation primitive as well as a shell idiom.
+ * The trade is taken with that known, because a guard that interrupts routine work is a guard that gets disabled
+ * wholesale, and the rules it takes down with it protect against far more than a hidden error message.
  */
 object SystemDevices {
 
     /**
-     * Provably inert: no persistent state, and no route through them to another user's or process's data.
-     * Compared against the lower-cased candidate so `/DEV/NULL` (case-insensitive filesystems, or an attacker
-     * hoping the check is case-sensitive) is exempted exactly like the canonical spelling.
+     * Exempt, and compared as a WHOLE path against the [GuardPaths.fold]ed, lower-cased candidate.
+     *
+     * Both halves of that are load-bearing. Whole-string equality (rather than a prefix or a `startsWith`) is
+     * what stops `/dev/null.evil` or `/dev/urandom/../sda` from inheriting the exemption; folding first is what
+     * makes `/dev/./null` inherit it, and what turns `/dev/null/../sda` into `/dev/sda` so it is judged as the
+     * disk it actually names. Lower-casing covers `/DEV/NULL` on a case-insensitive filesystem — and an attacker
+     * hoping the check is the other way round.
      */
-    private val BENIGN_DEVICES = setOf(
-        "/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom",
-        "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/fd/0", "/dev/fd/1", "/dev/fd/2", "/dev/tty",
-    )
+    private val EXEMPT_DEVICES = setOf("/dev/null", "/dev/urandom")
 
     /**
-     * Raw devices, matched against a [GuardPaths.normalize]d candidate. Each pattern is anchored so it names
-     * the device node itself (or, for the directory-shaped ones, anything under it) — never a bare substring,
-     * for the same reason `TempDirs.TEMP_ROOTS` is anchored: every string leaf of every tool input reaches this
-     * rule, so an unanchored fragment would match ordinary paths that merely contain one of these words.
+     * Devices, matched against a [GuardPaths.normalize]d candidate. Each pattern is anchored so it names the
+     * device node itself (or, for the directory-shaped ones, anything under it) — never a bare substring, for the
+     * same reason `TempDirs.TEMP_ROOTS` is anchored: every string leaf of every tool input reaches this rule, so
+     * an unanchored fragment would match ordinary paths that merely contain one of these words.
      */
     private val DEVICE_PATTERNS: List<Regex> = listOf(
-        // Direct physical/kernel memory, raw I/O ports, the kernel ring buffer — no partition scheme applies,
-        // so these are exact nodes, not prefixes.
-        Regex("""^/dev/(mem|kmem|port|kmsg)$""", RegexOption.IGNORE_CASE),
-        // Raw and partitioned block devices: the disk itself, not a filesystem mounted from it.
-        Regex(
-            """^/dev/(sd[a-z]+\d*|nvme\d+n\d+(p\d+)?|hd[a-z]+\d*|xvd[a-z]+\d*|vd[a-z]+\d*|mmcblk\d+(p\d+)?)$""",
-            RegexOption.IGNORE_CASE,
-        ),
-        Regex("""^/dev/mapper/""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/(loop|dm-)\d+$""", RegexOption.IGNORE_CASE),
-        // macOS: /dev/disk0, /dev/disk0s1, /dev/rdisk0 (the raw/character variant).
-        Regex("""^/dev/r?disk\d""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/input/""", RegexOption.IGNORE_CASE),
-        Regex("""^/dev/fb\d+$""", RegexOption.IGNORE_CASE),
-        // /proc: another process's live memory, or the kernel's own.
+        // Every device node, in one pattern. See the class doc for why this is not a list of the dangerous ones.
+        Regex("""^/dev(/|$)""", RegexOption.IGNORE_CASE),
+        // Windows' device namespace `\\.\…` — PhysicalDrive0, PIPE, COM1 — seen after GuardPaths.normalize turns
+        // it into its forward-slash form. `ForeignTerritory.isUnc` deliberately does NOT match it (`.` is not a
+        // hostname), so this is the rule that names it. NB `\\?\C:\…` is the extended-length LOCAL path prefix and
+        // is not a device: it is not matched here, and must not be.
+        Regex("""^//\./""", RegexOption.IGNORE_CASE),
+        // /proc: another process's live memory, or the kernel's own. Not under /dev, so they need their own lines.
         Regex("""^/proc/\d+/mem$""", RegexOption.IGNORE_CASE),
         Regex("""^/proc/(kcore|kmem|kallsyms)$""", RegexOption.IGNORE_CASE),
-        // Windows' raw device namespace, seen after GuardPaths.normalize turns `\\.\PhysicalDrive0` into its
-        // forward-slash form. (ForeignTerritory.isUnc already flags the same string as a UNC-shaped path first —
-        // see SensitiveGuard.classify's ordering — so this pattern is what names it correctly if that ever stops
-        // being true, not the only thing standing in front of it today.)
-        Regex("""^//\./physicaldrive\d+""", RegexOption.IGNORE_CASE),
     )
 
-    /** The first candidate that names a raw system device, or null when none does. */
+    /** The first candidate that names a system device, or null when none does. */
     internal fun deviceHit(paths: List<String>): String? = paths.firstOrNull { isSystemDevice(it) }
 
-    /** Is [path] a raw system device — matched against both the literal and the [GuardPaths.fold]ed form, the
-     *  same double check every other location rule in this package applies (see [TempDirs.isTemp]). */
+    /**
+     * Is [path] a system device?
+     *
+     * Matched against both the literal and the [GuardPaths.fold]ed form, the same double check every other
+     * location rule in this package applies (see [TempDirs.isTemp]) — but the EXEMPTION is decided on the folded
+     * form alone, because that is the only form in which a spelling cannot be padded into looking inert.
+     */
     fun isSystemDevice(path: String): Boolean {
         if (path.isBlank()) return false
-        if (path.lowercase() in BENIGN_DEVICES) return false
-        return matches(path) || matches(GuardPaths.fold(path))
+        val folded = GuardPaths.fold(path)
+        if (folded.lowercase() in EXEMPT_DEVICES) return false
+        return matches(path) || matches(folded)
     }
 
     private fun matches(path: String): Boolean = DEVICE_PATTERNS.any { it.containsMatchIn(path) }

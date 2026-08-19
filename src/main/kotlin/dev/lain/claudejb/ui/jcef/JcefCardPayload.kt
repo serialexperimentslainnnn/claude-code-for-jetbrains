@@ -1,6 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.permission.ElicitationCard
+import dev.lain.claudejb.permission.GuardAlert
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.protocol.AskQuestion
 import kotlinx.serialization.json.JsonArray
@@ -39,6 +40,23 @@ object JcefCardPayload {
         // The two card shapes that carry their own nested payload; each is only present on its own kind of card.
         p.questions?.let { put("questions", questionsJson(it)) }
         p.elicitation?.let { put("elicitation", elicitationJson(it)) }
+        p.guard?.let { put("guard", guardJson(it)) }
+    }
+
+    /**
+     * The guard-alert payload: present ONLY on a card raised by a security rule the user switched off.
+     *
+     * The rule travels by its exact id **and** by its human label and category, because the two answer different
+     * questions and the page must not have to derive either. The id is what the Settings surfaces key on
+     * (`rule:<NAME>`), so it is what makes "disable this rule" reach exactly one rule and nothing adjacent; the
+     * label and category are what a human reads to find the switch. Deriving one from the other on the page would
+     * put a second copy of the catalogue in JavaScript, and the two would disagree the first time a label changed.
+     */
+    private fun guardJson(g: GuardAlert) = buildJsonObject {
+        put("rule", g.rule.name)
+        put("label", g.label)
+        put("category", g.category)
+        g.reason?.let { put("reason", it) }
     }
 
     /** The AskUserQuestion payload: questions, each with its options. */

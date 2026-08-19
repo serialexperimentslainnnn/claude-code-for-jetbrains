@@ -50,14 +50,14 @@ class SensitiveGuardUncShapeTest {
 
     private fun read(path: String) = buildJsonObject { put("file_path", path) }
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
-    private fun v(tool: String, input: JsonObject) = SensitiveGuard.evaluate(tool, input, policy).verdict
+    private fun v(input: JsonObject) = SensitiveGuard.evaluate(input, policy).verdict
 
     // ── the reported call, both routes a regex literal takes into the guard ───────────────────────────────
 
     @Test
     fun `a regex literal in a command is not mistaken for a network share`() {
-        assertEquals(Verdict.ALLOW, v("Bash", bash("""rg --pcre2 '/\btype\s*:\s*/' src/""")))
-        assertEquals(Verdict.ALLOW, v("Bash", bash("""node -e 'console.log(/\bexport\b/.test(s))'""")))
+        assertEquals(Verdict.ALLOW, v(bash("""rg --pcre2 '/\btype\s*:\s*/' src/""")))
+        assertEquals(Verdict.ALLOW, v(bash("""node -e 'console.log(/\bexport\b/.test(s))'""")))
     }
 
     // The FAMILY, not the instance: every regex literal whose first atom is an escape acquired a `//` prefix
@@ -80,8 +80,8 @@ class SensitiveGuardUncShapeTest {
         )) {
             assertFalse(GuardPaths.normalize(literal, home).startsWith("//"), literal)
             assertFalse(ForeignTerritory.isUnc(GuardPaths.normalize(literal, home)), literal)
-            assertEquals(Verdict.ALLOW, v("Grep", buildJsonObject { put("pattern", literal) }), literal)
-            assertEquals(Verdict.ALLOW, v("Bash", bash("rg --pcre2 $literal src/")), literal)
+            assertEquals(Verdict.ALLOW, v(buildJsonObject { put("pattern", literal) }), literal)
+            assertEquals(Verdict.ALLOW, v(bash("rg --pcre2 $literal src/")), literal)
         }
     }
 
@@ -96,24 +96,27 @@ class SensitiveGuardUncShapeTest {
             """python3 -c 'print("a\tb\nc")'""",
             """echo 'C:\\Users\\me\\app'""",
             """rg '// TODO: drop this' src/""",
-        ).forEach { assertEquals(Verdict.ALLOW, v("Bash", bash(it)), it) }
-        // `sed -i` belongs to this list for the reason the list exists — its regex is source text, not a path, and
-        // it must not be read as one — but it is no longer ALLOW, and not because of anything canonicalisation did:
-        // `-i` rewrites the file it reads, which is a write with no diff to review (SHELL_FILE_WRITE). A card, not
-        // the unoverridable refusal this test guards against, so the claim it is really making still holds.
-        assertEquals(Verdict.ASK, v("Bash", bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
+        ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+        // An in-project `sed -i` is now ALLOW — a write inside the working directory is ordinary development, and
+        // its regex literal must not be path-shaped into a foreign verdict either. Both halves of the claim hold.
+        assertEquals(Verdict.ALLOW, v(bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
+        // The write rule is location-aware: the SAME sed -i onto a system file OUTSIDE the project is still a card.
+        assertEquals(
+            SecurityRule.SHELL_FILE_WRITE,
+            SensitiveGuard.evaluate(bash("""sed -i 's/\bfoo\b/bar/g' /etc/fstab"""), policy).rule,
+        )
     }
 
     // ── the half that matters: the fix withdraws no verdict from anything that is a path ──────────────────
 
     @Test
     fun `every real UNC spelling is still foreign territory`() {
-        assertEquals(Verdict.DENY, v("Read", read("""\\server\share\file""")))
-        assertEquals(Verdict.DENY, v("Read", read("//server/share/file")))
-        assertEquals(Verdict.DENY, v("Read", read("""\\?\UNC\server\share\x""")))
-        assertEquals(Verdict.DENY, v("Read", read("""\\.\pipe\x""")))
-        assertEquals(Verdict.DENY, v("Bash", bash("""cp \\fileserver\backup\dump.sql .""")))
-        assertEquals(Verdict.DENY, v("Bash", bash("cp //fileserver/backup/dump.sql .")))
+        assertEquals(Verdict.DENY, v(read("""\\server\share\file""")))
+        assertEquals(Verdict.DENY, v(read("//server/share/file")))
+        assertEquals(Verdict.DENY, v(read("""\\?\UNC\server\share\x""")))
+        assertEquals(Verdict.DENY, v(read("""\\.\pipe\x""")))
+        assertEquals(Verdict.DENY, v(bash("""cp \\fileserver\backup\dump.sql .""")))
+        assertEquals(Verdict.DENY, v(bash("cp //fileserver/backup/dump.sql .")))
         // …and the prefix still SURVIVES normalization, which is the form `isUnc` is actually handed.
         assertTrue(GuardPaths.normalize("""\\server\share\file""", home).startsWith("//"))
         assertTrue(GuardPaths.normalize("//server/share/file", home).startsWith("//"))
@@ -126,11 +129,17 @@ class SensitiveGuardUncShapeTest {
         // it never had and is then judged by every rule, including the one that actually fits it.
         // `/\home/bob/…` was refused as a network share (the right answer for the wrong reason, and out of
         // reach of the anchored `HOME_SEGMENT`); it is refused as another user's home now.
-        assertEquals(Verdict.DENY, v("Read", read("""/\home/bob/.ssh/id_rsa""")))
-        assertEquals(Verdict.DENY, v("Bash", bash("""cat /\home/bob/.bashrc""")))
-        assertEquals(Verdict.DENY, v("Read", read("""C:\Users\bob\Desktop\notes.txt""")))
-        assertEquals(Verdict.ASK, v("Read", read("""/\home/me/.ssh/id_rsa"""))) // own home: credential, not foreign
-        assertEquals(Verdict.DENY, v("mcp__fs__get", read("""/\home/me/.ssh/id_rsa""")))
+        assertEquals(Verdict.DENY, v(read("""/\home/bob/.ssh/id_rsa""")))
+        assertEquals(Verdict.DENY, v(bash("""cat /\home/bob/.bashrc""")))
+        assertEquals(Verdict.DENY, v(read("""C:\Users\bob\Desktop\notes.txt""")))
+        // Own home: a credential rather than foreign territory — a different RULE, and the same verdict, since
+        // both are enforced. The line that used to sit here asserted the same input DENIED for an MCP caller and
+        // merely ASKED for a first-party one; there is no such distinction left to pin.
+        assertEquals(Verdict.DENY, v(read("""/\home/me/.ssh/id_rsa""")))
+        assertEquals(
+            SecurityRule.CREDENTIALS,
+            SensitiveGuard.evaluate(read("""/\home/me/.ssh/id_rsa"""), policy).rule,
+        )
     }
 
     @Test
@@ -141,8 +150,8 @@ class SensitiveGuardUncShapeTest {
         // literally called `\\server\share` on POSIX. No reachable location is lost by declining both — and
         // the spelling that DOES reach the share is still refused, which is the load-bearing assertion.
         assertFalse(ForeignTerritory.isUnc("""\\\server\share"""))
-        assertEquals(Verdict.ALLOW, v("Bash", bash("""rg '/\\server\share/' src/""")))
-        assertEquals(Verdict.DENY, v("Bash", bash("""cp \\server\share\x .""")))
+        assertEquals(Verdict.ALLOW, v(bash("""rg '/\\server\share/' src/""")))
+        assertEquals(Verdict.DENY, v(bash("""cp \\server\share\x .""")))
     }
 
     @Test

@@ -149,6 +149,19 @@ class ClaudeSettings(internal val project: Project? = null) {
          */
         @JvmField var securityExtraBlockedDomains: String = ""
 
+        /**
+         * Exact commands pre-approved to run without a card, one per line. Empty by default.
+         *
+         * **The only setting in this document that WEAKENS the guard**, which is why it is fenced everywhere else:
+         * it lifts a block only for a [dev.lain.claudejb.permission.SecurityRule.whitelistable] action rule (never
+         * a credential, foreign-path, device, egress or unreadable-script wall), only on a whole-command match
+         * de-obfuscated on both sides, and only from here — the guard's card offers no way to add an entry, because
+         * pre-authorising a dangerous command mid-turn is the decision this design exists to avoid.
+         *
+         * Line-per-entry rather than CSV, unlike [disabledSecurityRules]: a command contains commas.
+         */
+        @JvmField var securityCommandWhitelist: String = ""
+
         // --- Superseded by `disabledSecurityRules`, kept ONE release as migration inputs ------------------
         //
         // These seven were the per-rule toggles before the rules became a two-level catalogue. They are read

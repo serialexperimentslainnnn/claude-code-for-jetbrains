@@ -63,10 +63,9 @@ internal object SourceScriptAudit {
             file.readText()
         }.getOrNull() ?: return null
         // Judged as the command it is: the whole text under a `command` key, which is the shape the guard's own
-        // scanner tokenises, de-obfuscates and expands. `Bash` as the caller name because that is what a login
-        // shell sourcing a file IS — and because a trusted caller is the WEAKER reading, so a finding here is a
-        // finding for every caller.
-        val decision = SensitiveGuard.evaluate("Bash", buildJsonObject { put("command", text) }, policy)
+        // scanner tokenises, de-obfuscates and expands. No caller is named because the guard no longer takes one —
+        // a finding here is a finding whoever would have run it, which is what this check needs.
+        val decision = SensitiveGuard.evaluate(buildJsonObject { put("command", text) }, policy)
         return decision.reason.takeIf { decision.verdict != SensitiveGuard.Verdict.ALLOW }
     }
 

@@ -102,6 +102,12 @@ object SecretStore {
      */
     const val SETTINGS_JSON = "CLAUDE_SETTINGS_JSON"
 
+    // There was a `TOOL_CHECKSUMS` entry here for the guard's dev-tool checksum baseline. Both are gone: the
+    // baseline is not verified any more (it could block a `./gradlew` on any Gradle version the shipped hashes
+    // did not pin, which is the opposite of a plugin that stays out of a developer's way), and the keychain
+    // lookup it drove ran on the stdout-reader thread and its first-run write opened an unlock dialog at IDE
+    // startup. The dev-tool exemption is name-only now; nothing in the safe backs it.
+
     /** Auth modes: mutually exclusive by construction — setting one clears the others. */
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 

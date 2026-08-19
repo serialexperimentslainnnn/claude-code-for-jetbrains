@@ -125,9 +125,21 @@ The first was a careful enumeration, and enumerations are what you miss the next
 GPU, no `/dev/kvm`, and not `/dev/tcp/<host>/<port>`, which is bash opening a network socket spelled as a
 file. That last one has no legitimate use — reverse shells are its entire user base.
 
-`/dev/null` is in scope too, which reads as excessive until you notice that making output disappear is an
-obfuscation primitive. A rule set whose job is finding problems should not accept the token whose purpose
-is that problems leave no trace.
+Two nodes are exempt, matched as whole names: `/dev/null` and `/dev/urandom`. They are inert — no persistent
+state, and no route through either to another process's or another user's data — and the reason they need
+naming at all is `2>/dev/null`, which is punctuation in a large share of ordinary commands rather than device
+access in any meaningful sense.
+
+The cost is real and worth stating rather than discovering: **output can be silenced.** Hiding a command's
+failure is an obfuscation primitive as well as a shell idiom, and this exemption accepts that. The trade is
+deliberate, because a guard that interrupts routine work is a guard switched off entirely — and switching
+this one off would take `/dev/tcp`, every disk and all of memory with it. Two nodes is a cheaper price than
+the whole rule.
+
+It stays an allow-list over a total pattern, which is the opposite of the enumeration that was deleted: an
+unknown node fails closed, because it is missing from a list of two rather than absent from a list of the bad
+ones. Everything else is still refused — `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/fd/<n>`, a tty — and
+the comparison is on the resolved spelling, so `/dev/null/../sda` is judged as the disk it actually names.
 
 ### Where data goes
 

@@ -41,10 +41,35 @@ data class PendingPermission(
     val blockedPath: String? = null,
     /** Non-null for an MCP elicitation: render an elicitation card instead of an Accept/Reject card. */
     val elicitation: ElicitationCard? = null,
+    /**
+     * Non-null when this card exists **because a security rule fired** — see [GuardAlert].
+     *
+     * It can only be set on a card for a rule the user switched OFF, because an enforced rule never produces a
+     * card at all: it is denied outright. So a guard alert always means "the lock you opened just let something
+     * through", which is exactly the thing that must not be quiet.
+     */
+    val guard: GuardAlert? = null,
 ) {
     /** Short headline for transcript notices, e.g. "Edit on App.kt". */
     val headline: String
         get() = DiffPresenter.filePathOf(input)?.substringAfterLast('/')?.let { "$toolName on $it" } ?: toolName
+}
+
+/**
+ * Why a card is a **guard alert** rather than an ordinary permission question: the [SecurityRule] that fired,
+ * and the guard's own sentence about it.
+ *
+ * The rule travels as the enum, not as prose. The card names it twice — the exact id, so the user can find the
+ * switch, and the human [SecurityRule.label] with its category — and deriving either by parsing [reason] would
+ * be a second, weaker copy of a classification already made: the wording is written for a human and is free to
+ * change, so a card keyed on it would start saying "unknown rule" the day somebody improves a sentence.
+ */
+data class GuardAlert(val rule: SecurityRule, val reason: String?) {
+    /** The row label the Settings page and the ⚙ menu draw, so all three surfaces say the same thing. */
+    val label: String get() = rule.label
+
+    /** The category it is grouped under, which is how the switch is actually found. */
+    val category: String get() = rule.category.label
 }
 
 /**
@@ -82,8 +107,8 @@ class PermissionBroker(
     /** Verdict **and reason** for a call that trips the sensitive-data guard — see [SensitiveGuard.evaluate].
      *  ALLOW with no reason when the guard is not configured. One call, not two: classification canonicalises
      *  paths on disk under a timeout, and doing that twice per request is latency the user feels on the card. */
-    private val sensitiveDecision: (toolName: String, input: JsonObject) -> SensitiveGuard.Decision =
-        { _, _ -> SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
+    private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
+        { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
     /** A call was refused by the sensitive-data guard — surface it in the transcript, with the guard's reason. */
     private val onSensitiveDenied: (toolName: String, reason: String?) -> Unit = { _, _ -> },
     /**
@@ -130,13 +155,16 @@ class PermissionBroker(
      * The sensitive-data guard, which runs BEFORE the mode is even looked at — so `bypassPermissions`,
      * `acceptEdits` and "Always allow" simply never reach their fast paths for a call that trips it (see
      * [SensitiveGuard]). The mode itself is untouched; this gate just never falls through to it.
-     *   MCP / Skills → denied outright: third-party code has no business reading the user's keys.
-     *   The agent's own tools → the user authorises it, explicitly, every time.
+     *
+     * **The caller does not enter into it.** An enforced rule denies whoever is calling — the agent's own tools
+     * exactly like an MCP server or a Skill — and a rule the user switched off in Settings turns into a card
+     * instead, every time. The tool name reaching this function is used only to WORD the transcript line and to
+     * decide whether the card carries a diff; it decides no verdict, because it arrives on the wire.
      *
      * Returns true when the guard settled the request (denied or turned it into a card).
      */
     private fun applySensitiveGuard(requestId: String, request: CanUseToolRequest): Boolean {
-        val decision = sensitiveDecision(request.toolName, request.input)
+        val decision = sensitiveDecision(request.input)
         return when (decision.verdict) {
             SensitiveGuard.Verdict.DENY -> {
                 // Tell the model WHICH rule refused and WHERE to change it. Until 5.0.0 this was a fixed string
@@ -150,7 +178,22 @@ class PermissionBroker(
             }
 
             SensitiveGuard.Verdict.ASK -> {
-                present(presentable(requestId, request, request.toolName in DiffPresenter.REVIEWABLE_TOOLS))
+                // A rule the user switched OFF. The card is their decision point, and **"Always allow" is a real
+                // choice on it** — so a standing "always allow" for this tool is honoured here, and nothing else
+                // is. Specifically NOT the permission mode: `bypassPermissions` and `acceptEdits` must not make a
+                // guard card disappear, because the whole meaning of disabling a rule is "I want to decide this
+                // one myself", not "stop watching for it". That is why this consults [isRemembered] directly
+                // instead of falling through to [tryAutoApprove], which would also let the mode answer.
+                //
+                // It cannot open a lock: this branch is only reachable for a rule already disabled in Settings,
+                // so the strongest thing "Always allow" can do is skip a card the user had already chosen to be
+                // asked about. An ENFORCED rule never arrives here at all — it is the DENY above.
+                val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
+                if (!forceAsk() && isRemembered(request.toolName, request.input)) {
+                    autoAllow(requestId, request, reviewable)
+                } else {
+                    present(presentable(requestId, request, reviewable, decision))
+                }
                 true
             }
 
@@ -194,7 +237,13 @@ class PermissionBroker(
             toolUseId = request.toolUseId.ifBlank { null },
         )
 
-    private fun presentable(requestId: String, request: CanUseToolRequest, reviewable: Boolean) =
+    private fun presentable(
+        requestId: String,
+        request: CanUseToolRequest,
+        reviewable: Boolean,
+        /** Set only on the guard's ASK path, so the card can announce which open lock let this through. */
+        guard: SensitiveGuard.Decision? = null,
+    ) =
         PendingPermission(
             requestId = requestId,
             toolName = request.toolName,
@@ -206,6 +255,7 @@ class PermissionBroker(
             description = request.description?.ifBlank { null },
             decisionReason = request.decisionReason?.ifBlank { null },
             blockedPath = request.blockedPath?.ifBlank { null },
+            guard = guard?.rule?.let { GuardAlert(it, guard.reason) },
         )
 
     /**

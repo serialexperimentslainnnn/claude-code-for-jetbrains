@@ -31,24 +31,42 @@ import kotlinx.serialization.json.put
  *  - [ForeignTerritory] — another user's home, network/UNC mounts, foreign WSL drives.
  *  - [CommandRules] — dangerous commands ([CommandRules.DANGEROUS_COMMANDS]) and the de-obfuscation applied
  *    before matching them.
+ *  - [VersionControlRules] — a version-control command that switches a safeguard OFF (`git add -f`, `--no-verify`).
+ *  - [DestructiveCommands] — the second axis: an irreversible action on the user's own systems.
+ *  - [CodeExecution] — package install hooks, persistence mechanisms, library injection.
  *  - [TempDirs] — the system temporary directory.
- *  - [SystemDevices] — the raw block device, physical memory, another process's memory.
+ *  - [SystemDevices] — any device node, the Windows device namespace, another process's memory.
  *  - [ShellFileWrites] — a command that writes or modifies a file, i.e. a write with no diff to review.
  *  - [ProxyRules] — egress that routes around the proxy the user declared.
  *  - [DangerousDomains] — the curated staging/exfiltration destinations.
  *  - [EnvIndirection] — a destination hidden behind a variable the guard cannot resolve.
  *  - [ScriptExecution] — a script file being sourced or launched, whose contents never reach this guard.
+ *  - [DevToolScripts] / [DevToolChecksums] — the build wrappers whose BODY is not worth reading, and the
+ *    vendor-published sums that say a file of that name really is the tool it claims to be.
  *
  * ### The surfaces, by [SecurityCategory]
  *
- * **[SecurityCategory.SENSITIVE_DATA]** — [SecurityRule.CREDENTIALS] matches by shape, wherever the file sits, never
- * anchored to a specific home (see [CredentialPaths]); [SecurityRule.SECRET_DUMPING_COMMANDS] catches commands that
- * dump a secret at rest, exfiltrate a file, pipe the network into a shell, or invoke recognised offensive/LOLBIN
- * tooling (see [CommandRules]).
+ * **[SecurityCategory.SENSITIVE_DATA]** — [SecurityRule.CREDENTIALS] matches by shape, **wherever the file sits, the
+ * open project included**, and never anchored to a specific home (see [CredentialPaths]). That "wherever" is
+ * load-bearing and it is the one place the project root buys nothing: a `.env` or a service-account key inside a
+ * repository is the ordinary case rather than the exotic one, and the repository is precisely what the agent is
+ * allowed to write to, so "the user put it there themselves" is not something this code is in a position to assume.
+ * [SecurityRule.SECRET_DUMPING_COMMANDS] catches commands that dump a secret at rest, exfiltrate a file, pipe the
+ * network into a shell, or invoke recognised offensive/LOLBIN tooling (see [CommandRules]);
+ * [SecurityRule.VCS_PROTECTION_BYPASS] catches a command asking for the safeguards that keep a secret OUT of a
+ * repository to be skipped (see [VersionControlRules]).
  *
  * **[SecurityCategory.FOREIGN_TERRITORY]** — another user's home, a network/removable mount, a foreign WSL drive:
- * not agentic development, but lateral movement. The only exemption is the open project's own root — see
- * [ForeignTerritory]. This is the one category that denies **every** caller (below).
+ * not agentic development, but lateral movement. Exempt inside the open project, because a hit here is entirely its
+ * LOCATION and that location is the workspace the user opened — see [ForeignTerritory], and [classify] for why a
+ * place may be exempted and a threat may not.
+ *
+ * **[SecurityCategory.DESTRUCTIVE_OPERATION]** — the second axis, and the only one that is not about an attacker:
+ * an irreversible action on the user's own infrastructure, cluster, cloud, database, containers, git history or
+ * filesystem. One narrow rule per vector so switching one off never opens the others — see [DestructiveCommands].
+ *
+ * **[SecurityCategory.CODE_EXECUTION]** — an install hook, a persistence mechanism, a preloaded library: code that
+ * runs because of this call but was not written for it, now or after the session ends — see [CodeExecution].
  *
  * **[SecurityCategory.SYSTEM_INTEGRITY]** — [SecurityRule.SYSTEM_DEVICE]: the device that BACKS the filesystem, or
  * live memory, addressed directly. Nothing about ordinary development touches those nodes, so it is a stronger claim
@@ -84,23 +102,35 @@ import kotlinx.serialization.json.put
  * delimited by slashes, or `Grep`'s own `pattern` argument, is absolute-LOOKING by pure coincidence of syntax, and
  * treating either as a location candidate turned an ordinary search into an unrelated "outside the project" card.
  *
- * ### Verdict, by trust of the CALLER — an allowlist, not a blacklist
- * The caller is trusted **only if it is one of the agent's own tools** ([AGENT_TOOLS]). Everything else — every MCP
- * server, every Skill, anything unrecognised — is third-party, because a blacklist of "bad" prefixes is exactly the
- * thing an attacker names their way around. By default this is a **hard lock**:
- *  - a **trusted** tool that trips any rule outside [SecurityCategory.FOREIGN_TERRITORY] → **ASK** (a card, every
- *    time, even under `bypassPermissions`): the user may authorise their own agent to read their own key, once,
- *    explicitly;
- *  - a **third-party** caller that trips one of those → **DENY**;
- *  - **anyone** who trips a [SecurityCategory.FOREIGN_TERRITORY] rule → **DENY**.
+ * ### The verdict IS the toggle, and nothing else — no caller is trusted
+ * **An enforced rule DENIES. A disabled rule ASKS. There is no third case, and who is calling does not enter into
+ * it.** The switch in Settings ▸ Claude Code ▸ Security is therefore the whole of the policy, and it says one thing
+ * in two directions:
+ *  - **rule enforced (the default) → DENY**, for every caller — the agent's own tools exactly like an MCP server or
+ *    a Skill, under `bypassPermissions` exactly like under `default`. There is no "authorise it just this once" in
+ *    the chat: the only key is the toggle, and it lives in Settings, where a decision of that weight is taken
+ *    deliberately rather than under the pressure of a stalled turn.
+ *  - **rule disabled → ASK**, for every caller, every time — never ALLOW. Detection ([classify]) runs
+ *    **unconditionally** whatever that set says, so switching a rule off does not stop the guard watching; it means
+ *    "I want to decide this one myself, every time". The card it produces is drawn as a red guard alert naming the
+ *    rule ([Decision.rule]), so an open lock is never quiet.
  *
- * ### Per-rule enforcement (Settings ▸ Claude Code ▸ Security) — never a silent allow
- * Every [SecurityRule] enforces by default; what the user can switch off is listed in
- * [Policy.disabledRules], and an empty set — the default — is the original hard lock exactly. Detection
- * ([classify]) runs **unconditionally**, regardless of that set: turning a rule off never skips recognising a
- * match. What it changes is [evaluate]'s OUTCOME: a disabled rule's hit is **downgraded from DENY to ASK**, for
- * every caller, including third-party ones — never to ALLOW. So "disabling a rule" means "I want to decide this one
- * myself, every time", not "stop watching for this".
+ * **This replaced a caller-trust matrix, and the deletion is the point.** The guard used to hold an allowlist of the
+ * agent's own tool names, ask THEM for confirmation, and hard-deny everyone else. Two things were wrong with it.
+ * It made the meaning of a rule depend on which tool happened to carry the call, so one credential read was a card
+ * and an identical one a wall, decided by a name that arrives **on the wire** — the one input a guard against prompt
+ * injection should not be taking policy from. And the confirmation itself was the hole: an ASK on an enforced rule is
+ * an Accept button on a call the guard has just called dangerous, put in front of a user in the middle of their work,
+ * which is precisely the condition under which people click it. What is left is a lock with one documented key.
+ *
+ * ### The one control that LIFTS a block — and the fence around it
+ * [Policy.commandWhitelist] pre-approves an **exact command** the user typed into Settings, in the cold. It is
+ * fenced on four sides, and each fence is load-bearing: it is authored only in Settings and never from the wire or
+ * from a card (pre-authorising something dangerous must not be a button offered mid-task); it is matched as the
+ * WHOLE command, de-obfuscated on both sides, so `terraform destroy` does not authorise `terraform destroy && rm
+ * -rf /`; it lifts only a [SecurityRule.whitelistable] rule, which is an action rule and never a wall; and that last
+ * guarantee is **structural rather than promised**, because [classify] asks the walls first, so a command that trips
+ * one is reported AS the wall and a wall is not whitelistable. There is no way to allow-list `cat ~/.ssh/id_rsa`.
  *
  * Two things are tunable *without* a toggle, and both only **widen** the net: the sensitive-path list
  * ([Policy.globs] = the built-in [CredentialPaths.SENSITIVE_GLOBS] plus the user's extras) and the blocked-domain
@@ -127,8 +157,8 @@ import kotlinx.serialization.json.put
  * What is *heuristic* is **detection**, and only for shell strings. Matching a declared file path is exact; but
  * `cat $HOME/.ss''h/id_rsa`, a base64 round-trip, or a script that reads a key indirectly may not *match* a
  * pattern, and a symlink is not resolved. That is a gap in what we recognise — not a way to argue with a match
- * once made. Close it by widening the patterns, never by trusting the caller. (The [AGENT_TOOLS] allowlist is the
- * one trust decision, and it is a whitelist precisely so an attacker cannot name their way onto it.)
+ * once made. Close it by widening the patterns — there is no caller left to trust instead, and no mode, and no
+ * button (see the verdict section above: the tool's name decides nothing).
  *
  * PURE: no IDE, no filesystem, no OS sniffing. [Policy] carries everything (assembled on the IDE side from settings
  * + [dev.lain.claudejb.session.RemoteMounts]), so every rule is unit-testable — for security code, a requirement.
@@ -138,43 +168,15 @@ object SensitiveGuard {
     /** What to do with a tool call that trips the guard. */
     enum class Verdict { ALLOW, ASK, DENY }
 
-    /**
-     * The agent's OWN tools — the allowlist of trusted callers. Anything not in here (MCP, Skills, unknown) is
-     * third-party and denied by default when it trips the guard.
-     *
-     * Kept in sync with the binary's built-in tool set — cross-referenced against the vendored SDK's own schema
-     * (`node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`, `ToolInputSchemas`), which is the project's
-     * declared protocol source of truth. A REAL incident: this list had gone stale as the CLI grew its own
-     * orchestration surface (background tasks, cron, worktrees…), so those native, first-party tool calls were
-     * silently falling into the "third-party" branch and getting hard-DENIED instead of asking — indistinguishable,
-     * from the user's chair, from an MCP server being blocked. `Skill` and any `mcp__*`-prefixed name are
-     * DELIBERATELY excluded: a Skill's *content* is third-party (community/user-authored), same tier as MCP, by
-     * design — see the class doc's caller-trust matrix.
-     */
-    val AGENT_TOOLS: Set<String> = setOf(
-        "Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead",
-        "Glob", "Grep", "LS", "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch", "ExitPlanMode",
-        "EnterPlanMode", "EnterWorktree", "ExitWorktree",
-        "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop",
-        "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "SendMessage",
-        "ListMcpResources", "ReadMcpResourceDir", "ReadMcpResource", "RefreshMcpTools",
-        "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
-        "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
-        "ShowOnboardingRolePicker", "Workflow",
-        // Re-audited against `claude` 2.1.222 / SDK 0.3.222. Entries are only ever ADDED here, never removed:
-        // this is a TRUST allowlist, not an inventory. A name that no longer exists costs nothing, while a
-        // first-party name that is missing falls into the third-party branch and is hard-DENIED — the 4.4.0
-        // incident described above. NB the CLI can also retire a tool per-session (it ships distinct
-        // "is disabled for this session" / "is not available in this context" messages, and Glob/Grep do get
-        // withdrawn in some sessions), which is another reason absence here must never be inferred from one run.
-        "AskUserQuestion", "Mcp", "FileRead", "FileEdit", "FileWrite",
-        // ToolSearch was absent, and it is the one that mattered most: it is how the agent loads the schema of
-        // every DEFERRED tool (web, tasks, cron, worktrees), so on a session that defers them, the call that
-        // unlocks all the others was the one landing in the untrusted branch. Found by diffing this list
-        // against a live session's actual tool inventory rather than against the SDK's type names — those are
-        // not the runtime registry (the SDK calls them FileRead/FileEdit/FileWrite; the tools are Read/Edit/Write).
-        "ToolSearch",
-    )
+    // There was an `AGENT_TOOLS` allowlist of the agent's own tool names here, and an `isTrustedCaller` reading it.
+    // Both are gone with the caller-trust matrix (see the class doc): a rule's verdict no longer depends on which
+    // tool carries the call, so the list decided nothing, and a curated trust allowlist that grants no trust is
+    // worse than none — it reads, to the next person, as if some caller were still privileged. It also had a
+    // failure mode of its own that is worth remembering as an argument AGAINST reintroducing it: the list went
+    // stale as the CLI grew tools, and every first-party name missing from it was hard-denied, indistinguishable
+    // from an MCP server being blocked. A policy input that has to be maintained against someone else's release
+    // cadence is a policy input that fails silently. It must not come back as dormant code either —
+    // `ReachabilityContractTest` would fail the build over it, which is that gate working.
 
     /** Everything the guard needs to judge a call. Assembled by the IDE side; pure input here. */
     data class Policy(
@@ -262,25 +264,22 @@ object SensitiveGuard {
         val noProxyHosts: List<String> = emptyList(),
         /** The user's OWN blocked domains, **added** to [DangerousDomains.BLOCKED_DOMAINS], never replacing it. */
         val extraBlockedDomains: List<String> = emptyList(),
+        /**
+         * Exact commands the user pre-approved in Settings — the ONE control that lifts a block rather than
+         * widening one. Empty by default.
+         *
+         * **Authored in the cold, never from the wire.** It is written on the Settings page and nowhere else: not
+         * from a permission card, not by the model, not by an MCP server. That is the same discipline
+         * [globs] and [extraBlockedDomains] follow, inverted — those may only widen the net from Settings, this
+         * may only narrow it from Settings — and it is why there is no one-click "always allow this" on a guard
+         * alert. Pre-authorising a dangerous command under the pressure of a stalled turn is exactly the decision
+         * this design refuses to offer.
+         *
+         * See [liftedByWhitelist] for how an entry is matched, and [SecurityRule.whitelistable] for what it can
+         * never lift.
+         */
+        val commandWhitelist: List<String> = emptyList(),
     )
-
-    // ── origin: trusted only if it is one of the agent's own tools ───────────────────────────────────────
-
-    /**
-     * True only for the agent's OWN tools. Everything else — MCP, Skills, unknown — is third-party.
-     *
-     * **A bare-name match, verified NOT to be a spoofing vector.** [AGENT_TOOLS] is a plain string set, so this
-     * looks naively vulnerable to an MCP server registering a tool named exactly `Read` and walking into the
-     * trusted branch by name collision. It isn't: the SDK's own published protocol (`sdk.d.ts`, `CanUseTool`'s
-     * `tool_name` — "Fully-qualified MCP tool name, e.g. `mcp__server__tool_name`") states the wire name of every
-     * MCP-provided tool is structurally prefixed `mcp__<server>__`, never bare — a server cannot suppress its own
-     * prefix, so `Read` on the wire is always the native tool. The one documented way to make a call ARRIVE under
-     * a bare first-party name while executing something else is `Options.toolAliases` (`{Bash: 'mcp__server__x'}`)
-     * — but that is a launch-time option set by whoever configures the SDK, not by the MCP server itself, and this
-     * plugin never sets it (`SessionLauncher.buildArgs` has no `toolAliases`). **This assumption breaks the day
-     * `toolAliases` support is added here** — re-verify this comment before wiring it up.
-     */
-    fun isTrustedCaller(toolName: String): Boolean = toolName in AGENT_TOOLS
 
     // ── the decision ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -298,27 +297,77 @@ object SensitiveGuard {
      * neither had a production caller, and paying for classification twice to answer one question is waste
      * the user experiences as latency on a permission card.
      */
-    data class Decision(val verdict: Verdict, val reason: String?)
+    data class Decision(
+        val verdict: Verdict,
+        val reason: String?,
+        /**
+         * Which rule tripped — null only on [Verdict.ALLOW], where nothing did.
+         *
+         * Carried as the enum rather than left implicit in [reason], because the permission card names the rule
+         * and the only other way to know it there would be to parse the prose back out. That parse would be a
+         * second, weaker copy of a classification already made: the wording is written for a human and is free to
+         * change, so a card keyed on it would start saying "unknown rule" the day somebody improves a sentence.
+         */
+        val rule: SecurityRule? = null,
+    )
 
-    /** [Verdict] plus its explanation, in a single classification pass. */
-    fun evaluate(toolName: String, input: JsonObject, policy: Policy): Decision {
+    /**
+     * [Verdict] plus its explanation, in a single classification pass.
+     *
+     * **Takes no tool name, and that is the policy rather than a simplification.** It used to, in order to look the
+     * caller up in a trust allowlist; the verdict no longer asks who is calling (see the class doc), so a parameter
+     * for it would be one this function never reads — which suggests the opposite of the actual design to everyone
+     * who reads the signature afterwards.
+     */
+    fun evaluate(input: JsonObject, policy: Policy): Decision {
         val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
-        return Decision(verdictFor(toolName, hit, policy), reasonFor(hit, policy))
+        if (liftedByWhitelist(input, hit, policy)) return Decision(Verdict.ALLOW, null)
+        return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule)
     }
 
-    private fun verdictFor(toolName: String, hit: Hit, policy: Policy): Verdict {
-        val enforced = isEnforced(hit, policy)
-        if (hit.rule.deniesEveryCaller) {
-            // Enforced (default): DENY for every caller, no exception — reaching into someone else's space, or
-            // structuring a call so it cannot be analysed. Disabled in Settings: downgraded to ASK for every
-            // caller instead — still a card every single time, never a silent allow.
-            return if (enforced) Verdict.DENY else Verdict.ASK
-        }
-        // Everything else: a trusted agent tool always gets a card regardless of the toggle — the toggle only ever
-        // changes an UNTRUSTED (MCP/Skill) caller's outcome: DENY when enforced, ASK when not.
-        if (!enforced) return Verdict.ASK
-        return if (isTrustedCaller(toolName)) Verdict.ASK else Verdict.DENY
+    /**
+     * **Enforced is a wall; disabled is a question.** The whole verdict, and there is deliberately nothing else in
+     * it — no caller, no permission mode, no per-call override.
+     *
+     * This was a four-branch decision over caller trust and a `deniesEveryCaller` flag, and collapsing it is the
+     * security change rather than a tidy-up: an ASK on an ENFORCED rule was an Accept button on a call the guard
+     * had just classified as dangerous, so the strongest statement the plugin can make ended in a dialog the user
+     * clicks through while thinking about something else. The lever moved to the one place where it is a decision
+     * instead of a reflex — the toggle in Settings — and the outcome here follows it exactly.
+     */
+    private fun verdictFor(hit: Hit, policy: Policy): Verdict =
+        if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
+
+    /**
+     * Does the user's always-allow list cover this exact call?
+     *
+     * Four conditions, and every one of them is a fence rather than a convenience:
+     *  1. **The rule must be [SecurityRule.whitelistable]** — an action rule. A wall never is, and because
+     *     [classify] asks the walls first, a command that trips one is reported AS the wall and never reaches here.
+     *  2. **Both sides go through [CommandRules.deobfuscate] and the same variable expansion**, so
+     *     `t""erraform destroy` cannot dodge an entry written normally — and an entry written obfuscated cannot
+     *     quietly cover more than it appears to.
+     *  3. **Whole-command equality**, after collapsing whitespace. Not `startsWith`, not `contains`:
+     *     `terraform destroy` must not authorise `terraform destroy && rm -rf /`, which is a different string.
+     *  4. **Every command the call carries must be approved** ([all], not [any]). A `Bash` input naming two
+     *     commands, one of them whitelisted, is not a whitelisted call — and a call carrying no command at all
+     *     (a path-shaped hit) is never lifted, since there is nothing to have approved.
+     */
+    private fun liftedByWhitelist(input: JsonObject, hit: Hit, policy: Policy): Boolean {
+        if (!hit.rule.whitelistable || policy.commandWhitelist.isEmpty()) return false
+        val approved = policy.commandWhitelist.map { canonicalCommand(it, policy) }.filter { it.isNotEmpty() }.toSet()
+        if (approved.isEmpty()) return false
+        val issued = ToolInputScanner.commandCandidates(input)
+        if (issued.isEmpty()) return false
+        return issued.all { canonicalCommand(it, policy) in approved }
     }
+
+    /** One spelling for both sides of a whitelist comparison: de-obfuscated, variable-expanded, whitespace
+     *  collapsed, trimmed. Never lower-cased — a shell is case-sensitive and so is this. */
+    private fun canonicalCommand(command: String, policy: Policy): String =
+        CommandRules.deobfuscate(command, policy.home, policy.envValues)
+            .replace(Regex("""\s+"""), " ")
+            .trim()
 
     /**
      * Whether [hit]'s rule is currently enforced (vs. downgraded to ASK) per [policy].
@@ -383,16 +432,21 @@ object SensitiveGuard {
             ToolInputScanner.pathCandidates(input, policy.home, policy.envValues),
             policy,
         )
-        val projRoot = policy.projectRoot?.let { GuardPaths.normalize(it, policy.home) }
-        val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(it, projRoot) }
+        // **The open project is the sanctioned zone for every LOCATION rule, credentials included.** Folded before
+        // the containment test, and that is the security half of this line: "inside the project" means inside the
+        // SUBTREE, not "spelled with the project root at the front". `GuardPaths.normalize` does not collapse
+        // `..`, so `<root>/../../tmp/payload` passes a plain prefix test and would collect the exemption of a
+        // place it is not in.
+        val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
+        val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(GuardPaths.fold(it), projRoot) }
 
         // The severity ordering, in one place and in one expression, so it can be READ as an ordering. The three
-        // groups below are a split for the human and for the complexity budget — a chain of eleven early returns
+        // groups below are a split for the human and for the complexity budget — a chain of sixteen early returns
         // in one function is neither reviewable nor within detekt's limits — and the order across them is exactly
         // the order the rules are declared in.
         return placeRules(paths, outsideProject, policy)
             ?: actionRules(input, policy, depth)
-            ?: weakRules(input, outsideProject, projRoot, policy)
+            ?: weakRules(input, outsideProject, policy, depth)
     }
 
     /** The strongest claims, and all three are about a PLACE: someone else's space, the disk itself, a key file. */
@@ -409,6 +463,20 @@ object SensitiveGuard {
             return Hit(SecurityRule.SYSTEM_DEVICE, "addresses a raw system device: $it")
         }
 
+        // Judged on the OUTSIDE-PROJECT subset: a credential file the user brought into their own repository is
+        // theirs, and the agent is working in that repository at their request.
+        //
+        // This exemption was removed once and put back, so the reasoning is worth keeping written down rather
+        // than rediscovered. Removing it is defensible on paper — a `.env` in a repo is the ordinary case, and
+        // the repository is space the agent can WRITE to, so "the user put it there" is an assumption. What it
+        // costs in practice is the whole tool: the strongest rule in the set then fires on the one directory
+        // every single call is aimed at, so ordinary work in any project that holds a `.env`, a `*.pem` or a
+        // service-account key becomes a wall. That is not a stricter guard, it is an uninstalled one — and an
+        // uninstalled guard protects nothing at all, which is the only measure that counts here.
+        //
+        // The line the package holds instead: **exempt a PLACE, never a THREAT.** The project root is a place the
+        // user opened deliberately. Nothing here exempts a KIND of file, and the same credential one directory
+        // outside the project is caught (see the test of exactly that name).
         val matchers = policy.globs.map { CredentialPaths.compile(it, policy.home) }
         return outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
             ?.let { Hit(SecurityRule.CREDENTIALS, "reads credentials or key material outside the project: $it") }
@@ -416,21 +484,7 @@ object SensitiveGuard {
 
     /** What the call DOES: where it talks to, what it runs, and what it would not let the guard see. */
     private fun actionRules(input: JsonObject, policy: Policy, depth: Int): Hit? {
-        // A destination reads as strongly as a credential dump and more specifically than "a dangerous command":
-        // if a call is both `curl --upload-file` AND aimed at a paste site, the site is the informative half.
-        DangerousDomains.blockedHit(ToolInputScanner.urlCandidates(input), policy.extraBlockedDomains)?.let {
-            return Hit(SecurityRule.BLOCKED_DOMAIN, "talks to a known staging or exfiltration service: $it")
-        }
-
-        CommandRules.dangerousCommand(input, policy.home, policy.envValues)?.let {
-            return Hit(SecurityRule.SECRET_DUMPING_COMMANDS, "runs a command that can expose secrets: $it")
-        }
-
-        // After the dangerous-command rule, because it is the narrower claim of the two: "this routes around your
-        // proxy" is worth saying only when nothing worse is true of the same command.
-        ProxyRules.proxyHit(input, policy)?.let {
-            return Hit(SecurityRule.PROXY_BYPASS, "routes around the proxy you declared: $it")
-        }
+        commandFamilies(input, policy)?.let { return it }
 
         // ── the OPAQUE pair: what the guard could not read, once it has tried ────────────────────────────
         // Below every rule that can say something CONCRETE and above every rule that only says "worth a glance":
@@ -439,6 +493,12 @@ object SensitiveGuard {
         // Scripts recurse at EVERY depth (bounded), because that is the whole point: a script that sources a
         // script is exactly how a payload is put one file further from the request.
         scriptFindings(input, policy, depth)?.let { return it }
+
+        // Command substitution — `$(cat /etc/shadow)`, `` `mimikatz` `` — is judged by the SAME recursion: the
+        // inner command is classified, so it is reported as the credential read or the hacking tool it actually
+        // is, not as a generic "unresolvable". Only a substitution whose inner command trips nothing falls
+        // through to the opaque rule below, which still refuses it for hiding the OUTER destination.
+        substitutionFindings(input, policy, depth)?.let { return it }
 
         // The variable rule, by contrast, is AT DEPTH 0 ONLY, and that is the decision that makes it survivable:
         // inside a file the guard is reading, a `$JAVACMD` or a `$(cd …)` is what a build wrapper is MADE of, so
@@ -457,6 +517,70 @@ object SensitiveGuard {
     }
 
     /**
+     * The families recognised by the SHAPE OF A COMMAND rather than by a path — asked in severity order, first
+     * hit wins the wording.
+     *
+     * Split out of [actionRules] rather than inlined there, and the split is not only detekt's return-count
+     * budget: this is the list that grows. Every new command family is one more entry here and one more file
+     * beside this one, which is the package's own rule — a rule is a file, never a branch in the verdict — and
+     * keeping them together is what lets the ordering be READ as an ordering instead of reconstructed from a
+     * chain of early returns interleaved with the opaque rules and the recursion bound.
+     *
+     * The order, and why each step is where it is:
+     *  1. a **blocked destination** — reads as strongly as a credential dump and more specifically than "a
+     *     dangerous command": a call that is both `curl --upload-file` AND aimed at a paste site is best
+     *     described by the site;
+     *  2. a **secret-dumping command** — the actual secret leaving;
+     *  3. a **version-control safeguard being skipped** — a door left open, which is weaker than one already
+     *     walked through;
+     *  4. a **destructive operation** — not confidentiality at all, but "this is about to delete your production
+     *     database" outranks every remaining claim about a command's shape;
+     *  5. **code execution / persistence** — someone else's code, now or after the session;
+     *  6. a **proxy bypass** — the narrowest of the set, worth saying only when nothing worse is true.
+     */
+    private fun commandFamilies(input: JsonObject, policy: Policy): Hit? {
+        // Each family is a probe returning its own [Hit] (rule + wording) or null, asked in severity order — the
+        // FIRST hit wins. A list rather than a chain of early returns, and the list IS the ordering: adding a
+        // command family is one more entry, never a new branch, and the order is readable as an order (see the
+        // per-step reasoning in this function's KDoc). The blocked-destination probe is first because a call that
+        // is both an exfiltration AND something else is best described by where it is sending the data.
+        val families: List<() -> Hit?> = listOf(
+            {
+                DangerousDomains.blockedHit(ToolInputScanner.urlCandidates(input), policy.extraBlockedDomains)
+                    ?.let { Hit(SecurityRule.BLOCKED_DOMAIN, "talks to a known staging or exfiltration service: $it") }
+            },
+            {
+                CommandRules.dangerousCommand(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.SECRET_DUMPING_COMMANDS, "runs a command that can expose secrets: $it") }
+            },
+            // The intrusion-technique family (named tool / reverse shell / GTFOBins escape). Above the destructive
+            // axis because "an attacker is operating on this box" outranks "a command with no undo", and below the
+            // secret rules because a technique that ALSO exfiltrates is best named as the exfiltration.
+            {
+                IntrusionTechniques.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "runs a recognised intrusion technique: ${it.text}") }
+            },
+            {
+                VersionControlRules.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "switches off a version-control safeguard: ${it.text}") }
+            },
+            {
+                DestructiveCommands.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "runs an irreversible destructive operation: ${it.text}") }
+            },
+            {
+                CodeExecution.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "makes this machine run code from elsewhere: ${it.text}") }
+            },
+            {
+                ProxyRules.proxyHit(input, policy)
+                    ?.let { Hit(SecurityRule.PROXY_BYPASS, "routes around the proxy you declared: $it") }
+            },
+        )
+        return families.firstNotNullOfOrNull { it() }
+    }
+
+    /**
      * The weak-claim tail, in increasing weakness. These say the action is worth a glance, not that it is
      * dangerous, so anything that is also one of the rules above is worded as that — a
      * `curl --upload-file /tmp/dump …` reads as exfiltration, not as a temp file.
@@ -464,18 +588,41 @@ object SensitiveGuard {
     private fun weakRules(
         input: JsonObject,
         outsideProject: List<String>,
-        projRoot: String?,
         policy: Policy,
+        depth: Int,
     ): Hit? {
-        // Judged on `outsideProject` for the same reason the credential rule is (see [TempDirs]).
+        // Exempt inside the project for the same reason the credential rule is: the finding here is ENTIRELY the
+        // location, and the location is the workspace the user opened. A project that sits under /tmp would
+        // otherwise deny its own every `Read` and `Edit` — that is not blocking a threat, it is blocking the work
+        // — while a /tmp path OUTSIDE the project still trips, which is the case the rule exists for.
         TempDirs.tempHit(outsideProject)?.let {
             return Hit(SecurityRule.TEMP_DIR, "acts on the system temporary directory: $it")
         }
 
-        // Location-INDEPENDENT, and deliberately not exempted by the project root: the point is that the write
-        // has no diff to review, which is as true of a file in the project as of one outside it.
-        ShellFileWrites.shellFileWrite(input)?.let {
-            return Hit(SecurityRule.SHELL_FILE_WRITE, "writes or modifies files through a shell command: $it")
+        val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
+
+        // **A shell write is a card ONLY when it touches somewhere outside the open project** — not globally.
+        // Blocking every `mkdir build`, `rm -rf node_modules`, `cp` and `sed -i` inside the user's OWN project was
+        // the noisiest rule in the set and the wrong criterion: what matters is not that a write has no diff, it
+        // is WHERE it lands. An in-project write is ordinary development; a write to `/etc`, another user's home,
+        // a device or anywhere off the workspace is the one worth a card. Sensitive locations already have their
+        // own stronger rules (credentials, foreign, device, temp) that win the wording; this catches the plain
+        // outside-project write that no other rule sees, since `OUTSIDE_PROJECT` below reads location keys only.
+        //
+        // AT DEPTH 0 ONLY, the same decision that keeps script analysis usable: a script is MADE of file
+        // operations, so asking "does this write" of a file the agent did not author in this request would card
+        // every build wrapper and setup script. WHERE a script writes is still judged — the location rules run at
+        // every depth. With no project context (`projRoot == null`) the write is a card, which is fail-closed.
+        //
+        // "Outside" means an ABSOLUTE candidate that resolves outside the root — NOT any candidate the containment
+        // string-match calls outside. A relative token (`tee`, `cp`, `a.txt`, `build/`) is in-project by
+        // construction, because the working directory the binary launches in IS the project root; treating those
+        // as outside is what would put the whole rule back to firing globally, which is the bug this replaces.
+        val writesOutside = projRoot == null || outsideProject.any { GuardPaths.isAbsolute(it) }
+        if (depth == 0 && writesOutside) {
+            ShellFileWrites.shellFileWrite(input)?.let {
+                return Hit(SecurityRule.SHELL_FILE_WRITE, "writes or modifies files outside the project: $it")
+            }
         }
 
         // LAST of all: with no open project there is nothing to be "outside" of, so this rule only fires when
@@ -519,10 +666,62 @@ object SensitiveGuard {
             return Hit(SecurityRule.RECURSION_LIMIT, "runs scripts nested deeper than $MAX_ANALYSIS_DEPTH: ${scripts.first()}")
         }
         for (script in scripts) {
+            // A known build wrapper or tool entrypoint is NOT READ, so it produces no hit at all. This is the
+            // narrowest fix for a real and total failure: a build wrapper is MADE of the things the rules look for
+            // — `command -v java >/dev/null 2>&1`, `JAVACMD=$JAVA_HOME/bin/java`, half its body quoted — so
+            // reading `./gradlew` yields an unreviewed write and a script that cannot be read, and the user
+            // experiences the plugin refusing to build their own project with no lever, since SCRIPT_EXECUTION is
+            // not whitelistable. The file stops being an input to the analysis; the analysis itself is untouched.
+            // What this does NOT do is exempt the COMMAND: `terraform destroy` is still DESTRUCTIVE_IAC, because
+            // that rule reads the command line and never the tool's own file. See [DevToolScripts].
+            if (isExemptDevTool(script)) continue
             val text = policy.fileReader?.invoke(script)
                 ?: return Hit(SecurityRule.SCRIPT_EXECUTION, "runs a script this guard could not read: $script")
             val inner = classifyScript(text, policy, depth + 1) ?: continue
             return Hit(inner.rule, "${inner.text} — inside the script it runs: $script")
+        }
+        return null
+    }
+
+    /**
+     * Is [script] a development tool whose BODY the guard should not read? By NAME (or directory) alone — see
+     * [DevToolScripts] for why reading a build wrapper's body produces three findings that are all the analysis
+     * meeting a file it was not designed for, and none of them true.
+     *
+     * **There used to be a checksum gate here** ([DevToolChecksums]) that, for an artifact whose published hash
+     * the plugin shipped, required the file on disk to match it. It is gone, and the reason is that it could
+     * BLOCK the very thing this exemption exists to protect: the shipped baseline pinned specific
+     * `gradle-wrapper.jar` hashes, so a developer on any other Gradle version had their `./gradlew` fail the
+     * match, lose the exemption, get its body read, and hit false findings on their own build. A plugin whose job
+     * is to stay out of ordinary development cannot ship a rule that blocks the most ordinary command there is.
+     * Tamper-resistance of the exemption comes from the fact that CREATING a file with one of these names is
+     * itself a wall (a shell write, or a reviewable diff), which is the bound [DevToolScripts] already documents.
+     */
+    private fun isExemptDevTool(script: String): Boolean = DevToolScripts.isKnownDevTool(script)
+
+    /**
+     * A command substitution — `$(inner)` or `` `inner` `` — as its own inner command.
+     *
+     * `cat $(cat /etc/shadow)` and `` `mimikatz` `` name a destination the guard cannot resolve, but the INNER
+     * command is right there in the text, so it is classified by the same recursion the scripts use: the finding
+     * is the credential read, the hacking tool, the destructive verb it actually is, at that rule's own severity
+     * — not a generic "unresolvable". A substitution whose inner command trips nothing returns null and falls
+     * through to [EnvIndirection], which still refuses it for hiding the OUTER destination.
+     *
+     * `[^()]` inside the `$(…)` capture means a NESTED substitution is not matched by this one pattern — that is
+     * left to the recursion bound: `$($($(…)))` reaches [MAX_ANALYSIS_DEPTH] and is [SecurityRule.RECURSION_LIMIT].
+     */
+    private val COMMAND_SUBSTITUTION = Regex("""\$\(([^()]*)\)|`([^`]*)`""")
+
+    private fun substitutionFindings(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        if (depth >= MAX_ANALYSIS_DEPTH) return null
+        for (command in ToolInputScanner.commandCandidates(input)) {
+            for (match in COMMAND_SUBSTITUTION.findAll(command)) {
+                val inner = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim()
+                if (inner.isEmpty()) continue
+                val hit = classifyScript(inner, policy, depth + 1) ?: continue
+                return Hit(hit.rule, "${hit.text} — inside a command substitution: $inner")
+            }
         }
         return null
     }

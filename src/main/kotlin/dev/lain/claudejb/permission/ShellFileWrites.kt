@@ -84,11 +84,17 @@ object ShellFileWrites {
     /**
      * A redirect target that writes nowhere: one of the inert device sinks, or a descriptor.
      *
-     * **Matched against [BENIGN_REDIRECT_TARGETS] directly, and NOT through [SystemDevices.isSystemDevice].**
-     * That was the original spelling and it was dead code with teeth: `isSystemDevice` returns **false** for these
-     * nodes *by design*, since exempting them is its own job, so `isSystemDevice(t) && t in BENIGN` was a
-     * conjunction that could never be true — every `2>/dev/null` in every command would have been a card, i.e.
-     * nearly every ordinary command, which is precisely how a rule gets switched off in its first hour.
+     * **Matched against [BENIGN_REDIRECT_TARGETS] directly, and NOT through [SystemDevices].** The two lists
+     * answer different questions and are deliberately not the same list: this one asks "does this redirect put
+     * bytes anywhere that survives", which `/dev/stderr` and a tty answer no to; [SystemDevices]' own exempt set
+     * asks "may a call NAME this node at all", which is a stricter question and has only two members. So a
+     * `2>/dev/stderr` is not a file write here and is still a device hit there — the stricter rule wins, which is
+     * the right direction for a disagreement between a wall and a noise filter.
+     *
+     * Routing this through `isSystemDevice` instead would be dead code with teeth: it returns **false** for an
+     * exempt node by design, so `isSystemDevice(t) && t in BENIGN` is a conjunction that can never be true, and
+     * every `2>/dev/null` in every command becomes a card — which is precisely how a rule gets switched off in
+     * its first hour.
      */
     private fun isBenignTarget(rawTarget: String): Boolean {
         val target = rawTarget.trim('\'', '"').lowercase()

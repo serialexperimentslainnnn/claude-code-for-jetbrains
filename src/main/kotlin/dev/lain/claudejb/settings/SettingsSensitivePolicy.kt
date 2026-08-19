@@ -24,10 +24,9 @@ fun ClaudeSettings.sensitiveGlobs(): List<String> {
  * from [RemoteMounts].
  */
 fun ClaudeSettings.sensitiveDecision(
-    toolName: String,
     input: JsonObject,
     projectRoot: String?,
-): SensitiveGuard.Decision = SensitiveGuard.evaluate(toolName, input, sensitivePolicy(projectRoot))
+): SensitiveGuard.Decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
 
 /** Assembles the pure [SensitiveGuard.Policy] from settings + this host's mounts + the open project. */
 fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
@@ -50,6 +49,7 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
         httpsProxy = env.proxyValue("https_proxy"),
         noProxyHosts = env.proxyValue("no_proxy").orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
         extraBlockedDomains = extraBlockedDomains(),
+        commandWhitelist = commandWhitelist(),
     )
 }
 
@@ -68,6 +68,18 @@ internal fun ClaudeSettings.disabledSecurityRules(): Set<SecurityRule> =
 /** The user's own blocked domains, one per line, `#` comments ignored — **added** to the built-in set. */
 internal fun ClaudeSettings.extraBlockedDomains(): List<String> =
     state.securityExtraBlockedDomains.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+
+/**
+ * The exact commands the user pre-approved, one per line, `#` comments ignored.
+ *
+ * Same shape as [extraBlockedDomains] and the sensitive globs — a plain text block edited in Settings — and
+ * deliberately so: this is the one list of the three that NARROWS the net, and giving it a different, richer
+ * authoring surface (a button on a card, a "remember this" checkbox) is precisely how a pre-authorisation stops
+ * being a decision taken in the cold. The parsing is the whole of the mechanism here; the fencing that decides what
+ * an entry can ever lift lives in `SensitiveGuard.liftedByWhitelist` and [SecurityRule.whitelistable].
+ */
+internal fun ClaudeSettings.commandWhitelist(): List<String> =
+    state.securityCommandWhitelist.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
 
 /**
  * The environment the guard resolves a `$VAR` against: **this IDE's own environment, with the settings' env block
