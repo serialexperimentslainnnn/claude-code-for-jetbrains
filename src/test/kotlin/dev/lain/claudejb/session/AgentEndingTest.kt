@@ -18,6 +18,17 @@ import org.junit.jupiter.api.Test
  */
 class AgentEndingTest {
 
+    /**
+     * The lines a real transcript holds, through the REAL parser — the one [dev.lain.claudejb.session.AgentRegistry.scan]
+     * feeds it from, so a change to what counts as a record cannot pass here and fail in production.
+     *
+     * These fixtures stay written as JSONL text rather than as built objects on purpose: what is being judged
+     * is the shape the binary writes, and a hand-built `JsonObject` would let a test pass over a shape the
+     * file never contains. It also keeps the blank-line and malformed-line cases below meaningful — they now
+     * assert that [SessionTranscriptReader.parseRecords] drops them before the verdict is ever asked for.
+     */
+    private fun records(lines: List<String>) = SessionTranscriptReader.parseRecords(lines)
+
     /** A finished assistant turn — the one record shape that closes a turn. */
     private val endTurn = """{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}"""
 
@@ -31,7 +42,7 @@ class AgentEndingTest {
     fun `a transcript whose last record closes its turn is completed`() {
         val lines = listOf(toolUse, toolResult, endTurn)
 
-        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -40,21 +51,21 @@ class AgentEndingTest {
         // "cut off" it comes back red, asserting a failure that never happened.
         val lines = listOf(endTurn, toolResult)
 
-        assertEquals(AgentEnding.Ending.RESUMED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.RESUMED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `a transcript with several records after a closed turn was resumed`() {
         val lines = listOf(endTurn, toolResult, toolUse, toolResult)
 
-        assertEquals(AgentEnding.Ending.RESUMED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.RESUMED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `a transcript still waiting on a tool never finished`() {
         val lines = listOf(toolResult, toolUse)
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -62,12 +73,12 @@ class AgentEndingTest {
         // The result arrived and nothing answered it: the turn is open, whatever the agent was doing.
         val lines = listOf(toolUse, toolResult)
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `no lines at all is nothing to judge`() {
-        assertNull(AgentEnding.of(emptyList()))
+        assertNull(AgentEnding.of(records(emptyList())))
     }
 
     @Test
@@ -76,7 +87,7 @@ class AgentEndingTest {
         // able to tell "the binary has written nothing yet" from "it wrote and never closed the turn".
         val lines = listOf("", "   ", "\t")
 
-        assertNull(AgentEnding.of(lines))
+        assertNull(AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -85,14 +96,14 @@ class AgentEndingTest {
         // every completed agent on disk.
         val lines = listOf(toolUse, endTurn, "", "  ")
 
-        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `unparseable lines before a closed turn are skipped, not fatal`() {
         val lines = listOf("not json at all", """{"type":"assistant",""", endTurn)
 
-        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -101,14 +112,14 @@ class AgentEndingTest {
         // verdict, never an exception in the middle of a scan.
         val lines = listOf("""{"type":"assistant","message":{"stop_reason":{"kind":"end_turn"}}}""")
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `a record whose message has the wrong shape is not an ending`() {
         val lines = listOf("""{"type":"assistant","message":"end_turn"}""")
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     // ── the second shape a finished turn comes in ────────────────────────────────────────────────────────
@@ -125,7 +136,7 @@ class AgentEndingTest {
     fun `a final answer with no stop_reason is completed`() {
         val lines = listOf(toolUse, toolResult, bareAnswer)
 
-        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.COMPLETED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -135,7 +146,7 @@ class AgentEndingTest {
         // a hundred dead agents painted as live — the exact mistake in the other direction.
         val lines = listOf(bareAnswer, toolUse, toolResult)
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -143,7 +154,7 @@ class AgentEndingTest {
         val pending =
             """{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"one moment"},{"type":"tool_use","id":"t1","name":"Read"}]}}"""
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(listOf(pending)))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(listOf(pending))))
     }
 
     // ── work that STOPPED: the two markers, and why they are not "unfinished" ────────────────────────────
@@ -167,14 +178,14 @@ class AgentEndingTest {
         // what it used to answer: that reads as "still going" and no further record is coming.
         val lines = listOf(toolUse, toolResult, sessionLimit)
 
-        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(records(lines)))
     }
 
     @Test
     fun `a cancelled agent is stopped, not still working`() {
         val lines = listOf(toolUse, toolResult, interrupted)
 
-        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -183,7 +194,7 @@ class AgentEndingTest {
         val variant =
             """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"""
 
-        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(listOf(toolUse, variant)))
+        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(records(listOf(toolUse, variant))))
     }
 
     @Test
@@ -191,7 +202,7 @@ class AgentEndingTest {
         // The binary writes `content` both ways; a record read only through the block array misses this one.
         val asString = """{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"}}"""
 
-        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(listOf(toolUse, asString)))
+        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(records(listOf(toolUse, asString))))
     }
 
     @Test
@@ -201,7 +212,7 @@ class AgentEndingTest {
         // this agent stayed green for the rest of the session with its own file saying otherwise.
         val lines = listOf(endTurn, toolUse, toolResult, interrupted)
 
-        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.ABORTED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -210,7 +221,7 @@ class AgentEndingTest {
         // interrupted and then resumed carries the marker mid-file and is demonstrably still working.
         val lines = listOf(interrupted, toolUse, toolResult)
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(lines))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(lines)))
     }
 
     @Test
@@ -220,6 +231,6 @@ class AgentEndingTest {
         val prose =
             """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"the log said [Request interrupted by user] and I moved on"}]}}"""
 
-        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(listOf(toolUse, prose)))
+        assertEquals(AgentEnding.Ending.UNFINISHED, AgentEnding.of(records(listOf(toolUse, prose))))
     }
 }

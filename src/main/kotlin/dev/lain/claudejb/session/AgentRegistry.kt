@@ -1,5 +1,6 @@
 package dev.lain.claudejb.session
 
+import kotlinx.serialization.json.JsonObject
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -235,13 +236,15 @@ class AgentRegistry(
         // Shallowest first, so a child is always resolved AFTER the parent it inherits its ending from.
         for (id in admitted.sortedWith(compareBy({ metas[it]?.spawnDepth ?: 1 }, { it }))) {
             val meta = metas[id] ?: continue
-            // Read once, parsed once, and each result serves every purpose that needs it: the raw lines are the
-            // evidence of how the agent ended, while the parsed records are both the rows the tab shows and the
-            // count growth is measured in — so the ONE parser is also the one definition of a record.
-            val lines = readLines(dir, id)
-            val entries = SessionTranscriptReader.parseEntries(lines)
+            // Read once and parsed ONCE, and that second word used to be a lie: this said "parsed once" while
+            // `parseEntries` and `AgentEnding.of` each ran their own JSON pass over the same lines — every
+            // admitted agent's whole transcript, parsed twice, every five seconds, for the life of the chat.
+            // Now one pass produces the records, and both readings of them are taken from it: the rows the tab
+            // shows, and the evidence of how the agent ended.
+            val records = SessionTranscriptReader.parseRecords(readLines(dir, id))
+            val entries = SessionTranscriptReader.entriesOf(records)
             reopenIfGrown(meta, entries.size)
-            val settled = settledStateOf(meta, next, lines)
+            val settled = settledStateOf(meta, next, records)
             next[id] = AgentNode(
                 meta = meta,
                 status = settled.status,
@@ -326,8 +329,12 @@ class AgentRegistry(
      * An instant already written is never overwritten: only an empty one is filled, and a running agent is
      * left alone until it settles.
      */
-    private fun settledStateOf(meta: AgentMeta, resolved: Map<String, AgentNode>, lines: List<String>): Settled {
-        val observed = observedStateOf(meta, resolved, lines)
+    private fun settledStateOf(
+        meta: AgentMeta,
+        resolved: Map<String, AgentNode>,
+        records: List<JsonObject>,
+    ): Settled {
+        val observed = observedStateOf(meta, resolved, records)
         if (observed.status == AgentStatus.RUNNING || observed.completedAtMillis != null) return observed
         return observed.copy(completedAtMillis = runStartedAtMillis)
     }
@@ -388,7 +395,11 @@ class AgentRegistry(
      *
      * [resolved] holds the agents already built by this scan, parents first — see the sort in [scan].
      */
-    private fun observedStateOf(meta: AgentMeta, resolved: Map<String, AgentNode>, lines: List<String>): Settled {
+    private fun observedStateOf(
+        meta: AgentMeta,
+        resolved: Map<String, AgentNode>,
+        records: List<JsonObject>,
+    ): Settled {
         // The transcript is read FIRST, and it is authoritative for an ending. The stream's own record
         // ([statusByToolUse]) is consulted only when the file has NOT closed a turn — as a witness that the
         // agent stopped when the process cannot see the file say so, never as an override of one that did.
@@ -399,7 +410,7 @@ class AgentRegistry(
         // scan that could have seen it finish on disk was short-circuited — for the rest of the session,
         // because the stream never re-says "done" for an ending it delivered without a `tool_use_id` (which
         // several of the binary's call sites omit) or delivered while the main session sat idle.
-        val ending = AgentEnding.of(lines)
+        val ending = AgentEnding.of(records)
         val streamStatus = meta.toolUseId?.let { statusByToolUse[it] }
         val parent = meta.parentAgentId?.let { resolved[it] }
         val live = meta.toolUseId?.let { it in observedToolUse } == true ||
