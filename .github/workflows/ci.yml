@@ -111,6 +111,15 @@ jobs:
       # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and every run silently re-downloads what the image already has.
       GRADLE_USER_HOME: /opt/gradle-home
+      # The image drops /usr/share/locale to stay small, so the JVM inherits an ASCII `sun.jnu.encoding` and
+      # CANNOT CREATE A FILE whose name is not ASCII — `DiffPresenterIsWithinRootTest` writes `fïle ñ.txt` and
+      # died with FileNotFoundException here while passing on any developer machine. `C.UTF-8` is built into
+      # glibc rather than living under /usr/share/locale, so this needs no image rebuild — which matters,
+      # because the image is the only cache this pipeline has.
+      #
+      # It is not a test concession either: this plugin resolves paths the user chose, and a UTF-8 filesystem
+      # is the environment it actually ships into. Asserting containment for an accented path is the point.
+      LANG: C.UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
