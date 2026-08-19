@@ -106,16 +106,6 @@
     { token: 'forever', label: 'Forever' },
   ];
 
-  function placeByAnchor(floating, anchor) {
-    var margin = 8;
-    var r = anchor.getBoundingClientRect();
-    var left = Math.min(Math.round(r.left), window.innerWidth - floating.offsetWidth - margin);
-    var top = r.bottom + 4;
-    if (top + floating.offsetHeight > window.innerHeight - margin) top = r.top - floating.offsetHeight - 4;
-    floating.style.left = Math.max(margin, left) + 'px';
-    floating.style.top = Math.round(Math.max(margin, top)) + 'px';
-  }
-
   function buildBlockNotice(rule) {
     var node = el('div', { class: 'notice guard-block' });
     var body = el('div', { class: 'body' });
@@ -130,6 +120,7 @@
       text: 'Disable rule',
       attrs: { type: 'button', 'aria-expanded': 'false', 'aria-haspopup': 'menu' },
     });
+    var actions = el('div', { class: 'guard-block-actions' });
     var options = [];
     var isOpen = false;
 
@@ -153,24 +144,35 @@
       setOpen(false);
     }
 
+    var rowWatch = window.MutationObserver
+      ? new window.MutationObserver(function () {
+          if (!link.isConnected) setOpen(false);
+        })
+      : null;
+
     function setOpen(open) {
       if (open === isOpen) return;
       isOpen = open;
       link.setAttribute('aria-expanded', open ? 'true' : 'false');
       if (!open) {
         menu.setAttribute('hidden', 'hidden');
+        actions.appendChild(menu);
         document.removeEventListener('mousedown', onOutside, true);
         document.removeEventListener('keydown', onEscape, true);
         document.removeEventListener('scroll', onViewChange, true);
         window.removeEventListener('resize', onViewChange);
+        if (rowWatch) rowWatch.disconnect();
         return;
       }
+      document.body.appendChild(menu);
       menu.removeAttribute('hidden');
-      placeByAnchor(menu, link);
+      CC.placeMenu(menu, link);
       document.addEventListener('mousedown', onOutside, true);
       document.addEventListener('keydown', onEscape, true);
       document.addEventListener('scroll', onViewChange, true);
       window.addEventListener('resize', onViewChange);
+      var conversation = conversationEl();
+      if (rowWatch && conversation) rowWatch.observe(conversation, { childList: true });
       focusOption(0);
     }
 
@@ -206,7 +208,6 @@
       menu.appendChild(option);
     });
 
-    var actions = el('div', { class: 'guard-block-actions' });
     actions.appendChild(link);
     actions.appendChild(menu);
     node.appendChild(actions);

@@ -158,6 +158,22 @@
     el.textContent = text;
   };
 
+  CC.placeMenu = function (menu, anchor) {
+    var margin = 8;
+    var r = anchor.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.maxWidth = window.innerWidth - margin * 2 + 'px';
+    var mw = menu.offsetWidth;
+    var mh = menu.offsetHeight;
+    var left = Math.min(Math.round(r.left), window.innerWidth - mw - margin);
+    if (left < margin) left = margin;
+    var top = r.top - mh - 6;
+    if (top < margin) top = r.bottom + 6;
+    if (top + mh > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - mh - margin);
+    menu.style.left = left + 'px';
+    menu.style.top = Math.round(top) + 'px';
+  };
+
   var covering = {};
   CC.coverTranscript = function (owner, covered) {
     if (covered) covering[owner] = true;
