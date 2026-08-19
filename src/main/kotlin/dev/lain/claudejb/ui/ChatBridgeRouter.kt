@@ -643,7 +643,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val atts = tray.take()
         val text = raw.trim()
         when {
-            atts.isEmpty() && text == "/login" -> session.startLogin()
+            atts.isEmpty() && text == "/login" -> session.login.start()
 
             atts.isEmpty() && BTW.matches(text.substringBefore('\n')) -> {
                 val rest = text.removePrefix("/btw").trim()
