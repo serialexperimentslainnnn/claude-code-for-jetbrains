@@ -291,7 +291,9 @@ class ClaudeSession(
         ui = object : AgentScanner.Ui {
             override fun labelCards() {
                 labelAgentCards()
-                // A scan is the only thing that can make an agent settled, which is half the revival gate.
+                // A scan is the only thing that can change what the gate reads — an agent becoming settled
+                // (it may revive) or appearing as RUNNING (it may finish with nothing in the stream to say
+                // so). Both start the poll, so a subagent that outlives its turn is still watched.
                 poll.ensureAgentRevivalPoll()
             }
             override fun onFresh(fresh: List<String>) = fireAgents(fresh)
@@ -500,6 +502,9 @@ class ClaudeSession(
         ),
         agentRevival = PollSchedule.AgentRevivalSource(
             anySettledAgent = { runningAgents.nodes.values.any { it.status != AgentStatus.RUNNING } },
+            // The other direction, and the one the stream cannot be trusted for: an agent still shown as
+            // RUNNING may have finished on disk. Its transcript is the only witness that always exists.
+            anyRunningAgent = { runningAgents.nodes.values.any { it.status == AgentStatus.RUNNING } },
             scanAgents = { agentScanner.scan() },
         ),
     )

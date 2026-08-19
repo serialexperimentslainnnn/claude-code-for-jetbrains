@@ -14,10 +14,12 @@ import kotlinx.serialization.json.JsonObject
  * - **output tail** ([ensureOutputTail], also [QUOTA_POLL_MS]): a running background task's output file,
  *   independent of the turn — a task backgrounded near the end of one keeps writing after it ends, which is
  *   exactly when the user goes to read it. Stops itself the moment nothing is tailable.
- * - **agent revival** ([ensureAgentRevivalPoll], [AGENT_REVIVAL_POLL_MS] = 5 s): re-reads the agent tree so an
- *   agent that is RESUMED stops reading as finished. A pass re-parses every admitted agent's whole transcript,
- *   so it costs far more than the other two and runs at a slower cadence; both halves of its gate (a turn is
- *   active AND something has settled) are necessary, so a chat with no agents and an idle chat run it never.
+ * - **agent state** ([ensureAgentRevivalPoll], [AGENT_REVIVAL_POLL_MS] = 5 s): re-reads the agent tree so an
+ *   agent's colour follows what its transcript says, in BOTH directions — a RESUMED one stops reading as
+ *   finished, and a finished one stops reading as running. A pass re-parses every admitted agent's whole
+ *   transcript, so it costs far more than the other two and runs at a slower cadence; its gate
+ *   ([agentStateCouldChange]) is what keeps that honest — with every agent settled and no turn running,
+ *   nothing can move and the timer retires itself, so an idle chat with nothing in flight polls zero times.
  *
  * The three [QuotaSource]/[OutputTailSource]/[AgentRevivalSource] parameters are each exactly what their own
  * poller needs — grouped so the constructor names three dependencies instead of the eight closures inside
@@ -47,8 +49,19 @@ class PollSchedule(
     /** What the output-tail poll needs: whether anything is worth tailing, and how to tail it. */
     class OutputTailSource(val anyTailable: () -> Boolean, val tailNow: () -> Unit)
 
-    /** What the agent-revival poll needs: whether anything has settled, and how to rescan the tree. */
-    class AgentRevivalSource(val anySettledAgent: () -> Boolean, val scanAgents: () -> Unit)
+    /**
+     * What the agent-state poll needs: whether anything could still change, and how to rescan the tree.
+     *
+     * Two questions, not one, because an agent's state can move in BOTH directions and each has its own
+     * trigger. [anySettledAgent] is the revival case — a finished agent that gets more records is working
+     * again — and it can only happen while a turn runs. [anyRunningAgent] is the opposite and was missing:
+     * an agent shown as RUNNING may have finished on disk with nothing in the main stream to say so.
+     */
+    class AgentRevivalSource(
+        val anySettledAgent: () -> Boolean,
+        val anyRunningAgent: () -> Boolean,
+        val scanAgents: () -> Unit,
+    )
 
     private val quotaPollTimer = javax.swing.Timer(QUOTA_POLL_MS) { pollQuota() }.apply { isRepeats = true }
 
@@ -87,21 +100,52 @@ class PollSchedule(
         isRepeats = true
     }
 
+    /**
+     * Whether any agent's state could still change, and therefore whether the tree is worth re-reading.
+     *
+     * Two directions, and the second one is the fix for agents frozen on green:
+     *  - **A RUNNING agent can finish**, and nothing in the main stream necessarily says so — the
+     *    `task_notification` carries an optional `tool_use_id` that several of the binary's call sites omit,
+     *    so the only witness is the agent's own transcript. This does NOT depend on a turn being active: a
+     *    backgrounded agent finishes after the turn that spawned it ended, which is precisely the case the
+     *    old gate could not see. It stopped the timer the moment the main session went idle, so a subagent
+     *    that finished while nothing else was happening stayed RUNNING — green — for the rest of the session.
+     *  - **A settled agent can revive**, by getting more records; that one genuinely needs a live turn, since
+     *    an agent cannot start writing again with no turn behind it.
+     *
+     * When neither holds — every agent settled and no turn running — nothing can move, and the timer retires
+     * itself exactly as before, so an idle chat with nothing in flight still polls zero times.
+     */
+    private fun agentStateCouldChange(): Boolean =
+        agentRevival.anyRunningAgent() || (turnActive() && agentRevival.anySettledAgent())
+
     private fun pollAgentRevival() {
-        if (!turnActive() || !agentRevival.anySettledAgent()) {
+        if (!agentStateCouldChange()) {
             agentRevivalTimer.stop()
             return
         }
         agentRevival.scanAgents()
     }
 
-    /** Starts the revival poll if anything could revive. EDT. Idempotent — a running timer is left alone. */
+    /** Starts the poll if any agent's state could still move. EDT. Idempotent — a running timer is left alone. */
     fun ensureAgentRevivalPoll() {
-        if (turnActive() && agentRevival.anySettledAgent() && !agentRevivalTimer.isRunning) agentRevivalTimer.start()
+        if (agentStateCouldChange() && !agentRevivalTimer.isRunning) agentRevivalTimer.start()
     }
 
     /** Whether the quota timer is currently running — used to decide whether to stop it when the last listener leaves. */
     val quotaRunning: Boolean get() = quotaPollTimer.isRunning
+
+    /**
+     * Whether the agent-state timer is currently running — the observable consequence of
+     * [agentStateCouldChange], which is private because nothing in production asks it directly.
+     *
+     * Exposed for the gate's test, and as a read-only property rather than a hook: the alternative is a test
+     * that waits on a real `javax.swing.Timer` to tick, which is how a suite acquires a flaky test.
+     */
+    val agentPollRunning: Boolean get() = agentRevivalTimer.isRunning
+
+    /** Runs one agent-state pass synchronously — the tick, without the clock. See [agentPollRunning]. */
+    fun pollAgentStateForTest() = pollAgentRevival()
 
     /** Stops just the quota timer, e.g. when the last observing panel goes away. */
     fun stopQuota() = quotaPollTimer.stop()
