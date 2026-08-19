@@ -106,11 +106,34 @@ object SessionTranscriptReader {
      * originating TOOL call is not also in the window is dropped (orphan output), rather than reconstructing it
      * without its call. A null (default), zero, or negative [maxEntries] returns every entry.
      */
-    fun parseEntries(lines: List<String>, maxEntries: Int? = null, projectRoot: String? = null): List<EntryDTO> {
+    fun parseEntries(lines: List<String>, maxEntries: Int? = null, projectRoot: String? = null): List<EntryDTO> =
+        entriesOf(parseRecords(lines), maxEntries, projectRoot)
+
+    /**
+     * The JSONL lines of a transcript as records, dropping a blank line and one that does not parse.
+     *
+     * **This repository's one definition of "a record", exposed so that nobody has to parse the same file
+     * twice.** It exists because [dev.lain.claudejb.session.AgentRegistry.scan] needs the same content under
+     * two readings — the rows a tab shows ([entriesOf]) and how the agent ENDED ([AgentEnding]) — and it used
+     * to get them by parsing every line to JSON once here and again there, on every five-second pass, for
+     * every admitted agent. Same lines, same lenient config, twice the work.
+     *
+     * A blank line is not a record and a malformed one is not either; both are simply absent from the result,
+     * which is the behaviour every caller already relied on.
+     */
+    fun parseRecords(lines: List<String>): List<JsonObject> =
+        lines.mapNotNull { line ->
+            if (line.isBlank()) null else runCatching { JSON.parseToJsonElement(line).jsonObject }.getOrNull()
+        }
+
+    /** [parseEntries] over records that are already parsed — see [parseRecords] for why that is separable. */
+    fun entriesOf(
+        records: List<JsonObject>,
+        maxEntries: Int? = null,
+        projectRoot: String? = null,
+    ): List<EntryDTO> {
         val out = ArrayList<EntryDTO>()
-        for (line in lines) {
-            if (line.isBlank()) continue
-            val obj = runCatching { JSON.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
+        for (obj in records) {
             runCatching {
                 when (obj["type"]?.jsonPrimitive?.contentOrNull) {
                     "user" -> parseUser(obj, out)

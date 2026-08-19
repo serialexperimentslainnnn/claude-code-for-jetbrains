@@ -1,11 +1,9 @@
 package dev.lain.claudejb.session
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
 
 /**
  * What an agent's own transcript says about whether it is over — the only evidence there is about an agent the
@@ -57,16 +55,16 @@ internal object AgentEnding {
         UNFINISHED,
     }
 
-    private val JSON = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-    }
-
-    /** `null` when there is nothing to judge (no transcript yet, or nothing parseable). */
-    fun of(lines: List<String>): Ending? {
-        val records = lines.mapNotNull { line ->
-            if (line.isBlank()) null else runCatching { JSON.parseToJsonElement(line).jsonObject }.getOrNull()
-        }
+    /**
+     * `null` when there is nothing to judge (no transcript yet, or nothing parseable).
+     *
+     * Takes **records rather than lines** so that the caller parses the file once. This used to do its own
+     * JSON pass over the same lines [SessionTranscriptReader] had just parsed, which meant every admitted
+     * agent's whole transcript was parsed twice on every five-second scan. Blank and malformed lines are
+     * already absent from [SessionTranscriptReader.parseRecords]'s output, so "nothing parseable" still
+     * arrives here as an empty list and still answers `null`.
+     */
+    fun of(records: List<JsonObject>): Ending? {
         if (records.isEmpty()) return null
         // FIRST, and on the last record only: a marker outranks every rule below it, including [RESUMED]. An
         // agent that closed a turn, was resumed, and was then cancelled has both a finished turn behind it and
