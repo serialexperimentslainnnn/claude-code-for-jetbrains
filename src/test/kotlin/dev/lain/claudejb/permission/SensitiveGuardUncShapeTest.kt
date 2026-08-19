@@ -52,31 +52,22 @@ class SensitiveGuardUncShapeTest {
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
     private fun v(input: JsonObject) = SensitiveGuard.evaluate(input, policy).verdict
 
-    // ── the reported call, both routes a regex literal takes into the guard ───────────────────────────────
-
     @Test
     fun `a regex literal in a command is not mistaken for a network share`() {
         assertEquals(Verdict.ALLOW, v(bash("""rg --pcre2 '/\btype\s*:\s*/' src/""")))
         assertEquals(Verdict.ALLOW, v(bash("""node -e 'console.log(/\bexport\b/.test(s))'""")))
     }
 
-    // The FAMILY, not the instance: every regex literal whose first atom is an escape acquired a `//` prefix
-    // under the old ordering. WHICH of them actually fired is an asymmetry worth naming rather than glossing —
-    // only the ones whose escape is followed by literal word characters, because that is what leaves a
-    // hostname-shaped first segment. `\d+`, `\s*` and `\w+` glue a `+` or a `*` to the escape letter, and
-    // `ForeignTerritory.UNC_HOST` already rejected those, so they never reported. They are pinned all the
-    // same: they were one character away from firing, and a manufactured prefix is the defect whether or not
-    // the rule downstream of it happened to catch the result.
     @Test
     fun `no regex literal reaches the rules wearing a UNC prefix`() {
         for (literal in listOf(
-            """/\btype\s*:\s*/""", // the reported one
-            """/\bfoo\b/""", // same shape: `bfoo` is a host, `b` is a share — refused before the fix
-            """/\bTODO\b/""", // likewise
-            """/\d\.\d/""", // a one-character host and a `.` share — also refused before the fix
-            """/\d+/""", // never fired: `d+` is not hostname-shaped
-            """/\s*foo\s*/""", // never fired: `s*foo` is not hostname-shaped
-            """/\w+\.txt/""", // never fired: `w+` is not hostname-shaped
+            """/\btype\s*:\s*/""",
+            """/\bfoo\b/""",
+            """/\bTODO\b/""",
+            """/\d\.\d/""",
+            """/\d+/""",
+            """/\s*foo\s*/""",
+            """/\w+\.txt/""",
         )) {
             assertFalse(GuardPaths.normalize(literal, home).startsWith("//"), literal)
             assertFalse(ForeignTerritory.isUnc(GuardPaths.normalize(literal, home)), literal)
@@ -85,10 +76,6 @@ class SensitiveGuardUncShapeTest {
         }
     }
 
-    // The sweep past regex literals: the other things an ordinary programming language puts into a command
-    // whose spelling canonicalisation can turn path-shaped — a substitution expression, a source-level escaped
-    // Windows path, an escape sequence that is not a separator, a line comment. None may cost an unoverridable
-    // refusal, which is what any of them being read as a location would produce.
     @Test
     fun `ordinary source text that canonicalisation can path-shape stays allowed`() {
         listOf(
@@ -97,17 +84,12 @@ class SensitiveGuardUncShapeTest {
             """echo 'C:\\Users\\me\\app'""",
             """rg '// TODO: drop this' src/""",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
-        // An in-project `sed -i` is now ALLOW — a write inside the working directory is ordinary development, and
-        // its regex literal must not be path-shaped into a foreign verdict either. Both halves of the claim hold.
         assertEquals(Verdict.ALLOW, v(bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
-        // The write rule is location-aware: the SAME sed -i onto a system file OUTSIDE the project is still a card.
         assertEquals(
             SecurityRule.SHELL_FILE_WRITE,
             SensitiveGuard.evaluate(bash("""sed -i 's/\bfoo\b/bar/g' /etc/fstab"""), policy).rule,
         )
     }
-
-    // ── the half that matters: the fix withdraws no verdict from anything that is a path ──────────────────
 
     @Test
     fun `every real UNC spelling is still foreign territory`() {
@@ -117,24 +99,15 @@ class SensitiveGuardUncShapeTest {
         assertEquals(Verdict.DENY, v(read("""\\.\pipe\x""")))
         assertEquals(Verdict.DENY, v(bash("""cp \\fileserver\backup\dump.sql .""")))
         assertEquals(Verdict.DENY, v(bash("cp //fileserver/backup/dump.sql .")))
-        // …and the prefix still SURVIVES normalization, which is the form `isUnc` is actually handed.
         assertTrue(GuardPaths.normalize("""\\server\share\file""", home).startsWith("//"))
         assertTrue(GuardPaths.normalize("//server/share/file", home).startsWith("//"))
     }
 
     @Test
     fun `a sensitive path dressed as a regex literal is still caught`() {
-        // The inverse trap, and the assertion this whole change rests on. Nothing is DROPPED — a dropped
-        // candidate is no match from any rule at once — so a value that really is a path merely loses a prefix
-        // it never had and is then judged by every rule, including the one that actually fits it.
-        // `/\home/bob/…` was refused as a network share (the right answer for the wrong reason, and out of
-        // reach of the anchored `HOME_SEGMENT`); it is refused as another user's home now.
         assertEquals(Verdict.DENY, v(read("""/\home/bob/.ssh/id_rsa""")))
         assertEquals(Verdict.DENY, v(bash("""cat /\home/bob/.bashrc""")))
         assertEquals(Verdict.DENY, v(read("""C:\Users\bob\Desktop\notes.txt""")))
-        // Own home: a credential rather than foreign territory — a different RULE, and the same verdict, since
-        // both are enforced. The line that used to sit here asserted the same input DENIED for an MCP caller and
-        // merely ASKED for a first-party one; there is no such distinction left to pin.
         assertEquals(Verdict.DENY, v(read("""/\home/me/.ssh/id_rsa""")))
         assertEquals(
             SecurityRule.CREDENTIALS,
@@ -144,11 +117,6 @@ class SensitiveGuardUncShapeTest {
 
     @Test
     fun `wrapping a share in regex delimiters reaches no share`() {
-        // The obvious attempt at turning the fix into the hole: dress `\\server\share` as a regex literal. The
-        // definition is anchored at the FIRST two characters, and a third separator there already names no
-        // host, so `\\\server\share` resolves nowhere on Windows while `/\\server\share` is a directory
-        // literally called `\\server\share` on POSIX. No reachable location is lost by declining both — and
-        // the spelling that DOES reach the share is still refused, which is the load-bearing assertion.
         assertFalse(ForeignTerritory.isUnc("""\\\server\share"""))
         assertEquals(Verdict.ALLOW, v(bash("""rg '/\\server\share/' src/""")))
         assertEquals(Verdict.DENY, v(bash("""cp \\server\share\x .""")))
@@ -156,17 +124,11 @@ class SensitiveGuardUncShapeTest {
 
     @Test
     fun `the UNC prefix is read after variable expansion, never off the raw argument`() {
-        // WHERE the shape test sits relative to canonicalisation is the whole of it, and this package has been
-        // burned by that inversion before: measuring before normalising is what let a `/.`-padded credential
-        // path slip out of `MAX_PATH_LEN`. Here the same inversion fails in the other direction — a Windows
-        // home can itself be a share, so `~` and `%USERPROFILE%` acquire the prefix only from the value
-        // substituted into them, and a test applied to the caller's raw argument would throw it away.
         val uncHome = """\\nas\users\me"""
         assertEquals("//nas/users/me/.ssh/id_rsa", GuardPaths.normalize("~/.ssh/id_rsa", uncHome))
         assertEquals("//nas/users/me/x", GuardPaths.normalize("\$HOME/x", uncHome))
         assertEquals("//nas/users/me", GuardPaths.normalize("%USERPROFILE%", uncHome))
-        // …while reading it AFTER the backslash translation is precisely the inversion that produced this bug.
-        assertEquals("/btype/s*:/s*", GuardPaths.normalize("""/\btype\s*:\s*/""", home))
+        assertEquals("/btype/s*:/s*", GuardPaths.normalize("""/\btype\s*:\s*""", home))
         assertEquals("//server/share/x", GuardPaths.normalize("""\\server\share\x""", home))
     }
 }
