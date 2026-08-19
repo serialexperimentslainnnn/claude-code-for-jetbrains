@@ -83,23 +83,23 @@ internal class OnboardingController(
 
             JcefBridge.Msg.LoginSubscription -> {
                 pushAuthState("waiting")
-                session.startLogin(LoginCoordinator.Mode.SUBSCRIPTION)
+                session.login.start(LoginCoordinator.Mode.SUBSCRIPTION)
             }
 
             JcefBridge.Msg.LoginConsole -> {
                 pushAuthState("waiting")
-                session.startLogin(LoginCoordinator.Mode.CONSOLE)
+                session.login.start(LoginCoordinator.Mode.CONSOLE)
             }
 
             is JcefBridge.Msg.UseApiKey -> useApiKey(m.key)
 
             is JcefBridge.Msg.SubmitLoginCode -> {
                 pushAuthState("verifying")
-                session.submitLoginCode(m.code)
+                session.login.submitCode(m.code)
             }
 
             JcefBridge.Msg.CancelLogin -> {
-                session.cancelLogin()
+                session.login.cancelLogin()
                 pushAuthState("idle")
             }
 

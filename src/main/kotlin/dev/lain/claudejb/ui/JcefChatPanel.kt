@@ -139,7 +139,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         livePanels.add(this)
         session.transcript.addListener(transcript)
         session.addListener(this)
-        session.attachLoginUi(onboarding) // the sign-in card renders in this panel's web view
+        session.login.attachUi(onboarding) // the sign-in card renders in this panel's web view
 
         // Re-push the theme whenever the IDE's Look-and-Feel changes; tied to this panel's lifetime.
         val lafConn = ApplicationManager.getApplication().messageBus.connect(this)
@@ -401,7 +401,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         livePanels.remove(this)
         session.transcript.removeListener(transcript)
         session.removeListener(this)
-        session.detachLoginUi(onboarding)
+        session.login.detachUi(onboarding)
         onboarding.dispose()
         transcript.stop()
         feed.stop()

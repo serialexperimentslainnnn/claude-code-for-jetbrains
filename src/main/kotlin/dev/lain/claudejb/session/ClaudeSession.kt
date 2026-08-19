@@ -140,7 +140,17 @@ class ClaudeSession(
     private val cards = PermissionCardManager(::firePermissions)
     private val hookBroker = HookBroker()
     private val hookNarrator = HookActivityNarrator(transcript)
-    private val login = LoginCoordinator(
+
+    /**
+     * The OAuth sign-in flow, reached directly: `session.login.start(mode)`, `session.login.submitCode(code)`.
+     *
+     * Public rather than fronted by five delegates on this class. Those delegates forwarded the same names with
+     * the same arguments and the same defaults, so each one was a second spelling of one call — and every
+     * public member here is one more thing that can call into a live session, which is what the size of this
+     * class is a symptom of. The card still lives in the panel and the flow still lives in the coordinator;
+     * what is gone is the middleman that neither of them needed.
+     */
+    val login = LoginCoordinator(
         project,
         edt = ::edt,
         notifyInfo = ::notifyInfo,
@@ -2463,15 +2473,9 @@ class ClaudeSession(
         starting = false
     }
 
-    /** Runs the OAuth sign-in. Delegates to [login]; public so the composer can route a typed `/login` here. */
-    fun startLogin(mode: LoginCoordinator.Mode = LoginCoordinator.Mode.SUBSCRIPTION) = login.start(mode)
-
-    // The sign-in card's plumbing, one delegate each — the card lives in the panel, the flow in the
-    // coordinator, and the session stays the thin orchestrator between them.
-    fun attachLoginUi(ui: LoginCoordinator.LoginUi) = login.attachUi(ui)
-    fun detachLoginUi(ui: LoginCoordinator.LoginUi) = login.detachUi(ui)
-    fun submitLoginCode(code: String) = login.submitCode(code)
-    fun cancelLogin() = login.cancelLogin()
+    // The sign-in flow is reached as `session.login.start(…)`, not through five delegates here. Those
+    // delegates carried nothing — same names, same arguments, same defaults — and every one of them was one
+    // more thing that could call into a session. See [login].
 
     /**
      * EDT-only. Returns true if the session may launch: either there's no risky exec config (sourceScript / stdio
