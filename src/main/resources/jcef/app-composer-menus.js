@@ -102,21 +102,7 @@
     CX.openMenu = { el: menu, pill: def.key, anchor: anchorEl, sig: menuSig(def) };
   };
 
-  function positionMenu(menu, anchorEl) {
-    var r = anchorEl.getBoundingClientRect();
-    var margin = 8;
-    menu.style.position = 'fixed';
-    menu.style.maxWidth = window.innerWidth - margin * 2 + 'px';
-    var mw = menu.offsetWidth;
-    var mh = menu.offsetHeight;
-    var left = Math.min(Math.round(r.left), window.innerWidth - mw - margin);
-    if (left < margin) left = margin;
-    var top = r.top - mh - 6;
-    if (top < margin) top = r.bottom + 6;
-    if (top + mh > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - mh - margin);
-    menu.style.left = left + 'px';
-    menu.style.top = Math.round(top) + 'px';
-  }
+  var positionMenu = CC.placeMenu;
   CX.positionMenu = positionMenu;
 
   function chooseOption(def, o) {

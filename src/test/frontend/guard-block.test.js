@@ -69,7 +69,7 @@ describe('a guard block carries the control that can open the rule', () => {
     const block = blockRow(win, 'REVERSE_SHELL');
 
     block.querySelector('.guard-disable-link').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    const options = [...block.querySelectorAll('.guard-disable-option')];
+    const options = [...document.querySelectorAll('.guard-disable-option')];
     options[2].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
 
     expect(sent).toEqual([{ type: 'guardSuspend', rule: 'REVERSE_SHELL', duration: '30m' }]);
@@ -82,12 +82,44 @@ describe('a guard block carries the control that can open the rule', () => {
     const link = block.querySelector('.guard-disable-link');
 
     link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    block
+    document
       .querySelector('.guard-disable-option')
       .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
 
     expect(block.querySelector('.guard-disable-menu').hasAttribute('hidden')).toBe(true);
     expect(link.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('while open it hangs off the body, not off the scrolled conversation', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.CC.send = () => {};
+    const block = blockRow(win);
+    const link = block.querySelector('.guard-disable-link');
+    const menu = block.querySelector('.guard-disable-menu');
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(menu.parentNode).toBe(document.body);
+    expect(document.getElementById('conversation').contains(menu)).toBe(false);
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(menu.parentNode.className).toBe('guard-block-actions');
+    expect(block.contains(menu)).toBe(true);
+  });
+
+  it('a cleared transcript takes the open menu with it', async () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.CC.send = () => {};
+    const block = blockRow(win);
+
+    block.querySelector('.guard-disable-link').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+    expect(document.body.querySelector(':scope > .guard-disable-menu')).toBeTruthy();
+
+    win.cc.clear();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(document.body.querySelector(':scope > .guard-disable-menu')).toBeNull();
   });
 
   it('can be dismissed with Escape', () => {
