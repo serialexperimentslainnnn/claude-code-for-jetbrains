@@ -1,8 +1,3 @@
-/* app-composer-boot.js — the boot screen and the "Claude Code was not found" card.
- *
- * One subject: what the tab shows before there is a session — the loading state, the install routes with
- * their exact commands, and the manual path escape hatch. Driven from cc.state via CX.renderBoot.
- */
 (function () {
   'use strict';
 
@@ -10,62 +5,28 @@
   var CC = window.CC || (window.CC = {});
   var CX = (CC.composer = CC.composer || {});
 
-  var announcedBoot = false; // guards the boot screen's one-per-boot screen-reader announcement
-  var announcedMissing = false; // ditto for the "not found" card, which replaces the loading announcement
-  var installMethods = []; // from cc.meta: the OS's install routes for the not-found card
-  var installsBuilt = false; // the card's method rows are built once per methods payload
-  var installingId = null; // method id whose button shows "Installing…" (cleared on error/card teardown)
+  var announcedBoot = false;
+  var announcedMissing = false;
+  var installMethods = [];
+  var installsBuilt = false;
+  var installingId = null;
 
-  /**
-   * The boot screen: up until the binary is running, then gone for good.
-   *
-   * Three states, not two. `running` means go; `starting` means wait; NEITHER means the launch finished without
-   * a process — a missing binary, a declined trust prompt, a refused remote-mount project. That last case must
-   * clear the screen, or a failed launch leaves the tab covered forever with no way to see the notification
-   * explaining why. The host fires a state push on that path precisely so this can happen.
-   */
   CX.renderBoot = function (s) {
     var boot = document.getElementById('boot');
     var app = document.getElementById('app');
     if (!boot) return;
-    // ONE invariant, and everything else follows from it: **the chat is reachable only while the `claude`
-    // process is running.** Install -> sign in -> loading -> plugin, in that order, and any step backwards
-    // (the process exits, is restarted, the credential goes away) returns to the matching screen rather
-    // than leaving a chat on screen that has nothing behind it. Exactly ONE screen at a time: `#boot` hosts
-    // the install card and the spinner, the sign-in card is its own layer, and the spinner stands down while
-    // that card is up or it would simply cover it (z-index 60 over 55).
-    //
-    // Three conditions, each with its own criterion, and the three negations are NOT interchangeable — folding
-    // them into one for symmetry loses a screen.
-    //
-    // `binaryMissing` alone: the install card has no regard for the process. A binary can vanish under a live
-    // session, and the host pushes the flag before it stops that session, so the page is sent both at once —
-    // and this card is the only control that repairs it.
     var missing = !!s.binaryMissing;
-    // The same predicate the card renders from, so the two screens cannot disagree about which is up. It is
-    // the one that suppresses while `starting`.
     var awaitingAuth = CX.authWanted(s);
-    // `!running`, deliberately not narrowed to `starting`: a launch that failed and a session that died are
-    // both not-starting and both belong on this screen, so narrowing it would hand them the chat with nothing
-    // behind it. This is the screen that owns the startup window — the one the other two stand down for.
     var booting = !s.running;
     var showBoot = missing || (booting && !awaitingAuth);
     boot.hidden = !showBoot;
     boot.classList.toggle('missing', missing);
-    // Announce the FIRST booting render, not just a transition into it. The screen is already on-screen when
-    // the page loads, so the common case never transitions — and the element's own aria-live never fires
-    // either, because static markup present at load is not a mutation. Once per boot: `announcedBoot` resets
-    // when the screen comes down, so a later relaunch announces again.
     if (showBoot && !missing && !announcedBoot) {
       announcedBoot = true;
       CC.announce && CC.announce('Loading Claude Code');
     }
     if (!showBoot) announcedBoot = false;
-    // `booting`, not `showBoot`: the chat stays inert for the sign-in screen too.
     if (app) app.classList.toggle('booting', booting);
-    // Both screens are opaque layers over the transcript, so whichever is up, what is under it must be out of
-    // reach as well as out of sight — a focusable link behind an opaque panel is WCAG 2.2 SC 2.4.11. Declared
-    // for the pair, from the one place that knows about both; the dashboard declares its own (app-core.js).
     CC.coverTranscript && CC.coverTranscript('waiting', showBoot || awaitingAuth);
     var card = document.getElementById('boot-missing');
     if (card) card.hidden = !missing;
@@ -75,7 +36,7 @@
     }
     if (!missing) {
       announcedMissing = false;
-      installingId = null; // a fresh boot resets any "Installing…" button
+      installingId = null;
       setBootError('');
     }
     if (!showBoot) return;
@@ -84,17 +45,9 @@
       return;
     }
     var sub = document.getElementById('boot-sub');
-    // Distinguish the two waits: a fresh launch versus resuming an existing session, which reads a transcript
-    // back and is the slower of the two. Guessing "Starting" for both made the longer wait look like a hang.
     if (sub) sub.textContent = s.resuming ? 'Resuming your session' : 'Starting the agent';
   };
 
-  /**
-   * The not-found card's method rows: per install route, a button ("Install via X") and under it the exact
-   * command with a copy affordance ("or copy this command to bash: …"). The command text is the fallback
-   * that matters: the button runs it in the IDE terminal, and when a corporate network or a missing
-   * Terminal plugin breaks that, the user copies the same command and runs it anywhere.
-   */
   function renderInstallMethods() {
     var box = document.getElementById('boot-installs');
     if (!box) return;
@@ -147,22 +100,6 @@
     syncInstallButtons();
   }
 
-  /**
-   * "Check again" — the card's answer for an install the user ran somewhere else.
-   *
-   * The host watcher behind this card already re-derives the boot state every few seconds, so the button buys
-   * no capability; it buys an ANSWER. Someone who copied the command, ran it in their own terminal and came
-   * back has no way to say "done, look again", and a card that only ever changes on someone else's timer
-   * reads as broken while it waits.
-   *
-   * Deliberately NO busy state. The two outcomes both speak for themselves — the binary turns up and the card
-   * falls away (which is when `renderBoot` announces the wait), or the host writes the reason into
-   * `#boot-path-err`, which is `role="alert"` — so a disabled button or an "Checking…" label would only add a
-   * state that wedges if a reply never arrives. Clicking twice is two requests, which is exactly right.
-   *
-   * Built here rather than in `shell.html` for the same reason as the install buttons, and idempotent because
-   * a fresh `installMethods` push rebuilds those and must not leave a second copy of this one behind.
-   */
   function wireRecheck() {
     var card = document.getElementById('boot-missing');
     var installs = document.getElementById('boot-installs');
@@ -172,20 +109,14 @@
     btn.id = 'boot-recheck';
     btn.className = 'btn ghost boot-recheck';
     btn.textContent = 'Check again';
-    // The visible label is the start of the accessible name (WCAG 2.5.3), which just makes it survive being
-    // read out of context — "Check again" alone says nothing in a screen reader's list of buttons.
     btn.setAttribute('aria-label', 'Check again for the Claude Code binary');
     btn.addEventListener('click', function () {
-      // Drop any previous message first: the answer to THIS click has to be a fresh mutation of the alert
-      // region, or an identical reason twice in a row is announced once.
       setBootError('');
       CC.send({ type: 'recheckBinary' });
     });
     card.insertBefore(btn, installs ? installs.nextSibling : null);
   }
 
-  /** Button labels track the one installing: "Installing…" on it, normal labels (enabled) on the rest, so a
-   *  visibly failed attempt in the terminal can be retried by another route without any reset step. */
   function syncInstallButtons() {
     var box = document.getElementById('boot-installs');
     if (!box) return;
@@ -224,15 +155,12 @@
     if (el) el.textContent = msg || '';
   }
 
-  /** Host → card (via cc.meta): this OS's install routes. Rebuilds the buttons if the card is up. */
   CX.setInstallMethods = function (methods) {
     installMethods = methods;
-    installsBuilt = false; // rebuild the card's buttons if it is (or becomes) visible
+    installsBuilt = false;
     renderInstallMethods();
   };
 
-  /** Host → card: a validation or install-launch failure, verbatim. Clears the "Installing…" state so the
-   *  buttons are usable again — the error IS the end of that attempt. */
   cc.bootPathError = function (msg) {
     installingId = null;
     syncInstallButtons();

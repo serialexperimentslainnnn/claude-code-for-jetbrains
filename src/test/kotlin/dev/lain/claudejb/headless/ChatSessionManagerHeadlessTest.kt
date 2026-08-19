@@ -5,16 +5,11 @@ import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionHistory
 
-/**
- * Headless: the [ChatSessionManager] project service owns the set of open chat tabs.
- * Tests only the in-memory session bookkeeping — never [ClaudeSession.start], which would spawn the binary.
- */
 class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
 
     private val manager get() = ChatSessionManager.getInstance(project)
 
     override fun tearDown() {
-        // Dispose any sessions created during the test before the platform tears the project down.
         try {
             manager.all().forEach { runCatching { manager.remove(it) } }
         } finally {
@@ -35,20 +30,12 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         assertEquals(1, manager.all().size)
     }
 
-    /**
-     * REGRESSION: the fallback title numbered the chats ever CREATED, not the ones open.
-     *
-     * Closing the last chat opens a replacement (`ChatTabsPanel.replaceLastChat`), so a session spent closing
-     * and reopening one conversation climbed to `Chat 47` while never holding more than one — a number counting
-     * something the user cannot see. It is the lowest free number now.
-     */
     fun `test the fallback title reuses the lowest number no open chat is using`() {
         val first = manager.create()
         assertEquals("Chat 1", first.title)
         val second = manager.create()
         assertEquals("Chat 2", second.title)
 
-        // Close them both and the numbering starts over, which is the reported bug.
         manager.remove(first)
         manager.remove(second)
         assertEquals("Chat 1", manager.create().title)
@@ -60,8 +47,6 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         val three = manager.create()
         assertEquals(listOf("Chat 1", "Chat 2", "Chat 3"), manager.all().map { it.title })
 
-        // Closing from the MIDDLE is the case a count-based name gets wrong: `size + 1` would say "Chat 3"
-        // while `three` already holds it.
         manager.remove(two)
         val replacement = manager.create()
         assertEquals("Chat 2", replacement.title)
@@ -90,7 +75,6 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         manager.remove(second)
         assertFalse(second in manager.all())
         assertTrue(first in manager.all())
-        // active falls back to the last remaining session.
         assertSame(first, manager.active)
     }
 
@@ -98,7 +82,6 @@ class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
         val first = manager.create()
         val second = manager.create()
         manager.remove(second)
-        // Sessions were never started, so their sessionId is null → no ids persisted.
         assertEquals(emptyList<String>(), SessionHistory.getInstance(project).openSessions())
         manager.remove(first)
         assertEquals(emptyList<String>(), SessionHistory.getInstance(project).openSessions())

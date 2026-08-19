@@ -11,14 +11,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Unit coverage for [SessionControlClient] — the control-request correlation extracted from `ClaudeSession`.
- * Uses a fake scheduler (so timeouts fire on demand, never via the real executor) and a deterministic id minter,
- * matching the project's "inject the scheduler, don't depend on the real one" guidance.
- */
 class SessionControlClientTest {
 
-    /** Captures scheduled tasks so a test can fire (or never fire) the watchdog deterministically. */
     private class FakeScheduler : SessionControlClient.Scheduler {
         val tasks = mutableListOf<() -> Unit>()
         var cancelled = 0
@@ -52,11 +46,9 @@ class SessionControlClientTest {
             decode = { payload -> payload?.str("value") },
         )
 
-        // The request line was written using the minted id; nothing resolved yet.
         assertEquals(listOf("line-for-req_1"), sent)
         assertEquals("unset", captured)
 
-        // Reply for the matching id → decoded payload delivered, watchdog cancelled.
         val payload = buildJsonObject { put("value", "hello") }
         client.onControlResult(ClaudeEvent.ControlResult("req_1", success = true, payload = payload, error = null))
         assertEquals("hello", captured)
@@ -76,11 +68,9 @@ class SessionControlClientTest {
             decode = { it?.str("value") },
         )
 
-        // A reply for a different id must not touch the pending handler.
         client.onControlResult(ClaudeEvent.ControlResult("req_OTHER", success = true, payload = null, error = null))
         assertFalse(invoked)
 
-        // The real reply still resolves it afterwards (handler was not consumed).
         client.onControlResult(ClaudeEvent.ControlResult("req_1", success = true, payload = null, error = null))
         assertTrue(invoked)
     }
@@ -99,14 +89,13 @@ class SessionControlClientTest {
                 captured = v
                 calls++
             },
-            decode = { it }, // identity, like requestSessionCost/requestMcpStatus
+            decode = { it },
         )
 
         scheduler.fireAll()
         assertEquals(1, calls)
         assertNull(captured)
 
-        // A late reply after the watchdog won is a no-op (handler already removed).
         client.onControlResult(ClaudeEvent.ControlResult("req_1", success = true, payload = buildJsonObject {}, error = null))
         assertEquals(1, calls)
     }
@@ -127,10 +116,8 @@ class SessionControlClientTest {
         }
 
         client.failAll("process gone")
-        // Both handlers fired with a null payload (failure → decode(null) → null).
         assertEquals(listOf<JsonObject?>(null, null), results)
 
-        // The map is empty: a subsequent reply or a second failAll resolves nothing further.
         results.clear()
         client.failAll("again")
         client.onControlResult(ClaudeEvent.ControlResult("req_1", success = true, payload = buildJsonObject {}, error = null))

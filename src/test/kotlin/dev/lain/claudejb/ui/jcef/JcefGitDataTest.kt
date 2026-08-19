@@ -20,14 +20,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the Git view's payload: the shape the page is promised, the two ways it degrades when
- * there is no Git, and the two things it must not decide for itself — the status vocabulary (owned by
- * [JcefStatus]) and the action list (owned by [GitActionCatalog]).
- */
 class JcefGitDataTest {
-
-    // ── fixtures ─────────────────────────────────────────────────────────────────────────────────────────
 
     private val commit = GitCommitInfo(
         hash = "0123456789abcdef0123456789abcdef01234567",
@@ -38,7 +31,6 @@ class JcefGitDataTest {
         changedPaths = listOf("src/a.kt", "src/b.kt", "README.md"),
     )
 
-    /** The other shape a commit comes in: two parents, mainline first. */
     private val merge = GitCommitInfo(
         hash = "89abcdef89abcdef89abcdef89abcdef89abcdef",
         subject = "Merge branch 'feature/git'",
@@ -75,14 +67,10 @@ class JcefGitDataTest {
     private fun idsOf(git: JsonObject): List<String> =
         git["actions"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content }
 
-    // ── shape ────────────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `payload carries availability, repo, changes, commits and actions`() {
         val git = JcefGitData.gitJson(populated(), nowMillis = 1_500_000L)!!
 
-        // `pullRequests` and `lastRun` are ABSENT rather than null: the forge is not configured in this
-        // fixture, and "we never asked" is a different claim from "there are none" — see JcefGitData.
         assertEquals(
             setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
             git.keys,
@@ -120,13 +108,8 @@ class JcefGitDataTest {
         assertEquals(0L, c["ageMillis"]!!.jsonPrimitive.long)
     }
 
-    // ── the branch map's two halves: parents and refs ────────────────────────────────────────────────────
-
     @Test
     fun `a commit carries its parents as full hashes, in commit order`() {
-        // Order is the contract, not an accident: the FIRST parent is the mainline and the rest are what was
-        // merged in, which is what the map's lane assignment keys off. Full hashes because the page joins a
-        // commit to its parent by matching them, and seven characters are unique only until they are not.
         val git = JcefGitData.gitJson(populated(commits = listOf(merge, commit)), nowMillis = 0L)!!
         val parents = git["commits"]!!.jsonArray.first().jsonObject["parents"]!!.jsonArray
 
@@ -148,8 +131,6 @@ class JcefGitDataTest {
 
         assertEquals(setOf("name", "kind", "hash", "short", "current"), emitted.first().keys)
         assertEquals(listOf("main", "origin/main"), emitted.map { it["name"]!!.jsonPrimitive.content })
-        // Lowercase on the wire because that is what the page keys its styling off — the same rule `kind`
-        // follows on an action.
         assertEquals(listOf("local", "remote"), emitted.map { it["kind"]!!.jsonPrimitive.content })
         assertEquals("0123456", emitted.first()["short"]!!.jsonPrimitive.content)
         assertEquals(listOf(true, false), emitted.map { it["current"]!!.jsonPrimitive.boolean })
@@ -189,8 +170,6 @@ class JcefGitDataTest {
         assertEquals(JsonNull, repo["root"])
     }
 
-    // ── degradation ──────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `no snapshot at all emits no git value`() {
         assertNull(JcefGitData.gitJson(null, nowMillis = 0L))
@@ -216,15 +195,11 @@ class JcefGitDataTest {
         assertNotNull(git["commits"])
         assertTrue(git["changes"]!!.jsonArray.isEmpty())
         assertTrue(git["commits"]!!.jsonArray.isEmpty())
-        // `pullRequests` and `lastRun` are ABSENT rather than null: the forge is not configured in this
-        // fixture, and "we never asked" is a different claim from "there are none" — see JcefGitData.
         assertEquals(
             setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
             git.keys,
         )
     }
-
-    // ── actions: the catalogue decides, this builder only serializes ─────────────────────────────────────
 
     @Test
     fun `the action list is the catalogue's, in the catalogue's order`() {
@@ -289,8 +264,6 @@ class JcefGitDataTest {
         assertTrue(setOf("Repository", "Ask Claude", "IDE actions").containsAll(groups))
     }
 
-    // ── status: the vocabulary is JcefStatus's ───────────────────────────────────────────────────────────
-
     @Test
     fun `an action that has not been run carries a null status`() {
         val git = JcefGitData.gitJson(populated(), nowMillis = 0L)!!
@@ -330,7 +303,6 @@ class JcefGitDataTest {
 
     private companion object {
 
-        /** The second parent of the merge fixture — the branch that was merged in, never the mainline. */
         const val OTHER_PARENT = "fedcba9876543210fedcba9876543210fedcba98"
     }
 }

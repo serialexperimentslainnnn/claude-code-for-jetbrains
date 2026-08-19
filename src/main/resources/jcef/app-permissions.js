@@ -1,12 +1,6 @@
-/* app-permissions.js — the permission cards.
- * Renders cc.permissions(list) into CC.els.permissions per §PERMISSIONS.
- * Consumes app-core.js globals (window.CC: h, escape, markdown, send).
- * Vanilla ES2019, addEventListener only, no external resources, themeable via classes only.
- */
 (function () {
   'use strict';
 
-  // Safe accessors — every method must be callable before core fully initializes.
   function core() {
     return window.CC || null;
   }
@@ -34,18 +28,6 @@
     if (c && typeof c.send === 'function') c.send(obj);
   }
 
-  /**
-   * Sends a message ABOUT a card, tagged with whichever conversation the card belongs to.
-   *
-   * There are two now: the chat this browser was built for, and the one embedded in the Git view
-   * (`app-session-gitchat.js`), which is a second `claude` process with permission requests of its own. Both
-   * are drawn by the builders below — one renderer, so a card cannot look different depending on where it
-   * appears — and `scope` is what tells the host which session to answer. It rides on the message rather than
-   * on a second set of message types because the alternative, letting the host guess from the request id,
-   * would resolve the wrong turn on any collision, silently and irreversibly.
-   *
-   * Absent scope means the panel's own session, so nothing about the ordinary path changes.
-   */
   function sendFor(card, obj) {
     var scope = card && card.scope ? String(card.scope) : null;
     if (scope) obj.scope = scope;
@@ -54,16 +36,12 @@
 
   function isHttpUrl(u) {
     if (!u || typeof u !== 'string') return false;
-    // Anchor at start; only http/https schemes are permitted.
     return /^https?:\/\//i.test(u.trim());
   }
-
-  // ---- card builders ---------------------------------------------------------
 
   function buildQuestionCard(card) {
     var id = card.id;
     var questions = Array.isArray(card.questions) ? card.questions : [];
-    // selections[questionText] = [labels...]
     var selections = {};
 
     var qBlocks = questions
@@ -94,7 +72,6 @@
                   } else {
                     selections[qText] = [label];
                   }
-                  // re-paint selected state within this question block
                   syncSelected();
                 },
               },
@@ -102,7 +79,6 @@
             if (preview) props.title = preview;
 
             var el = h('button', props, children[0], children[1] || null);
-            // tag for sync
             if (el) {
               el.__qText = qText;
               el.__label = label;
@@ -143,7 +119,6 @@
             },
           },
         }),
-        // Cancel = deny the AskUserQuestion tool (the model continues without an answer).
         h('button', {
           class: 'btn ghost',
           text: 'Cancel',
@@ -156,7 +131,6 @@
       )
     );
 
-    // Reflect current selection state onto option buttons.
     function syncSelected() {
       if (!root) return;
       var opts = root.querySelectorAll('.q-option');
@@ -171,7 +145,6 @@
     return root;
   }
 
-  // Normalize a field's declared type to one of: string | number | integer | boolean.
   function fieldKind(f) {
     var t = f && f.type != null ? String(f.type).toLowerCase() : 'string';
     if (t === 'number') return 'number';
@@ -184,8 +157,6 @@
     var id = card.id;
     var e = card.elicitation || {};
 
-    // A field is { name, title?, type?, required? }.  Render form when the
-    // elicitation explicitly asks for a form OR when fields are supplied.
     var fields = Array.isArray(e.fields)
       ? e.fields.filter(function (f) {
           return f && f.name != null && String(f.name) !== '';
@@ -197,7 +168,6 @@
     var bodyChildren = [];
     if (e.description) bodyChildren.push(h('div', { class: 'elicit-desc', text: String(e.description) }));
 
-    // Safe URL link (http/https only), routed through Kotlin (never navigated).
     if (isUrl) {
       var url = String(e.url).trim();
       bodyChildren.push(
@@ -214,7 +184,6 @@
       );
     }
 
-    // name -> { input, kind, required } for value collection + validation.
     var fieldMeta = {};
     var acceptBtn = null;
 
@@ -244,7 +213,6 @@
       bodyChildren.push(h('div', { class: 'elicit-fields' }, fieldEls));
     }
 
-    // Required fields must be satisfied before Accept is enabled (form only).
     function requiredSatisfied() {
       var names = Object.keys(fieldMeta);
       for (var i = 0; i < names.length; i++) {
@@ -252,7 +220,6 @@
         if (!meta || !meta.required) continue;
         var input = meta.input;
         if (meta.kind === 'boolean') {
-          // A required checkbox must be checked.
           if (!input.checked) return false;
         } else if (String(input.value == null ? '' : input.value).trim() === '') {
           return false;
@@ -383,8 +350,6 @@
     );
   }
 
-  // Render a unified-diff string as a read-only, colour-coded block (red removed / green added / hunk headers).
-  // Uses textContent per line (never innerHTML) so file contents can't inject markup. Bounded for very large diffs.
   function renderPermDiff(text) {
     var pre = h('pre', { class: 'perm-diff' });
     var code = h('code', {});
@@ -412,17 +377,6 @@
     return pre;
   }
 
-  /**
-   * The banner on a card the security guard raised, naming the rule that matched.
-   *
-   * It can only appear for a rule the user switched OFF — an enforced rule is denied outright and never becomes
-   * a card — so the action it offers is **re-enable**, never disable. That direction is the whole point: this
-   * banner can only ever narrow the open surface, and there is no way to widen protection away from a card, in
-   * the middle of a task, under the pressure of a stalled turn. Widening is a deliberate trip to Settings.
-   *
-   * The badge is TEXT. Colour and motion are not information: neither survives forced-colors mode, a screenshot,
-   * or a user who cannot see the difference.
-   */
   function buildGuardAlert(g) {
     var rule = g.rule != null ? String(g.rule) : '';
     var children = [
@@ -438,8 +392,6 @@
         h('button', {
           class: 'perm-guard-restore',
           text: 'Re-enable this rule',
-          // `on: true` means ENFORCED — the inversion between the row and the stored disabled-set lives in
-          // JcefSettingsMenu.applyRule and nowhere else, so this sends the row's meaning, not the field's.
           on: {
             click: function () {
               send({ type: 'settingsToggle', key: 'rule:' + rule, on: true });
@@ -456,10 +408,6 @@
     var tool = card.tool;
 
     var bodyChildren = [];
-    // The guard alert goes FIRST, above the summary, because it changes what the card IS. An ordinary permission
-    // card asks "may I"; this one says "a security rule you switched off just matched, and here is which".
-    // It only ever appears for a DISABLED rule — an enforced one is denied outright and never reaches a card — so
-    // its presence always means an open lock let something through, which must not be quiet.
     if (card.guard) bodyChildren.push(buildGuardAlert(card.guard));
     var summary = card.summary != null ? String(card.summary) : '';
     var description = card.description != null ? String(card.description) : '';
@@ -476,15 +424,10 @@
     if (card.decisionReason)
       bodyChildren.push(h('div', { class: 'perm-reason', text: String(card.decisionReason) }));
 
-    // Read-only unified diff for reviewable edits: shows exactly what changes (red removed / green added). No
-    // per-line selection — the whole edit is accepted or rejected.
     if (card.diff != null && String(card.diff).length) {
       bodyChildren.push(renderPermDiff(String(card.diff)));
     }
 
-    // Edits are ATOMIC: accept or reject the whole change. Per-hunk "apply this line, not that one" selection was
-    // removed — picking a subset of a coherent edit produces broken code, and it rendered as a confusing checklist.
-    // The full change is viewable via "View diff" (and the IDE auto-opens the diff tab when the card appears).
     var acceptBtn = h('button', {
       class: 'btn primary',
       text: 'Accept',
@@ -520,10 +463,6 @@
         })
       );
     }
-    // On a GUARD card the unit of the answer is the COMMAND, not the tool, and the label says so. "Always
-    // allow" on a `terraform destroy` card must open that command and nothing else the rule stops — the tool
-    // grain would be `Bash`, i.e. every command there is. It also lasts only while the rule stays open, so
-    // re-enabling the rule takes the approval with it.
     if (card.guard) {
       actions.push(
         h('button', {
@@ -561,29 +500,12 @@
 
   function buildCard(card) {
     if (!card || typeof card !== 'object') return null;
-    // First match wins.
     if (Array.isArray(card.questions) && card.questions.length) return buildQuestionCard(card);
     if (card.elicitation) return buildElicitCard(card);
     if (card.isPlan) return buildPlanCard(card);
     return buildPermCard(card);
   }
 
-  // ---- public API ------------------------------------------------------------
-
-  /**
-   * Announce that Claude is blocked on the user (WCAG 2.2 AA — 4.1.3 Status Messages).
-   *
-   * This is the single most important announcement in the whole UI: a permission card appears in the dock
-   * WITHOUT taking focus, so to a screen-reader user the turn simply stops with no explanation and no
-   * indication that anything is waiting for them. Sighted users see a card slide in; everyone else got silence.
-   *
-   * Announces only the 0 -> n transition, and names the tool when there is exactly one card, since "Claude
-   * needs your permission to run Bash" is actionable in a way that "Claude needs your response" is not.
-   * Resolution is left silent on purpose — the user just acted, so they know.
-   */
-  // Counted PER REGION. There are two mounts now — the dock and the Git view's embedded chat — and a single
-  // counter would make a card arriving in one of them cancel the announcement of a card arriving in the
-  // other, which is exactly the case where the user is least likely to be looking at the right pane.
   var pendingCounts = new WeakMap();
   function announcePending(list, region) {
     var C = core();
@@ -607,25 +529,12 @@
     C.announce(count + ' requests are waiting for your response.');
   }
 
-  /**
-   * Draws [list] into [into], or into the dock when no container is given.
-   *
-   * The container is a parameter because the Git view embeds a second conversation with permission requests
-   * of its own (`app-session-gitchat.js`), and every turn in that chat runs with forced approval — a view
-   * that could show the conversation but not its cards would be a view you cannot finish anything from. ONE
-   * renderer with two mounts, never two renderers: the card is where the command is shown before it runs, so
-   * a second implementation is a second place for that to go wrong.
-   */
   function permissions(list, into) {
     var region = into || mount();
     if (!region) return;
     if (!list || !Array.isArray(list)) list = [];
     announcePending(list, region);
 
-    // Reconcile by card id rather than wiping + rebuilding the whole region. A blunt innerHTML='' on every push
-    // (the host re-pushes on ANY permission change — a second card arriving, one resolving) destroyed the
-    // in-progress state of the OTHER cards: typed elicitation fields, AskUserQuestion selections, unticked hunk
-    // checkboxes. Keeping the existing DOM node for an id already shown preserves all of that.
     var existing = {};
     var n = region.children.length;
     for (var i = 0; i < n; i++) {
@@ -649,22 +558,12 @@
       if (node) ordered.push(node);
     }
 
-    // Drop cards that are no longer pending.
     for (var k = region.children.length - 1; k >= 0; k--) {
       var child = region.children[k];
       var ck = child.getAttribute ? child.getAttribute('data-card-id') : null;
       if (ck == null || !wanted[ck]) region.removeChild(child);
     }
 
-    // Put each card in its place, and TOUCH NOTHING that is already in it.
-    //
-    // Reusing the node is not the same as leaving it alone: re-appending a node that is already there is not a
-    // no-op, it is a removal followed by an insertion (both the browser and jsdom report the pair), and a
-    // subtree that leaves the document comes back with its scroll offsets at zero and its focus gone. The
-    // host re-pushes the whole list on every permission change — a second request arriving, another one
-    // resolving — so the diff you were reading (`.perm-diff`, capped at 28vh, so anything real scrolls)
-    // jumped back to its first line, and the elicitation field you were typing into lost the caret. Only the
-    // cards whose position actually changed are moved; in the ordinary push, nothing moves at all.
     for (var m = 0; m < ordered.length; m++) {
       if (region.children[m] !== ordered[m]) region.insertBefore(ordered[m], region.children[m] || null);
     }
@@ -672,7 +571,6 @@
 
   window.cc = window.cc || {};
   window.cc.permissions = permissions;
-  // The renderer, for the Git view's embedded chat. Exposed rather than duplicated — see `permissions`.
   window.CC = window.CC || {};
   window.CC.permissions = { render: permissions };
 })();

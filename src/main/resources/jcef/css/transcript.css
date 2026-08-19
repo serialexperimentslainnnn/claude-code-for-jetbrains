@@ -1,6 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   TRANSCRIPT — messages
-   ════════════════════════════════════════════════════════════════════════════ */
 .msg {
   margin: 18px 0;
   animation: rise 0.26s var(--ease) both;
@@ -48,7 +45,6 @@
   color: var(--text);
 }
 
-/* hover affordances (copy / actions) */
 .act,
 .copy {
   cursor: pointer;
@@ -76,10 +72,6 @@
   background: var(--surface);
 }
 
-/* Confirmation state, shared by every Copy affordance (message heads and code-block heads alike). The class
-   was already being applied by the JS and had NO rule at all, so the only feedback was the word changing —
-   easy to miss on a control you are not looking straight at. Green because it reports an outcome, and it
-   holds through :hover so moving the pointer does not wipe the confirmation you just triggered. */
 .act.copied,
 .copy.copied,
 .act.copied:hover,
@@ -88,56 +80,20 @@
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
-/* USER — an ordinary transcript row, like the assistant's, and NOT a card.
-
-   It was a bordered, padded, shadowed box, and it carried `white-space: pre-wrap`. Both were correct for the
-   `kind: 'text'` body it used to have and both became wrong when `buildUser` moved to `kind: 'md'`
-   (app-transcript-rows.js): the box turned a long prompt into a scrollable slab of chrome instead of text you
-   read, and `pre-wrap` over ALREADY-RENDERED markup makes every newline in that markup a visible line break —
-   which is what put each list bullet a blank line apart and the `1.` on a line of its own. The rule's own
-   comment still said "Verbatim user text (kind 'text' → textContent)", which is how a stale sentence outlives
-   its symbol in a stylesheet.
-
-   What stays is the only part the container was really needed for: wrapping. A pasted path or a token has no
-   break opportunity, and without these two it would set the row's width. The header (`You` + Copy) is
-   untouched — it is what marks the row as the user's now that no box does. */
 .msg.user .body {
   padding: 0 1px;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
-/* ASSISTANT — flows on the page, no container chrome */
 .msg.assistant .body {
   padding: 0 1px;
 }
 
-/* ── markdown typesetting ─────────────────────────────────────────────────── */
 .body {
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
 
-/* NO MEASURE. Prose runs to the width of the tool window, like everything else in the transcript.
-   There WAS one — `max-width: 70ch` on `.body p/li/blockquote/h*` — and it was argued from the reading
-   measure WCAG 2.1 SC 1.4.8 (AAA) names, ~80 characters. The argument is sound about a page; it was wrong
-   about this surface, and the reason is that the reader is not one:
-
-   A transcript is not a document column. It is a stream that alternates prose with things that are
-   deliberately full-width — tool cards, diffs, tables, code. Capping only the paragraphs made the column
-   RAGGED: a card spanning the pane, then a paragraph stopping halfway across it, and nothing but whitespace
-   to explain why. That is what was reported, in those words: the text does not expand and the rest does.
-
-   The measure also has a reader here who can already set it. `--col` is `none` (base.css), so the width of
-   the running text IS the width of the tool window, and dragging that window is how a user picks their own
-   line length — which is the intent behind 1.4.8's own "the user can select the width" wording, met by the
-   platform rather than by us guessing 70 characters on their behalf. 1.4.8 is AAA and applied per criterion,
-   never as a blanket goal (WCAG §5.2.1); the AA criterion that binds is 1.4.10 Reflow, and text that fills
-   its container and wraps satisfies it at any width. Nothing about this rule's removal narrows anything: a
-   pane left at its default width reads exactly as it did.
-
-   The one thing the old rule got right and is worth keeping in mind if this is ever revisited: the user's
-   own card was deliberately exempt, because its text is verbatim (a text node, not a `<p>`) and a cap would
-   have had to go on the card, turning "a soft full-width card, not a bubble" into a bubble. */
 .body > :first-child {
   margin-top: 0;
 }
@@ -202,7 +158,6 @@
   border-top: 1px solid var(--border);
   margin: 18px 0;
 }
-/* inline images from model markdown (only data: URIs pass the CSP img-src) — keep them in-bounds */
 .body img {
   max-width: 100%;
   height: auto;
@@ -210,7 +165,6 @@
   border-radius: var(--radius-sm);
 }
 
-/* inline code */
 .body code:not(pre code) {
   font-family: var(--mono);
   font-size: 0.88em;
@@ -221,7 +175,6 @@
   word-break: break-word;
 }
 
-/* fenced code blocks with a header bar */
 .body pre {
   margin: 12px 0;
   background: var(--code-bg);
@@ -264,7 +217,6 @@
   background: transparent;
 }
 
-/* tables */
 .body table {
   border-collapse: collapse;
   margin: 12px 0;
@@ -293,10 +245,8 @@
   border-left: 1px solid var(--border);
 }
 
-/* ── thinking / memory disclosures ───────────────────────────────────────── */
 details.fold {
   margin: 8px 0;
-  /* "Thought process" and recalled-memory folds enter like the rest — see .tool. */
   animation: rise 0.22s var(--ease) both;
 }
 details.fold > summary {
@@ -353,7 +303,6 @@ details.fold .fold-body p:first-child {
   margin-top: 0;
 }
 
-/* ── tool cards ──────────────────────────────────────────────────────────── */
 .tool {
   margin: 10px 0;
   border: 1px solid var(--border);
@@ -361,22 +310,9 @@ details.fold .fold-body p:first-child {
   background: var(--surface2);
   overflow: hidden;
   transition: border-color 0.2s;
-  /* Enter like everything else. `.msg` and `.elicit-card` both rose into place while tool cards appeared
-     instantly, and a turn is mostly tool cards — so the transcript read as rigid even though the animation
-     "worked". Slightly quicker than a message (0.22s vs 0.26s): several can land in a row during one turn,
-     and at message speed a burst of them reads as sluggish rather than smooth. */
   animation: rise 0.22s var(--ease) both;
 }
-/* NB the Agents / Subagents / Background-tasks WINDOWS are gone, and their rules with them: `.agent-row`,
-   `.agent-row-head`, `.agent-status[.running|.completed|.failed]`, `.agent-chain`, `.subagent-row` and
-   `.task-row`. What answers those questions now is the Workloads diagram (`.dg-*`, dashboard.css) for the
-   whole picture, and the tab bar's second row (`.subtab-capsule`, tabs.css) for the open chat's own agents,
-   subagents and background tasks — so nothing has emitted these class names since. Deleted rather than kept
-   "just in case": a rule nobody can reach is one more thing to read and to keep consistent with a theme. */
 
-/* An Agent/Task card is a link to that agent's tab, not an expander: its work lives in its own transcript
-   now. It says so by pointing rather than by looking different — a second card style in a transcript that is
-   mostly tool cards would be noise, and the chevron is already hidden for it below. */
 .tool.agent-link > .tool-head {
   cursor: pointer;
 }
@@ -387,17 +323,6 @@ details.fold .fold-body p:first-child {
   visibility: hidden;
 }
 
-/* state borders use status hues — NOT the accent. --info = sky blue (loading/running). */
-/* Active (loading until a result lands, or running on a heartbeat) → fade sky-blue ↔ amber + spin.
-   Most tools never emit a tool_progress (so never hit RUNNING), so loading shares the fade — that's
-   what makes "it's working" read at a glance. */
-/* `rise` is repeated here on purpose — removing it would REPLAY it.
-   `animation` is one property, so a state rule that lists only `toolRun` overrides the entrance animation
-   entirely; when the state class is later dropped the name reverts to `rise` and the browser starts it again,
-   which is why a card visibly re-faded the moment it finished. Keeping `rise` first in the list at the same
-   position means it is the SAME running animation throughout the card's life — it plays once, on insertion,
-   and the state fade layers on top of it. The two never fight: `rise` animates opacity/transform, `toolRun`
-   animates border-color. */
 .tool.loading,
 .tool.running {
   animation:
@@ -410,26 +335,16 @@ details.fold .fold-body p:first-child {
     spin 1.1s linear infinite,
     toolRunIc 1.3s ease-in-out infinite;
 }
-/* RED WINS — and it does so because a card carries exactly ONE state class: `applyToolState` clears all four
-   before adding one, so the old defensive `.tool.failed.done` / `.failed.running` / `.failed.loading` pile
-   guarded against a combination the state machine cannot produce. */
 .tool.failed {
   border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
   animation: none;
 }
 .tool.done {
   border-color: color-mix(in srgb, var(--success) 50%, var(--border));
-  /* A single soft beat when the call finishes.
-     `rise` stays FIRST and unchanged so it is not restarted (see the .loading rule for why that matters); only
-     slot 2 changes, from the looping toolRun to this one-shot, so `settle` plays exactly once at the moment
-     the state flips. Without it "finished" is communicated by colour alone, which is easy to miss in a long
-     transcript — and colour alone is also the thing a user with a colour-vision deficiency cannot rely on. */
   animation:
     rise 0.22s var(--ease) both,
     settle 0.32s var(--ease);
 }
-/* Deliberately small. 1.5% is enough to register as a beat at the edge of vision; anything larger reads as the
-   card lurching, and several finishing in quick succession would make the transcript bounce. */
 @keyframes settle {
   0% {
     transform: scale(1);
@@ -446,7 +361,6 @@ details.fold .fold-body p:first-child {
     transform: rotate(360deg);
   }
 }
-/* running = fade between sky blue and amber (border + icon) */
 @keyframes toolRun {
   0%,
   100% {
@@ -502,7 +416,6 @@ details.fold .fold-body p:first-child {
   word-break: break-word;
   flex: 1 1 auto;
 }
-/* The two trailing buttons on a tool head. Same shape; they differ only in hue and in which edge they hug. */
 .tool-head .tool-diff,
 .tool-head .tool-restore {
   flex: 0 0 auto;
@@ -552,12 +465,9 @@ details.fold .fold-body p:first-child {
   display: none;
   border-top: 1px solid var(--border);
 }
-/* direct-child selectors: a nested tool's out/children depend on ITS OWN .open, not an ancestor's
-   (a descendant selector would force every nested card open whenever the Agent is open). */
 .tool.open > .tool-out {
   display: block;
 }
-/* A code block inside a card wears none of the chrome a markdown fence has — the card already provides it. */
 .tool-out pre,
 .tool-cmd pre.command-src,
 .tool-msg pre.message-src {
@@ -576,28 +486,13 @@ details.fold .fold-body p:first-child {
 .tool-msg pre.message-src code {
   font-size: 12px;
 }
-/* A FAILED tool's output wraps whatever kind of output it is — and that "whatever" is the whole of what this
-   rule still buys, now that free-flowing output wraps on its own (`.flow`, below). What is left here is the
-   case the general rule deliberately exempts: a FAILING COMMAND. Its stdout was tabular and its stderr is
-   prose, and the prose is the part you need — "Error: No such tool available: Glob. Glob is not available in
-   this session — find files with `find` via the Bash tool instead" is one long line, so it ran off the right
-   edge and the actionable half (what to use instead) was invisible unless you thought to scroll a card you had
-   no reason to think was scrollable. An error nobody can read without discovering a horizontal scrollbar is an
-   error nobody reads, and on a failed call the alignment is worth less than the sentence.
-   `anywhere` rather than `break-word` so a long unbroken path or URL also gives way. */
 .tool.failed .tool-out pre code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* coloured unified diff inside a tool card */
 .tool-out pre.diff code {
   display: block;
 }
-/* Command output and free-flowing output share their FRAME and differ in one property, so they are written
-   that way: the same code-head + Copy chrome as a markdown code fence (via CC.decorateOneCodeBlock), scoped
-   to fit inside a tool card — no outer margin/border/shadow, the card already has its own. `.tool-out pre`
-   scrolls the WHOLE pre (head included); here the scroll region is the code element only, so the head bar
-   (and its Copy button) never scrolls out of view on long output. */
 .tool-out pre.command,
 .tool-out pre.flow {
   overflow: hidden;
@@ -608,27 +503,14 @@ details.fold .fold-body p:first-child {
   max-height: 380px;
   overflow: auto;
 }
-/* …and the one property they differ in. `.flow` is a tool result that is neither a diff, nor a command's
-   output, nor a file's contents (see routeToolOutput): an MCP server's JSON, an agent's acknowledgement,
-   a page that was fetched, a tool saying what it did. None of that has a column to keep aligned, and left
-   at `white-space: pre` all of it rendered as ONE line disappearing off the right edge — the reported case
-   being a `SendMessage` result, `{"success":true,"message":"Message queued…` and then nothing.
-
-   This is the same rule `.tool.failed` already had, generalised. It was scoped to failures only because a
-   failure was the case that got reported, not because a successful result reads any better sideways.
-   `anywhere` rather than `break-word` so a long unbroken id, path or URL gives way too — those are precisely
-   what this kind of output is full of. The padding is here rather than on `.tool-out pre code` because this
-   is the only variant that is `display: block`; the others get theirs from their own rules. */
 .tool-out pre.flow code {
   padding: 10px 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* the executed COMMAND itself — a sibling of .tool-out (see .tool-cmd below), NOT gated by .open: you should
-   see what ran without expanding the card, only its output/result stays behind the collapse toggle. */
 .tool-cmd:empty {
   display: none;
-} /* no command on this tool → the container takes up no space at all */
+}
 .tool-cmd {
   border-top: 1px solid var(--border);
 }
@@ -640,27 +522,19 @@ details.fold .fold-body p:first-child {
   max-height: 160px;
   overflow: auto;
 }
-/* a command-executing tool's own look: a distinct left accent on the whole card, so it reads as "this ran
-   something" at a glance, even before you've located the code block. */
 .tool.cmd-tool {
   border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
-/* the MESSAGE a call sends — a sibling of .tool-out exactly like .tool-cmd, and for the same reason: what a
-   call said is not something you should have to expand the card to read, only what came back is. Same
-   shape as the command block throughout, because it is the same idea about a different payload. */
 .tool-msg:empty {
   display: none;
-} /* no message on this tool → the container takes up no space at all */
+}
 .tool-msg {
   border-top: 1px solid var(--border);
 }
 .tool-msg pre.message-src {
   overflow: hidden;
 }
-/* Prose, so it WRAPS — the opposite default from the command block, which is a shell line whose spacing is
-   its own. Capped shorter than the output region too: a message can be a page long, and at that length the
-   card stops being a row in a transcript and becomes the transcript. */
 .tool-msg pre.message-src code {
   display: block;
   padding: 10px 12px;
@@ -669,19 +543,9 @@ details.fold .fold-body p:first-child {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* Its own left accent, in the INFO hue rather than the accent one, so a card that sends something is
-   distinguishable at a glance from a card that runs something without either being mistaken for a state. */
 .tool.msg-tool {
   border-left: 3px solid color-mix(in srgb, var(--info) 55%, var(--border));
 }
-/* ── jump-to-code links (jb://open) ─────────────────────────────────────────── */
-/* Used for file paths on tool cards and for paths/symbols detected in model text. Painted in the IDE's OWN
-   hyperlink colour (--link, the familiar blue, theme-correct in light and dark) rather than the product's coral
-   accent: a link should read as a link, not as branding. Subtle enough not to shout in a dense transcript. */
-/* NB the `.body a.jb-link` selector: `.body a` above paints ordinary Markdown links with the coral accent, and it
-   would out-specify a bare `.jb-link` — which is why jump-to-code links inside model text came out coral while the
-   identical ones on tool cards (not under `.body`) came out blue. Both selectors must beat it.
-   The colour fallbacks matter too: the first paint can happen before the host has pushed the theme vars. */
 .jb-link,
 .body a.jb-link {
   color: var(--link, #589df6);
@@ -720,7 +584,6 @@ details.fold .fold-body p:first-child {
   color: var(--dim);
 }
 
-/* highlight.js token colours, driven by the IDE editor scheme (JcefTheme synXxx vars). */
 .hljs-keyword,
 .hljs-meta .hljs-keyword,
 .hljs-selector-tag {
@@ -755,9 +618,6 @@ details.fold .fold-body p:first-child {
 .hljs-attribute {
   color: var(--syn-type);
 }
-/* Not a no-op, despite repeating the inherited colour: these tokens NEST inside coloured ones —
-   `${x}` sits inside an `.hljs-string`, `$var` inside a quoted shell word — and without this they would take
-   the string's colour and stop reading as an interpolation. */
 .hljs-attr,
 .hljs-variable,
 .hljs-template-variable,
@@ -771,7 +631,6 @@ details.fold .fold-body p:first-child {
   font-weight: 600;
 }
 
-/* nested subagent activity inside an Agent/Task card */
 .tool-children {
   display: none;
   padding: 2px 0 2px 12px;
@@ -784,10 +643,7 @@ details.fold .fold-body p:first-child {
 .tool-children:empty {
   display: none;
 }
-/* NB nothing here undoes `#conversation > *` (the centred reading column): that is a CHILD selector, and a
-   nested card is a child of this container, not of the transcript. The three lines that did were inert. */
 
-/* ── notices (system / error) ─────────────────────────────────────────────── */
 .notice {
   margin: 10px 0;
   font-size: 12.5px;
@@ -795,8 +651,6 @@ details.fold .fold-body p:first-child {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   background: var(--surface2);
-  /* Same entrance as every other transcript row — see .tool. A notice that snaps in is the one thing in a
-     smoothly-scrolling turn that jumps, which draws the eye to the least important row on screen. */
   animation: rise 0.22s var(--ease) both;
   border: 1px solid var(--border);
 }
@@ -806,9 +660,6 @@ details.fold .fold-body p:first-child {
 .notice p:last-child {
   margin-bottom: 0;
 }
-/* The memory cap dropped rows off the head of the transcript, and one persistent row at the top says how many.
-   Dashed and centred so it reads as the BOUNDARY of the scrollback rather than as one more thing that happened
-   inside it — it is the only notice that is a property of the transcript instead of an event in it. */
 .notice.trim-notice {
   background: transparent;
   border-style: dashed;
@@ -820,9 +671,6 @@ details.fold .fold-body p:first-child {
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
-/* ── a guard block, and the one control that can open the rule ──────────────
-   Read as a refusal, so it carries the danger colour like .notice.error: the guard stopped the call, and a
-   neutral grey row would read as information rather than as something that did not happen. */
 .notice.guard-block {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 9%, transparent);
@@ -832,8 +680,6 @@ details.fold .fold-body p:first-child {
   position: relative;
   margin-top: 6px;
 }
-/* A button, because it acts rather than navigates — styled as the hyperlinked text it reads as. `currentColor`
-   so it inherits the row's danger colour instead of naming it twice. */
 .guard-disable-link {
   background: none;
   border: 0;
@@ -854,11 +700,9 @@ details.fold .fold-body p:first-child {
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  /* Opaque: it overlays the transcript, and a translucent menu over prose is unreadable at 12.5px. */
   background: var(--surface);
   box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
 }
-/* `[hidden]` alone loses to `display: flex` above — the attribute has to win, or the menu is always open. */
 .guard-disable-menu[hidden] {
   display: none;
 }
@@ -877,7 +721,6 @@ details.fold .fold-body p:first-child {
   background: var(--surface2);
 }
 
-/* ── search highlight ─────────────────────────────────────────────────────── */
 mark.cc-hit {
   background: var(--accent-soft);
   color: inherit;

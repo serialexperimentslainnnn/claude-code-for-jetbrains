@@ -5,20 +5,9 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * GitHub's half of the package, over recorded payloads. **No network, ever** — the fixtures are inline, cut
- * down to the fields the models read plus enough neighbours to prove `ignoreUnknownKeys` is doing its job.
- *
- * The URL assertions are exact strings on purpose. Every one of these endpoints fails SILENTLY when it is
- * built wrong: `state=open` misspelt returns every pull request ever opened, and a `head` filter given a bare
- * branch instead of `owner:branch` returns an empty list — which is indistinguishable, on screen, from a
- * branch that genuinely has no pull request.
- */
 class GitHubApiTest {
 
     private val repo = ForgeRepo(ForgeProvider.GITHUB, "github.com", "acme", "widget")
-
-    // ── URLs ──────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `the pulls URL filters by open state and by owner-qualified head branch`() {
@@ -52,8 +41,6 @@ class GitHubApiTest {
         assertTrue("/repos/..%2F..%2Forgs/widget/pulls" in uri) { uri }
     }
 
-    // ── Pull requests ─────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a pull request is read onto the shared model`() {
         val pulls = known(GitHubApi.parsePullRequests(TWO_PULLS))
@@ -77,14 +64,11 @@ class GitHubApiTest {
             ForgeAnswer.Silent(ForgeSilence.MALFORMED),
             GitHubApi.parsePullRequests("""{ "message": "Not Found" """),
         )
-        // A field of the wrong type is the other half: valid JSON, wrong API.
         assertEquals(
             ForgeAnswer.Silent(ForgeSilence.MALFORMED),
             GitHubApi.parsePullRequests("""[{"number": "forty-two"}]"""),
         )
     }
-
-    // ── The last run ──────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a successful run is completed and carries its finish time`() {
@@ -102,7 +86,6 @@ class GitHubApiTest {
         val run = runFrom(status = "in_progress", conclusion = null)
 
         assertEquals(ForgeRunStatus.RUNNING, run?.status)
-        // `updated_at` on a live run means "last touched". Showing it would date a run that has not finished.
         assertNull(run?.finishedAtIso)
     }
 
@@ -158,7 +141,6 @@ class GitHubApiTest {
 
     private companion object {
 
-        /** `locked` and the second entry's absent `locked` are both there to exercise `ignoreUnknownKeys`. */
         val TWO_PULLS = """
             [
               {"number": 42, "title": "Add the thing", "html_url": "https://github.com/acme/widget/pull/42",

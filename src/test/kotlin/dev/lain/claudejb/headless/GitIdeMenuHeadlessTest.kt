@@ -8,17 +8,6 @@ import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.ui.GitActionCatalog
 import dev.lain.claudejb.ui.GitIdeMenu
 
-/**
- * Headless: **every action id the Git submenu offers still resolves, and the submenu is the catalogue.**
- *
- * The first part is worth having because its failure mode is invisible. The entries are resolved by string id
- * and a miss is skipped rather than thrown — so an id JetBrains renames does not produce an error, a crash or a
- * log line. It produces a menu with one fewer item, in a submenu nobody opens on the build machine. Nothing but
- * an assertion notices.
- *
- * The ids come from [GitActionCatalog] rather than a copy: a copy that drifts still passes, which would leave
- * this checking ids the menu no longer shows while the ones it does show go unchecked.
- */
 class GitIdeMenuHeadlessTest : BasePlatformTestCase() {
 
     fun `test every id the Git submenu offers is a real action in this IDE`() {
@@ -32,8 +21,6 @@ class GitIdeMenuHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test the Git plugin is actually loaded here, or the check above proves nothing`() {
-        // Belt and braces: if Git4Idea were absent from the test IDE, every `Git.*` id above would resolve to
-        // null and the assertion would be reporting a fixture problem as a product one.
         assertTrue(
             "Git4Idea is not enabled in the test IDE — the id check is meaningless without it",
             GitAvailability.isGitPluginEnabled(),
@@ -58,7 +45,6 @@ class GitIdeMenuHeadlessTest : BasePlatformTestCase() {
     private fun ideActionIds(): List<String> = GitActionCatalog.ideActions().mapNotNull { it.ideActionId }
 
     private companion object {
-        /** How a divider reads in the comparison above; the menu itself uses a `Separator` instance. */
         const val SEPARATOR = "—"
     }
 }

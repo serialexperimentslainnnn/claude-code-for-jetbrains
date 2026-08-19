@@ -7,12 +7,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Exercises [ProtocolParser.parse] for the AskUserQuestion path: a `control_request` whose subtype is
- * `can_use_tool` and whose [tool_name] is `AskUserQuestion`. The questions arrive in the tool input and
- * are extracted by [parseAskQuestions] from the resulting [ClaudeEvent.PermissionRequest]. The label,
- * description and preview fields of every option are load-bearing for the UI's wrapped option cards.
- */
 class ProtocolParserAskUserQuestionTest {
 
     private fun parseSingle(line: String): ClaudeEvent = ProtocolParser.parse(line).single()
@@ -120,11 +114,9 @@ class ProtocolParserAskUserQuestionTest {
 
     @Test
     fun `malformed questions array degrades to empty list, not a crash`() {
-        // The questions key is present but each entry has a non-decodable shape (number instead of object).
         val line = """{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool",
             "tool_name":"AskUserQuestion","tool_use_id":"tu","input":{"questions":[1,2,3]}}}""".replace("\n", "")
         val event = parseSingle(line) as ClaudeEvent.PermissionRequest
-        // parseAskQuestions wraps decode in runCatching and returns emptyList on any failure.
         assertTrue(parseAskQuestions(event.request.input).isEmpty())
     }
 
@@ -143,7 +135,6 @@ class ProtocolParserAskUserQuestionTest {
 
     @Test
     fun `title field on the request is exposed (nullable, may be absent)`() {
-        // Some binary versions attach a title on the control_request. When absent, it decodes to null.
         val line = askLine(
             question = "?",
             header = "h",
@@ -163,8 +154,6 @@ class ProtocolParserAskUserQuestionTest {
             multiSelect = false,
         )
         val event = parseSingle(line) as ClaudeEvent.PermissionRequest
-        // The raw input must still contain the original `questions` JSON array so the broker can
-        // pass it to parseAskQuestions() — this is exactly the path PermissionBroker.handle relies on.
         val questionsNode = event.request.input["questions"]
         assertNotNull(questionsNode)
         val parsed = parseAskQuestions(event.request.input)

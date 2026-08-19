@@ -1,22 +1,7 @@
 package dev.lain.claudejb.drift
 
-/**
- * Computes protocol drift after the live tools have been brought up to date, and renders an
- * **agent-consumable** report. The model is "update to latest, then ask whether the plugin's code still
- * covers the protocol" — so both axes diff the *latest* surface against what the plugin already models
- * ([ProtocolSurface.KNOWN_SUBTYPES] / [ProtocolSurface.KNOWN_EVENT_TYPES], mirrored from
- * `protocol/ClaudeEvent.kt`), not against a previous snapshot.
- *
- *  - SDK drift: subtypes the latest `sdk.d.ts` declares that the parser doesn't type yet.
- *  - Binary drift: top-level `type`s the auto-updated binary emits that hit the parser's `else -> Other`
- *    branch, plus runtime `subtype`s not yet modeled.
- *
- * The report names the `protocol/` file each gap touches, so reconciliation is mechanical: add the
- * serializer/branch, extend the KNOWN_* set, bump the baseline version, re-run to confirm green.
- */
 object DriftDetector {
 
-    /** Diff the latest SDK declaration surface against what the plugin models. */
     fun sdkDrift(latestDts: String): SdkDrift {
         val latest = ProtocolSurface.fromDts(latestDts)
         return SdkDrift(
@@ -25,7 +10,6 @@ object DriftDetector {
         )
     }
 
-    /** Diff a live binary capture against what the plugin models. */
     fun binaryDrift(capture: String): BinaryDrift {
         val seen = ProtocolSurface.fromCapture(capture)
         return BinaryDrift(
@@ -36,9 +20,7 @@ object DriftDetector {
 }
 
 data class SdkDrift(
-    /** Latest SDK declares these `subtype`s but the parser doesn't model them — actionable. */
     val unmodeledSubtypes: Set<String>,
-    /** Parser models these but the latest SDK no longer declares them — informational (possible cleanup). */
     val staleSubtypes: Set<String>,
 ) {
     val hasDrift: Boolean get() = unmodeledSubtypes.isNotEmpty()
@@ -48,16 +30,9 @@ data class BinaryDrift(
     val unknownEventTypes: Set<String>,
     val unmodeledSubtypes: Set<String>,
 ) {
-    /** An unknown *top-level* type is hard drift (silently bucketed as `Other`); an unmodeled subtype is
-     *  soft (already absorbed, but a candidate for a typed model). */
     val hasHardDrift: Boolean get() = unknownEventTypes.isNotEmpty()
 }
 
-/**
- * Full report across both axes plus the version deltas. [actionable] is true when a *surface* gap exists
- * (an SDK/binary kind the plugin doesn't model) — a bare version bump with a fully-covered surface is NOT
- * actionable (no false alarm on a patch release; you just bump the recorded baseline).
- */
 data class DriftReport(
     val sdkBaselineVersion: String,
     val sdkLatestVersion: String,

@@ -1,19 +1,9 @@
-/*
- * app-core-theme.js — the IDE theme, reduced motion, Vibe Mode and the one-shot render diagnostics.
- *
- * One subject: what colour and how much movement the page has. Split out of app-core.js; loads right after
- * it and only extends window.CC / window.cc.
- */
 (function () {
   'use strict';
 
   var cc = window.cc || (window.cc = {});
   var CC = window.CC || (window.CC = {});
 
-  // ---------------------------------------------------------------------------
-  // applyTheme(vars): map camelCase keys → kebab CSS custom props on :root.
-  // Special mappings per §THEME; everything else → --<lowercased-kebab-key>.
-  // ---------------------------------------------------------------------------
   var THEME_MAP = {
     accentSoft: '--accent-soft',
     codeBg: '--code-bg',
@@ -33,16 +23,14 @@
     CC.__themeVars = CC.__themeVars || {};
     for (var key in vars) {
       if (!Object.prototype.hasOwnProperty.call(vars, key)) continue;
-      if (key === 'vibe' || key === 'reducedMotion') continue; // flags, not CSS vars — handled below
+      if (key === 'vibe' || key === 'reducedMotion') continue;
       var val = vars[key];
       if (val === null || val === undefined) continue;
       var prop = THEME_MAP[key] || '--' + camelToKebab(key);
-      CC.__themeVars[prop] = String(val); // remembered so Vibe Mode can restore on toggle-off
+      CC.__themeVars[prop] = String(val);
       try {
         root.style.setProperty(prop, String(val));
-      } catch (e) {
-        // Ignore an invalid property/value; theming is best-effort.
-      }
+      } catch (e) {}
     }
     if (Object.prototype.hasOwnProperty.call(vars, 'vibe')) setVibe(!!vars.vibe);
     if (Object.prototype.hasOwnProperty.call(vars, 'reducedMotion')) {
@@ -50,25 +38,13 @@
     }
   };
 
-  // Motion is reduced ONLY when the host says so. We deliberately do not consult
-  // matchMedia('(prefers-reduced-motion: reduce)') here: JCEF renders off-screen, with no GTK window and (on
-  // Wayland) no XSETTINGS bridge, so the browser has no desktop preference to report and answering from it
-  // disabled every animation for everyone. See the body.reduced-motion block in css/boot.css for the full story.
   function setReducedMotion(on) {
     var body = document.body;
     if (!body) return;
     body.classList.toggle('reduced-motion', !!on);
-    // Also readable from JS: the smooth autoscroll is imperative (element.scrollTo), so no stylesheet rule can
-    // reach it — the same blind spot that let Vibe Mode's rainbow keep spinning when every CSS animation was
-    // flattened. Anything driven by script has to consult this flag itself.
     CC.reducedMotion = !!on;
   }
 
-  // What the embedded browser ACTUALLY resolves — reported once, on demand, to the IDE log.
-  //
-  // The plugin's UI is a browser we cannot open devtools on, which makes a whole class of bug undiagnosable
-  // from the outside: a CSS rule that silently does not apply is indistinguishable from a backend that never
-  // sent the state. Everything below is read from the live document, not assumed.
   CC.diagnostics = function () {
     var probe = document.createElement('div');
     probe.className = 'tool loading';
@@ -79,12 +55,10 @@
         window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
       ),
       bodyHasReducedClass: document.body.classList.contains('reduced-motion'),
-      // Does a `.tool.loading` element actually receive the animation, and for how long?
       toolAnimationName: computed.animationName,
       toolAnimationDuration: computed.animationDuration,
       toolAnimationIterations: computed.animationIterationCount,
       toolBorderColor: computed.borderTopColor,
-      // color-mix drives every state border; if it is unsupported the rule is dropped and the card stays grey.
       supportsColorMix: !!(
         window.CSS &&
         CSS.supports &&
@@ -100,12 +74,6 @@
     return report;
   };
 
-  // ---------------------------------------------------------------------------
-  // 🌈 Vibe Mode: while on, a rAF loop cycles the theme vars through the spectrum so
-  // EVERYTHING rainbows — transcript text, the prompt-box text, borders, accent, icons
-  // (icons inherit currentColor/--accent). Hue animates; saturation/lightness are held in
-  // a legible band so text stays readable. On toggle-off we restore the IDE theme verbatim.
-  // ---------------------------------------------------------------------------
   var vibeOn = false;
   var vibeTimer = 0;
   var vibeHue = 0;
@@ -117,17 +85,14 @@
     return 'hsla(' + Math.round(((h % 360) + 360) % 360) + ',' + s + '%,' + l + '%,' + a + ')';
   }
 
-  // One step of the rainbow. Driven by setInterval (NOT requestAnimationFrame): under JCEF's
-  // offscreen rendering, rAF stalls when the browser thinks nothing is painting, which froze the
-  // colours on a single hue. A timer keeps cycling regardless.
   function vibeStep() {
     if (!vibeOn) return;
-    vibeHue = (vibeHue + 6) % 360; // faster rainbow — ~1.8s per full cycle (was ~5.4s); see also the timer below
+    vibeHue = (vibeHue + 6) % 360;
     var s = document.documentElement.style;
     var h = vibeHue;
     s.setProperty('--accent', hsl(h, 90, 60));
     s.setProperty('--accent-soft', hsla(h, 90, 60, 0.2));
-    s.setProperty('--text', hsl(h + 40, 85, 72)); // hue cycles; S/L held legible on dark bg
+    s.setProperty('--text', hsl(h + 40, 85, 72));
     s.setProperty('--dim', hsl(h + 90, 60, 66));
     s.setProperty('--border', hsla(h + 140, 75, 58, 0.6));
     s.setProperty('--success', hsl(h + 200, 75, 62));
@@ -148,28 +113,21 @@
         vibeTimer = 0;
       }
       if (body) body.classList.remove('vibe');
-      // restore the IDE theme vars we overwrote
       var root = document.documentElement;
       var v = CC.__themeVars || {};
       for (var p in v) {
         if (Object.prototype.hasOwnProperty.call(v, p)) {
           try {
             root.style.setProperty(p, v[p]);
-          } catch (e) {
-            // A saved var the browser now rejects: skip it and restore the rest. Losing one colour is
-            // strictly better than aborting the loop and leaving the theme half-reverted.
-          }
+          } catch (e) {}
         }
       }
     }
   }
-  // The one reader of the flag. It was also mirrored onto CC.vibeOn, which nothing ever read — two spellings
-  // of one piece of state is how they end up disagreeing.
   CC.isVibe = function () {
     return vibeOn;
   };
 
-  // Nyan Cat (ported from /icons/claude-vibe.svg) — the Vibe Mode glyph for the toggle and avatar.
   CC.nyanSvg = function () {
     return (
       '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
@@ -192,7 +150,6 @@
     );
   };
 
-  // cc.theme delegates to CC.applyTheme. Null-safe: callable immediately.
   cc.theme = function (vars) {
     CC.applyTheme(vars);
   };

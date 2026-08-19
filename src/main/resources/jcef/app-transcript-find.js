@@ -1,9 +1,3 @@
-/* app-transcript-find.js — in-transcript search and the find bar.
- *
- * One subject: highlighting matches across the rendered rows, walking between them, and the Ctrl/Cmd+F
- * overlay that drives it (plus the Ctrl/Cmd+O reasoning toggle, which shares the same capture-phase key
- * handler). Extends the shared `CC.transcript` namespace created by app-transcript.js.
- */
 (function () {
   'use strict';
 
@@ -16,14 +10,10 @@
   var conversationEl = TX.conversationEl;
   var rows = TX.rows;
 
-  // ---- search -------------------------------------------------------------
   var currentQuery = '';
   var searchHits = [];
   var activeIndex = 0;
 
-  // Move the active highlight to hit [i] (wrapping), scroll it into view, and refresh the counter. The find bar
-  // previously marked the first hit but never scrolled to it and offered no next/prev — you could see "10 matches"
-  // and never reach any of them.
   function setActiveHit(i, scroll) {
     if (!searchHits.length) {
       activeIndex = 0;
@@ -31,19 +21,14 @@
       return;
     }
     var n = searchHits.length;
-    activeIndex = ((i % n) + n) % n; // wrap both directions
+    activeIndex = ((i % n) + n) % n;
     for (var k = 0; k < n; k++) searchHits[k].classList.remove('active');
     var hit = searchHits[activeIndex];
     hit.classList.add('active');
-    // Only scroll on an explicit navigation (fresh query / next / prev). The silent re-highlight that runs on
-    // every streaming batch must NOT scroll, or it would yank the viewport to the active match on every frame
-    // and fight auto-follow.
     if (scroll) {
       try {
         hit.scrollIntoView({ block: 'center', inline: 'nearest' });
-      } catch (e) {
-        /* older engines */
-      }
+      } catch (e) {}
     }
     updateFindCount();
   }
@@ -66,7 +51,6 @@
       if (!parent) {
         continue;
       }
-      // replace mark with its text
       var txt = document.createTextNode(m.textContent || '');
       parent.replaceChild(txt, m);
       parent.normalize();
@@ -80,7 +64,6 @@
     var textNodes = [];
     var n;
     while ((n = walker.nextNode())) {
-      // skip text already inside code-head copy controls etc. — fine to include
       if (n.nodeValue && n.nodeValue.length) {
         textNodes.push(n);
       }
@@ -135,8 +118,6 @@
       total += highlightInNode(rec.bodyNode, lower);
     });
     if (searchHits.length) {
-      // Fresh (non-silent) query → jump+scroll to the first hit. Silent re-highlight (streaming batch) → only
-      // restore the active class at the current position, NEVER scroll (that yanked the viewport every frame).
       if (silent) {
         setActiveHit(Math.min(activeIndex, searchHits.length - 1), false);
       } else {
@@ -149,23 +130,17 @@
   }
   TX.runSearch = runSearch;
 
-  /** Re-apply the active highlight to the bodies a batch just rebuilt. No-op when nothing is being searched. */
   TX.refreshSearch = function () {
     if (currentQuery) {
       runSearch(currentQuery, true);
     }
   };
 
-  /** cc.clear() emptied the transcript: there is nothing left to have found. */
   TX.resetSearch = function () {
     currentQuery = '';
     searchHits = [];
   };
 
-  // ---- find bar overlay (Ctrl/Cmd+F) -------------------------------------
-  // Lightweight, null-safe in-transcript search UI. Typing drives the existing
-  // highlight path (CC.emit('search', q) when available, else runSearch); the
-  // match count is shown locally. Esc / ✕ closes and clears highlights.
   var findBar = null;
   var findInput = null;
   var findCount = null;
@@ -175,9 +150,7 @@
       try {
         CC.emit('search', q);
         return;
-      } catch (e) {
-        /* fall through */
-      }
+      } catch (e) {}
     }
     runSearch(q, false);
   }
@@ -234,21 +207,12 @@
         e.stopPropagation();
         closeFindBar();
       } else if (e.key === 'Enter' || e.keyCode === 13) {
-        // Enter → next match, Shift+Enter → previous (standard find-bar navigation).
         e.preventDefault();
         if (e.shiftKey) prevHit();
         else nextHit();
       }
     });
 
-    // The WORK AREA, not the body. Mounted on the body the bar is positioned against the viewport, and in a
-    // narrow tool window a bar that spans it covers the tab row outright — so tabbing to a chat focused
-    // something nobody could see (WCAG 2.2 SC 2.4.11, Focus Not Obscured). Inside `#work` it cannot reach the
-    // tabs at all, because `#work` does not contain them; that is a guarantee of the structure rather than a
-    // z-index kept out of their way by hand. It is also what its `top` is now measured from — the rule lives
-    // in `css/dashboard.css` (`.find-bar`), and inside `#work` that offset starts below the tab row instead of
-    // at the edge of the window. The body stays as the way out if the work area is ever absent — a find bar
-    // somewhere is better than none.
     var host = document.getElementById('work') || document.body || conversationEl();
     if (host) {
       host.appendChild(findBar);
@@ -266,9 +230,7 @@
       try {
         findInput.focus();
         findInput.select();
-      } catch (e) {
-        /* ignore */
-      }
+      } catch (e) {}
       if (findInput.value) {
         emitSearch(findInput.value);
         updateFindCount();
@@ -300,13 +262,11 @@
         cc.toggleReasoning();
       } else if ((key === 'Escape' || e.keyCode === 27) && findBar && !findBar.hidden) {
         e.preventDefault();
-        // Stop the event here so closing the find bar doesn't ALSO reach the composer's Escape handler, which
-        // would interrupt the running turn (capture phase runs before the composer's bubble handler).
         e.stopPropagation();
         if (e.stopImmediatePropagation) e.stopImmediatePropagation();
         closeFindBar();
       }
     },
     true
-  ); // capture phase — beat in-view handlers; IDE-level capture is handled host-side if needed
+  );
 })();

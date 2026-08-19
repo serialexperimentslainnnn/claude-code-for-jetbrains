@@ -6,12 +6,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * E1 regression suite: pins the shape of every system subtype and top-level event the binary emits that the
- * plugin now parses natively (previously dropped as [ClaudeEvent.Other]). Field names mirror sdk.d.ts; a
- * failure here means the binary changed a contract we reconstruct UI state from. The parser must never
- * throw, so a few cases also assert malformed payloads degrade to [ClaudeEvent.Other] instead.
- */
 class ProtocolEventsTest {
 
     private inline fun <reified T : ClaudeEvent> parseOne(line: String): T {
@@ -19,8 +13,6 @@ class ProtocolEventsTest {
         assertEquals(1, events.size, "expected exactly one event from: $line")
         return assertInstanceOf(T::class.java, events.first())
     }
-
-    // --- subagent task lifecycle ---
 
     @Test
     fun `task_started decodes id description and subagent type`() {
@@ -75,8 +67,6 @@ class ProtocolEventsTest {
         assertEquals(10L, e.info.usage?.totalTokens)
     }
 
-    // --- tool progress / summary ---
-
     @Test
     fun `tool_progress decodes elapsed time and parent id`() {
         val line = """{"type":"tool_progress","tool_use_id":"tu1","tool_name":"Bash",
@@ -97,8 +87,6 @@ class ProtocolEventsTest {
         assertEquals("read 3 files", e.info.summary)
         assertEquals(listOf("a", "b", "c"), e.info.precedingToolUseIds)
     }
-
-    // --- thinking / notification / auth / retry / state ---
 
     @Test
     fun `thinking_tokens decodes estimate and delta`() {
@@ -170,8 +158,6 @@ class ProtocolEventsTest {
         assertNull(e.info.errorStatus)
     }
 
-    // --- commands / memory / files / suggestion / plugin ---
-
     @Test
     fun `commands_changed decodes the replacement command list`() {
         val line = """{"type":"system","subtype":"commands_changed","commands":[
@@ -229,8 +215,6 @@ class ProtocolEventsTest {
         assertEquals("404", e.info.error)
     }
 
-    // --- hooks ---
-
     @Test
     fun `hook_started decodes ids and event`() {
         val e = parseOne<ClaudeEvent.HookStarted>(
@@ -263,8 +247,6 @@ class ProtocolEventsTest {
         assertEquals("done", e.info.output)
     }
 
-    // --- mirror_error ---
-
     @Test
     fun `mirror_error decodes error and key`() {
         val line = """{"type":"system","subtype":"mirror_error","error":"append failed",
@@ -276,8 +258,6 @@ class ProtocolEventsTest {
         assertEquals("s1", e.info.key.sessionId)
         assertEquals("sub", e.info.key.subpath)
     }
-
-    // --- model_refusal_fallback ---
 
     @Test
     fun `model_refusal_fallback decodes models category and retracted uuids`() {
@@ -304,11 +284,8 @@ class ProtocolEventsTest {
         assertTrue(e.info.retractedMessageUuids.isEmpty())
     }
 
-    // --- robustness: never throw on a hostile shape ---
-
     @Test
     fun `system event with hostile field shape degrades to Other`() {
-        // `usage` is typed as an object; arriving as a scalar must not crash the reader.
         val line = """{"type":"system","subtype":"task_progress","task_id":"t1","description":"x","usage":"nope"}"""
         val e = parseOne<ClaudeEvent.Other>(line)
         assertEquals("system", e.type)

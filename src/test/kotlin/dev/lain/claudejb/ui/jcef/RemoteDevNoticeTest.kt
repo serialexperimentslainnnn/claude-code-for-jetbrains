@@ -8,13 +8,6 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 
-/**
- * Pure-JVM contract of the page a client sees when the forward to the IDE backend is not up. It is the only
- * screen a blocked user gets, so what is pinned here is that it stays readable, script-free and hash-pinned:
- * the port and the command are present, nothing executes, nothing is fetched, and the sha256 in the CSP is the
- * digest of the `<style>` block as EMITTED — derived from the document, never recomputed from the source, so a
- * hash computed the same wrong way on both sides cannot pass.
- */
 class RemoteDevNoticeTest {
 
     @Test
@@ -74,10 +67,6 @@ class RemoteDevNoticeTest {
         assertTrue(html.contains("style-src 'sha256-$digest'"), "the CSP pins the emitted block")
     }
 
-    /**
-     * The port is the ONLY variable in the page. A blocked user pastes this document into a public ticket, so
-     * anything else in it — a path, a home directory, a session id, an address — is a leak by construction.
-     */
     @Test
     fun `page carries nothing but the port`() {
         for (port in listOf(6942, 1024)) {

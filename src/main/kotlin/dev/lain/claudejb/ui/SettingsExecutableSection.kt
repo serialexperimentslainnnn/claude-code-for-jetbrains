@@ -6,10 +6,6 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import dev.lain.claudejb.settings.ClaudeSettings
 
-/**
- * Where the binaries live and what environment the session starts with — plus the note that has to sit next
- * to the source-script field, because that script is EXECUTED at session start.
- */
 internal class SettingsExecutableSection : SettingsSection {
 
     private val claudePathField = JBTextField().apply {
@@ -69,7 +65,6 @@ internal class SettingsExecutableSection : SettingsSection {
     )
 
     private companion object {
-        /** Visible rows of the env-var text area, i.e. how tall it is before scrolling. */
         const val ENV_VARS_ROWS = 4
     }
 }

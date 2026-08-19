@@ -5,19 +5,9 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * GitLab's half of the package, over recorded payloads. **No network, ever.**
- *
- * Three of these pin things that are wrong-but-plausible rather than wrong-and-obvious, which is why they are
- * asserted as literals: `state=opened` (GitLab does not accept `open`, and an unaccepted value does not
- * filter), the project addressed by its **URL-encoded** full path (a nested group otherwise turns into extra
- * path segments and a 404), and `iid` rather than `id` as the number a human sees.
- */
 class GitLabApiTest {
 
     private val repo = ForgeRepo(ForgeProvider.GITLAB, "gitlab.com", "platform/backend", "svc")
-
-    // ── URLs ──────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a nested group's project path is one percent-encoded segment`() {
@@ -45,15 +35,12 @@ class GitLabApiTest {
         )
     }
 
-    // ── Merge requests ────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a merge request is read onto the shared model, iid and all`() {
         val mrs = known(GitLabApi.parsePullRequests(TWO_MERGE_REQUESTS))
 
         assertEquals(7L, mrs[0].number)
         assertEquals("https://gitlab.com/platform/backend/svc/-/merge_requests/7", mrs[0].url)
-        // Normalised to GitHub's spelling so one card draws both providers.
         assertEquals("open", mrs[0].state)
         assertEquals("ada", mrs[0].author)
         assertTrue(mrs[1].draft)
@@ -76,11 +63,8 @@ class GitLabApiTest {
         )
     }
 
-    // ── The last pipeline ─────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a successful pipeline is completed and dated from updated_at`() {
-        // The LIST endpoint carries no `finished_at` — only the single-pipeline endpoints do.
         val run = pipelineFrom("success")
 
         assertEquals(ForgeRunStatus.COMPLETED, run?.status)
@@ -104,7 +88,6 @@ class GitLabApiTest {
         assertEquals(ForgeRunStatus.FAILED, pipelineFrom("failed")?.status)
         assertEquals(ForgeRunStatus.STOPPED, pipelineFrom("canceled")?.status)
         assertEquals(ForgeRunStatus.STOPPED, pipelineFrom("canceling")?.status)
-        // Nothing ran, so nothing passed.
         assertEquals(ForgeRunStatus.STOPPED, pipelineFrom("skipped")?.status)
     }
 
@@ -131,7 +114,6 @@ class GitLabApiTest {
 
     private companion object {
 
-        /** `work_in_progress` is present and deliberately unread — `draft` is the field that is not deprecated. */
         val TWO_MERGE_REQUESTS = """
             [
               {"id": 90210, "iid": 7, "project_id": 3, "title": "Add the thing",

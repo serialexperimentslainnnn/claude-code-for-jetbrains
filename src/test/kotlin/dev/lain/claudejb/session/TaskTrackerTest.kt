@@ -11,11 +11,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the subagent (Task tool) lifecycle merge semantics extracted from `ClaudeSession.onEvent`:
- * started adds (honoring skip_transcript), progress replaces, updated merges only `description`
- * (E10 will widen the DTO), notification drops and reports whether to notify the transcript.
- */
 class TaskTrackerTest {
 
     @Test
@@ -80,7 +75,7 @@ class TaskTrackerTest {
         val task = t.tasks["t1"]!!
         assertEquals("failed", task.status)
         assertEquals("boom", task.error)
-        assertEquals("do it", task.description) // untouched fields preserved
+        assertEquals("do it", task.description)
     }
 
     @Test

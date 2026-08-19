@@ -4,15 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 
-/**
- * Pins [LoginDetection]: which kind of authentication failure the wording alone describes
- * ([LoginDetection.classify]), and what the GUI must actually do about it ([LoginDetection.resolve]).
- *
- * [LoginDetection.resolve] is what decides the sign-in card, and it is the only one that may: an access-token
- * expiry is renewed without the user **while a refresh token is left to spend**, and with none it is the end
- * of the identity, wearing the same words. So every "is this an authentication problem at all" case is
- * asserted against one of those two, never against a convenience answer nothing calls.
- */
 class LoginDetectionTest {
 
     @Test
@@ -58,7 +49,6 @@ class LoginDetectionTest {
 
     @Test
     fun `exclusion wins even if a login hint is also present`() {
-        // A message that mentions both quota and login should not nag about login — it's a billing issue.
         assertEquals(AuthFailure.NONE, LoginDetection.classify("Credit balance too low; you are still logged in"))
     }
 
@@ -74,7 +64,6 @@ class LoginDetectionTest {
 
     @Test
     fun `an expired refresh token is a missing identity`() {
-        // Nothing can mint a token from a dead refresh token: this one really is a sign-in.
         assertEquals(
             AuthFailure.NO_IDENTITY,
             LoginDetection.classify("OAuth refresh token has expired. Please log in again."),
@@ -94,7 +83,6 @@ class LoginDetectionTest {
 
     @Test
     fun `expiry wording outside an auth failure is not an auth failure`() {
-        // "expired" is not on its own evidence of anything: a plan, a trial or a link can expire.
         assertEquals(AuthFailure.NONE, LoginDetection.classify("Your trial has expired"))
         assertEquals(AuthFailure.NONE, LoginDetection.classify("The download token expired"))
     }
@@ -120,30 +108,18 @@ class LoginDetectionTest {
         }
     }
 
-    /** The reported 401, on a session whose vaulted refresh token is alive: renewed, so no card. */
     @Test
     fun `a renewable access-token expiry stays an expiry`() {
         assertEquals(AuthFailure.EXPIRED, LoginDetection.resolve(EXPIRY_401) { true })
         assertEquals(AuthFailure.EXPIRED, LoginDetection.resolve("OAuth token has expired") { true })
     }
 
-    /**
-     * **The regression.** This exact text raised the sign-in card before an expiry was a kind of its own, and
-     * with nothing left to renew it must raise it again: no refresh token means nothing is going to mint an
-     * access token, so the session is over until the user signs in. Getting this wrong is silent — the turn
-     * fails, a row promises an automatic renewal, and no renewal is possible.
-     */
     @Test
     fun `an expiry with nothing to renew is a missing identity`() {
         assertEquals(AuthFailure.NO_IDENTITY, LoginDetection.resolve(EXPIRY_401) { false })
         assertEquals(AuthFailure.NO_IDENTITY, LoginDetection.resolve("OAuth token has expired") { false })
     }
 
-    /**
-     * The safe is asked only when the answer can change the verdict. It is a round trip to the OS credential
-     * store, on the EDT, for every failed turn — and an ordinary tool error is not an authentication failure
-     * whatever the vault holds.
-     */
     @Test
     fun `renewability is not asked unless the text is an access-token expiry`() {
         var asked = 0
@@ -163,7 +139,6 @@ class LoginDetectionTest {
         assertEquals(0, asked, "the credential safe must not be consulted for these")
     }
 
-    /** Every other verdict is the text's alone: renewability cannot turn one into an expiry, or out of one. */
     @Test
     fun `renewability changes nothing outside an access-token expiry`() {
         listOf(true, false).forEach { renewable ->
@@ -171,8 +146,6 @@ class LoginDetectionTest {
             assertEquals(AuthFailure.NONE, LoginDetection.resolve("Weekly quota exceeded") { renewable })
             assertEquals(AuthFailure.NO_IDENTITY, LoginDetection.resolve("401 Unauthorized") { renewable })
             assertEquals(AuthFailure.NO_IDENTITY, LoginDetection.resolve("Invalid API key provided") { renewable })
-            // A dead refresh token is the end of the identity by the wording itself: whatever the vault says
-            // it can renew, the thing renewal spends is gone.
             assertEquals(
                 AuthFailure.NO_IDENTITY,
                 LoginDetection.resolve("OAuth refresh token has expired. Please log in again.") { renewable },
@@ -180,12 +153,6 @@ class LoginDetectionTest {
         }
     }
 
-    /**
-     * The invariant the split rests on: a text is an authentication failure exactly when it was one before,
-     * whatever kind it is now sorted into and whichever way renewability answers. [LoginDetection.resolve] may
-     * move a failure between kinds — that is its whole job — and may never move one out of the set, because
-     * that is a session that never works again and says nothing about why.
-     */
     @Test
     fun `no auth failure is ever swallowed, and nothing else is ever raised as one`() {
         val authFailures = listOf(
@@ -230,7 +197,6 @@ class LoginDetectionTest {
     }
 
     private companion object {
-        /** The 401 a live session gets when its access token dies mid-turn, as the binary words it. */
         const val EXPIRY_401 =
             "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue."
     }

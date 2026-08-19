@@ -1,8 +1,4 @@
-/* ════════════════════════════════════════════════════════════════════════════
-   COMPOSER
-   ════════════════════════════════════════════════════════════════════════════ */
 .composer-card {
-  /* The containing block for `#palette`, which is anchored to this card's top edge and hangs upwards. */
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -23,7 +19,6 @@
     0 0 0 3px var(--accent-soft);
 }
 
-/* input row: textarea only — controls live in the flat bar below */
 .composer-input-row {
   width: 100%;
 }
@@ -41,15 +36,12 @@
   padding: 4px 4px 0;
   margin: 0;
   max-height: 40vh;
-  min-height: 3em; /* ~2 lines tall by default */
+  min-height: 3em;
 }
 .composer-input::placeholder {
   color: var(--dim);
 }
 
-/* neon-grey send/stop button — NO border, NO background: just the icon, glowing.
-   The grey is the theme's own text colour, not a literal: a hardcoded #cfd6e0 is a light-grey icon on a light
-   IDE theme's surface, i.e. invisible exactly where contrast is hardest to spare. */
 .send-btn {
   flex: 0 0 auto;
   width: 32px;
@@ -92,7 +84,6 @@
   color: var(--danger);
   filter: drop-shadow(0 0 7px color-mix(in srgb, var(--danger) 70%, transparent));
 }
-/* Interrupt in flight: dimmed + non-interactive + a gentle pulse until the host clears it. */
 .send-btn.interrupting {
   color: var(--danger);
   opacity: 0.55;
@@ -110,21 +101,12 @@
   }
 }
 
-/* ── controls bar (flat single row, divided by hairlines — no bubbles) ─────── */
 .composer-bar,
 .bar-left {
   display: flex;
   align-items: center;
   min-width: 0;
 }
-/* ONE LINE THAT CLIPS, and both declarations are load-bearing rather than cosmetic.
-   The tail of this bar is collected behind a ⋮ (app-composer-base.js), and what decides that a control does
-   not fit is `scrollWidth > clientWidth` — the browser's own answer, which is only ever true of a row that
-   neither wraps nor grows. Wrapping is precisely the behaviour the ⋮ REPLACED: the pills used to drop to a
-   second line, which spends the dock's height unasked and leaves nothing overflowing to detect, so the row
-   could never say it was full. The cost is that a focus ring on the control at either end is clipped on its
-   outer side; three sides of it still show, and the alternative is those controls sitting outside the tool
-   window where nothing can reach them at all. */
 .composer-bar {
   flex-wrap: nowrap;
   overflow: hidden;
@@ -132,10 +114,6 @@
   margin-top: 4px;
   padding-top: 4px;
 }
-/* Neither grows NOR shrinks. A group that shrinks lets its own children spill over the group beside it, so
-   their right edges stop being a sequence and the arithmetic above is measuring a layout that is not on
-   screen. What holds the right-hand group at the end instead is `.bar-right`'s auto margin, which collapses
-   to nothing exactly when the row is full — which is when the measurement has to be exact. */
 .bar-left {
   flex: 0 0 auto;
 }
@@ -148,22 +126,6 @@
   flex: 0 0 auto;
 }
 
-/* ── the controls bar, INSIDE the prompt card ────────────────────────────────────
-   Where you are (the view pills) on the left, what you can do to this chat (the action icons) on the right —
-   see app-composer-actions.js for why neither is in the tool window's title bar any more.
-
-   **Inside the card and at the TOP of it**, above the box you type in. Two things follow from that and both
-   were wrong before: it is part of the chat rather than a strip floating over it — which is how the title
-   bar read, a toolbar the chat happens to sit under — and it does not stack a second row of controls under
-   the text, where the model/mode bar already is. Its divider therefore hangs BELOW it, the mirror of that
-   bar's, so the card still reads as one object with the text in the middle.
-
-   ONE row, not two. Where you are and what you can do are different kinds of thing and stay two groups, but
-   two stacked strips of controls around a text box is a wall — the ends of the line separate them instead.
-
-   AND IT CLIPS, for the same reason as `.composer-bar` below and by the same mechanism: this row is collected
-   into a ⋮ too, and a row that wraps never overflows — it just grows downwards, so the tail the button exists
-   to reach becomes a second strip of controls instead of one press. */
 .composer-controls {
   display: flex;
   align-items: center;
@@ -177,17 +139,12 @@
 .composer-controls:empty {
   display: none;
 }
-/* Content-sized, never elastic — see `.bar-left`: a group that shrinks lets its children spill over its
-   neighbour, and the overflow arithmetic reads positions that no longer form a sequence. */
 .composer-views {
   display: flex;
   align-items: center;
   min-width: 0;
   flex: 0 0 auto;
 }
-/* Held at the far end by its own auto margin, now that `#views` no longer grows to push it there. The margin
-   is what collapses to zero the moment the row is full, which is exactly when the measurement has to be
-   exact — a group that kept a width of its own would be a permanent, invisible cut out of the budget. */
 .composer-actions {
   display: flex;
   align-items: center;
@@ -196,17 +153,12 @@
   margin-left: auto;
   padding-left: 8px;
 }
-/* The dashboard's own stack, and it does not shrink either: the ⋮ collects the five view buttons INSIDE it
-   one at a time (`collect` flattens this wrapper), so their right edges have to be a sequence like everything
-   else on the row. */
 .composer-views .dash-toggles {
   display: flex;
   align-items: center;
   min-width: 0;
   flex: 0 0 auto;
 }
-/* The same flat, divided shape as the model/mode pills below — one look for "a control on the composer",
-   rather than a second, heavier pill language two rows apart from the first. */
 .composer-views .dash-toggle + .dash-toggle {
   border-left: 1px solid var(--border);
 }
@@ -234,31 +186,14 @@
   background: var(--surface2);
   color: var(--text);
 }
-/* The view you are in.
-   WCAG 1.4.1 forbids colour as the ONLY carrier of information, and "which of these five am I looking at" is
-   information — so the state is carried by the underline and the weight as well as the hue. It used to carry
-   a leading `●` too; three signals for one bit was an ornament, and two of them are non-colour, which is what
-   the criterion asks for. `aria-current` carries it programmatically (see `viewButton`). */
 .composer-views .dash-toggle.active {
   color: var(--neon-orange);
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--neon-orange);
 }
-/* Chat carries NO glyph of its own. It used to wear a `←` to read as "leave" rather than as a fifth view,
-   which earned its place when the switcher was a segmented control floating over the transcript. In the
-   card's own bar the five read as one row of destinations and the arrow was the only ornament in it — so
-   Chat is lit by the same bullet as the rest when it is where you are. */
 .composer-views .dash-toggle.dash-exit {
   color: var(--text);
 }
-/* The ⚙ at the HEAD of the row (app-composer-settings.js) — before Chat, deliberately not beside the clip:
-   the clip acts on the message being written, this acts on the chat, which is what this row is.
-   It borrows `.bar-icon` for the glyph and overrides the two things that would make it read as belonging to
-   the action group at the other end: the 8px radius (this row is flat and full height) and the divider —
-   `.dash-toggle + .dash-toggle` above cannot reach across the `.dash-toggles` wrapper, so the hairline
-   between the gear and Chat has to be declared here.
-   The open state is drawn from `aria-expanded`, not from a class of its own: the fact is already
-   programmatic, and a second copy of it in a class list is a second thing that can fall out of step. */
 .composer-views .settings-btn {
   height: 26px;
   padding: 0 9px;
@@ -270,8 +205,6 @@
   color: var(--text);
 }
 
-/* Same 26px as the controls row above it, and that is the point: the two bars frame the text box, so a
-   six-pixel difference in height between them reads as one of them being wrong rather than as two bars. */
 .composer-bar .pill,
 .composer-bar .attach-btn {
   display: inline-flex;
@@ -340,7 +273,6 @@
   color: var(--text);
 }
 
-/* icon-only buttons on the right of the bar (vibe, history) */
 .bar-icon {
   flex: 0 0 auto;
   background: transparent;
@@ -359,14 +291,6 @@
   background: var(--surface2);
   color: var(--text);
 }
-/* NB no `:disabled` state on this class, and its absence is a decision rather than an omission: nothing in
-   the row can be disabled. All five controls act on the chat the page already belongs to, so each is
-   available whenever there is a chat at all. The class DID carry one, for a *Close diffs* button that greyed
-   itself out whenever no diff was open — which was most of the time — and that button is gone: its bin now
-   closes the chat, which is what a bin beside *New chat* reads as. Anything added here that can refuse must
-   bring its own disabled state back AND say why it refused, because a grey icon among four live ones, with
-   no explanation and no click event (Chromium delivers none to a disabled button), is exactly how that
-   control came to be reported three times as broken. */
 .bar-icon.active {
   color: var(--accent);
 }
@@ -379,27 +303,11 @@
   height: 16px;
   display: block;
 }
-/* The ⋮ that holds whatever its row could not fit (app-composer-base.js). It IS a `.bar-icon` and takes
-   everything from it — including the `flex: 0 0 auto` above, which is not restated here and matters more for
-   this button than for its neighbours: its width is subtracted from the budget before anything is offered
-   space, so a ⋮ that narrowed after being measured would leave one item too many on the row and hang itself
-   off the edge it was added to fix.
-   What it adds is the one state it has, and that state is drawn FROM `aria-expanded` rather than from a class
-   of its own — the same decision as `.composer-views .settings-btn` two blocks up: the fact is already
-   programmatic, and a second copy of it in a class list is a second thing that can fall out of step. */
 .overflow-btn[aria-expanded='true'] {
   background: var(--surface2);
   color: var(--text);
 }
 
-/* ── popup menu (pills) ───────────────────────────────────────────────────── */
-/* ── the floating menus, at the IDE's own metrics ────────────────────────────────
-   These are popups inside an IDE, not on a web page, and until now they were built to web proportions:
-   pill-shaped rows with 7px radii, generous padding, an inset search box with its own border. Next to a
-   platform popup — flat rows the full width of the panel, a 1px separator, a tight line height — they read
-   as something from another application, which in a tool window is precisely what they are not.
-   Rows are FULL-BLEED (the padding lives on the row, not on the panel) so the hover highlight runs edge to
-   edge the way IntelliJ's does; the panel keeps a 4px band top and bottom and nothing on the sides. */
 .menu {
   position: absolute;
   z-index: 50;
@@ -425,8 +333,6 @@
     transform: none;
   }
 }
-/* One row: 22px of content plus 2px either side, which is the platform's list metric. No radius — a rounded
-   highlight inside a square panel is the web idiom, and it is what made these read as not-the-IDE. */
 .menu-item {
   display: flex;
   align-items: center;
@@ -439,7 +345,6 @@
   color: var(--text);
   transition: background-color 0.12s;
 }
-/* Full-bleed, and in the selection colour rather than a panel tint: this is a list you are picking from. */
 .menu-item:hover {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
@@ -452,11 +357,6 @@
   color: var(--accent);
   font-size: 11px;
 }
-/* A collapsible group inside a popup, expanded in place. Two menus use it — "Other models" in the pill menu,
-   and every group of the ⚙ settings menu — so it lives here rather than with either of them.
-   The header is a .menu-item so it inherits hover/focus/padding — it must NOT get the ✓, which is why
-   .menu-group-header is never given the `selected` class. The caret's glyph is the non-colour half of the
-   folded state (WCAG 1.4.1); `aria-expanded` on the header is the programmatic half. */
 .menu-group {
   border-top: 1px solid var(--border);
   margin-top: 4px;
@@ -482,54 +382,26 @@
 .menu-group.open .menu-group-items {
   display: block;
 }
-/* Indented so a collapsed/expanded group reads as a level, not as more of the flat list. */
 .menu-group-items .menu-item {
   padding-left: 20px;
 }
 
-/* ── the ⚙ settings menu ──────────────────────────────────────────────────────
-   The same panel and the same rows as every other popup on this bar (`.menu`, `.menu-item`) — flat, dense,
-   full-bleed, the platform's list metric. What it adds is only what a panel of ten SECTIONS needs and a menu
-   of one choice does not: room for a long row, a section entry that reads as one, a mark that tells a choice
-   from a switch, and a note for the sections that only reach the next chat.
-
-   IT DRILLS DOWN INSTEAD OF FOLDING, so `.menu-group`'s accordion rules above are no longer part of this
-   menu — they still belong to the pill menus, which do fold. One section's rows are the whole panel while you
-   are in it, which is what keeps the 60vh cap honest: the panel is never ten headings plus one opened group
-   plus everything after it. */
-/* Wider than a pill menu, because a row here can be a tool name rather than a word and `.menu`'s 320px cap is
-   measured for a list of models. */
 .settings-menu {
   min-width: 240px;
   max-width: 340px;
 }
-/* A section entry leads somewhere, and reads as it: the weight is what makes it findable while scanning the
-   root panel, the chevron is what says it opens. Both are on the ENTRY, never on a heading above rows — there
-   are no headings here any more, because a section's rows only exist while that section is the panel. */
 .settings-menu .settings-group-entry {
   font-weight: 600;
 }
-/* The open section's rows, and the rule exists because of what happened without it: the panel first borrowed
-   `.menu-group-items`, the pill menus' accordion body, which is `display: none` unless a `.menu-group.open`
-   ancestor reveals it. This panel has no such ancestor, so every section opened to a header with nothing
-   under it — the rows present, correct and invisible. A `display` of its own is therefore not decoration
-   here, it is the whole rule; the rows are laid out flush, exactly as on the root panel, because this panel
-   IS that section rather than a region nested inside a list. */
 .settings-section-items {
   display: block;
 }
-/* A tool name is not a word: `allow:mcp__jetbrains__get_file_problems` is a legitimate row label. Capped and
-   ellipsised on the LABEL rather than on the panel, because `positionMenu` writes an inline `max-width` on
-   the popup itself and an inline style wins — a cap declared there would simply not be the one in force.
-   The full text is on the row's `title`. */
 .settings-menu .menu-item-label {
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* "Applies to new chats" on a group whose flags are read at launch. Text, and part of the heading's accessible
-   name — a note carried only by colour, or only by a `title`, reaches half the readers. */
 .settings-defer {
   flex: 0 0 auto;
   margin-left: auto;
@@ -541,17 +413,9 @@
   padding: 0 4px;
   white-space: nowrap;
 }
-/* With the note present it is the note that takes the free space, so the caret must stop claiming it too —
-   two `auto` margins split what is left and park the note in the middle of the row. */
 .settings-defer + .menu-group-caret {
   margin-left: 0;
 }
-/* A row here is a `<button>` carrying `role="menuitemcheckbox"`, `role="menuitemradio"` or — on a group
-   heading — `role="menuitem"`, because every one of those states has to be a programmatic state and not a
-   colour. A button brings its own width, alignment, font family, border and
-   background, and those four are RESET rather than restated: everything visual still comes from
-   `.menu-item`. In particular `color` and `font-size` are deliberately absent — declaring them here would
-   out-order `.menu-item` and, worse, flatten the `.menu-item.selected` accent that marks a switch as on. */
 .settings-item {
   width: 100%;
   box-sizing: border-box;
@@ -560,21 +424,14 @@
   font-family: inherit;
   text-align: left;
 }
-/* A CHOICE, not a switch. `.menu-item.selected::after` gives every checked row a ✓; a radio row gets a dot
-   instead, so the two kinds are told apart by shape and not by which one happens to be alone in its group —
-   the same non-colour discipline, applied to the distinction as well as to the state (WCAG 1.4.1). */
 .settings-item[role='menuitemradio'].selected::after {
   content: '●';
 }
-/* The rule before "Open Plugin Settings". A real `role="separator"` carries it, so the break the eye reads
-   is the break assistive technology is told about. */
 .menu-sep {
   height: 1px;
   margin: 4px 0;
   background: var(--border);
 }
-/* No settings yet: dim, non-interactive, and still an entry so menu navigation reaches it. A popup that
-   opens empty and explains nothing is the state this row exists to prevent. */
 .settings-empty {
   color: var(--dim);
   cursor: default;
@@ -583,15 +440,11 @@
   background: transparent;
 }
 
-/* rich attach menu (search + recent files), AI-Assistant style */
 .attach-menu {
   min-width: 290px;
   max-width: 380px;
   padding: 6px;
 }
-/* The speed search, as the platform draws one: a line at the head of the popup with a rule under it, not a
-   bordered box floating inside a padded panel. Same reasoning as `.menu-item` — the box was the single
-   most web-looking thing in the menu. */
 .attach-search {
   width: 100%;
   box-sizing: border-box;
@@ -641,17 +494,6 @@
   min-width: 0;
 }
 
-/* ── stepping between a popup's two levels ────────────────────────────────────
-   `.attach-body` and `.settings-body` are the elements a two-level popup draws its current panel into, and the
-   ones that slide when you step between them — into the project tree, into a settings section, and back out of
-   either. The slide says which way you went, and it is DECORATION: `body.reduced-motion *` (boot.css) already
-   zeroes every duration and delay on the page, so there is nothing here to switch off and no second copy of
-   that decision.
-
-   The two direction classes are declared on their OWN, unqualified by the body they sit on, precisely so the
-   second popup to need them did not have to bring a second pair of rules — and so a third would not either.
-   The keyframes keep the `attach-` name they were introduced with: renaming them would touch every call site
-   for no behaviour, which is churn a reader has to diff to dismiss. */
 @keyframes attach-in-right {
   from {
     opacity: 0;
@@ -678,16 +520,10 @@
 .attach-from-left {
   animation: attach-in-left 0.16s var(--ease);
 }
-/* The settings popup's panel: the unit that is replaced whole on every step, and therefore the unit that
-   animates. A plain block on purpose — `display: contents` would leave no box for the animation to run on,
-   which is a rule that silently does nothing. */
 .settings-body {
   display: block;
 }
 
-/* The tree view's header — back · title · Multiple · Attach N — as the first ROW of the popup rather than a
-   bar over it, closed by the same hairline the search field under it draws, so the panel still reads as one
-   object and not as a dialog that grew a toolbar. */
 .attach-head {
   display: flex;
   align-items: center;
@@ -711,9 +547,6 @@
 .attach-back:hover {
   color: var(--text);
 }
-/* Gives way before the two controls beside it rather than pushing them off the row: the title is a fixed
-   phrase today, and a header whose layout depends on that staying true is one that breaks the first time a
-   picker is named after something the user typed. */
 .attach-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -723,10 +556,6 @@
   font-size: 12.5px;
   font-weight: 600;
 }
-/* Both header buttons are small, outlined and quiet — they are not the content of the popup, they are what
-   you do to it. Each is drawn FROM ITS OWN ATTRIBUTE below (`aria-pressed`, `disabled`), the same discipline
-   as `.composer-views .settings-btn[aria-expanded]`: the state is already programmatic, and a class carrying
-   a second copy of it is a second thing that can fall out of step with the first. */
 .attach-multi,
 .attach-done {
   flex: 0 0 auto;
@@ -740,15 +569,11 @@
   border-radius: 3px;
   cursor: pointer;
 }
-/* On, and said twice: the hue AND the weight. The mode changes what pressing a row does, which is
-   information, and WCAG 1.4.1 forbids information carried by colour alone — recolouring the text and the
-   border is two declarations of one signal, not two signals. Same answer as `.dash-toggle.active` above. */
 .attach-multi[aria-pressed='true'] {
   color: var(--accent);
   border-color: var(--accent);
   font-weight: 600;
 }
-/* Attach N is the only thing in this popup that attaches, so it is lit from the start, not on hover. */
 .attach-done {
   color: var(--accent);
   border-color: var(--accent);
@@ -759,42 +584,15 @@
   cursor: default;
 }
 
-/* ── the project tree inside the popup ────────────────────────────────────────
-   A row is a `.menu-item` like every other row in every other popup on this bar; what the tree adds is a
-   level, a fold and a mark. Each of the three is drawn from something the row already carries — an inline
-   custom property, `aria-expanded`, `aria-selected`/`aria-checked` — so there is one copy of every fact and
-   no class that can drift away from the attribute assistive technology is reading. */
-
-/* The fold, mirroring `.menu-group-items` exactly. It is the SECOND lock, not the first: `fillChildren`
-   renders nothing at all under a closed folder, so this rule normally paints an empty box. The box exists
-   because `aria-controls` may not name an element that is absent — and if children ever did survive a fold,
-   `display: none` is what keeps them out of the tab order and the accessibility tree rather than merely out
-   of sight, which is the claim the keyboard tests make. */
 .tree-children {
   display: none;
 }
 .tree-node.open > .tree-children {
   display: block;
 }
-/* The LEVEL is data and the metric is not. `nodeFor` writes `--level` inline because the depth is a property
-   of the row it just built; the 12px that depth is worth stays here, so changing the indent is one number in
-   a stylesheet and not a number computed inside a renderer. The row already carries `.menu-item`, which owns
-   the rest of its padding — this replaces the left one only, at equal specificity and later in the file. */
 .tree-row {
   padding-left: calc(6px + var(--level, 1) * 12px);
 }
-/* Capped and ellipsised on the LABEL, never on the panel: `positionMenu` writes an inline `max-width` on the
-   popup itself and an inline style wins, so a cap declared on `.attach-menu` would not be the one in force —
-   the same reasoning, and the same fix, as `.settings-menu .menu-item-label`. The full path is on the row's
-   `title`.
-
-   AND IT GROWS, which is what puts the badge and the mark at the end of the row without either of them
-   claiming the free space. Two `auto` margins on one flex line SPLIT what is left between them and park the
-   first one in the middle of the row — the defect already patched once in this file (`.settings-defer +
-   .menu-group-caret`), and a patch per pair is a patch owed again for every trailing thing added later. The
-   pair really does meet here: a folder over the host's ceiling wears `Too many` and can be `mixed` at the
-   same time, because a child inside it may be marked one by one. With the label taking the space there is no
-   free space left to split, and what is at the end is whatever is last in the DOM. */
 .tree .menu-item-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -802,10 +600,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* A leaf carries no `aria-expanded`, so it is given no glyph — and keeps the 10px anyway, which is what makes
-   every name at a level start on the same pixel. The glyph is the non-colour half of the folded state (WCAG
-   1.4.1) and `aria-expanded` is the programmatic half; both are read off the one attribute. No alternative
-   text is needed on this one: the span is `aria-hidden`, so nothing here reaches the accessible name. */
 .tree-caret {
   flex: 0 0 10px;
   color: var(--dim);
@@ -817,11 +611,6 @@
 .tree-row[aria-expanded='true'] .tree-caret::after {
   content: '▾';
 }
-/* The mark is a GLYPH and not a tone (WCAG 1.4.1): `✓` for a whole folder or a file, `–` for a folder only
-   part of which is going. The alternative-text form (`content: <glyph> / ''`) declares both decoration —
-   Chromium folds generated content into the accessible name, and the row already says `aria-selected` /
-   `aria-checked="mixed"`, so without it every marked row would announce its state twice, once in words and
-   once as a bullet. Same mechanism as `.strip-cell::after`, further down. */
 .tree-row[aria-selected='true'] {
   color: var(--accent);
 }
@@ -835,9 +624,6 @@
   color: var(--dim);
   font-size: 11px;
 }
-/* "Loading…", "Nothing to attach here.", "Only the first N are shown…". An entry, because tree navigation
-   visits entries and anything else is text a screen-reader user never arrives at — but not one that can be
-   acted on, so it is dim and takes no hover. Mirrors `.settings-empty`. */
 .tree-note {
   color: var(--dim);
   cursor: default;
@@ -845,9 +631,6 @@
 .tree-note:hover {
   background: transparent;
 }
-/* The refusal, on the folder's own row and at the moment it is marked. Amber rather than red: nothing has
-   failed and nothing is lost — the folder holds more than can be attached at once and the way through is to
-   open it. It claims no auto margin; the label above yields the space (see there). */
 .tree-cap {
   flex: 0 0 auto;
   font-size: 10px;
@@ -859,7 +642,6 @@
   white-space: nowrap;
 }
 
-/* ── queue strip ──────────────────────────────────────────────────────────── */
 .queue {
   display: flex;
   flex-wrap: wrap;
@@ -878,8 +660,6 @@
   background: var(--surface2);
   border: 1px solid var(--border);
 }
-/* The little × that removes one chip — on a queued prompt, and on an attachment. One control, one rule: they
-   were two identical blocks in two files, which is how they drifted apart in the first place. */
 .queue-x,
 .att-x,
 .find-x {
@@ -901,7 +681,6 @@
   background: color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
-/* ── ghost suggestion ─────────────────────────────────────────────────────── */
 .ghost {
   color: var(--dim);
   font-size: 12px;
@@ -911,150 +690,31 @@
   gap: 8px;
   opacity: 0.85;
 }
-/* NB `.ghost-text` / `.ghost-key` were an inner span and a key badge for the suggestion. The composer writes
-   the suggestion straight into `.ghost` as text (see `els.ghost.textContent`), so neither ever applied. */
 
-/* ════════════════════════════════════════════════════════════════════════════
-   THE SESSION STRIP — one system, declared once
-   ════════════════════════════════════════════════════════════════════════════
-   Three elements sit between the transcript and the prompt box, built by app-composer.js and
-   app-composer-readout.js as SIBLINGS inside `#composer`. Top to bottom they are the plan-limit bars with
-   each window's countdown under it (`.usage-bars`, which is two of the five rows in one element), the
-   standing facts (`.dash-mini`, two more) and the status line last, closest to the box you type in
-   (`.readout`). There is no wrapper around just those three, so nothing can be inherited from a box that
-   means "the strip" — which is exactly how they came to disagree.
-
-   THAT ORDER IS THE DOM'S. `app-composer.js` appends the readout before the bars, so two of the three are
-   MOVED into place in `ensureMini` rather than painted elsewhere: `order:` and `column-reverse` buy the look
-   and leave the tab order behind, and a focus sequence that disagrees with the screen is WCAG 2.2 SC 2.4.3.
-   Nothing below may reintroduce one.
-
-   And they did disagree, on both axes at once, because each row decided for itself:
-     · FOUR type sizes — 12.5 on the status line, 12 on the bars, 11 on the countdown and 11 on the facts —
-       so a strip of one subject read as four things stacked;
-     · THREE column systems — a free-flowing row, a `repeat(auto-fit, minmax(200px, 1fr))` grid whose column
-       count changed with the window, and a fixed four. Three columns and four share no gridline but the
-       first, so however well each row lined up with itself, the eye going down found no vertical that held.
-   Neither is a value someone got wrong; both are what happens when three rules each answer the same
-   question. So the answers live HERE, once, as custom properties on the rows' common ancestor, and every
-   row below consumes them. A row that hardcodes one of these again reintroduces the defect, whatever number
-   it picks — which is what `readout.test.js` asserts, by comparing the rows against each other rather than
-   against a literal.
-
-   `#composer` and not `#dock`: the dock also holds the permissions tray and the prompt card, and these are
-   the strip's measurements, not the dock's. Declaring a custom property inherits it without applying
-   anything, so nothing here reaches the composer's own type or layout.
-
-   FOUR equal columns, and a row that does not fill them LEAVES THEM EMPTY. That second half is the rule,
-   not an omission: `Model | Working dir | · | ·` is two cells and two gaps, never two half-width cells.
-   Stretching the last cell of a short row is what makes a grid stop being regular — every row would then
-   have its own idea of where column two begins, which is the defect this replaced, rebuilt out of `span`s.
-   The one declared exception is `Working dir` reaching into the columns already empty to its right
-   (`.mini-fill` in dashboard.css) — which is not the same thing, because it moves where one ITEM ends and
-   no track at all, so no other row's verticals move. The whole path stays in the pair's `title` either way.
-   Four also absorbs the one row that varies: the facts line is `Account · Plan · Provider` on a personal
-   account, whose generated `Organization` is suppressed, and all four cells on a team account, where the
-   organization is a real name. Neither case needs an exception. */
 #composer {
-  /* Four EQUAL columns, at every width. Not `repeat(4, 25%)`, which is the correction this comment exists
-     to prevent: with a column gap those four percentages plus three gaps come to more than the container
-     and the strip overflows sideways — in the dock, which is the one place that must never scroll. `1fr`
-     divides what is actually left, `(100% - 3 × gap) / 4`. And `minmax(0, 1fr)` rather than `1fr`, because a
-     bare `1fr` is `minmax(auto, 1fr)`: its floor is the cell's min-content width, so a long path would push
-     the track wider instead of clipping. The `0` floor is what makes every ellipsis below reachable. */
   --strip-cols: repeat(4, minmax(0, 1fr));
-  /* THE ONE DECLARED EXCEPTION to "every row shares one column system", and it is granted to the plan-limit
-     bars because their count is not a layout choice: the binary reports three windows, so a fourth track is
-     an empty track, and squeezing `label · bar · 72.0% · 3h 2m` into a quarter of a narrow tool window is
-     what made the countdown need a row of its own in the first place. Three columns is what the row is FOR.
-
-     It is a variable rather than a literal on the rule for the same reason `--strip-cols` is: the fold below
-     re-parameterises both together, so the bars cross the breakpoint with everything else instead of keeping
-     three tracks while the other rows go to two and leaving a third of the row empty behind the ⋮. */
   --strip-cols-bars: repeat(3, minmax(0, 1fr));
-  /* The smallest size the strip already used, now the only one. The countdown and the facts were 11px and
-     nothing was smaller; the two larger rows come down to meet them rather than the reverse, because this
-     is metadata under a transcript, not a heading. */
   --strip-font: 11px;
-  /* The column gap, and it belongs here for a reason that is easy to miss: a `1fr` track is
-     `(100% − 3 × gap) / 4`, so two rows with the same template and DIFFERENT gaps have different columns.
-     The bars were on 14px and the facts on 18px, which is enough to put every gridline in a different place
-     — the templates would have matched and the rows still would not have. It also has to stay clearly wider
-     than the 4px between a key and its own value (`.mini-fact`), since proximity is the only thing grouping
-     a pair. */
   --strip-gap: 16px;
-  /* The side inset every row shares, so the three start and end on the same pixels — the other half of
-     sharing a column system, and previously the same `4px` written out in three rules. */
   --strip-inset: 4px;
-  /* THE VERTICAL RHYTHM, and it is the same kind of declaration as the four above it: one answer to one
-     question, consumed by every row instead of decided by each.
-
-     It was decided four times and read as four different distances down a strip that is one subject — 1px
-     between a bar and its own countdown (inside `.ub-item`), 3px between two lines of facts (a grid's row
-     gap), and 8px twice over, once under the bars and once under the facts, because a block's bottom margin
-     was doing the work of a row gap. Nothing there was a value someone got wrong; they are three rules each
-     answering for their own box, which is the same defect the type size and the column system had.
-
-     The value is the SMALLEST the strip already used, so the block gets tighter and never taller: this sits
-     under a transcript and above the box you type in, and every pixel it takes is one the conversation
-     loses. It is deliberately NOT the separation from the prompt card below — that is a boundary between two
-     different things and stays where it is, on `.readout`'s bottom margin. */
   --strip-row: 1px;
-  /* And the same for the line box, because equal gaps between rows of unequal height are still an unequal
-     rhythm: the facts declared `1.5` while the bars and the status line inherited the page's `1.6`, which is
-     ~1px of drift per row at this size — small, cumulative, and exactly the sort of thing that reads as
-     "these are not aligned" without being nameable. The tighter of the two, for the reason above. */
   --strip-line: 1.5;
 }
-/* ── the column separator: a `·` in the GAP, on every row ─────────────────────
-   One class for every cell of the strip, because all five rows are built by app-composer-readout.js and the
-   rule is the same one in each: a cell carries the boundary between itself and the cell on its right.
-
-   IT MUST NOT COST THE TEXT A PIXEL. With four columns in a tool window the text has none to give, so a
-   separator taking room inside the cell would be paid for out of the value — the ellipsis would arrive one
-   character sooner, exactly where the cell is tightest, which is always. So the cell CLAIMS the gap as
-   padding and hands the same amount straight back as a negative margin: the content box is still exactly the
-   track (the text loses nothing, and its ellipsis still lands on the track's edge) while the padding box now
-   spans the gap.
-
-   THAT SECOND HALF IS THE POINT AND IT IS THE TRAP THIS COMMENT EXISTS FOR. Every cell here carries
-   `overflow: hidden` so it can clip, and overflow clips to the PADDING box, not to the content box (MDN,
-   CSS `overflow`: "Overflow content is clipped at the element's padding box"). The obvious way to write this
-   rule — a pseudo-element pushed out past the cell with a negative offset — puts the glyph outside that box,
-   where it is silently never painted: the CSS reads correctly, the separator is simply invisible, and
-   nothing anywhere says why. Inside the padding it is both in the gap and inside the clip.
-   The other route, dropping `overflow: hidden` so a negative offset could escape, is not available and is
-   not a trade: that declaration is what stops a filesystem path widening its own track and putting a
-   horizontal scrollbar in the dock, which is the one thing the dock must never have. */
 .strip-cell {
   position: relative;
   padding-right: var(--strip-gap);
   margin-right: calc(-1 * var(--strip-gap));
 }
 .strip-cell::after {
-  /* The alternative-text form (`content: <glyph> / <alt>`). Chromium — the only engine this page runs in —
-     DOES expose generated content as static text and folds it into the accessible name, so a bare
-     `content: '·'` has a screen reader announce a bullet between every metric of every row. The empty
-     alternative is what declares the glyph decoration. MDN says the same in the other direction: anything
-     that is not decoration belongs in the DOM, not in a stylesheet. */
   content: '·' / '';
   position: absolute;
   top: 0;
   right: 0;
-  /* Exactly the gap, so the glyph is centred on the boundary rather than hanging off one neighbour. */
   width: var(--strip-gap);
   text-align: center;
   color: var(--border);
   pointer-events: none;
 }
-/* NO DANGLING SEPARATOR, and the rule is "nothing to the right", which is two different things.
-   `:last-child` is the last cell WITH CONTENT of its row — the one that matters, because a short line like
-   `Model | Working dir` leaves columns three and four EMPTY and must not end in two bullets pointing at
-   nothing. `:nth-child(4n)` is the cell in the last COLUMN, which has no gap to its right at all: left
-   alone, its claimed padding would extend the strip past the grid's own edge and its glyph would be painted
-   outside it. Both also give back the padding and the margin, so the last column can never widen the row.
-   Every row starts at column 1 — `.mini-line`'s first fact says so explicitly and the other two rows have no
-   choice — which is what makes `4n` mean "last column" rather than "every fourth cell in some order". */
 .strip-cell:last-child,
 .strip-cell:nth-child(4n) {
   padding-right: 0;
@@ -1065,21 +725,9 @@
   content: none;
 }
 
-/* The disclosure for the two folded columns, as the last row of the strip. `display: none` here and `flex`
-   inside the fold below: with room for four columns there is no button, no reserved gap and no dimmed
-   control, because its PRESENCE is the signal that something is being withheld and a control that is
-   always there says nothing by appearing. `display` is also what keeps it out of the tab order and out of
-   the accessibility tree, which `visibility` or an opacity would not.
-   The other half of "it cannot appear over nothing" is in app-composer-readout.js, which only builds it when
-   a row really has a third cell: this rule knows the window is narrow and nothing else. */
 .strip-more {
   display: none;
   align-items: center;
-  /* Shrink-wrapped and BLOCK-level, which is one decision and not two: `inline-flex` would size the same way
-     and then silently drop the bottom margin, because vertical margins do not apply to an inline-level box —
-     the button would sit flush against the prompt card with nothing in the rule to say why. `flex` keeps the
-     margin and `fit-content` keeps the click target the size of the words, rather than a full-width strip of
-     invisible button above the composer. */
   width: fit-content;
   margin: 0 var(--strip-inset) 8px;
   padding: 0;
@@ -1095,44 +743,14 @@
   color: var(--text);
 }
 
-/* ONE step, 4 → 2, and it is a FOLD rather than a reflow. Below the width where four columns stop holding a
-   `Key: value` pair, the third and fourth cell of every row are HIDDEN behind the button, which reveals them
-   in place: each revealed cell lands on the grid row under the pair it belongs to, so the account line reads
-   `Account | Organization` and then `Plan | Provider` directly beneath it, never at the end of the strip
-   under some other row's cells. Because the step is a change to `--strip-cols` and nothing else, all five
-   rows cross it at the same width — a row that broke on its own would put the strip back to having several
-   column systems, which is what this replaced.
-
-   IT REPLACED A REFLOW THAT DID THE HIDING FOR FREE, and the difference is not cosmetic: reflowing answered
-   the narrow window by making the strip twice as tall, unasked and with no way back, which spends the dock's
-   height exactly when there is least of it and pushes the transcript out of the way to show numbers nobody
-   asked to see. Hidden-with-a-button is the same information at the reader's choosing.
-
-   THE UNIT OF HIDING IS THE COLUMN, ACROSS ALL FIVE ROWS: one `:nth-child` on one cell class, so the third
-   column goes as one thing — the reasoning counter, `Plan`, the third plan window's bar and that window's
-   countdown. A bar and its reset need no rule of their own to stay together because they are ONE cell
-   (`.ub-item`, stacked): a rule that reached them separately would sooner or later hide one and keep the
-   other, and a countdown sitting under somebody else's bar is a wrong answer rather than a missing one.
-
-   There is deliberately no second step to one column: past this the rows keep their pairing and the cells
-   clip instead, which is the other half of the answer and not a fallback. */
 @media (max-width: 640px) {
   #composer {
     --strip-cols: repeat(2, minmax(0, 1fr));
-    /* The bars fold with everything else. Left at three, two visible cells would sit in two of three tracks
-       and the row would carry an empty third while its window hid behind the ⋮. */
     --strip-cols-bars: repeat(2, minmax(0, 1fr));
   }
-  /* `display: none`, never `visibility` and never an opacity: a cell that is not on screen must not be
-     reachable with Tab or readable by a screen reader either. */
   #composer:not(.strip-open) .strip-cell:nth-child(n + 3) {
     display: none;
   }
-  /* Two columns means the boundary falls after every SECOND cell, so the separator that used to point at
-     column three goes away with the columns it was pointing at — the same rule, re-parameterised, rather
-     than a second rule that has to be kept in step. Every cell the four-column rule silences is even, so
-     this only ever adds to that set and there is nothing to put back. Later in the sheet than that rule and
-     of equal specificity, which is what lets it win. */
   .strip-cell:nth-child(2n) {
     padding-right: 0;
     margin-right: 0;
@@ -1145,24 +763,11 @@
   }
 }
 
-/* ── session readout, the strip's LAST row ────────────────────────────────────
-   On the strip's columns like every other row: `Idle | Context 5% | 33 out | 0 reasoning`, one metric per
-   cell. It was a wrapping flex row, which is why it never lined up with anything else — the items sat
-   wherever the previous item's text ended, and the width of `Running…` moved all three of the others.
-   Last, and therefore closest to the prompt box: it is the row that changes every few seconds, and what a
-   turn is doing belongs next to the box you are waiting at rather than four rows above it. Its position is
-   the DOM's (see `ensureMini`), so this rule says nothing about where it goes. */
 .readout {
   display: grid;
   grid-template-columns: var(--strip-cols);
   align-items: center;
   gap: var(--strip-row) var(--strip-gap);
-  /* The strip's one vertical rhythm: no top margin on any row, `--strip-row` under each. It used to carry
-     `2px` here and the bars a `-4px` that pulled them up against it — two tuned values that only made sense
-     while the readout was first and the bars second, i.e. exactly the kind of adjustment that turns into a
-     gap in the wrong place the moment two rows swap.
-     The `8px` is the one distance here that is NOT a row gap: this is the last row, and what it separates
-     itself from is the prompt card — a different thing, not the next line of the same readout. */
   margin: 0 var(--strip-inset) 8px;
   font-size: var(--strip-font);
   line-height: var(--strip-line);
@@ -1175,22 +780,12 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  /* A cell of the grid, so it clips rather than widening its column — the same chain as every other cell in
-     the strip. `Running…` carries the model's own status text and can be long. */
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  /* The counters update several times a second. Proportional digits make every item after them shuffle
-     sideways on each tick — the line never settles, which is what made a row of four small numbers read as
-     busy. Tabular figures are the same width whatever the digit, so only the number changes. */
   font-variant-numeric: tabular-nums;
 }
-/* The `·` between metrics is declared once for the whole strip (`.strip-cell::after`, above), not here. It
-   used to be this row's alone, as a pseudo-element on a flex line — which is why it ended up at the END of
-   each item's text, reading as part of that item's value. On the grid it belongs to the BOUNDARY: it lives
-   in the gap, it costs the cell no width, and every row has one for the same reason this row does. */
-/* What the session is DOING leads the line; the numbers qualify it. */
 .readout .ro-item:first-child {
   color: var(--text);
 }
@@ -1219,52 +814,19 @@
     opacity: 0.45;
   }
 }
-/* NB `.ro-bar` was the readout's own little quota bar. The plan-limit bars replaced it. */
 
-/* ── plan-limit bars, the strip's FIRST element and ONE of its rows ───────────
-   ONE LINE PER WINDOW: `label · bar · 72.0% · 3h 2m`, the countdown last. It used to be two lines — the bars,
-   and a row of `Reset time: …` under them — which spent a whole line of the strip on three repetitions of the
-   same word for a value that qualifies the percentage next to it. The countdown is an item of its window's
-   own line now, and the strip is a row shorter.
-   Each window is still ONE cell (`.ub-item`), which is what keeps the bar and its countdown inseparable:
-   whatever hides a column acts on cells, so it cannot take a bar and leave the countdown that qualifies it.
-   THREE columns, not the strip's four (`--strip-cols-bars`, declared with the exception's reasoning on
-   `#composer`): the binary reports three windows, so a fourth track is an empty track.
-   It was `repeat(auto-fit, minmax(200px, 1fr))`, which sounds like the same thing and is not: auto-fit
-   decides the column COUNT from the available width, so this row had three tracks at one size of tool window
-   and two at another. A count that changes on resize is not a system anything can line up with; this one
-   changes only at the declared fold, with every other row. */
 .usage-bars {
   display: grid;
   grid-template-columns: var(--strip-cols-bars);
-  /* `var(--strip-gap)` and not a number of its own — this row carried `14px` while the facts carried `18px`,
-     and a `1fr` track is `(100% − 3 × gap) / 4`, so two rows with the same template and different gaps have
-     every gridline in a different place. The templates matched and the rows still did not. */
   gap: var(--strip-row) var(--strip-gap);
-  /* The strip's one rhythm, like every other row — see `--strip-row`. The `-4px` that used to be here pulled
-     this row up against the readout ABOVE it, and there is no readout above it any more; the `8px` that
-     replaced it was a block margin standing in for a row gap, which is how the strip came to have two
-     distances between five rows of the same readout. */
   margin: 0 var(--strip-inset) var(--strip-row);
   font-size: var(--strip-font);
   line-height: var(--strip-line);
   color: var(--dim);
 }
-/* `hidden` is a user-agent rule, and ANY author declaration of `display` beats it whatever the specificity —
-   so the `display: grid` above quietly cancelled the `hidden` attribute the JS sets when there is nothing to
-   draw, leaving a strip of empty grid above the prompt box. jsdom has no layout, so the test that asserted
-   the attribute was set stayed green throughout. Anything that declares `display` and is also hidden by
-   script needs this line; it is not defensive, it is the other half of that declaration. */
 .usage-bars[hidden] {
   display: none;
 }
-/* ONE line per window, so the cell is the line and there is nothing to stack.
-   `min-width: 0` because a grid item's automatic minimum is its min-content width, so without it a long
-   label refuses to shrink and widens the track instead of clipping. `overflow: hidden` is the backstop for
-   the one thing in this cell that cannot clip: the bar itself keeps `min-width: 24px` (below that it is a
-   dash, not a meter) and the percentage is the datum, so in a very narrow tool window the cell runs out of
-   room with both still at their floor. Clipping the cell's edge is the acceptable end of that — a strip
-   that overflows would put a horizontal scrollbar in the dock, which is the one thing it must never do. */
 .usage-bars .ub-item {
   display: flex;
   min-width: 0;
@@ -1275,8 +837,6 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  /* It IS the cell's content now that there is one line per window, so it takes the whole of it — without
-     this the row shrink-wraps its items and the track never grows into the space the cell has. */
   flex: 1 1 auto;
 }
 .usage-bars .ub-label {
@@ -1293,12 +853,8 @@
   border-radius: var(--radius-pill);
   background: var(--surface2);
   overflow: hidden;
-  /* The fill animates its WIDTH, which is a layout property: without containment every frame of that
-     transition re-lays out the grid, the dock and the transcript above it. Layout containment confines the
-     work to this 4px box — the bar's own size does not depend on the fill, so nothing outside can change. */
   contain: layout paint;
 }
-/* Level colours (lvl-low/mid/high) are the shared quota scale — see `.usage-fill` in dashboard.css. */
 .usage-bars .ub-track > i {
   display: block;
   height: 100%;
@@ -1311,51 +867,19 @@
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
-/* Time left in the window, the LAST item of that window's own line. It qualifies the percentage it sits
-   beside, and it does not compete with it: dimmer only, since the whole strip is one type size.
-   `flex: 0 0 auto` for the same reason as the percentage — both are short, fixed-width data, and the track is
-   the one item that should give and take the free space. Never wraps and never shrinks below its text: a
-   countdown broken across two lines, or ellipsised to `3h…`, reads as a different value rather than as the
-   same one abbreviated. If the cell runs out of room, `.ub-item`'s clip is what gives way. */
 .usage-bars .ub-reset {
   flex: 0 0 auto;
   opacity: 0.72;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-/* NB no `display: none` for the empty case, and that is deliberate rather than an omission. A window with no
-   reset time emits the span empty, and an empty inline box paints nothing — all it costs is the flex gap after
-   the percentage, which is indistinguishable from padding at the end of a cell. Hiding it would put a
-   `display: none` on one HALF of a window's pair, and the invariant this row rests on is that nothing can act
-   on a bar without its countdown or the reverse (`readout.test.js` asserts exactly that, over the stylesheet).
-   Six pixels of air is the cheaper side of that trade.
-   No `·` before it either: the gap inside the line already groups these four, and `.strip-cell::after` draws
-   the one separator this row has — between WINDOWS, in the grid gap, where a boundary belongs. */
 
-/* ════════════════════════════════════════════════════════════════════════════
-   SLASH PALETTE
-   ════════════════════════════════════════════════════════════════════════════ */
-/* A ROW OF THE DOCK, directly above the composer — not a layer over it, and that is the whole rule.
-   It was `position: fixed` with `padding-bottom: 72px` holding it clear of a composer whose height is not
-   72px and never was: it grows with the pills, the queue, the attachment chips and the textarea itself, so
-   the list covered the box you were typing into exactly when you had the most in it. It also positioned
-   against the VIEWPORT rather than the tool window, which is the same mistake the find bar made.
-
-   In the flow it cannot cover anything: it opens above the composer, pushes the dock up, and the transcript
-   gives up the space. No z-index, no inset to keep in step with anything. */
-/* Anchored to the TOP EDGE of the prompt card, hanging upwards over the meters.
-   It was a row of the dock, which put it above the plan-limit bars — a block away from the box it completes.
-   In the flow it also pushed the card down as it opened, moving the text you were typing in under your
-   cursor. So: out of the flow, over what is above, never over what is below. */
 #palette {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 100%;
   margin-bottom: 6px;
-  /* One row's height, declared here because `.palette-box` caps itself in ROWS and cannot do that against a
-     height it would have to measure. It is `.palette-item`'s padding plus its line-height, and the three
-     change together. */
   --palette-row: 27px;
 }
 #palette[hidden] {
@@ -1367,16 +891,10 @@
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 4px;
-  /* Bounded in ROWS, not in viewport height. `46vh` gave a half-window list on a tall IDE, and the number a
-     list of commands should be capped at is a number of lines you can scan — past ~9 you are reading, not
-     choosing, and the query is the better tool. Two lines' worth of slack over the 9 so a tenth row peeks
-     and the list is visibly scrollable. */
   max-height: calc(9.5 * var(--palette-row));
   overflow-y: auto;
   animation: pop 0.16s var(--ease);
 }
-/* No search field here, deliberately: the composer's own textarea is the palette's text box, so the query
-   stays where it was typed and where it will be sent from. The list below is the whole overlay. */
 .attach-search:focus {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
@@ -1402,11 +920,6 @@
 .palette-item.active {
   box-shadow: inset 2px 0 0 var(--accent);
 }
-/* WHAT THE QUERY IS POINTING AT — and deliberately weaker than `.active`.
-   The two states are different claims. `.match` says "this is what your text most resembles"; `.active` says
-   "press Enter and you get this". Drawing the first like the second would promise a selection that Enter does
-   not honour, because until you press an arrow Enter sends what you typed. Hence a rule on the name alone: no
-   background, nothing that reads as a highlighted row, and no focus moved anywhere. */
 .palette-item.match:not(.active) .palette-name {
   color: var(--accent);
 }

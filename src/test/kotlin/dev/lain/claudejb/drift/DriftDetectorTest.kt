@@ -5,14 +5,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Offline unit tests for the pure drift extraction/diff logic — fed hand-written `.d.ts` and NDJSON
- * fixtures so they're deterministic and need no network or binary. The live download + probe is exercised
- * separately by [DriftLiveCheck] (tagged `driftLive`, run only by `./gradlew checkDrift`).
- */
 class DriftDetectorTest {
-
-    // -- ProtocolSurface.fromDts ------------------------------------------------------------------
 
     @Test
     fun `fromDts extracts subtype literals`() {
@@ -23,7 +16,6 @@ class DriftDetectorTest {
         """.trimIndent()
         val s = ProtocolSurface.fromDts(dts)
         assertEquals(setOf("can_use_tool", "get_session_cost"), s.subtypes)
-        // memory_type is not a subtype literal — must not be captured.
         assertFalse("User" in s.subtypes)
     }
 
@@ -36,7 +28,6 @@ class DriftDetectorTest {
         val s = ProtocolSurface.fromDts(dts)
         assertTrue("SDKAssistantMessage" in s.unionMembers)
         assertTrue("SDKResultMessage" in s.unionMembers)
-        // coreTypes.SDKMessage -> SDKMessage (qualifier dropped)
         assertTrue("SDKMessage" in s.unionMembers)
         assertTrue("SDKControlResponse" in s.unionMembers)
     }
@@ -46,8 +37,6 @@ class DriftDetectorTest {
         val s = ProtocolSurface.fromDts("""x: { subtype: "set_model"; }""")
         assertTrue("set_model" in s.subtypes)
     }
-
-    // -- ProtocolSurface.fromCapture --------------------------------------------------------------
 
     @Test
     fun `fromCapture reads top-level type and nested control subtype`() {
@@ -62,7 +51,7 @@ class DriftDetectorTest {
         val s = ProtocolSurface.fromCapture(ndjson)
         assertEquals(setOf("system", "assistant", "control_request", "keep_alive", "result"), s.eventTypes)
         assertTrue("init" in s.subtypes)
-        assertTrue("can_use_tool" in s.subtypes) // pulled from the nested request object
+        assertTrue("can_use_tool" in s.subtypes)
         assertTrue("success" in s.subtypes)
     }
 
@@ -72,11 +61,8 @@ class DriftDetectorTest {
         assertEquals(setOf("system"), s.eventTypes)
     }
 
-    // -- DriftDetector.sdkDrift (latest .d.ts vs the plugin's KNOWN_SUBTYPES) ----------------------
-
     @Test
     fun `sdkDrift flags a subtype the parser does not model`() {
-        // A .d.ts that declares a known subtype plus a brand-new one the parser doesn't handle.
         val latest = """
             type A = { subtype: 'can_use_tool'; };
             type B = { subtype: 'brand_new_kind'; };
@@ -84,25 +70,21 @@ class DriftDetectorTest {
         val drift = DriftDetector.sdkDrift(latest)
         assertTrue(drift.hasDrift)
         assertEquals(setOf("brand_new_kind"), drift.unmodeledSubtypes)
-        assertFalse("can_use_tool" in drift.unmodeledSubtypes) // already modeled
+        assertFalse("can_use_tool" in drift.unmodeledSubtypes)
     }
 
     @Test
     fun `sdkDrift is clean when every declared subtype is already modeled`() {
-        // Declare only subtypes that are in KNOWN_SUBTYPES → no unmodeled drift.
         val latest = ProtocolSurface.KNOWN_SUBTYPES.joinToString("\n") { "x: { subtype: '$it'; };" }
         assertFalse(DriftDetector.sdkDrift(latest).hasDrift)
     }
 
     @Test
     fun `sdkDrift reports a modeled subtype the SDK dropped as informational, not actionable`() {
-        // Latest declares nothing → every KNOWN subtype is "stale", but that's informational (not drift).
         val drift = DriftDetector.sdkDrift("// no subtypes here")
         assertFalse(drift.hasDrift)
         assertTrue(drift.staleSubtypes.containsAll(ProtocolSurface.KNOWN_SUBTYPES))
     }
-
-    // -- DriftDetector.binaryDrift ----------------------------------------------------------------
 
     @Test
     fun `binaryDrift flags an unknown top-level type as hard drift`() {
@@ -131,15 +113,12 @@ class DriftDetectorTest {
     fun `binaryDrift surfaces an unmodeled subtype as soft drift`() {
         val ndjson = """{"type":"system","subtype":"some_future_system_subtype"}"""
         val drift = DriftDetector.binaryDrift(ndjson)
-        assertFalse(drift.hasHardDrift) // type 'system' is known
+        assertFalse(drift.hasHardDrift)
         assertEquals(setOf("some_future_system_subtype"), drift.unmodeledSubtypes)
     }
 
-    // -- DriftReport ------------------------------------------------------------------------------
-
     @Test
     fun `report is non-actionable on a version bump whose surface stays fully covered`() {
-        // Latest declares only modeled subtypes → not actionable; versions advanced → "bump baseline".
         val coveredDts = ProtocolSurface.KNOWN_SUBTYPES.joinToString("\n") { "x: { subtype: '$it'; };" }
         val report = DriftReport(
             sdkBaselineVersion = "0.3.161",

@@ -5,20 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * What [PluginAgentIndex] is allowed to persist, pinned as a contract.
- *
- * Two rules, both from the user. **Nothing goes into the project's `.idea/`**: it is shared, gets committed
- * by accident and is routinely synced, so anything there is effectively published — the index lives under
- * `~/.claude`, private to the user and where this data already is. And it records the **shape** (what each
- * node is, what it hangs off, what hangs off it) but never the **content**: an agent's description
- * ("Translate the SAP standards") already says what the user is working on, and a prompt or a transcript says
- * far more. Those are read from the binary's own files on demand, so a copy here would buy nothing and create
- * a second thing to leak or go stale.
- *
- * This test exists to stop a future "just cache the title so the tab restores faster" from quietly turning an
- * index into a data store.
- */
 class AgentIndexPrivacyTest {
 
     private fun index(vararg nodes: PluginAgentIndex.Node) =
@@ -47,12 +33,10 @@ class AgentIndexPrivacyTest {
                 ),
             ),
         )
-        // The shape is stated, so the file can be read and checked on its own.
         assertTrue(encoded.contains("\"type\": \"subagent\""), encoded)
         assertTrue(encoded.contains("\"type\": \"backgroundtask\""), encoded)
         assertTrue(encoded.contains("\"parent\""))
         assertTrue(encoded.contains("\"childs\""))
-        // The content is not.
         setOf("description", "prompt", "transcript", "summary", "stdout")
             .forEach { assertFalse(encoded.contains(it), "persisted index must not carry '$it'") }
     }
@@ -71,8 +55,6 @@ class AgentIndexPrivacyTest {
         )
         val back = PluginAgentIndex.decode(encoded).getValue("5f2b-session")
         val parent = back.nodes.first { it.id == "a1" }
-        // Never stored as an independently-editable field: a hand-maintained child list is a second source of
-        // truth, and its first bug is a node claiming a child that no longer exists.
         assertEquals(listOf(PluginAgentIndex.Ref(PluginAgentIndex.Kind.SUBAGENT, "a2")), parent.childs)
     }
 
@@ -104,7 +86,6 @@ class AgentIndexPrivacyTest {
 
     @Test
     fun `the index lives under the user's claude home, never in the project`() {
-        // The location IS the privacy decision, so it is pinned rather than left to a comment.
         val home = PluginAgentIndex.homeOverride
         assertTrue(home != null && home.endsWith("/.claude"), "expected ~/.claude, got $home")
     }

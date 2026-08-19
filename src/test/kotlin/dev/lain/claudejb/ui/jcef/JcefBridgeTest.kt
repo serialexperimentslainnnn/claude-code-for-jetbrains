@@ -9,15 +9,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the INBOUND half of the JCEF bridge — every `window.__ccSend` message `type` → a typed
- * [JcefBridge.Msg], plus the [JcefBridge.jsString] escaping primitive of the boundary itself. The outbound
- * payload builders are covered by [JcefPayloadTest]. No platform/browser is involved, so together they are the
- * load-bearing contract test.
- */
 class JcefBridgeTest {
-
-    // ── inbound parsing ──────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `parse simple verbs`() {
@@ -105,8 +97,6 @@ class JcefBridgeTest {
         assertEquals("AAAA", m.base64)
     }
 
-    // ── the attach menu's project browser ────────────────────────────────────────────────────────────────
-
     @Test
     fun `parse treeChildren carries the root-relative path and the picker`() {
         val m = JcefBridge.parse(
@@ -123,17 +113,12 @@ class JcefBridgeTest {
 
     @Test
     fun `an absent path is the project ROOT, not a missing field`() {
-        // The tree's vocabulary spells the root "" and the page omits the field when it means it, so the two
-        // have to arrive as one value — a null here would make "the root" and "no answer" the same input.
         val m = JcefBridge.parse("""{"type":"treeChildren","mode":"files"}""") as JcefBridge.Msg.TreeChildren
         assertEquals("", m.path)
     }
 
     @Test
     fun `a path that is not a string is dropped, never thrown on`() {
-        // The input is a browser message, so a field of the wrong SHAPE is ordinary and not exceptional. It
-        // used to throw out of `parse` — `.jsonPrimitive` does that on an object or an array — which left the
-        // press with no answer at all rather than with a harmless empty one.
         val obj = JcefBridge.parse("""{"type":"treeChildren","path":{"nope":1},"mode":"files"}""")
         assertEquals("", (obj as JcefBridge.Msg.TreeChildren).path)
         val arr = JcefBridge.parse("""{"type":"treeExpand","path":["a"],"mode":"files"}""")
@@ -142,9 +127,6 @@ class JcefBridgeTest {
 
     @Test
     fun `an absolute path rides through verbatim — containment is ProjectTree's single gate`() {
-        // Deliberately NOT refused here. `ProjectTree.resolve` canonicalizes and applies the same project-root
-        // check that confines what the binary may write, and a second opinion formed at the wire is how one of
-        // the two eventually ends up the weaker of the pair. Carried unchanged, refused where the rule lives.
         val m = JcefBridge.parse(
             """{"type":"treeChildren","path":"/etc/passwd","mode":"files"}""",
         ) as JcefBridge.Msg.TreeChildren
@@ -159,7 +141,6 @@ class JcefBridgeTest {
             """{"type":"attachPaths","paths":["README.md","src/App.kt"]}""",
         ) as JcefBridge.Msg.AttachPaths
         assertEquals(listOf("README.md", "src/App.kt"), m.paths)
-        // Blanks and non-strings are dropped and the rest survives; an absent list is an empty one.
         val junk = JcefBridge.parse(
             """{"type":"attachPaths","paths":["ok.kt","",{"a":1}]}""",
         ) as JcefBridge.Msg.AttachPaths
@@ -189,8 +170,6 @@ class JcefBridgeTest {
         assertEquals("task42", m.taskId)
     }
 
-    // ── Git view ─────────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `parse gitAction carries the id and the commit hash`() {
         val m = JcefBridge.parse(
@@ -202,9 +181,6 @@ class JcefBridgeTest {
 
     @Test
     fun `parse gitAction without a hash reads as no commit, not as a missing field`() {
-        // The action bar's buttons act on the repository and send no hash at all. ONE message type serves both
-        // bars — a second one for the history rail was a type nothing here parsed, i.e. a button whose press
-        // was dropped in silence — so the absent field has to mean something definite, and "" is it.
         val m = JcefBridge.parse("""{"type":"gitAction","id":"commit"}""") as JcefBridge.Msg.GitAction
         assertEquals("commit", m.id)
         assertEquals("", m.hash)
@@ -212,9 +188,6 @@ class JcefBridgeTest {
 
     @Test
     fun `a turn carries the conversation it is for, and the ordinary one carries none`() {
-        // ONE composer, two conversations: this chat, and the one embedded in the Git view while that view is
-        // showing it. There is no second message type and no second text box — the turn is tagged, exactly as
-        // a request card's answer is, and the same line host-side routes both.
         assertEquals(JcefBridge.Msg.Send("hello"), JcefBridge.parse("""{"type":"send","text":"hello"}"""))
         assertEquals(
             JcefBridge.Msg.Send("squash those two", JcefBridge.SCOPE_GIT),
@@ -229,15 +202,11 @@ class JcefBridgeTest {
 
     @Test
     fun `parse a card resolution carries the conversation it belongs to`() {
-        // Two sessions draw cards into one page. Absent scope is the panel's own session — the ordinary path,
-        // which must keep parsing exactly as it did — and `git` is the conversation in the Git view.
         val own = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true}""")
         assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, ""), own)
         val git = JcefBridge.parse("""{"type":"resolvePermission","id":"r1","allow":true,"scope":"git"}""")
         assertEquals(JcefBridge.Msg.ResolvePermission("r1", true, JcefBridge.SCOPE_GIT), git)
     }
-
-    // ── "Claude Code was not found" boot card ────────────────────────────────────────────────────────────
 
     @Test
     fun `parse installClaude carries the method id`() {
@@ -255,8 +224,6 @@ class JcefBridgeTest {
     fun `parse recheckBinary`() {
         assertEquals(JcefBridge.Msg.RecheckBinary, JcefBridge.parse("""{"type":"recheckBinary"}"""))
     }
-
-    // ── sign-in card ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `parse loginSubscription cancelLogin dismissAuth logout`() {
@@ -277,13 +244,9 @@ class JcefBridgeTest {
     @Test
     fun `jsString escapes what would break out of a host exec call`() {
         assertEquals("\"plain\"", JcefBridge.jsString("plain"))
-        // A quote+paren payload must come back inert, and control chars must be escaped, or a message
-        // containing them would terminate the JS string it is embedded in.
         assertEquals("\"a\\\"b\"", JcefBridge.jsString("a\"b"))
         assertEquals("\"line\\nbreak\"", JcefBridge.jsString("line\nbreak"))
     }
-
-    // ── jump-to-code links ───────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `parse resolveLinks carries the row id and both candidate lists`() {
@@ -301,7 +264,6 @@ class JcefBridgeTest {
         assertEquals(-1L, m.rowId)
         assertTrue(m.paths.isEmpty())
         assertTrue(m.symbols.isEmpty())
-        // Malformed candidates must not throw: non-strings and blanks are dropped, the rest survives.
         val junk = JcefBridge.parse(
             """{"type":"resolveLinks","rowId":1,"paths":["ok.kt","",{"a":1}],"symbols":"nope"}""",
         ) as JcefBridge.Msg.ResolveLinks

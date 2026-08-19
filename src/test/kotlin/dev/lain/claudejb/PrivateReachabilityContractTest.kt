@@ -45,8 +45,6 @@ class PrivateReachabilityContractTest {
 
     @Test
     fun `the scan reaches the sources and finds private declarations to judge`() {
-        // Without this the assertion below is `[] is empty`, which is green forever and proves nothing. Both
-        // halves fail loudly: the wrong tree, and a declaration pattern that has stopped matching the style.
         assertTrue(files.size > MIN_SOURCES) {
             "Only ${files.size} Kotlin sources found from ${File("").absolutePath} — this gate is looking at " +
                 "the wrong tree and would pass whatever the code did."
@@ -73,12 +71,6 @@ class PrivateReachabilityContractTest {
         }
     }
 
-    /**
-     * The detection, driven over a synthetic file whose answer is known.
-     *
-     * A verdict only ever observed green cannot be told apart from one that reports nothing — and this gate
-     * spends most of its life green, which is exactly when a silently broken pattern would go unnoticed.
-     */
     @Test
     fun `reports a private declaration nothing in its file names`() {
         val code = MainSources.codeOf(syntheticFile())
@@ -90,11 +82,6 @@ class PrivateReachabilityContractTest {
         }
     }
 
-    /**
-     * A file with one of each case the scan must get right: a private class that IS constructed, one that is
-     * not, a private function called from the body, a private one named only in a comment and in a string,
-     * and an `override` that must not be judged at all.
-     */
     private fun syntheticFile(): File {
         val file = File.createTempFile("private-reachability", ".kt")
         file.deleteOnExit()
@@ -114,24 +101,12 @@ class PrivateReachabilityContractTest {
         return file
     }
 
-    /** True when [declaration]'s name is written anywhere in [code] outside its own declaration and body. */
     private fun usedElsewhereIn(code: List<String>, declaration: Declaration): Boolean {
         val name = Regex("""\b${Regex.escape(declaration.name)}\b""")
         val body = bodyOf(code, declaration.line)
         return code.indices.any { index -> index !in body && name.containsMatchIn(code[index]) }
     }
 
-    /**
-     * The line range a declaration owns, as an inclusive interval — its own line plus the braces it opens.
-     *
-     * Counted on the REDUCED code, where a brace inside a comment or a string literal is already gone. A
-     * declaration that opens no brace on its own line (`private val x = y`) owns just that line.
-     *
-     * **A CONSTRUCTOR PROPERTY owns nothing but its line**, and getting that wrong is what this rule is for:
-     * `class Foo(private val bar: Bar) {` opens the class's braces on the same line, so brace-counting from
-     * there swallowed the whole class — which is precisely where `bar` is used. Ten live declarations were
-     * reported dead by that alone, every one of them a constructor property of a collaborator.
-     */
     private fun bodyOf(code: List<String>, from: Int): IntRange {
         if (TYPE_ON_LINE.containsMatchIn(code[from])) return from..from
         var depth = 0
@@ -159,29 +134,13 @@ class PrivateReachabilityContractTest {
         const val MIN_SOURCES = 100
         const val MIN_DECLARATIONS = 100
 
-        /**
-         * `private class Foo` / `private fun bar(` / `private val baz` — with any modifiers in between, since
-         * `private inner class`, `private suspend fun` and `private const val` are all this shape.
-         */
         val DECLARATION = Regex("""\bprivate\b[\w\s]*?\b(class|object|interface|fun|val|var)\s+(\w+)""")
 
-        /**
-         * Shapes this scan must not judge. `override` is called through its supertype; a constructor is
-         * invoked by the class's name; a `private set` is part of the property above it, not a declaration of
-         * its own; a type parameter list before the name (`private fun <T> of`) breaks the capture; and an
-         * EXTENSION (`private fun List<String>.lastMatching`) is called on its receiver, so the name this
-         * pattern would capture is the receiver's type rather than the function's.
-         */
         val SKIPPED = Regex(
             """\boverride\b|\bprivate\s+constructor\b|\bprivate\s+set\b|""" +
                 """\bprivate\s+fun\s*<|\bprivate\s+fun\s+\w+\s*[<.]""",
         )
 
-        /**
-         * A type declaration on the same line — which makes any `private val` on it a CONSTRUCTOR PROPERTY,
-         * whose scope is the body those braces open rather than something to exclude. `value class` and
-         * `enum class` are the same shape and were among the false alarms.
-         */
         val TYPE_ON_LINE = Regex("""\b(class|object|interface)\s+\w""")
     }
 }

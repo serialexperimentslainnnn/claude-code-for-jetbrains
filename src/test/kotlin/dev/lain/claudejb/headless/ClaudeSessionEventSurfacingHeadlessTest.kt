@@ -13,10 +13,6 @@ import dev.lain.claudejb.protocol.ThinkingTokensInfo
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.Speaker
 
-/**
- * Headless: the binary->host events surfaced in 3.3.0 reach session state / the transcript, driven through the
- * [ClaudeSession.handleEventForTest] seam without starting the binary.
- */
 class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
 
     private fun flush() = PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()

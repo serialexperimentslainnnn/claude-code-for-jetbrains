@@ -4,11 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the project-free helper on [EditorContextProvider]: the extension→lang map that tags
- * a pasted selection's fence. The editor accessors need a Project/EDT and are exercised in the headless
- * suite instead; the clipboard subsystems have their own tests ([ClipboardCliTest], [ImageAttachmentsTest]).
- */
 class EditorContextProviderTest {
 
     @Test

@@ -4,23 +4,12 @@ import com.intellij.execution.configurations.PathEnvironmentVariableUtil
 import com.intellij.openapi.util.SystemInfo
 import java.io.File
 
-/**
- * Locates the preinstalled native `claude` binary. The plugin never downloads or bundles it
- * (per the project's architecture decision): if it is missing we surface an actionable notification
- * and fail clean.
- */
 object ClaudeBinaryLocator {
 
     private val home: String get() = System.getProperty("user.home").orEmpty()
 
-    /** The `.js` entrypoint an npm `.cmd`/`.bat` shim invokes, `%~dp0`-relative. Compiled once, not per probe. */
     private val SHIM_ENTRYPOINT = Regex("%~dp0[\\\\/]?([^\"\\s]+\\.js)")
 
-    /**
-     * Executable names to try, in priority order. On Windows we must NOT pick the extensionless npm
-     * shim (`%APPDATA%\npm\claude`) — it is a bash script and `CreateProcess` rejects it with
-     * "%1 is not a valid Win32 application" (error 193). Prefer the native `.exe`, then the `.cmd`.
-     */
     internal val executableNames: List<String>
         get() = if (SystemInfo.isWindows) {
             listOf("claude.exe", "claude.cmd", "claude.bat")
@@ -48,15 +37,8 @@ object ClaudeBinaryLocator {
             )
         }
 
-    /**
-     * Returns the executable, or null if it cannot be found. An explicit [override] (from Settings) wins
-     * over all auto-detection — the only catch-all for non-standard installs (custom dirs, version managers,
-     * a GUI IDE that doesn't inherit the user's PATH).
-     */
     fun locate(override: String? = null): File? {
         override?.takeIf { it.isNotBlank() }?.let { path ->
-            // A configured path wins — but if it has gone stale (binary moved/updated), fall through to
-            // auto-detection rather than failing hard.
             File(path).takeIf { it.isFile && it.canExecute() }?.let { return it }
         }
         for (name in executableNames) {
@@ -71,20 +53,12 @@ object ClaudeBinaryLocator {
         return null
     }
 
-    /**
-     * If [binary] is a Windows npm `.cmd`/`.bat` shim, returns the underlying `cli.js` so the caller can
-     * launch `node cli.js …` directly, bypassing cmd.exe. Running the shim through cmd.exe corrupts the
-     * streaming stdio contract: the batch layer mangles argument quoting and turns our stdin EOF (graceful
-     * shutdown) into a blocking "Terminate batch job (Y/N)?" prompt. Returns null when no bypass is needed.
-     */
     fun resolveNodeScript(binary: File): File? {
         if (!SystemInfo.isWindows) return null
         val name = binary.name.lowercase()
         if (!name.endsWith(".cmd") && !name.endsWith(".bat")) return null
         val dir = binary.parentFile ?: return null
-        // npm global layout: <prefix>\claude.cmd  with  <prefix>\node_modules\@anthropic-ai\claude-code\cli.js
         File(dir, "node_modules\\@anthropic-ai\\claude-code\\cli.js").takeIf { it.isFile }?.let { return it }
-        // Fallback: extract the .js entrypoint the shim invokes (paths are %~dp0-relative).
         return runCatching {
             SHIM_ENTRYPOINT.find(binary.readText())
                 ?.groupValues?.get(1)
@@ -93,11 +67,6 @@ object ClaudeBinaryLocator {
         }.getOrNull()
     }
 
-    /**
-     * Resolves a launchable `node` for driving an npm shim. A GUI IDE launched from a shortcut may not
-     * inherit the user's PATH, so we look near the shim and in the standard install dir before falling
-     * back to the bare name `node` (resolved at spawn time from the console parent environment).
-     */
     fun locateNode(near: File?, override: String? = null): String {
         override?.takeIf { it.isNotBlank() }?.let { path ->
             File(path).takeIf { it.isFile && it.canExecute() }?.let { return it.absolutePath }

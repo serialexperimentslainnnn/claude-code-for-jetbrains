@@ -1,84 +1,42 @@
 package dev.lain.claudejb.process
 
-/**
- * Pure parsing helpers for the interactive `claude auth login` output streamed off a PTY (see [ClaudeLoginFlow]).
- *
- * The binary renders an Ink/React TUI full of ANSI escapes and cursor positioning; we only need three signals
- * out of it: the OAuth **authorize URL** (to open the browser ourselves), the **"paste code" prompt** (so we
- * know the binary is waiting for stdin), and a coarse **success/failure** read of the final output. Keeping this
- * logic pure (no process, no IO) makes it unit-testable in plain JVM.
- */
 object LoginOutputParser {
 
-    // CSI / OSC / two-char and single-char ESC sequences emitted by the Ink renderer. Broad on purpose — we
-    // want clean text for substring/URL matching, not a faithful terminal emulation.
     private val ANSI = Regex("(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^]*(?:|\\\\)?|[()][0-9A-Za-z]|[=>78])")
 
-    // The OAuth authorize URL. Restricted to URL-safe characters so it stops at the first whitespace/control the
-    // renderer inserts around it. We match the authorize endpoint specifically to avoid grabbing a help link.
     private val AUTH_URL = Regex("https://[\\w.\\-]+/[\\w./\\-]*oauth/authorize\\?[\\w./?=&%+\\-~:]+")
 
-    // Hints stored in normalized (alphanumeric-only, lower-case) form: the Ink renderer often lays words out
-    // with cursor-move escapes instead of literal spaces, so after stripping ANSI the words run together
-    // ("Paste" + "code" + "here" → "pastecodehere"). Normalizing both sides makes the match layout-agnostic.
     private val CODE_PROMPT_HINTS = listOf("pastecodehere", "pastethecode", "enterthecode", "enteryourcode")
     private val SUCCESS_HINTS = listOf("loginsuccessful", "loggedin", "successfully", "youreallset", "authenticated")
     private val FAILURE_HINTS =
         listOf("invalidcode", "loginfailed", "authenticationfailed", "oautherror", "didnotmatch", "expired", "error")
 
-    /** Removes ANSI escapes so the remaining text can be matched/grepped. */
     fun stripAnsi(text: String): String = ANSI.replace(text, "")
 
-    // Hoisted, not inline: `normalize` runs once per hint per line inside `resultMessage`, and a Regex built in
-    // the function body is recompiled on every one of those calls.
     private val NON_ALNUM = Regex("[^a-z0-9]")
 
-    /** Lower-cases and drops every non-alphanumeric char — collapses cursor-positioned layout into stable tokens. */
     private fun normalize(text: String): String = stripAnsi(text).lowercase().replace(NON_ALNUM, "")
 
-    /** The OAuth authorize URL the binary is sending the user to, or null if it hasn't appeared yet. */
     fun extractAuthUrl(text: String): String? = AUTH_URL.find(stripAnsi(text))?.value
 
-    /** True once the binary is prompting for the authorization code on its TTY stdin. */
     fun isCodePrompt(text: String): Boolean {
         val t = normalize(text)
         return CODE_PROMPT_HINTS.any { it in t }
     }
 
-    /** Coarse failure read of the final (already exited) output — used to override a 0 exit if the text says otherwise. */
     fun looksLikeFailure(text: String): Boolean {
         val t = normalize(text)
         return FAILURE_HINTS.any { it in t }
     }
 
-    /**
-     * The long-lived token `claude setup-token` prints on success, or null while it hasn't appeared.
-     *
-     * Matched by its documented shape — an `sk-ant-` prefixed token — rather than by the surrounding prose,
-     * which the Ink renderer rearranges freely. Deliberately the LAST match: the flow may echo example or
-     * placeholder text before printing the real one. NB the caller must treat the containing buffer as a
-     * secret from this point on: never log it, never put it in a transcript or an error message.
-     */
     fun extractSetupToken(text: String): String? =
         SETUP_TOKEN.findAll(stripAnsi(text)).lastOrNull()?.value
 
     private val SETUP_TOKEN = Regex("sk-ant-[A-Za-z0-9_\\-]{20,}")
 
-    /**
-     * The login output with every `sk-ant-…` token masked and the ANSI stripped — the ONLY form in which any
-     * of this may leave the process (a log line, a notification, the card). A diagnostic that cannot be
-     * written safely does not get written, and a login regression with no trace is invisible: this is what
-     * makes both possible at once.
-     */
     fun redactSecrets(text: String): String = SETUP_TOKEN.replace(stripAnsi(text), "sk-ant-…")
 
-    /**
-     * A short, human-facing result line distilled from the final output. On success returns a confirmation; on
-     * failure tries to surface the binary's own error wording, falling back to a generic retry message.
-     */
     fun resultMessage(text: String, success: Boolean): String {
-        // Whatever line is surfaced, a token must never ride along in it: the message goes to
-        // notifications and the sign-in card, which are exactly the places a secret must not appear.
         val lines = redactSecrets(text).lines().map { it.trim() }.filter { it.isNotEmpty() }
         if (success) {
             return lines.lastMatching(SUCCESS_HINTS)?.let(::withoutKeyPrompt) ?: "You're signed in."
@@ -86,16 +44,9 @@ object LoginOutputParser {
         return lines.lastMatching(FAILURE_HINTS)?.let(::withoutKeyPrompt) ?: "Login failed. Please try again."
     }
 
-    /** The last line whose normalized form carries any of [hints] — normalizing each line ONCE, not per hint. */
     private fun List<String>.lastMatching(hints: List<String>): String? =
         lastOrNull { line -> normalize(line).let { n -> hints.any { it in n } } }
 
-    /**
-     * Drops the TUI's trailing "Press Enter to continue…" / "Press any key to close." instruction.
-     *
-     * Those screens are terminal-only furniture and the plugin answers them itself; repeating them in an IDE
-     * notification would tell the user to press a key on a terminal they never saw.
-     */
     private fun withoutKeyPrompt(line: String): String =
         line.replace(KEY_PROMPT, "").trim().trimEnd(',', ';', '·', '-').trim().ifEmpty { line }
 

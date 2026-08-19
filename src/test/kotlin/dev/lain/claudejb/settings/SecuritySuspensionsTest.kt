@@ -9,28 +9,17 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * The two stores behind *Disable rule* on a guard block, and the property that makes offering it defensible:
- * **every one of them can only ever open a rule for a bounded time, and none of them can allow anything.**
- *
- * A suspension downgrades a rule to ASK — the card is still mandatory — so what these assert is the arithmetic
- * of the bound and the direction each failure falls in. The clock is a parameter throughout: a test that waited
- * five real minutes to check a five-minute suspension is a test nobody runs.
- */
 class SecuritySuspensionsTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
     private val other = SecurityRule.DESTRUCTIVE_CLOUD
     private val t0 = 1_700_000_000_000L
 
-    /** The process-scoped store outlives a test method, so each one hands back what it took. */
     @AfterEach
     fun clearProcessState() {
         SecuritySuspensions.releaseSessionScoped(rule)
         SecuritySuspensions.releaseSessionScoped(other)
     }
-
-    // ── the timed store ─────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a suspension is in force before its instant and gone after it`() {
@@ -43,8 +32,6 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `expiry needs no write - the same stored value answers differently as time passes`() {
-        // The whole reason a suspension heals itself: nothing has to run, be remembered, or be cleaned up. The
-        // guard recomputes the open set on every call, so the rule is enforced again on the very next one.
         val csv = SecuritySuspensions.withSuspension("", rule, 30 * 60_000L, t0)
 
         assertTrue(SecuritySuspensions.active(csv, t0).isNotEmpty())
@@ -87,8 +74,6 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `a garbled entry fails safe - it opens nothing`() {
-        // The direction of every failure in this file. A stale rule name, a missing instant, a value that is not
-        // a number: each can only ever fail to OPEN a rule, which costs a card and never a credential.
         val csv = "NOT_A_RULE=${t0 + 60_000},${rule.name}=not-a-number,${rule.name},=123"
 
         assertTrue(SecuritySuspensions.active(csv, t0).isEmpty())
@@ -107,14 +92,11 @@ class SecuritySuspensionsTest {
         assertFalse(rule in SecuritySuspensions.active(csv, t0 + 9 * 60 * 60_000L))
     }
 
-    // ── the process-scoped store ────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `until-the-IDE-closes is process state and is never written to the document`() {
         SecuritySuspensions.suspendUntilIdeCloses(rule)
 
         assertEquals(setOf(rule), SecuritySuspensions.sessionSuspended())
-        // The IDE going away IS the expiry, so persisting it would let it outlive its own meaning.
         assertTrue(SecuritySuspensions.active("", t0).isEmpty(), "nothing timed was stored")
     }
 
@@ -128,11 +110,8 @@ class SecuritySuspensionsTest {
         assertEquals(setOf(other), SecuritySuspensions.sessionSuspended(), "one switch releases one rule")
     }
 
-    // ── the duration vocabulary ─────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `an unknown duration token is refused rather than defaulted`() {
-        // A guessed default here would be a security rule opened by a message nobody authored.
         assertNull(SecuritySuspensions.Duration.from("7m"))
         assertNull(SecuritySuspensions.Duration.from(""))
         assertNull(SecuritySuspensions.Duration.from(null))
@@ -140,8 +119,6 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `every choice reads as English in the confirming sentence`() {
-        // The row the user gets after clicking is the only confirmation there is, so a choice whose phrase was
-        // derived from its menu label ("disabled for forever") would ship a broken sentence on a security control.
         SecuritySuspensions.Duration.entries.forEach { d ->
             val sentence = "Destructive IaC is disabled ${d.phrase}."
             assertTrue(d.phrase.isNotBlank(), "${d.name} has no phrase")
@@ -160,11 +137,6 @@ class SecuritySuspensionsTest {
         }
     }
 
-    /**
-     * The menu the user actually clicks is built in JavaScript, so the two lists have to agree, and review is
-     * not a mechanism. A token the page offers and the host does not know would render a menu entry that does
-     * nothing — the "dead control" failure this repository has shipped before.
-     */
     @Test
     fun `the page offers exactly the durations the host understands`() {
         val js = File("src/main/resources/jcef/app-transcript-rows.js")
@@ -175,10 +147,6 @@ class SecuritySuspensionsTest {
     }
 }
 
-/**
- * "Always allow" on a guard card, and the one distinction that keeps it from being a hole: it remembers a
- * COMMAND, filed under the rule that stopped it — never a tool, and never the rule itself.
- */
 class SecurityCommandApprovalsTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
@@ -189,8 +157,6 @@ class SecurityCommandApprovalsTest {
         val lines = SecurityCommandApprovals.withApproval("", rule, "terraform destroy")
 
         assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy"))
-        // THE property. One click on a `terraform destroy` card must not open everything else the same rule
-        // stops — which is exactly what a tool-level answer ("Bash") would have done.
         assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy -auto-approve"))
         assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform apply"))
     }
@@ -204,8 +170,6 @@ class SecurityCommandApprovalsTest {
 
     @Test
     fun `a blank command is never stored`() {
-        // A call with no command text has nothing exact to remember, and an empty entry would match every such
-        // call under that rule — the tool-wide bypass this design exists to avoid.
         assertEquals("", SecurityCommandApprovals.withApproval("", rule, null))
         assertEquals("", SecurityCommandApprovals.withApproval("", rule, "   "))
         assertFalse(SecurityCommandApprovals.isApproved("${rule.name}=", rule, ""))

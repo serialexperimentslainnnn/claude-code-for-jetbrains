@@ -9,16 +9,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 
-/**
- * [SecurityRule.SCRIPT_EXECUTION] against **real files on disk**, because the whole rule is about reading one.
- *
- * The scripts are written into a JUnit [TempDir] at run time and go away with it: nothing is committed, nothing
- * has to be ignored, and the test is hermetic — the same reason the fixture builds its own `PATH`-shaped
- * environment instead of reading the machine's.
- *
- * The reader is the real one in shape (`File.readText` behind a size cap), so what is exercised is the path the
- * plugin actually takes: `SettingsSensitivePolicy` injects exactly this.
- */
 class ScriptAnalysisTest {
 
     @TempDir
@@ -36,7 +26,6 @@ class ScriptAnalysisTest {
         fileReader = { path -> runCatching { java.io.File(path).takeIf { it.isFile }?.readText() }.getOrNull() },
     )
 
-    /** Writes [body] as `<project>/<name>` and returns the path the guard will be asked to read. */
     private fun script(name: String, body: String): Path {
         val file = Path.of(project).resolve(name)
         java.nio.file.Files.createDirectories(file.parent)
@@ -51,8 +40,6 @@ class ScriptAnalysisTest {
     private fun why(cmd: String, p: SensitiveGuard.Policy = policy()) =
         SensitiveGuard.evaluate(bash(cmd), p).reason.orEmpty()
 
-    // ── the point of the rule: a clean script costs nothing ──────────────────────────────────────────────
-
     @Test
     fun `a script that trips no rule runs unasked`() {
         script("gradlew", "#!/bin/sh\nexec java -jar gradle/wrapper/gradle-wrapper.jar \"$@\"\n")
@@ -63,8 +50,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `a build wrapper full of variables and substitutions is still clean — the OPAQUE rules stop at depth 0`() {
-        // Every real wrapper is made of these. If "could every variable be resolved" applied inside a script,
-        // this would be a card on every build, which is how the rule would get switched off in its first hour.
         script(
             "mvnw",
             """
@@ -76,8 +61,6 @@ class ScriptAnalysisTest {
         )
         assertEquals(Verdict.ALLOW, v("./mvnw -q test"))
     }
-
-    // ── and the point of reading it: the payload is judged, with its own wording ──────────────────────────
 
     @Test
     fun `a sourced script that dumps a key is refused AS a key dump, naming the script`() {
@@ -112,8 +95,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `a script that runs an intrusion tool or a reverse shell is caught inside it`() {
-        // The whole rule set applies to a script's contents, the new intrusion family included: a payload dropped
-        // one file away is judged exactly as if it had been typed.
         script("recon.sh", "#!/bin/sh\nnmap -sS 10.0.0.0/24\n")
         assertEquals(Verdict.DENY, v("./recon.sh"))
         assertTrue(why("./recon.sh").contains("intrusion technique"), why("./recon.sh"))
@@ -128,11 +109,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `an ordinary python script is not refused because the analyser read it as shell`() {
-        // The contents of a script are matched as text, which is what lets the same rules cover every language.
-        // What must NOT happen is the shell's *grammar* being imposed on that text: `source` is a POSIX builtin
-        // and, in every other language on earth, an ordinary variable name. Reading `source = f.read_text()` as
-        // "source the file named `=`" invents a path nobody wrote, fails to open it, and refuses the call with a
-        // message about a file that does not exist — the analyser's own limitation charged to the user.
         script(
             "gen.py",
             """
@@ -148,14 +124,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `a script doing ordinary file work is not refused for being a script that does file work`() {
-        // A script is MADE of file operations — that is what a script IS. The same argument that keeps the two
-        // OPAQUE rules out of a file the guard is reading applies verbatim here: judging "this writes files"
-        // inside a script refuses every build, setup and CI helper on earth, and a rule that refuses everything
-        // is a rule that gets switched off, taking the ones that matter with it.
-        //
-        // What is NOT relaxed is WHERE it writes. The location rules run at every depth, so the same script
-        // writing into a credential path, another user's home or a device is still caught — by the rule that
-        // names the actual danger, which is the more informative answer anyway.
         script(
             "setup.sh",
             "#!/bin/sh\nmkdir -p build/gen\ncp template.txt build/gen/out.txt\nrm -f build/gen/stale\n" +
@@ -173,16 +141,11 @@ class ScriptAnalysisTest {
 
     @Test
     fun `no language turns an operator into a filename`() {
-        // The family, not the instance. A capture that yields `=`, `.` or `-` has not found a path — it has found
-        // punctuation — and anchoring it produces a file that cannot exist, whose unreadability is then reported
-        // as a finding. Every one of these bodies is ordinary code in its language.
         script("a.rb", "source = File.read('in.txt')\nputs source\n")
         script("b.js", "const source = fs.readFileSync('in.txt');\nconsole.log(source);\n")
         script("c.sh", "#!/bin/sh\nsource=\"in.txt\"\necho \"\$source\"\n")
         listOf("ruby a.rb", "node b.js", "sh c.sh").forEach { assertEquals(Verdict.ALLOW, v(it), it) }
     }
-
-    // ── recursion, and the bound that ends it ────────────────────────────────────────────────────────────
 
     @Test
     fun `a script that sources a script that dumps a key is still caught`() {
@@ -196,8 +159,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `nesting deeper than the bound is a hard block for every caller`() {
-        // Six links: within the bound nothing is found, so the only honest answer is that the call is built not to
-        // be analysable — and that is a refusal, not a card.
         (0..6).forEach { i -> script("s$i.sh", "#!/bin/sh\nsource ./s${i + 1}.sh\n") }
         assertEquals(Verdict.DENY, v("./s0.sh"))
         assertEquals(Verdict.DENY, v("./s0.sh"))
@@ -209,8 +170,6 @@ class ScriptAnalysisTest {
         script("loop.sh", "#!/bin/sh\nsource ./loop.sh\n")
         assertEquals(Verdict.DENY, v("./loop.sh"))
     }
-
-    // ── what the guard cannot read ───────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a script that does not exist yet is opaque, so it is a card`() {
@@ -225,8 +184,6 @@ class ScriptAnalysisTest {
         assertEquals(Verdict.DENY, v("./clean.sh", blind))
     }
 
-    // ── the two halves meet: a variable resolving to a script the guard then reads ────────────────────────
-
     @Test
     fun `a script named through a resolvable variable is read, not merely flagged as a variable`() {
         script("run.sh", "#!/bin/sh\ncat $home/.ssh/id_rsa\n")
@@ -236,7 +193,6 @@ class ScriptAnalysisTest {
 
     @Test
     fun `a write followed by a source is caught at the source, which is the laundering path`() {
-        // The write itself is a card (SHELL_FILE_WRITE); this pins the SECOND call, which used to be invisible.
         script("staged.sh", "#!/bin/sh\ngpg --export-secret-keys > /tmp/k.asc\n")
         val reason = why("source ./staged.sh")
         assertTrue(reason.contains("expose secrets") || reason.contains("credentials"), reason)

@@ -3,7 +3,6 @@ package dev.lain.claudejb.session
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/** Pure tests for the live reasoning-token status suffix (coarse bucketing, blank at zero). */
 class StatusLineFormatterTest {
 
     @Test

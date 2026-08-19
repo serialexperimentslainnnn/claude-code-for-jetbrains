@@ -8,9 +8,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 
-/**
- * [LiveOutputTail] — "what is new since I last looked", which is what makes polling a growing file affordable.
- */
 class LiveOutputTailTest {
 
     @TempDir
@@ -37,8 +34,6 @@ class LiveOutputTailTest {
         val tail = LiveOutputTail()
         append(file, "aaaa\n")
         tail.readNew(file)
-        // Rotation or a rewrite: continuing from the old offset would hand back a fragment of the new
-        // content starting mid-line, which reads as corruption.
         Files.writeString(file, "b\n")
         assertEquals("b\n", tail.readNew(file))
     }
@@ -54,7 +49,6 @@ class LiveOutputTailTest {
     fun `a huge burst is truncated to its tail rather than pushed whole`() {
         val file = dir.resolve("big.out")
         val tail = LiveOutputTail()
-        // 300 KB in one go: a build log between two polls. The view is of a running thing, not an archive.
         append(file, "x".repeat(300_000) + "END")
         val read = tail.readNew(file)
         assertTrue(read.length < 300_000, "expected a truncated chunk, got ${read.length}")

@@ -16,19 +16,6 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.io.path.createTempDirectory
 
-/**
- * [ApiKeyApproval] and [ConsoleApiKey] both write to `~/.claude.json` — **the user's own CLI config, shared
- * with every terminal on the machine**. The rule both live under is that they AMEND it: the field they came
- * for changes and nothing else does, and a file that cannot be read is left alone rather than replaced.
- *
- * That rule had no test. It is the kind that holds until someone reaches for `writeText(buildJsonObject { … })`
- * with only the field they care about in it, at which point a user loses their MCP servers, their project
- * history and their tool allowlists to a two-line change that looked obviously correct.
- *
- * Everything here runs against a TEMPORARY home ([ApiKeyApproval.homeOverride]) — the same hard rule as
- * `CredentialsVault.homeOverride`, and for the same reason: without it these tests edit the developer's live
- * configuration.
- */
 class ApiKeyApprovalTest {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -37,7 +24,6 @@ class ApiKeyApprovalTest {
 
     private val config get() = ApiKeyApproval.configFile()
 
-    /** A config with the things a real one carries and none of which are ours to lose. */
     private val existing = """
         {
           "numStartups": 42,
@@ -69,8 +55,6 @@ class ApiKeyApprovalTest {
     private fun approvedList(root: JsonObject): List<String> =
         root["customApiKeyResponses"]!!.jsonObject["approved"]!!.jsonArray.map { it.jsonPrimitive.content }
 
-    // ── the amendment ────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `approve records the suffix and leaves every other field byte-for-byte equivalent`() {
         write(existing)
@@ -79,9 +63,7 @@ class ApiKeyApprovalTest {
         assertTrue(ApiKeyApproval.approve("sk-ant-api03-" + "a".repeat(60)))
 
         val after = read()
-        // Every original key survives, with exactly its original value — nested objects included.
         before.forEach { (k, v) -> assertEquals(v, after[k], "field `$k` was not preserved") }
-        // And the only new key is the one we came for.
         assertEquals(before.keys + "customApiKeyResponses", after.keys)
     }
 
@@ -144,8 +126,6 @@ class ApiKeyApprovalTest {
         assertEquals(JsonPrimitive(1), responses["somethingElse"]!!.jsonObject["a"])
     }
 
-    // ── refusals: a corrupt read must never become a corrupt write ───────────────────────────────────────
-
     @Test
     fun `a missing config is not created`() {
         assertFalse(config.exists())
@@ -169,8 +149,6 @@ class ApiKeyApprovalTest {
         assertEquals(json.parseToJsonElement(existing), json.parseToJsonElement(config.readText()))
     }
 
-    // ── ConsoleApiKey: the same file, the same amendment rule ────────────────────────────────────────────
-
     @Test
     fun `harvesting the Console key strips it and preserves the rest of the config`() {
         val key = "sk-ant-api03-" + "h".repeat(60)
@@ -189,7 +167,6 @@ class ApiKeyApprovalTest {
         assertFalse(config.readText().contains(key))
         assertEquals(JsonPrimitive(42), after["numStartups"])
         assertEquals("sse", after["mcpServers"]!!.jsonObject["jetbrains"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        // The approval the binary wrote stays: it identifies the key by suffix and is not a credential.
         assertEquals(listOf(key.takeLast(20)), approvedList(after))
     }
 
@@ -200,13 +177,8 @@ class ApiKeyApprovalTest {
         assertEquals(json.parseToJsonElement(existing), json.parseToJsonElement(config.readText()))
     }
 
-    // ── the two seams onto ~/.claude.json must agree ─────────────────────────────────────────────────────
-
     @Test
     fun `ApiKeyApproval and AccountProfile resolve the SAME file`() {
-        // They hold INDEPENDENT `homeOverride` fields, so the only thing stopping a test from giving one a
-        // temp home and the other the developer's real one is that both resolve the path the same way. Pin
-        // it: a split view here means one of them amending a file the other never read.
         assertEquals(ApiKeyApproval.configFile().absolutePath, AccountProfile.configFile().absolutePath)
         assertEquals(File(home, ".claude.json").absolutePath, ApiKeyApproval.configFile().absolutePath)
     }

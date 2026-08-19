@@ -4,21 +4,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **The Git dependency must be declared, and declared OPTIONAL.**
- *
- * Two failure modes, opposite in direction, and this pins both.
- *
- * *Undeclared* is the failure `JcefDependencyContractTest` exists for: the Gradle `bundledPlugin(…)` covers
- * COMPILATION only. Without the matching `<depends>` in the descriptor, `git4idea.*` is not in this plugin's
- * classloader at runtime, and the first call dies with `NoClassDefFoundError` — a break `verifyPlugin` cannot
- * see, because it resolves against the whole IDE distribution rather than against our classloader.
- *
- * *Hard* is the failure specific to THIS dependency. JCEF is declared hard because there is no browser-less mode
- * to degrade to. Git is the opposite: a hard `<depends>Git4Idea</depends>` would make the plugin refuse to load
- * in any IDE where the user has disabled Git — taking the chat, which has nothing to do with version control,
- * down with it. So it is optional, with `claude-git.xml` as its config file, and the code degrades instead.
- */
 class GitDependencyContractTest {
 
     private val main = File("src/main")
@@ -27,7 +12,7 @@ class GitDependencyContractTest {
     @Test
     fun `the descriptor declares Git4Idea whenever the sources use it`() {
         val usesGit = gitPackageSources().any { "git4idea" in it.readText() }
-        if (!usesGit) return // nothing to declare
+        if (!usesGit) return
         assertTrue(
             DEPENDS.containsMatchIn(descriptor),
             "The sources import git4idea, so META-INF/plugin.xml MUST declare Git4Idea as a dependency — the " +

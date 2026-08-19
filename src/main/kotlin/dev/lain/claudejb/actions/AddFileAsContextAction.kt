@@ -6,11 +6,6 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import dev.lain.claudejb.context.EditorContextProvider
 
-/**
- * Editor-popup action: pin the active file as an [dev.lain.claudejb.context.Attachment.FileRef] chip on the active
- * chat composer (via [AttachmentActions.pin]), so it travels with the user's next prompt. Enabled only when there
- * is a focused editor under a project.
- */
 class AddFileAsContextAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -24,10 +19,5 @@ class AddFileAsContextAction : AnAction() {
         e.presentation.isEnabledAndVisible = hasFile && e.project != null
     }
 
-    /**
-     * BGT: [update] reads nothing but the [AnActionEvent]'s data context, which the platform resolves for a
-     * background update by design. (The sibling selection actions stay on the EDT — they dereference
-     * `Editor.selectionModel`, which is EDT-bound; this one does not.)
-     */
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 }

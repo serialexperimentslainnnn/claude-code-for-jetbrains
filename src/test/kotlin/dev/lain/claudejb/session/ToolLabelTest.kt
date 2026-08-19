@@ -8,14 +8,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-JVM coverage of the tool-card label + its jump-to-code path ([ToolNaming.formatToolUse] /
- * [ToolNaming.toolFilePath] / [ToolNaming.relativizeToRoot]).
- *
- * These three decide what the transcript row says AND which substring the frontend turns into a link — the
- * frontend links the path by locating it *inside* the label, so "the label contains exactly the string
- * `toolFilePath` returned" is the contract that must not drift.
- */
 class ToolLabelTest {
 
     private val root = "/home/u/proj"
@@ -23,8 +15,6 @@ class ToolLabelTest {
     private fun input(vararg pairs: Pair<String, String>) = buildJsonObject {
         pairs.forEach { (k, v) -> put(k, v) }
     }
-
-    // ── relativizeToRoot ─────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `relativizeToRoot strips the project root`() {
@@ -39,7 +29,6 @@ class ToolLabelTest {
     @Test
     fun `relativizeToRoot leaves a path outside the root untouched`() {
         assertEquals("/etc/passwd", ToolNaming.relativizeToRoot("/etc/passwd", root))
-        // A sibling directory that merely shares the root's prefix is NOT inside it.
         assertEquals("/home/u/proj-other/x.kt", ToolNaming.relativizeToRoot("/home/u/proj-other/x.kt", root))
     }
 
@@ -53,8 +42,6 @@ class ToolLabelTest {
     fun `relativizeToRoot normalises Windows separators`() {
         assertEquals("src/Foo.kt", ToolNaming.relativizeToRoot("C:\\p\\src\\Foo.kt", "C:\\p"))
     }
-
-    // ── toolFilePath ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `toolFilePath returns the project-relative path for a file tool`() {
@@ -78,15 +65,12 @@ class ToolLabelTest {
         assertNull(ToolNaming.toolFilePath("Read", input("file_path" to "  "), root))
     }
 
-    // ── formatToolUse ────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `formatToolUse shows a file tool's path relative to the project`() {
         val label = ToolNaming.formatToolUse("Read", input("file_path" to "$root/src/main/Foo.kt"), root)
         assertEquals("Read(src/main/Foo.kt)", label)
     }
 
-    /** The frontend links the path by finding it inside the label — so the label MUST contain it verbatim. */
     @Test
     fun `formatToolUse label contains the toolFilePath verbatim`() {
         val i = input("file_path" to "$root/src/main/Foo.kt")
@@ -118,14 +102,11 @@ class ToolLabelTest {
         assertEquals("TodoWrite", ToolNaming.formatToolUse("TodoWrite", buildJsonObject { }, root))
     }
 
-    // ── mayHaveWrittenUnknownFiles: which tools force a project-tree VFS refresh ──────────────────────────
-
     @Test
     fun `Bash may have written anything`() {
         assertTrue(ToolNaming.mayHaveWrittenUnknownFiles("Bash"))
     }
 
-    /** These write files we KNOW: the per-path refresh covers them exactly, no tree crawl needed. */
     @Test
     fun `the file tools are refreshed by path, not by tree`() {
         listOf("Read", "Edit", "Write", "MultiEdit", "NotebookEdit").forEach {

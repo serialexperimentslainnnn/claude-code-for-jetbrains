@@ -3,12 +3,6 @@ package dev.lain.claudejb.protocol
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// ---------------------------------------------------------------------------
-// Incoming SDKMessage payloads (subset we care about). Verified against
-// node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts (claudeCodeVersion 2.1.150).
-// ---------------------------------------------------------------------------
-
-/** `{"type":"system","subtype":"init", ...}` — first message; carries the session id to --resume. */
 @Serializable
 data class SystemInit(
     @SerialName("session_id") val sessionId: String = "",
@@ -25,16 +19,11 @@ data class SystemInit(
 @Serializable
 data class McpServerStatus(val name: String = "", val status: String = "")
 
-/**
- * `{"type":"result","subtype":"success|error_*", ...}` — end of a turn. Watching for this is how
- * the host knows the agent is idle again and can flush the next queued (multiprompt) message.
- */
 @Serializable
 data class ResultMessage(
     val subtype: String = "",
     @SerialName("is_error") val isError: Boolean = false,
     val result: String = "",
-    // error_* subtypes carry no `result`; their message(s) arrive here (sdk.d.ts SDKResultError.errors).
     val errors: List<String> = emptyList(),
     @SerialName("session_id") val sessionId: String = "",
     @SerialName("total_cost_usd") val totalCostUsd: Double = 0.0,
@@ -42,7 +31,6 @@ data class ResultMessage(
     @SerialName("duration_ms") val durationMs: Long = 0,
 )
 
-/** Inner Anthropic BetaMessage of `{"type":"assistant","message":{...}}`. Content blocks are dispatched manually. */
 @Serializable
 data class AssistantInner(
     val id: String = "",

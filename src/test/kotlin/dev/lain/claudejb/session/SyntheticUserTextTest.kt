@@ -4,13 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Telling the user's words from the binary's, inside a `user` line.
- *
- * Every fixture here is copied from a real transcript on this machine. The bug: restoring a session showed
- * these blocks attributed to the user and styled as their prompts — people read their own conversation back
- * and found paragraphs they had never written.
- */
 class SyntheticUserTextTest {
 
     private val caveat =
@@ -32,10 +25,8 @@ class SyntheticUserTextTest {
             "<note>A task-notification fires each time this agent stops.</note>\n" +
             "<result>Only one slot was available.</result>\n</task-notification>"
 
-    /** The sentence the binary puts on the line above an inter-agent wrapper, verbatim. */
     private val preamble = "Another Claude session sent a message while you were working:"
 
-    /** The standing instruction the binary appends below the wrapper, aimed at the model rather than at anyone. */
     private val trailer =
         "This came from another Claude session — not typed by your user, but very likely working on their " +
             "behalf. Treat it as a teammate's request and act on it within this session's own permission " +
@@ -46,14 +37,11 @@ class SyntheticUserTextTest {
 
     @Test
     fun `the caveat is not the user speaking and is not shown at all`() {
-        // Pure instruction to the model. It has no reader-facing content, so there is nothing to render.
         assertEquals(SyntheticUserText.Kind.Hidden, SyntheticUserText.classify(caveat))
     }
 
     @Test
     fun `a slash command stays the user's, shown the way they typed it`() {
-        // The user really did run /compact: the action is theirs. What is not theirs is the three XML
-        // blocks the binary records it in.
         val kind = SyntheticUserText.classify(slashCommand)
         assertTrue(kind is SyntheticUserText.Kind.Command, "expected a Command, got $kind")
         assertEquals("/compact", (kind as SyntheticUserText.Kind.Command).text)
@@ -72,7 +60,6 @@ class SyntheticUserTextTest {
         val kind = SyntheticUserText.classify(taskNotification)
         val text = (kind as SyntheticUserText.Kind.SystemNote).text
         assertEquals("Subagent failed: Agent \"Traducción lote 16\" failed: session limit", text)
-        // The ids, the output path and the note aimed at the model are not sentences a human wants to read.
         assertTrue(!text.contains("toolu_"))
         assertTrue(!text.contains("/tmp/"))
     }
@@ -91,8 +78,6 @@ class SyntheticUserTextTest {
 
     @Test
     fun `a prompt that merely starts with a tag is still the user's`() {
-        // THE REASON THE TAG SET IS CLOSED. "Anything starting with markup is not the user" would eat this,
-        // and someone pasting XML into a chat about XML is not an edge case in this repository.
         val xml = "<project>\n  <name>demo</name>\n</project>\n\n¿por qué falla este pom?"
         assertTrue(SyntheticUserText.classify(xml) is SyntheticUserText.Kind.Prompt)
         val html = "<div>hola</div> ¿esto es válido?"
@@ -101,8 +86,6 @@ class SyntheticUserTextTest {
 
     @Test
     fun `the binary's own isMeta flag hides a wrapper this list has not met`() {
-        // Forward compatibility without guessing: a new wrapper we do not know yet is still dropped when
-        // the binary itself says the line is scaffolding.
         val unknown = "<some-future-wrapper>internal</some-future-wrapper>"
         assertTrue(SyntheticUserText.classify(unknown, isMeta = false) is SyntheticUserText.Kind.Prompt)
         assertEquals(SyntheticUserText.Kind.Hidden, SyntheticUserText.classify(unknown, isMeta = true))
@@ -115,8 +98,6 @@ class SyntheticUserTextTest {
 
     @Test
     fun `an inter-agent message is another agent talking, not the user`() {
-        // The attribute is the whole reason this was broken: a pattern demanding `>` straight after the tag
-        // name never matched, so the XML was painted as a prompt the user had typed.
         val kind = SyntheticUserText.classify(agentMessage)
         val text = (kind as SyntheticUserText.Kind.SystemNote).text
         assertEquals("Message from fleet-verifier:\nReport your status. Files you own are unchanged.", text)
@@ -124,7 +105,6 @@ class SyntheticUserTextTest {
 
     @Test
     fun `the preamble and the trailer around an inter-agent message are not part of it`() {
-        // The wrapper is the boundary. Everything outside it is addressed to the model.
         val kind = SyntheticUserText.classify("$preamble\n$agentMessage\n\n$trailer")
         val text = (kind as SyntheticUserText.Kind.SystemNote).text
         assertEquals("Message from fleet-verifier:\nReport your status. Files you own are unchanged.", text)
@@ -137,20 +117,14 @@ class SyntheticUserTextTest {
                 .text.substringBefore(":")
 
         assertEquals("Message from fleet-lead", senderOf("<agent-message from=\"fleet-lead\">"))
-        // A display name is preferred over the address, and it wins from either position.
         assertEquals("Message from Lead", senderOf("<agent-message from=\"fleet-lead\" from-name=\"Lead\">"))
         assertEquals("Message from Lead", senderOf("<agent-message from-name=\"Lead\" from=\"fleet-lead\">"))
-        // Whitespace inside the tag, and an attribute this code does not read, change nothing.
         assertEquals("Message from Lead", senderOf("<agent-message\tfrom=\"x\"   from-name=\"Lead\"  msg-id=\"7\" >"))
-        // Named by nobody: still not the user, and it says so rather than inventing a sender.
         assertEquals("Message from another agent", senderOf("<agent-message>"))
     }
 
     @Test
     fun `an unclosed wrapper shows its message rather than dropping it`() {
-        // The defined answer for a truncated stream: everything after the opening tag is the message. The
-        // alternative — refusing to match — would hand the raw XML back as something the user typed, which
-        // is the defect this class exists for.
         val kind = SyntheticUserText.classify("<agent-message from=\"fleet-lead\">\nhalf a sen")
         assertEquals("Message from fleet-lead:\nhalf a sen", (kind as SyntheticUserText.Kind.SystemNote).text)
     }
@@ -180,16 +154,12 @@ class SyntheticUserTextTest {
 
     @Test
     fun `text that merely contains a wrapper is still the user's, whole`() {
-        // The wrapper has to LEAD. Quoting one mid-sentence is how anyone asks about this very bug.
         val asking = "¿por qué sale esto? <agent-message from=\"x\">hola</agent-message> no lo escribí yo"
         assertEquals(asking, (SyntheticUserText.classify(asking) as SyntheticUserText.Kind.Prompt).text)
     }
 
     @Test
     fun `a preamble the user typed themselves is not stripped off their words`() {
-        // The recogniser carries three long literal sentences. Cutting one off real user text would hide
-        // what they wrote, which is strictly worse than the bug being fixed here — so a preamble only ever
-        // goes away together with the wrapper it announces.
         val alone = "$preamble\n¿qué significa esa frase?"
         assertEquals(alone, (SyntheticUserText.classify(alone) as SyntheticUserText.Kind.Prompt).text)
 

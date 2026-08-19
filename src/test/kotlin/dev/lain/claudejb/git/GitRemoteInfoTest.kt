@@ -4,18 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * The remote-URL parse, on a bare JVM: no IDE, no repository, no network.
- *
- * Every shape here is one Git genuinely writes into `.git/config`, and the ones that matter are the ones that are
- * NOT URLs — scp syntax (`git@host:owner/repo.git`) has no scheme and uses the colon as a path separator, so a real
- * URL parser reads `owner/repo.git` as the port. The rest of the cases are the ways the same URL varies in the
- * wild: with and without `.git`, with a port, with credentials, nested GitLab groups, a self-hosted host, and a
- * remote that is a directory on this machine.
- */
 class GitRemoteInfoTest {
-
-    // ── https ─────────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `an https GitHub url yields provider, owner and repo`() {
@@ -41,15 +30,11 @@ class GitRemoteInfoTest {
 
     @Test
     fun `credentials in the url do not become the host, and never reach the parsed fields`() {
-        // A token pasted into the remote URL is a real (bad) habit. Whatever else happens, it must not be mistaken
-        // for the hostname, or the provider is decided on a secret.
         val remote = GitRemoteInfo.parse("https://oauth2:glpat-secret@gitlab.com/group/repo.git")
         assertEquals(GitRemoteProvider.GITLAB, remote.provider)
         assertEquals("group", remote.owner)
         assertEquals("repo", remote.repo)
     }
-
-    // ── ssh, both spellings ───────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `scp syntax is not a url and is parsed as its own shape`() {
@@ -61,8 +46,6 @@ class GitRemoteInfoTest {
 
     @Test
     fun `an ssh url with an explicit port keeps the port out of the host`() {
-        // The port is exactly where scp syntax and ssh URLs disagree, and reading it as part of the hostname is
-        // what turns `github.com:22` into an unknown provider.
         val remote = GitRemoteInfo.parse("ssh://git@github.com:22/anthropics/claude-code.git")
         assertEquals(GitRemoteProvider.GITHUB, remote.provider)
         assertEquals("anthropics", remote.owner)
@@ -76,8 +59,6 @@ class GitRemoteInfoTest {
         assertEquals("anthropics", remote.owner)
     }
 
-    // ── provider detection ────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a self-hosted GitLab is recognised by its host label, not by the dot-com`() {
         val remote = GitRemoteInfo.parse("git@gitlab.example.com:platform/tooling/deploy.git")
@@ -88,8 +69,6 @@ class GitRemoteInfoTest {
 
     @Test
     fun `a nested GitLab group keeps every level of the namespace`() {
-        // Losing a level here is not cosmetic: `group/repo` is a different project from `group/sub/repo`, and both
-        // exist.
         val remote = GitRemoteInfo.parse("https://gitlab.com/a/b/c/thing.git")
         assertEquals("a/b/c", remote.owner)
         assertEquals("thing", remote.repo)
@@ -97,7 +76,6 @@ class GitRemoteInfoTest {
 
     @Test
     fun `a host that merely contains the word is not the provider`() {
-        // The whole reason detection is per dot-separated label: a substring test says GitHub to this one.
         val remote = GitRemoteInfo.parse("https://mygithub.example.org/team/app.git")
         assertEquals(GitRemoteProvider.OTHER, remote.provider)
         assertEquals("team", remote.owner)
@@ -115,12 +93,8 @@ class GitRemoteInfoTest {
         assertEquals("Anthropics", GitRemoteInfo.parse("https://GitHub.com/Anthropics/Claude-Code.git").owner)
     }
 
-    // ── local remotes and rubbish ─────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a local path has a repository but no owner`() {
-        // `/srv/git` is a directory, not a namespace. Reporting it as the owner would put it where a UI expects an
-        // organisation, which reads as a fact and is not one.
         val remote = GitRemoteInfo.parse("/srv/git/mirror.git")
         assertEquals(GitRemoteProvider.OTHER, remote.provider)
         assertNull(remote.owner)
@@ -136,8 +110,6 @@ class GitRemoteInfoTest {
 
     @Test
     fun `a windows path is not a host called C`() {
-        // The colon here is a drive letter, and treating it as the scp separator makes `C` the hostname and
-        // everything after it a namespace.
         val remote = GitRemoteInfo.parse("C:/repos/thing")
         assertEquals(GitRemoteProvider.OTHER, remote.provider)
         assertNull(remote.owner)
@@ -165,9 +137,6 @@ class GitRemoteInfoTest {
 
     @Test
     fun `rubbish is carried through verbatim instead of being guessed at`() {
-        // The parse is faithful, not clever: what it cannot read as a host it reads as a path, and the URL itself
-        // is always intact for a caller to show. Nothing here throws, because a malformed remote in someone's
-        // config must not be able to take the Git view down.
         val junk = GitRemoteInfo.parse("::::")
         assertEquals("::::", junk.url)
         assertEquals(GitRemoteProvider.OTHER, junk.provider)
@@ -186,12 +155,8 @@ class GitRemoteInfoTest {
         assertEquals("anthropics", remote.owner)
     }
 
-    // ── value semantics ───────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `two parses of the same url are the same value`() {
-        // Same reason as GitCommitInfo: the dashboard re-pushes its model on every tick and skips the repaint when
-        // nothing changed. Equality on the model is what that skip is.
         val url = "git@github.com:anthropics/claude-code.git"
         assertEquals(GitRemoteInfo.parse(url), GitRemoteInfo.parse(url))
         assertEquals(GitRemoteInfo.parse(url).hashCode(), GitRemoteInfo.parse(url).hashCode())

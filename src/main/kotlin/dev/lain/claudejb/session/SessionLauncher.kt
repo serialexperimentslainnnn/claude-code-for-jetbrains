@@ -7,29 +7,12 @@ import dev.lain.claudejb.process.PluginContextPrompt
 import dev.lain.claudejb.util.InstalledPlugins
 import java.io.File
 
-/**
- * Pure(-ish) assembly of the `claude` process launch: the CLI argument vector and the `--mcp-config` JSON, lifted
- * verbatim out of [ClaudeSession] so the launch contract can be unit-tested in isolation. Every input arrives as an
- * immutable [LaunchOptions] snapshot — the session captures its volatile state once and hands it here, so no
- * session/platform mutation can race the build.
- *
- * - [buildArgs] is PURE: identical inputs → identical output; no IDE coupling. The argument order and the flags must
- *   match the historical [ClaudeSession.buildArgs] byte-for-byte (the binary parses them).
- * - [mcpConfigJson] / [resolveStdioParams] / [findMcpServerLib] touch the running IDE (PathManager / PluginManager,
- *   public API only — no `@ApiStatus.Internal` descriptor lookups) to synthesize the stdio transport command; the
- *   JSON shape itself is delegated to the already-pure [McpConfigBuilder].
- */
 object SessionLauncher {
 
     private val log = thisLogger()
 
-    /** JetBrains' bundled MCP Server plugin — the one we drive over stdio when IDE tools are enabled. */
     private const val MCP_SERVER_PLUGIN_ID = "com.intellij.mcpServer"
 
-    /**
-     * Immutable snapshot of every launch-affecting session option. Mirrors the fields [ClaudeSession] reads inside
-     * [buildArgs] / [mcpConfigJson]; the session builds one of these from its volatile state before each (re)start.
-     */
     data class LaunchOptions(
         val model: String?,
         val effort: String?,
@@ -44,7 +27,6 @@ object SessionLauncher {
         val ideMcpPort: Int,
         val customMcpServers: String,
         val sessionId: String?,
-        // --- Advanced launch options (neutral = flag omitted) -------------------------------------
         val maxTurns: Int? = null,
         val maxBudgetUsd: Double? = null,
         val fallbackModel: String? = null,
@@ -53,25 +35,10 @@ object SessionLauncher {
         val strictMcpConfig: Boolean = false,
     )
 
-    /**
-     * The mode the binary actually runs in. `acceptEdits`/`bypassPermissions` are enforced host-side by the
-     * [dev.lain.claudejb.permission.PermissionBroker]: we keep the binary in `default` so it still routes every edit
-     * through `--permission-prompt-tool stdio`. That round-trip is what lets us open the native diff in the IDE before
-     * the binary writes — newer binaries auto-approve edits internally in acceptEdits and never prompt, so the diff
-     * would otherwise never appear. `default`/`plan` pass through unchanged.
-     */
     fun binaryPermissionMode(mode: String): String =
         if (mode == "acceptEdits" || mode == "bypassPermissions") "default" else mode
 
-    /**
-     * Builds the CLI argument vector. PURE: the [mcpConfig] JSON (computed by [mcpConfigJson], which needs the IDE) is
-     * passed in so this stays unit-testable. Argument order is load-bearing and matches the historical
-     * [ClaudeSession.buildArgs], with `--append-system-prompt` ([appendSystemPromptFlags]) spliced in as the last
-     * option group — it is a constant of every plugin launch, not one of the user's options.
-     */
     fun buildArgs(opts: LaunchOptions, resume: Boolean, mcpConfig: String?): List<String> {
-        // Concatenation order IS the argument order, and the argument order is load-bearing — so the groups are
-        // spliced in exactly the sequence they were emitted in before.
         val args = mutableListOf(
             "--print",
             "--output-format", "stream-json",
@@ -98,8 +65,6 @@ object SessionLauncher {
     private fun modelFlags(opts: LaunchOptions): List<String> = buildList {
         opts.model?.let { addAll(listOf("--model", it)) }
         opts.effort?.let { addAll(listOf("--effort", it)) }
-        // Extended thinking (adaptive): a launch flag on current models. `--thinking-display summarized` is what
-        // actually streams the reasoning blocks; without it no "Thought process" appears. Any non-null budget = on.
         if (opts.thinkingTokens != null) addAll(listOf("--thinking", "adaptive", "--thinking-display", "summarized"))
     }
 
@@ -108,20 +73,9 @@ object SessionLauncher {
         opts.disallowedTools.trim().ifBlank { null }?.let { addAll(listOf("--disallowedTools", it)) }
     }
 
-    /**
-     * `--append-system-prompt <text>`: what the agent is told about the IDE it is running in (see
-     * [PluginContextPrompt]). Emitted **only when there is something to append** — a blank prompt means no flag at
-     * all, never an empty argument (the binary would take one and append nothing, paying an argv slot for it).
-     *
-     * Takes the text as a parameter rather than reading the constant so this stays pure and the "blank → no flag"
-     * branch is reachable from a test; [buildArgs] is the only caller and always passes [PluginContextPrompt.TEXT].
-     * Whatever is passed lands on the command line, where `/proc/<pid>/cmdline` is world-readable — so it must stay
-     * the generic constant and must never be given per-user or per-project material.
-     */
     fun appendSystemPromptFlags(prompt: String): List<String> =
         prompt.trim().ifBlank { null }?.let { listOf("--append-system-prompt", it) } ?: emptyList()
 
-    /** Advanced launch options: each emitted only when it carries a value (neutral default → omitted). */
     private fun advancedFlags(opts: LaunchOptions): List<String> = buildList {
         opts.maxTurns?.let { addAll(listOf("--max-turns", it.toString())) }
         opts.maxBudgetUsd?.let { addAll(listOf("--max-budget-usd", it.toString())) }
@@ -131,11 +85,6 @@ object SessionLauncher {
         if (opts.strictMcpConfig) add("--strict-mcp-config")
     }
 
-    /**
-     * Builds `{"mcpServers": …}` for `--mcp-config` by delegating to the pure [McpConfigBuilder] (testable without
-     * the IDE). The only IDE-coupled bit — resolving the stdio command from the running IDE's paths — is computed
-     * here as [resolveStdioParams] and handed in; everything else is plain data. The wire format is unchanged.
-     */
     fun mcpConfigJson(opts: LaunchOptions): String? =
         McpConfigBuilder.mcpConfigJson(
             ideMcpEnabled = opts.ideMcpEnabled,
@@ -146,16 +95,6 @@ object SessionLauncher {
             onCustomParseError = { log.debug("Failed to parse custom MCP servers JSON", it) },
         )
 
-    /**
-     * Resolves the IDE-dependent inputs for the stdio transport: the JBR java, the bundled MCP Server plugin's lib
-     * dir, the platform lib dir and the port. Returns null if the plugin can't be located (→ stdio isn't registered).
-     * Located WITHOUT any descriptor-lookup API (every variant — `PluginManager.findEnabledPlugin`,
-     * `PluginManager.getPlugin`, `PluginManagerCore.getPlugin` — is now `@ApiStatus.Internal` and the
-     * Marketplace verifier rejects them). Instead: the public [PluginManager.isPluginInstalled] gates the
-     * call, and the lib dir is resolved against the public [PathManager.getPluginsPath] /
-     * [PathManager.getPreInstalledPluginsPath] roots using the plugin folder name (a bundled plugin's
-     * directory matches the camelCase tail of its id — for `com.intellij.mcpServer` that's `mcpServer`).
-     */
     fun resolveStdioParams(opts: LaunchOptions): McpConfigBuilder.StdioParams? {
         if (!InstalledPlugins.isEnabled(MCP_SERVER_PLUGIN_ID)) return null
         val pluginLib = findMcpServerLib() ?: return null
@@ -163,7 +102,6 @@ object SessionLauncher {
         return McpConfigBuilder.StdioParams(javaBin, pluginLib, PathManager.getLibPath(), opts.ideMcpPort)
     }
 
-    /** Searches the standard plugin roots for the MCP server's `lib/` directory; returns null if none found. */
     fun findMcpServerLib(): File? {
         val names = listOf("mcpServer", "mcp-server", "MCP Server")
         val roots = listOfNotNull(

@@ -13,12 +13,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
 
-/**
- * Verifies the `--mcp-config` JSON [McpConfigBuilder.mcpConfigJson] emits. Compares parsed JSON trees
- * (not literal strings) so the tests are tolerant to whitespace/key-order while still pinning the
- * load-bearing shape the binary consumes (transport types, the synthesized localhost endpoints, the
- * empty `headers` object, and the `jetbrains` key reservation).
- */
 class McpConfigBuilderTest {
 
     private fun parse(s: String): JsonObject =
@@ -50,7 +44,6 @@ class McpConfigBuilderTest {
         val jb = servers(out!!)["jetbrains"]!!.jsonObject
         assertEquals("sse", jb["type"]!!.jsonPrimitive.content)
         assertEquals("http://127.0.0.1:64342/sse", jb["url"]!!.jsonPrimitive.content)
-        // Empty headers object is intentional (the binary expects the key).
         assertNotNull(jb["headers"])
         assertTrue(jb["headers"]!!.jsonObject.isEmpty())
     }
@@ -70,7 +63,6 @@ class McpConfigBuilderTest {
 
     @Test
     fun `unknown transport falls back to sse`() {
-        // Implementation: when transport != "stdio" / "streamable-http", defaults to sse.
         val out = McpConfigBuilder.mcpConfigJson(
             ideMcpEnabled = true,
             transport = "garbage",
@@ -83,8 +75,6 @@ class McpConfigBuilderTest {
 
     @Test
     fun `stdio without StdioParams skips the jetbrains entry`() {
-        // jetbrainsMcpServer("stdio", _, null) returns null → the key is omitted; with no custom
-        // servers either, the whole config collapses to null (no --mcp-config flag).
         val out = McpConfigBuilder.mcpConfigJson(
             ideMcpEnabled = true,
             transport = "stdio",
@@ -175,10 +165,9 @@ class McpConfigBuilderTest {
             ideMcpEnabled = true,
             transport = "sse",
             port = 64342,
-            customMcpServers = "[]", // valid JSON but not an object → treated as null
+            customMcpServers = "[]",
             onCustomParseError = { captured = it },
         )
-        // "[]" is parseable but not a JsonObject, so the cast yields null silently (no error callback).
         assertNull(captured)
         val s = servers(out!!)
         assertNotNull(s["jetbrains"])

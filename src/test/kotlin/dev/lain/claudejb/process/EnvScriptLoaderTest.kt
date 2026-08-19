@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/** Unit tests for [EnvScriptLoader.parse]. Same package so the `internal` function is reachable. */
 class EnvScriptLoaderTest {
 
     @Test

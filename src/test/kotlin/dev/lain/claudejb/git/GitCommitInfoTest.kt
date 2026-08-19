@@ -4,16 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The pure half of the Git integration: hash abbreviation, subject extraction and path relativization.
- *
- * These three run on strings the VCS hands over, and each one has an edge that is real rather than theoretical —
- * a hash shorter than the abbreviation (a fixture or a test double), a commit made with `--allow-empty-message`,
- * and a repository root that sits ABOVE the project directory, which is the normal shape of a monorepo.
- */
 class GitCommitInfoTest {
-
-    // ── shortHash ─────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `a full hash is abbreviated to git's own seven characters`() {
@@ -32,8 +23,6 @@ class GitCommitInfoTest {
         val commit = commit(hash = "0123456789abcdef")
         assertEquals(GitCommitInfo.shortHash(commit.hash), commit.shortHash)
     }
-
-    // ── subjectOf ─────────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     fun `the subject is the first non-blank line, trimmed`() {
@@ -54,8 +43,6 @@ class GitCommitInfoTest {
         assertEquals("", GitCommitInfo.subjectOf("\n \t\n"))
     }
 
-    // ── relativize ────────────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `a path under the root loses the root prefix`() {
         assertEquals(
@@ -71,8 +58,6 @@ class GitCommitInfoTest {
 
     @Test
     fun `a sibling directory sharing the root's name prefix is NOT stripped`() {
-        // "/home/u/project-notes" starts with "/home/u/project" as a STRING but is not under it. Requiring the
-        // separator is what stops a path outside the repository being reported as if it were inside.
         assertEquals("/home/u/project-notes/todo.md", GitCommitInfo.relativize("/home/u/project", "/home/u/project-notes/todo.md"))
     }
 
@@ -94,17 +79,11 @@ class GitCommitInfoTest {
 
     @Test
     fun `windows paths relativize too, because the VFS uses forward slashes on every OS`() {
-        // FilePath.getPath() is system-INDEPENDENT: C:/Users/... even on Windows. So one code path covers both.
         assertEquals("src/App.kt", GitCommitInfo.relativize("C:/Users/u/project", "C:/Users/u/project/src/App.kt"))
     }
 
-    // ── value semantics ───────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `two commits with the same fields are the same commit`() {
-        // Not ceremony: the tab bar and the dashboard re-push their model on every tick, and 5.5.0 already had
-        // to stop them rebuilding the DOM "on pushes that change nothing visible". That optimisation is equality
-        // on the model — turn this into a plain class and the list starts blinking again.
         val a = commit(hash = "cf73e32b9a1d")
         val b = commit(hash = "cf73e32b9a1d")
         assertEquals(a, b)
@@ -115,7 +94,6 @@ class GitCommitInfoTest {
 
     @Test
     fun `the model carries exactly what a commit row needs`() {
-        // Read by name, not by destructuring: positional reads of a six-field model are how a reordered
         // constructor silently swaps two strings, and detekt rejects them past three components anyway.
         val info = GitCommitInfo(
             hash = "0123456789abcdef",

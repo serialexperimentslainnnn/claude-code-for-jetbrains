@@ -6,23 +6,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
-/**
- * Pure narrowing of an Edit/Write/MultiEdit tool input.
- *
- * The `claude` binary performs the write; we only narrow the input we hand it so it writes exactly the
- * text the user accepted — today, the text they may have edited on the proposed side of the review diff.
- * No IntelliJ Application/EDT dependency lives here, so all of it is pure and testable.
- */
 object HunkSelection {
 
-    /**
-     * Re-encodes a narrowed tool input so the binary writes exactly [selectedText]. `file_path` is preserved.
-     *
-     * - `Write`    → copy of [originalInput] with `content` overwritten to [selectedText].
-     * - `Edit`     → `{file_path, old_string=currentText, new_string=selectedText, replace_all=false}`.
-     * - `MultiEdit`→ `{file_path, edits:[{old_string=currentText, new_string=selectedText}]}`.
-     * - anything else → [originalInput] unchanged.
-     */
     fun encodeInput(
         toolName: String,
         originalInput: JsonObject,

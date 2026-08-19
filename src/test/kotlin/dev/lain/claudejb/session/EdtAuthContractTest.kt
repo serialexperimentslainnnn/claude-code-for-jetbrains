@@ -6,23 +6,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * Three properties of the boot path that **only the source can state**, because none of them is observable
- * from a test that drives the code.
- *
- * 1. *Which question the EDT asks.* Both spellings return an answer; the difference is that one of them can
- *    spawn `claude auth status` and wait for it. A test that called it would either freeze or, on a machine
- *    with a fresh cached answer, pass while proving nothing.
- * 2. *That the cheap question stays cheap.* Its value is that it never starts a process — and "it did not
- *    spawn one this time" is not the same claim.
- * 3. *That losing the binary is ONE hop to the EDT.* Two hops publish a state that cannot exist, `running`
- *    together with `binaryMissing`, for as long as the event queue takes. The window is real and the page
- *    draws the install card over a live chat inside it, but its width is a scheduling accident, so asserting
- *    on it would mean asserting on a race.
- *
- * The behaviour on the other side of these — that an undecidable answer draws no card — is
- * `AuthGateCredentialHeadlessTest`.
- */
 class EdtAuthContractTest {
 
     @Test
@@ -52,11 +35,6 @@ class EdtAuthContractTest {
         }
     }
 
-    /**
-     * The spawn this one is about hides behind an innocent name: building the launch env runs the user's
-     * source script through their shell. It is legitimate here only while no script is configured, so what
-     * has to hold is the ORDER — the guard decides before the call is reachable.
-     */
     @Test
     fun `the cheap answer never sources the user's shell`() {
         val body = bodyOf(AUTH_GATE, "fun $HELD(")
@@ -98,13 +76,6 @@ class EdtAuthContractTest {
         }
     }
 
-    /**
-     * The lines of a member function, from its signature down to its own closing brace.
-     *
-     * Relies on the four-space member indentation the formatter enforces, and fails loudly when the
-     * signature or the closing brace is not where it expects — a slice that quietly came back empty would
-     * make every assertion above pass on nothing.
-     */
     private fun bodyOf(file: File, signature: String): List<String> {
         val lines = file.readLines()
         val from = lines.indexOfFirst { it.startsWith(INDENT) && it.trimStart().startsWith(signature) }
@@ -116,14 +87,11 @@ class EdtAuthContractTest {
 
     private companion object {
 
-        /** The EDT-safe question, and the one that resolves its third answer by running the binary. */
         const val HELD = "heldCredential"
         const val BLOCKING = "hasCredential"
 
-        /** The two ways out of `AuthGate` that end in a spawned process. */
         val SPAWN_DOORS = listOf("AuthCli.", "ClaudeBinaryLocator.")
 
-        /** The third one, which does not look like one: `resolveEnv` sources the configured shell script. */
         const val LAUNCH_ENV = "resolveEnv()"
         const val SCRIPT_GUARD = "sourceScript"
 
@@ -136,7 +104,6 @@ class EdtAuthContractTest {
         val CLAUDE_SESSION = source("ClaudeSession.kt")
         val AUTH_GATE = source("AuthGate.kt")
 
-        /** Resolves a session source whether the test runs from the module directory or the repository root. */
         fun source(name: String): File {
             val path = "src/main/kotlin/dev/lain/claudejb/session/$name"
             return sequenceOf(File(path), File("../$path")).firstOrNull { it.isFile }

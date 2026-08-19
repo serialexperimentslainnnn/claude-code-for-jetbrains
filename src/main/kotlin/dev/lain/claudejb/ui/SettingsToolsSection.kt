@@ -9,11 +9,6 @@ import dev.lain.claudejb.session.ToolNaming
 import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JComponent
 
-/**
- * Setting sources, the allowed/disallowed tool grids, and the revocable "Always allow" list — all
- * pick-from-checkboxes, nothing to type. The "Always allow" set is not a plain state field (it goes through
- * `AlwaysAllowTools`, which persists on its own), which is why this section holds the [settings] service.
- */
 internal class SettingsToolsSection(private val settings: ClaudeSettings) : SettingsSection {
 
     private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
@@ -65,7 +60,6 @@ internal class SettingsToolsSection(private val settings: ClaudeSettings) : Sett
             "sensitive-data lock above still applies). Select an entry and click <b>Remove</b> to revoke it.",
     )
 
-    /** Editable list of remembered "Always allow" tool names with a Remove action (revoke). */
     private fun alwaysAllowedComponent(): JComponent =
         ToolbarDecorator.createDecorator(alwaysAllowList)
             .setRemoveAction { alwaysAllowList.selectedValuesList.forEach { alwaysAllowModel.remove(it) } }
@@ -74,7 +68,6 @@ internal class SettingsToolsSection(private val settings: ClaudeSettings) : Sett
             .createPanel()
 
     private companion object {
-        /** Visible rows of the always-allow list, i.e. how tall it is before scrolling. */
         const val COMBO_VISIBLE_ROWS = 4
     }
 }
