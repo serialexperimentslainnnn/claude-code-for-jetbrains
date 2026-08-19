@@ -333,10 +333,9 @@ class SensitiveGuardTest {
         assertFalse(ForeignTerritory.isUnc("// a plain comment explaining something"))
     }
 
-    // A comment with NO space after `//` — a license header, a directive, `//nolint` — reads exactly like a
     @Test
-    fun `a directive-style comment with no space after slash-slash reads as a UNC share`() {
-        assertTrue(ForeignTerritory.isUnc("//nolint:unused"))
+    fun `a directive-style comment is not a share, and is still refused as an outside path`() {
+        assertFalse(ForeignTerritory.isUnc("//nolint:unused"))
         val input = buildJsonObject {
             put("file_path", "/home/me/proj/src/App.kt")
             put("old_string", "//nolint:unused")
@@ -356,17 +355,17 @@ class SensitiveGuardTest {
     }
 
     @Test
-    fun `an integer-division fragment of a command now reads as a UNC share`() {
-        assertTrue(ForeignTerritory.isUnc("//2]"))
+    fun `an integer-division fragment is a share only while it spells a valid host`() {
+        assertFalse(ForeignTerritory.isUnc("//2]"))
+        assertFalse(ForeignTerritory.isUnc("//${'$'}"))
+        assertFalse(ForeignTerritory.isUnc("//TODO:fix/x"))
         assertTrue(ForeignTerritory.isUnc("//2"))
         assertTrue(ForeignTerritory.isUnc("//len"))
-        assertTrue(ForeignTerritory.isUnc("//${'$'}"))
-        assertTrue(ForeignTerritory.isUnc("//TODO:fix/x"))
     }
 
     @Test
-    fun `a command doing integer division is now DENIED as foreign territory`() {
-        assertEquals(Verdict.DENY, v(bash("python3 -c \"print(xs[len(xs)//2])\"")))
+    fun `integer division is allowed unless its fragment spells a valid host`() {
+        assertEquals(Verdict.ALLOW, v(bash("python3 -c \"print(xs[len(xs)//2])\"")))
         assertEquals(Verdict.DENY, v(bash("python3 -c 'print(sum(v)//len(v))'")))
     }
 
