@@ -7,20 +7,11 @@ import com.intellij.openapi.util.SystemInfo
 import java.io.File
 import java.nio.charset.StandardCharsets
 
-/**
- * Sources a user-provided script and captures the environment it produces, so the `claude` process can
- * inherit the same `PATH`/env the user gets in their own shell — the reliable fix for a GUI IDE launched
- * without the login environment (custom node/claude locations, nvm/fnm, etc.).
- *
- * Linux/macOS: `source <script>.sh` in the login shell, then dump `env`.
- * Windows: dot-source the PowerShell profile/script, then dump `Env:`.
- */
 object EnvScriptLoader {
 
     private val log = thisLogger()
     private const val TIMEOUT_MS = 15_000
 
-    /** How much of a failing script's stderr is logged. A shell can print a lot; enough to diagnose is enough. */
     private const val STDERR_PREVIEW_CHARS = 200
 
     fun load(scriptPath: String?): Map<String, String> {
@@ -44,10 +35,6 @@ object EnvScriptLoader {
             )
         } else {
             val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/bash"
-            // Pass the script path as a positional argument ($1) instead of interpolating it into the
-            // `-lc` command string, so a path containing `"`, `$(...)` or backticks cannot break the
-            // quoting and inject shell code. With `sh -lc CMD ARG0 ARG1 ...`, ARG0 becomes `$0` and ARG1
-            // becomes `$1`; we use a dummy `$0` (the shell name) and reference the path as `$1`.
             GeneralCommandLine(shell, "-lc", ". \"$1\" && env", shell, script.absolutePath)
         }
         cmd.charset = StandardCharsets.UTF_8
@@ -68,7 +55,6 @@ object EnvScriptLoader {
         }
     }
 
-    /** Keeps only well-formed `KEY=VALUE` lines (KEY has no whitespace); ignores multi-line value spillover. */
     internal fun parse(dump: String): Map<String, String> =
         dump.lineSequence()
             .mapNotNull { line ->

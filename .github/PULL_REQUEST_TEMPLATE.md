@@ -32,10 +32,16 @@ or the permission surface, say what happens to a user who already ran it.
 - [ ] Commits follow Conventional Commits (the `commit-msg` hook enforces it —
       install once with `git config core.hooksPath .githooks`).
 - [ ] `./gradlew test verifyPlugin buildPlugin` passes locally.
-- [ ] `verifyPlugin` is **Compatible** across the declared range (251 → 263.\*)
+- [ ] `verifyPlugin` is **Compatible** across the declared range (253 → 263.\*)
       and reports no new internal-API usage (`@ApiStatus.Internal`).
       The CDN download is unreliable here; use
       `-PlocalIdePath=<dir>[,<dir>…]` with locally-extracted IDEs.
+- [ ] `./gradlew detekt spotlessCheck`, `npm run lint` and `npm run format:check`
+      pass. These are gated on PRs into `main` only, so a failure otherwise
+      lands on `develop` and blocks the next release rather than this PR.
+- [ ] Renamed a CI job? `.github/rulesets/*.json` names required checks by the
+      job's **display name** — update them in this PR and re-run
+      `./scripts/apply-rulesets.sh`, or the gate silently stops applying.
 - [ ] No new deprecated or scheduled-for-removal IntelliJ Platform APIs.
 - [ ] Tests added or updated for the new behaviour — `src/test/kotlin/…` for
       Kotlin, `src/test/frontend/…` (`npm test`) for anything under
@@ -46,7 +52,12 @@ or the permission surface, say what happens to a user who already ran it.
       recorded in [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) if it
       ships in the artifact.
 - [ ] User-visible changes are documented in [`CHANGELOG.md`](../CHANGELOG.md)
-      and [`RELEASE_NOTES.md`](../RELEASE_NOTES.md) under `Unreleased`.
+      (what changed, for someone debugging) **and**
+      [`RELEASE_NOTES.md`](../RELEASE_NOTES.md) (why it matters, for someone on
+      the Marketplace page), under the version being prepared. There is no
+      `Unreleased` section — `release.yml` publishes the newest `## [x.y.z]`
+      block of `CHANGELOG.md` verbatim, so a heading that is not a version
+      would ship as the release notes.
 - [ ] No secrets, tokens, conversation transcripts, or personal absolute
       paths in the diff or commit messages.
 - [ ] Follows the conventions in [`CONTRIBUTING.md`](../CONTRIBUTING.md), the

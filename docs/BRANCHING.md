@@ -1,7 +1,7 @@
 # Branching & release model
 
-This repo follows a lightweight **GitFlow**. Two long-lived branches, short-lived topic branches, and tags
-drive releases.
+This repo follows a lightweight **GitFlow**. Two long-lived branches and short-lived topic branches; the
+merge into `main` is what releases, and the tag is cut by the workflow rather than by a person.
 
 ## Long-lived branches
 
@@ -10,8 +10,9 @@ drive releases.
 | `main`     | **Release branch.** Only ever holds released, tagged commits. Every commit is a release. |
 | `develop`  | **Integration branch.** Default target for PRs; the next release accumulates here.        |
 
-`main` is updated by merging `develop` (or a `release/*`/`hotfix/*` branch) when cutting a release, then
-tagging. Day-to-day work never targets `main` directly.
+`main` is updated by merging `develop` (or a `release/*`/`hotfix/*` branch) when cutting a release; the push
+that merge creates is what triggers the release workflow, which tags it. Day-to-day work never targets `main`
+directly, and nobody tags by hand.
 
 ## Short-lived branches
 
@@ -31,10 +32,16 @@ Naming: `feature/<short-kebab-summary>`, e.g. `feature/hunk-selection`, `bugfix/
 
 1. Land everything for the version on `develop`; bump `version` in `build.gradle.kts` and add the section to
    `RELEASE_NOTES.md` / `CHANGELOG.md`.
-2. Merge `develop` → `main` via PR. `main` is protected: the CI checks must be green and the PR approved.
+2. Merge `develop` → `main` via PR. `main` is protected: a pull request is required, it must be up to date,
+   and every required check must be green. It does **not** require an approval — see *Branch protection*
+   below for why zero is the only value that is not a deadlock here.
 3. **That is the whole procedure.** The merge triggers `release.yml`, which reads the version from
-   `build.gradle.kts`, re-runs the full gate on the merged tree, builds and attests, waits on the
-   `marketplace` environment approval, publishes, and only then cuts and signs the `vX.Y.Z` tag.
+   `build.gradle.kts`, re-runs the full gate on the merged tree, and then — inside the single
+   `marketplace`-scoped job — cuts and signs the `vX.Y.Z` tag, builds *from that tag*, signs, publishes,
+   attests, and attaches the artifacts to a GitHub Release.
+
+   The tag is cut **before** the build, not after: the tag is the identity of the release, so the artifact is
+   produced from the ref that names it rather than being labelled once it has already gone out.
 
 **`build.gradle.kts` is the single source of truth for the version.** The tag is derived from it rather than
 supplied alongside it, so the two can no longer disagree — the failure mode the old flow guarded against with
@@ -54,36 +61,28 @@ The tag is cut by the workflow and signed with the **CI key**, not the maintaine
 sign inside a runner, and whose non-exportability is precisely what makes it worth trusting. The chain still
 terminates in hardware, because the CI key is certified by the YubiKey.
 
-The cost is stated rather than glossed: **no signature on a release asserts that a person authorised it.** That
-claim now rests entirely on the two gates around the publish — `main` accepts only reviewed pull requests, and
-publication requires an approval on the `marketplace` environment by a named reviewer. Anyone verifying a
-release should read `git verify-tag` as *"this workflow cut this from main"*, not as *"a human signed off"*.
+The cost is stated rather than glossed: **no signature on a release asserts that a person authorised it.**
+Anyone verifying a release should read `git verify-tag` as *"this workflow cut this from main"*, not as
+*"a human signed off"*.
+
+> **There is exactly one gate, and it is the pull request into `main`.** The `marketplace` environment's
+> only protection rule is its deployment-branch policy (`main` and `v*.*.*`): it lists no
+> `required_reviewers`, and `scripts/bootstrap-ci.sh` sets `reviewers: []` on purpose, so **publication is
+> unattended** and the merge is the last human act. Check it rather than take it on trust —
+> `gh api repos/OWNER/REPO/environments/marketplace`. That is defensible on a single-maintainer repository,
+> where an approval is the same person clicking twice; what would not be defensible is a gate everyone
+> believes exists. Adding one is [`CI_SETUP.md`](CI_SETUP.md) §1, and belongs with a second maintainer.
 
 ## Cleaning up obsolete branches
 
-The following branches are stale and should be deleted once their work has landed on `develop`/`main`.
-**Verify each is fully merged before deleting** (`git branch --merged develop` / check the PR), then run the
-commands. They are commented so nothing is deleted by accident — the maintainer runs them deliberately.
+A topic branch is deleted when its pull request merges. Listing branches here would go stale the week after
+it was written, so the standing rule is the command instead — anything it prints has already been integrated
+and can go.
 
 ```sh
-# Inspect first: confirm there is nothing unmerged on these branches.
-# git log --oneline develop..origin/feature/compatibility
-# git log --oneline develop..origin/feature/use-recognized-libraries
-# git log --oneline develop..origin/fix/security-issues
-# git log --oneline develop..origin/test/MCPSkills
-
-# Delete the remote branches once confirmed merged:
-# git push origin --delete feature/compatibility
-# git push origin --delete feature/use-recognized-libraries
-# git push origin --delete fix/security-issues
-# git push origin --delete test/MCPSkills
-
-# Prune local tracking refs afterwards:
-# git fetch --prune
+git fetch --prune
+git branch -r --merged origin/develop | grep -vE 'origin/(HEAD|develop|main)$'
 ```
-
-Note the naming drift: `fix/security-issues` and `test/MCPSkills` predate this convention (they would be
-`bugfix/*` and a `feature/*` today). New branches should follow the prefixes in the table above.
 
 ## Branch protection (versioned, not clicked)
 
@@ -102,29 +101,35 @@ admin. What they enforce:
 |---|---|---|
 | Pull request required | yes | yes |
 | Required approvals | **0** — see below | **0** — see below |
-| Status checks | tests, **static analysis**, frontend, audit, verifier, build, **both CodeQL analyses** | tests, **static analysis**, frontend, audit, verifier, build |
-| Branch must be up to date | yes | yes |
+| Status checks | JVM tests, Static analysis, Frontend tests, Dependency audit, Plugin verifier, Build plugin, both CodeQL analyses, **No bot PRs pending on develop** | JVM tests, Frontend tests, both CodeQL analyses |
+| Branch must be up to date | **yes** (strict) | no |
 | Signed commits | required | required |
-| Merge method | **merge commit — the only one enabled** | **merge commit — the only one enabled** |
+| Merge method | **merge commit, and nothing else** | merge commit or squash |
 | Force push / deletion | blocked | blocked |
 | Admin bypass | **none** | **none** |
 
+`develop` requires a deliberately smaller set: the expensive checks (static analysis, the dependency audit,
+the plugin verifier, the artifact assertions) run at the `develop → main` door, and `ci.yml` does not even
+start them on a pull request into `develop`. The cost is real and named in the workflow: a detekt or verifier
+failure can land *on* `develop` and is fixed by a follow-up commit rather than being caught in the PR.
+
 Four deliberate choices worth stating:
 
-- **Merge commit is the ONLY method enabled on this repository**, and squash and rebase are switched off at
-  the repository level rather than merely discouraged here. This is a *signing* decision, not a taste in
-  history shape. Every commit in this project is signed by a hardware-backed key, and both of the other
-  methods **rewrite commits**: GitHub creates new SHAs and new committer information, which invalidates those
-  signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits required" would
-  still pass — the commits are signed, just no longer *by the author*, which is the entire property the rule
-  exists to give. Leaving the buttons enabled meant one wrong click could quietly destroy that provenance, so
-  the buttons are gone.
+- **On `main`, the merge commit is the only method the ruleset allows**, and this is a *signing* decision
+  rather than a taste in history shape. Every commit in this project is signed by a hardware-backed key, and
+  both of the other methods **rewrite commits**: GitHub creates new SHAs and new committer information, which
+  invalidates those signatures and replaces them with GitHub's own `web-flow` key. The rule "signed commits
+  required" would still pass — the commits are signed, just no longer *by the author*, which is the entire
+  property the rule exists to give. `main` is the branch that publishes, so it is the branch where one wrong
+  button could destroy that provenance on the way out; `develop` also allows squash, where a topic branch's
+  scratch commits are worth collapsing and nothing is being released. Rebase is allowed on neither.
 
   The cost, stated plainly: the merge node itself is created and signed by GitHub, because the alternative is
   merging locally and pushing, which the pull-request requirement blocks — and relaxing *that* to save one
   commit's provenance would be a far worse trade. `main` therefore ends up with the same *tree* as `develop`
-  but not the same SHA. Release provenance rests on the **tag**, which the maintainer signs with the YubiKey,
-  not on the merge node.
+  but not the same SHA. Release provenance rests on the **tag** rather than on the merge node — and, since
+  the tag is cut inside the workflow, it is signed by the **CI key** (certified by the YubiKey), not by the
+  YubiKey directly. See the section above for exactly what that signature claims.
 
 - **Zero required approvals, and this is not a weakened gate — it is the only value that is not a
   deadlock.** GitHub does not let an author approve their own pull request. With one maintainer and no
@@ -134,11 +139,10 @@ Four deliberate choices worth stating:
   status check green. A human approval is a real control when a second human exists; requiring one that
   cannot exist is theatre that bolts the door from the inside. **Raise it to 1 — and re-enable
   `require_code_owner_review` and `require_last_push_approval` — the day someone else has write access.**
-- **No bypass actors, including admins.** The previous version of this document kept an admin bypass "so a
-  maintainer can land an urgent hotfix when a structural check would otherwise block the merge". The
-  structural check it referred to — capped GitHub Actions — never existed. A bypass exists to be used at the
-  worst possible moment, under time pressure, on the change least likely to have been reviewed. The hotfix
-  path goes through `main` like everything else.
+- **No bypass actors, including admins** — `bypass_actors` is empty in both rulesets and stays empty. A
+  bypass is only ever reached for at the worst possible moment: under time pressure, on the change least
+  likely to have been reviewed. The hotfix path goes through a pull request into `main` like everything
+  else.
 - **The UI test suite (`uiTest`) is advisory and must NOT become a required check.** It needs a display, it
   is slower, and a flaky required check teaches people to re-run until green.
 

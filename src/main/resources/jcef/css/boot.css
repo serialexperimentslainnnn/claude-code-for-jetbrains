@@ -1,0 +1,273 @@
+@media (max-width: 600px) {
+  #conversation {
+    padding: 16px 12px 24px;
+  }
+  #dock {
+    padding: 8px 12px 12px;
+  }
+  .dashboard .dash-inner {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+#boot {
+  grid-area: 1 / 1;
+  z-index: 1;
+  min-height: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  align-items: safe center;
+  justify-content: center;
+  padding: clamp(24px, 12vh, 90px) clamp(16px, 5vw, 40px);
+  --wait-grace: 0.35s;
+  animation: fade 0.14s var(--ease) var(--wait-grace) both;
+}
+.boot-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 0 24px;
+}
+.boot-inner > *,
+.auth-inner > * {
+  --wait-in: 0.2s;
+  --wait-step: 0.07s;
+  animation: fade var(--wait-in) var(--ease) both;
+  animation-delay: calc(var(--wait-grace) + var(--wait-beat, 0) * var(--wait-step));
+}
+.boot-title,
+.auth-title {
+  --wait-beat: 1;
+}
+.boot-sub,
+.auth-step {
+  --wait-beat: 2;
+}
+#boot-missing {
+  --wait-beat: 3;
+}
+.boot-mark {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--accent);
+  animation:
+    fade var(--wait-in) var(--ease) var(--wait-grace) both,
+    bootBreathe 2.2s ease-in-out calc(var(--wait-grace) + var(--wait-in)) infinite;
+}
+@keyframes bootBreathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+.boot-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.boot-dots::after {
+  content: '.';
+  animation: bootDots 1.2s steps(1, end) infinite;
+}
+@keyframes bootDots {
+  0% {
+    content: '.';
+  }
+  33% {
+    content: '..';
+  }
+  66% {
+    content: '...';
+  }
+}
+body.reduced-motion .boot-mark {
+  animation: none !important;
+  opacity: 1;
+}
+body.reduced-motion .boot-dots::after {
+  animation: none !important;
+  content: '...';
+}
+.boot-sub {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+#boot.missing .boot-dots {
+  display: none;
+}
+#boot-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  margin-top: 6px;
+  text-align: left;
+}
+.boot-missing-title {
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+.boot-missing-sub {
+  font-size: 12px;
+  color: var(--dim);
+  text-align: center;
+}
+.boot-install {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.boot-install-btn {
+  align-self: flex-start;
+  font-weight: 600;
+}
+.boot-install-btn.installing {
+  opacity: 0.75;
+}
+.boot-recheck {
+  align-self: flex-start;
+}
+.boot-install-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.boot-path-label,
+.auth-label,
+.auth-hint,
+.boot-install-hint-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+.boot-install-hint-label {
+  white-space: nowrap;
+}
+.boot-install-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--code-bg, rgba(128, 128, 128, 0.12));
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.boot-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.boot-path-controls,
+.auth-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.boot-path-controls input,
+.auth-row input {
+  flex: 1;
+  min-width: 0;
+}
+.boot-path-err,
+.auth-error {
+  font-size: 12px;
+  color: var(--error, #d66);
+  min-height: 1em;
+}
+
+#auth-card {
+  grid-area: 1 / 1;
+  z-index: 1;
+  min-height: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  align-items: safe center;
+  justify-content: center;
+  padding: clamp(24px, 10vh, 70px) clamp(16px, 5vw, 40px);
+  --wait-grace: 0s;
+}
+.auth-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 440px;
+  padding: 0 24px;
+  text-align: center;
+}
+.auth-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.auth-step,
+#auth-key-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.auth-primary {
+  font-weight: 600;
+}
+.auth-divider {
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.auth-quiet {
+  background: none;
+  border: none;
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+}
+.auth-wait {
+  font-size: 13px;
+  color: var(--dim);
+}
+.auth-sub-wait {
+  font-size: 13px;
+  font-weight: 600;
+}
+.auth-url-actions {
+  gap: 8px;
+}
+.account-auth-row {
+  margin-top: 6px;
+}
+.account-auth-btn {
+  font-size: 12px;
+}
+
+body.reduced-motion *,
+body.reduced-motion *::before,
+body.reduced-motion *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-delay: 0s !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}

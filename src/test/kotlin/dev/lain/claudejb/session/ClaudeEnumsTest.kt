@@ -4,10 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
-/**
- * Locks the `wire` strings of the settings enums: these are persisted in claude-code.xml and sent to the
- * `claude` binary, so a rename must never silently change them. Also guards `from` parsing (unknown → null).
- */
 class ClaudeEnumsTest {
 
     @Test
@@ -35,7 +31,6 @@ class ClaudeEnumsTest {
         assertEquals("Accept edits", PermissionMode.labelFor("acceptEdits"))
         assertEquals("Plan", PermissionMode.labelFor("plan"))
         assertEquals("Bypass permissions", PermissionMode.labelFor("bypassPermissions"))
-        // Unknown / null degrade gracefully to the raw value rather than throwing.
         assertEquals("weird", PermissionMode.labelFor("weird"))
         assertEquals("", PermissionMode.labelFor(null))
     }

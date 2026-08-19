@@ -5,58 +5,28 @@ import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
 import java.nio.charset.StandardCharsets
 
-/**
- * Drives `claude auth login` (the OAuth flow) **natively**, without dropping the user into an IDE terminal.
- *
- * Why a PTY: the interactive login is a TTY program (an Ink/React TUI). With piped stdio the binary prints
- * nothing and just blocks — exactly why our `--print` stream-json session can't host `/login`. So we allocate a
- * real pseudo-terminal with **pty4j** (bundled in the platform; the IDE's own terminal uses it) and let the
- * binary run its whole flow: it opens the browser, prints the authorize URL, and waits for the user to paste the
- * code shown on the callback page. The plugin's only job is the glue around that — open the browser, collect the
- * pasted code via a native dialog, and write it back to the PTY — surfaced through [Listener].
- *
- * Lifecycle: [start] spawns the process and reads it on a daemon thread (non-blocking). [submitCode] feeds the
- * code to stdin; [cancel] kills the process. The terminal is sized very wide so the long OAuth URL never wraps,
- * which keeps [LoginOutputParser.extractAuthUrl] a simple single-line match.
- */
 class ClaudeLoginFlow(
     private val binaryPath: String,
     private val cwd: String?,
     private val env: Map<String, String>,
-    /**
-     * The subcommand to drive. `auth login` writes to the binary's own credential store;
-     * `setup-token` prints a long-lived token instead (surfaced via [Listener.onToken]) so the caller can
-     * keep it in the IDE's PasswordSafe and the binary's store stays empty.
-     */
     private val args: List<String> = listOf("auth", "login"),
 ) {
 
     private companion object {
-        /** Wide enough that the binary emits the OAuth authorize URL on ONE line — [pump] parses it per line. */
         const val PTY_COLUMNS = 1000
 
-        /** Rows are irrelevant to parsing; a plausible terminal height keeps the child from reformatting output. */
         const val PTY_ROWS = 50
 
-        /** PTY read chunk. One page — the login flow's whole output is a few KB. */
         const val READ_BUFFER_BYTES = 4096
     }
 
-    /** Callbacks fired from the reader thread — implementations must marshal any UI work onto the EDT. */
     interface Listener {
-        /** The OAuth authorize URL, as soon as it appears (open the browser here). */
         fun onAuthUrl(url: String)
 
-        /** The binary is now waiting for the authorization code on stdin (prompt the user, then [submitCode]). */
         fun onCodeRequested()
 
-        /**
-         * A `setup-token` flow printed its long-lived token. Fired at most once, before [onResult]. The
-         * value is a SECRET: store it (PasswordSafe) and nothing else — no logs, no transcript, no UI text.
-         */
         fun onToken(token: String) {}
 
-        /** The flow ended: [success] from the exit code (and a final-output sanity check), with a short [message]. */
         fun onResult(success: Boolean, message: String)
     }
 
@@ -72,14 +42,10 @@ class ClaudeLoginFlow(
 
     @Volatile private var finished = false
 
-    /**
-     * Spawns `claude auth login` under a PTY and starts streaming its output to [listener]. Returns false (so the
-     * caller can fall back, e.g. to the IDE terminal) if the process can't be started. Safe to call off the EDT.
-     */
     fun start(listener: Listener): Boolean {
         val builder = PtyProcessBuilder((listOf(binaryPath) + args).toTypedArray())
-            .setEnvironment(env) // pty4j replaces the env wholesale — [env] must already carry the base
-            .setInitialColumns(PTY_COLUMNS) // wide enough that the OAuth URL is emitted on a single line
+            .setEnvironment(env)
+            .setInitialColumns(PTY_COLUMNS)
             .setInitialRows(PTY_ROWS)
             .setRedirectErrorStream(true)
         if (!cwd.isNullOrBlank()) builder.setDirectory(cwd)
@@ -96,15 +62,6 @@ class ClaudeLoginFlow(
         return true
     }
 
-    /**
-     * Reads the PTY until EOF, firing URL/prompt signals, then resolves the result from the **exit code**.
-     *
-     * `claude auth login` is a one-shot command: it prints "Login successful." and EXITS 0 on its own (checked
-     * against 2.1.223, both `--claudeai` and `--console`). So there is nothing to answer and nothing to kill —
-     * the process ending IS the signal, and its status IS the verdict. Anything this reader writes into that
-     * PTY, or any kill it issues to hurry the process along, can only turn a clean 0 into something else and
-     * make a login that worked look like one that failed.
-     */
     private fun pump(proc: PtyProcess, listener: Listener) {
         val acc = StringBuilder()
         val buf = ByteArray(READ_BUFFER_BYTES)
@@ -136,8 +93,6 @@ class ClaudeLoginFlow(
 
         val exit = runCatching { proc.waitFor() }.getOrDefault(-1)
         val out = acc.toString()
-        // The whole PTY transcript, ANSI stripped and tokens masked — without it a login regression leaves
-        // nothing behind but an exit code, which is how this one stayed invisible.
         log.debug("claude login finished (exit=$exit):\n${LoginOutputParser.redactSecrets(out)}")
         val success = exit == 0 && !LoginOutputParser.looksLikeFailure(out)
         finish(listener, success, LoginOutputParser.resultMessage(out, success))
@@ -149,14 +104,6 @@ class ClaudeLoginFlow(
         listener.onResult(success, message)
     }
 
-    /**
-     * Writes the authorization [code] to the binary's stdin, terminated with a CARRIAGE RETURN.
-     *
-     * `\r`, not `\n`, and it is the difference between working and hanging: the login TUI (Ink) puts the
-     * TTY in raw mode, where the Enter key arrives as `\r` — that is what its input handler maps to
-     * "submit". A trailing `\n` left the code sitting in the input field with the flow waiting forever,
-     * which the user experienced as the card stuck on "Verifying".
-     */
     fun submitCode(code: String) {
         val proc = process ?: return
         runCatching {
@@ -167,7 +114,6 @@ class ClaudeLoginFlow(
         }.onFailure { log.warn("Failed to write the login code to the PTY", it) }
     }
 
-    /** Aborts the flow and kills the process (e.g. the user canceled the code dialog). */
     fun cancel() {
         process?.destroy()
         process = null

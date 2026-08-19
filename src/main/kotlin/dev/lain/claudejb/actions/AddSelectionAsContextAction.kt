@@ -6,11 +6,6 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import dev.lain.claudejb.context.EditorContextProvider
 
-/**
- * Editor-popup action: capture the current selection as an [dev.lain.claudejb.context.Attachment.Selection] and pin
- * it as a chip on the active chat composer (via [AttachmentActions.pin]), so it travels with the user's next prompt.
- * Enabled only when there is a non-empty selection in the focused editor.
- */
 class AddSelectionAsContextAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {

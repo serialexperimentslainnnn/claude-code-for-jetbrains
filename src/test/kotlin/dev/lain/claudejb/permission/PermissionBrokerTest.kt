@@ -14,11 +14,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
 
-/**
- * Tests the [PermissionBroker]'s decision wiring through its injected lambdas (no process, no UI). The focus is
- * the tool_use id plumbing that keys the persistent edit snapshot: it must reach the [PendingPermission] (manual
- * card) and the [onAutoReviewed] callback (auto-approved edit), and a blank id must degrade to null.
- */
 class PermissionBrokerTest {
 
     private fun broker(
@@ -103,7 +98,6 @@ class PermissionBrokerTest {
             toolUseId = "tu_plan",
         )
 
-        // bypassPermissions would auto-approve any normal tool; ExitPlanMode must still be presented.
         broker(mode = "bypassPermissions", present = { captured = it }).handle("req-plan", request)
 
         assertNotNull(captured)

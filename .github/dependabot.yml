@@ -106,3 +106,33 @@ updates:
       # to match what the targeted IDEs ship, not the newest release. Bumping it blindly is a
       # NoSuchMethodError on a user's IDE, not an upgrade.
       - dependency-name: 'org.jetbrains.kotlinx:kotlinx-serialization-json'
+
+  # The CI images themselves. Every job in ci.yml, codeql.yml, drift.yml and release.yml runs inside
+  # `ghcr.io/serialexperimentslainnnn/{jvm,node}-test`, built from `.github/ci-image/*.Dockerfile` — so the
+  # base image of those files is the operating system the whole gate executes on, and until now NOTHING
+  # proposed a bump for it. `github-actions` does not cover it (it updates `uses:`, not `container:`), and
+  # neither did the npm or gradle ecosystems. An unwatched base image is the one dependency where "nobody
+  # changed anything" and "it stopped receiving security patches" are the same sentence.
+  #
+  # Dependabot's docker fetcher matches any filename containing `dockerfile` (case-insensitive), so
+  # `jvm-test.Dockerfile` and `node-test.Dockerfile` are both picked up — but it does NOT recurse, hence the
+  # explicit directory. It parses one dependency per `FROM`: in practice that is `fedora:44` in
+  # node-test.Dockerfile, since jvm-test.Dockerfile's `FROM ${NODE_IMAGE}` resolves through an ARG.
+  - package-ecosystem: docker
+    directory: /.github/ci-image
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: build
+      include: scope
+    labels: [dependencies, ci]
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ['*']
+    # Deliberately NO `ignore` of majors here, unlike every other ecosystem above. A base image pinned to
+    # `fedora:44` has no minors and no patches to propose — a major IS the only update that exists, so
+    # ignoring majors would leave this block doing precisely nothing, which is worse than not having it:
+    # it would read as coverage. A distro bump is still a human decision; the bot's job is to make sure the
+    # decision gets put in front of someone instead of being reached by nobody.

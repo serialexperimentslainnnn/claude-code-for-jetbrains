@@ -6,18 +6,6 @@ import dev.lain.claudejb.settings.SecretStore
 import java.io.File
 import java.nio.file.Files
 
-/**
- * Headless: [CredentialsVault] moves the binary's credentials file into the IDE's PasswordSafe and back.
- *
- * The invariant these pin is the whole point of the vault — **between sessions the credential is in the
- * encrypted safe and NOT on the disk**. The full-consent OAuth login writes plaintext JSON to
- * `~/.claude/.credentials.json`, readable by anything running as the user; the vault reduces its lifetime
- * to the session's.
- *
- * These run against a TEMPORARY home ([CredentialsVault.homeOverride]), never the real one. That is not
- * tidiness: harvest MOVES a credential, so a run that died between taking the file and restoring it would
- * sign the developer out of their own CLI for real.
- */
 class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
     private val file get() = CredentialsVault.credentialsFile()
@@ -27,12 +15,12 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
         super.setUp()
         home = Files.createTempDirectory("claudejb-home").toFile()
         CredentialsVault.homeOverride = home
-        SecretStore.clear(SecretStore.CREDENTIALS_JSON)
+        SecretStore.storeOverride = mutableMapOf()
     }
 
     override fun tearDown() {
         try {
-            SecretStore.clear(SecretStore.CREDENTIALS_JSON)
+            SecretStore.storeOverride = null
             CredentialsVault.homeOverride = null
             home.deleteRecursively()
         } finally {
@@ -40,11 +28,9 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
         }
     }
 
-    /** A credentials blob whose access token expires [inMs] from now. */
     private fun blob(token: String, inMs: Long) =
         """{"claudeAiOauth":{"accessToken":"$token","expiresAt":${System.currentTimeMillis() + inMs}}}"""
 
-    /** The real shape the binary writes: an access token AND the refresh token that outlives it. */
     private fun renewable(accessInMs: Long, refreshInMs: Long): String {
         val now = System.currentTimeMillis()
         return """
@@ -70,14 +56,11 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test nothing ever writes the credential back to disk`() {
-        // The invariant, stated as a test: there is no code path that re-creates the plaintext file. The
-        // credential leaves the safe only through the child process ENVIRONMENT.
         file.parentFile?.mkdirs()
         file.writeText(blob("live-token", inMs = 6 * 60 * 60 * 1000))
 
         assertTrue(CredentialsVault.harvest())
         assertFalse(file.exists())
-        // Everything a launch does with the vault, twice over — the file must stay gone.
         repeat(2) {
             CredentialsVault.envOverlay(emptySet())
             CredentialsVault.hasUsableToken()
@@ -102,7 +85,6 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
     fun `test clear wipes both the safe entry and the file`() {
         SecretStore.set(SecretStore.CREDENTIALS_JSON, """{"a":1}""")
-        // A file left by the terminal CLI (nothing here writes one) must go too: Log out means gone.
         file.parentFile?.mkdirs()
         file.writeText("""{"a":1}""")
 
@@ -116,7 +98,6 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
         val env = CredentialsVault.envOverlay(emptySet())
         assertEquals(mapOf(SecretStore.OAUTH_TOKEN to "live-token"), env)
-        // The whole point: the session authenticates with nothing on disk at all.
         assertTrue(CredentialsVault.hasUsableToken())
         assertFalse(file.exists())
     }
@@ -126,14 +107,11 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
         assertTrue("an expiring token must not be handed out", CredentialsVault.envOverlay(emptySet()).isEmpty())
         assertFalse(CredentialsVault.hasUsableToken())
-        // Nothing to renew from: this blob carries an access token and nothing else.
         assertFalse(CredentialsVault.canRenew())
         assertFalse(CredentialsVault.needsRenewal())
     }
 
     fun `test an expired token with a live refresh token is still an identity, pending renewal`() {
-        // THE REBOOT CASE. The access token is issued for hours, so an overnight restart always lands here;
-        // answering "signed out" is what put the sign-in card in front of the user every morning.
         SecretStore.set(SecretStore.CREDENTIALS_JSON, renewable(accessInMs = -60_000, refreshInMs = day * 20))
 
         assertFalse(CredentialsVault.hasUsableToken())
@@ -156,9 +134,6 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test renewal needs the scopes the binary demands`() {
-        // The non-interactive path is driven by CLAUDE_CODE_OAUTH_SCOPES alongside the refresh token, and a
-        // blob that cannot state the grant it was issued under is not renewable — better to say so here than
-        // to spawn a process that exits 1.
         SecretStore.set(
             SecretStore.CREDENTIALS_JSON,
             """{"claudeAiOauth":{"accessToken":"stale","expiresAt":0,"refreshToken":"rt","scopes":[]}}""",
@@ -173,8 +148,6 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
             """{"claudeAiOauth":{"accessToken":"stale","expiresAt":0,"refreshToken":"rt","scopes":["a"]}}""",
         )
 
-        // The endpoint is the authority on whether it is still good; a wrong guess costs one failed renewal,
-        // refusing costs a sign-in nobody needed.
         assertTrue(CredentialsVault.canRenew())
     }
 
@@ -194,8 +167,6 @@ class CredentialsVaultHeadlessTest : BasePlatformTestCase() {
 
     fun `test the credentials blob is never offered to the child environment`() {
         SecretStore.set(SecretStore.CREDENTIALS_JSON, """{"a":1}""")
-        // It is file-shaped, not an env var: leaking it into the environment would put a bearer credential
-        // in a place nothing reads it from, for no benefit.
         assertTrue(SecretStore.envOverlay(emptySet()).isEmpty())
     }
 }

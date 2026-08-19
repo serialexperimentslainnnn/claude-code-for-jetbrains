@@ -8,12 +8,6 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the permission-card queue semantics extracted from `ClaudeSession`'s EDT-confined
- * `pending: LinkedHashMap`: present adds + fires onChanged, remove returns and detaches, all preserves
- * insertion order, clear empties (firing only when non-empty). PendingPermission is a plain data class, so
- * this runs as a pure-JVM unit test with no IDE.
- */
 class PermissionCardManagerTest {
 
     private fun perm(id: String, tool: String = "Edit") =
@@ -58,7 +52,6 @@ class PermissionCardManagerTest {
         fired = 0
         val removed = m.remove("r1")
         assertSame(p, removed)
-        // remove does NOT fire onChanged (the caller fires firePermissions itself after answering).
         assertEquals(0, fired)
         assertNull(m.get("r1"))
         assertTrue(m.all().isEmpty())

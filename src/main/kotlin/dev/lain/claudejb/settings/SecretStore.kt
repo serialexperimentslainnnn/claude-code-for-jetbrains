@@ -4,103 +4,81 @@ import com.intellij.credentialStore.CredentialAttributes
 import com.intellij.credentialStore.Credentials
 import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
+import com.intellij.openapi.application.ApplicationManager
+import org.jetbrains.annotations.TestOnly
 
-/**
- * The plugin's credentials, in the IDE's PasswordSafe (OS keychain / KWallet / DPAPI / encrypted file —
- * whatever the user configured) and NOWHERE else.
- *
- * Why not `ClaudeSettings.envVars`, which can technically hold the same names: `claude-code.xml` is a
- * PROJECT-level file, plain XML, and committable — an API key there is one careless `git add` from being
- * published. The safe is application-level and encrypted, so a credential entered through the sign-in card
- * can never reach the repository.
- *
- * Two entries, mutually exclusive by construction ([set] clears the sibling): a session authenticates with
- * a subscription token OR an API key, and keeping both invites the confusion of not knowing which one the
- * binary actually used. Values are injected into the child process ENVIRONMENT only
- * (ClaudeSession.effectiveLaunchEnv) — never argv, never logs, never the transcript.
- */
 object SecretStore {
 
-    /** Env-var names the store manages. The name IS the key: what the binary reads is what we store under. */
     const val OAUTH_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN"
 
-    /**
-     * The env-var name for an API key — a NAME only. The key itself is NOT kept here: an Anthropic API key
-     * is stored exactly like every other provider's, through
-     * [ClaudeSettings.setProviderApiKey] under `providerApiKey:anthropic`, so the sign-in card and the
-     * provider field in Settings are two doors onto one credential instead of two credentials that quietly
-     * disagree about which one the binary used.
-     */
     const val API_KEY = "ANTHROPIC_API_KEY"
 
-    /**
-     * NOT an env var: the full content of the binary's `.credentials.json`, held here AT REST. The file
-     * itself exists only while a session runs — [dev.lain.claudejb.process.CredentialsVault] materializes
-     * it at launch and harvests+deletes it at teardown, so the subscription login's disk footprint is zero
-     * whenever the plugin is idle.
-     */
     const val CREDENTIALS_JSON = "CLAUDE_CREDENTIALS_JSON"
 
-    /**
-     * The signed-in account (email, organization) — NOT a credential and NOT an auth mode, which is exactly
-     * why it is kept out of [EXCLUSIVE]: storing it must never evict the credential beside it. Held here
-     * rather than re-read from `~/.claude.json` each time so the dashboard can name the account even once
-     * that file is gone.
-     */
     const val ACCOUNT_PROFILE = "CLAUDE_ACCOUNT_PROFILE"
 
-    /**
-     * The last successful `claude auth status` reply, VERBATIM — the binary's own statement of who is signed
-     * in (`loggedIn`, `authMethod`, `apiProvider`, `email`, `orgId`, `orgName`, `subscriptionType`).
-     *
-     * Kept here, and kept whole, for two reasons. It is the authoritative source for the dashboard's account
-     * card: the probe is a process spawn, so it cannot run on every push, and without a stored copy the card
-     * had nothing to show between probes. And it is identity, not credential — so like [ACCOUNT_PROFILE] it
-     * stays out of [EXCLUSIVE] (storing it must never evict the credential beside it) and out of the child
-     * environment.
-     */
     const val AUTH_STATUS = "CLAUDE_AUTH_STATUS"
 
-    /** Auth modes: mutually exclusive by construction — setting one clears the others. */
+    const val ENV_VARS = "CLAUDE_ENV_VARS"
+
+    const val SETTINGS_JSON = "CLAUDE_SETTINGS_JSON"
+
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
-    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
+    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS + ENV_VARS + SETTINGS_JSON
 
-    /** The subset that is injected into the child environment — [CREDENTIALS_JSON] is file-shaped, not env. */
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
 
     private fun attributes(name: String) =
         CredentialAttributes(generateServiceName("Claude Code", name))
 
-    fun get(name: String): String? =
-        PasswordSafe.instance.getPassword(attributes(name))?.takeIf { it.isNotBlank() }
+    @TestOnly
+    @Volatile
+    internal var storeOverride: MutableMap<String, String>? = null
 
-    /**
-     * Stores [value] under [name] and CLEARS every sibling entry — the auth modes are exclusive, and a
-     * leftover credential from a previous mode silently winning over the one the user just set is exactly
-     * the kind of ghost this store exists to avoid.
-     */
+    internal fun inert(): Boolean {
+        if (storeOverride != null) return false
+        return ApplicationManager.getApplication()?.isUnitTestMode ?: true
+    }
+
+    internal fun readCredential(key: String, attributes: CredentialAttributes): String? {
+        storeOverride?.let { return it[key]?.takeIf(String::isNotBlank) }
+        if (inert()) return null
+        return PasswordSafe.instance.getPassword(attributes)?.takeIf { it.isNotBlank() }
+    }
+
+    internal fun writeCredential(key: String, attributes: CredentialAttributes, value: String?) {
+        storeOverride?.let { store ->
+            if (value == null) store.remove(key) else store[key] = value
+            return
+        }
+        if (inert()) return
+        PasswordSafe.instance.set(attributes, value?.let { Credentials(key, it) })
+    }
+
+    fun get(name: String): String? = readCredential(name, attributes(name))
+
     fun set(name: String, value: String) {
         require(name in NAMES) { "unknown secret: $name" }
-        PasswordSafe.instance.set(attributes(name), Credentials(name, value))
-        // Only an auth mode evicts the other auth modes. The account profile sits alongside whichever one
-        // is in use — clearing the credential every time we learned the user's email would be absurd.
+        writeCredential(name, attributes(name), value)
         if (name in EXCLUSIVE) EXCLUSIVE.filter { it != name }.forEach { clear(it) }
     }
 
+    fun setVerified(name: String, value: String): Boolean = runCatching {
+        set(name, value)
+        get(name) == value
+    }.getOrElse { false }
+
     fun clear(name: String) {
-        PasswordSafe.instance.set(attributes(name), null)
+        writeCredential(name, attributes(name), null)
     }
 
     fun clearAll() = NAMES.forEach(::clear)
 
-    /**
-     * What the launch env should gain from the safe: every stored credential whose name the explicit env
-     * does NOT already define. The carve-out is the contract — a value the user wrote by hand in Settings
-     * (or exported in their shell) keeps winning over the card-entered one.
-     */
-    fun envOverlay(explicitNames: Set<String>): Map<String, String> =
-        ENV_NAMES.filter { it !in explicitNames }
+    fun envOverlay(explicitNames: Set<String>): Map<String, String> {
+        if (API_KEY in explicitNames) return emptyMap()
+        return ENV_NAMES.filter { it !in explicitNames }
             .mapNotNull { name -> get(name)?.let { name to it } }
             .toMap()
+    }
 }

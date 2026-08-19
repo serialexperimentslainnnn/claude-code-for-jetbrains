@@ -6,18 +6,10 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins [LoginOutputParser] against the real, ANSI-laden output that `claude auth login` streams over a PTY
- * (captured from the binary): we must reliably pull the OAuth URL out of the Ink TUI noise, recognise the
- * "paste code" prompt even when the renderer positions words with cursor moves instead of spaces, and read
- * success/failure from the final frame.
- */
 class LoginOutputParserTest {
 
     private val esc = "\u001B"
 
-    // A representative chunk of the live capture: cursor moves (esc[..G), the authorize URL emitted as one
-    // contiguous write, and the code prompt whose words are laid out by column (no literal spaces between them).
     private val live =
         "$esc[2G$esc[36mOpening$esc[12Gbrowser$esc[20Gto sign in…$esc[0m\r\n\r\n" +
             "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e" +
@@ -60,9 +52,6 @@ class LoginOutputParserTest {
         )
     }
 
-    // ── the frames the login TUI renders before exiting ──────────────────────────────────────────────────
-
-    /** The frame the binary renders on success under a PTY, right before it exits 0. */
     private val successScreen =
         "$esc[2mLogged in as dev@example.com$esc[0m\r\n" +
             "$esc[32mLogin successful. Press $esc[1mEnter$esc[0m$esc[32m to continue…$esc[0m"
@@ -97,15 +86,12 @@ class LoginOutputParserTest {
         assertEquals("Login failed. Please try again.", LoginOutputParser.resultMessage("(noise)", success = false))
     }
 
-    // ── setup-token ──────────────────────────────────────────────────────────────────────────────────────
-
     @Test
     fun `extracts the setup token, taking the LAST match past placeholder text`() {
         val token = "sk-ant-oat01-" + "a".repeat(40)
         val out = "$esc[2mExample: sk-ant-oat01-xxxxxxxxxxxxxxxxxxxx$esc[0m\nYour token:\n$token\n"
         assertEquals(token, LoginOutputParser.extractSetupToken(out))
         assertNull(LoginOutputParser.extractSetupToken("no token here"))
-        // Too short to be real — placeholder-sized fragments must not be captured as credentials.
         assertNull(LoginOutputParser.extractSetupToken("sk-ant-short"))
     }
 
@@ -114,5 +100,21 @@ class LoginOutputParserTest {
         val token = "sk-ant-oat01-" + "b".repeat(40)
         val msg = LoginOutputParser.resultMessage("Login successful! Token: $token", success = true)
         assertFalse(msg.contains(token), "a secret leaked into a user-facing message")
+    }
+
+    @Test
+    fun `masking holds for a real API-key shape, on the success and the failure branch alike`() {
+        val key = "sk-ant-api03-Ab1_cD2-eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aB4cD5eF6gH7iJ8kL9mN0oP-_AA"
+        assertEquals("sk-ant-…", LoginOutputParser.redactSecrets(key))
+
+        val ok = LoginOutputParser.resultMessage("Login successful, authenticated with $key", success = true)
+        assertFalse(ok.contains(key), "a secret leaked into the success message")
+        assertFalse(ok.contains("sk-ant-api03"), ok)
+
+        val bad = LoginOutputParser.resultMessage("Authentication failed for key $key", success = false)
+        assertFalse(bad.contains(key), "a secret leaked into the failure message")
+        assertFalse(bad.contains("sk-ant-api03"), bad)
+
+        assertTrue(bad.startsWith("Authentication failed"), bad)
     }
 }

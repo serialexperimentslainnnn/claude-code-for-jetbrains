@@ -1,9 +1,4 @@
-// The boot screen: it must appear while the binary launches, and — more importantly — must always come down.
-//
-// It covers the whole tab and blocks input, so a stuck boot screen is a worse failure than the empty composer
-// it exists to hide. These pin the three-state logic (running / starting / neither) and the fact that it is
-// driven outside the composer's ensureBuilt() gate.
-const { loadFrontend } = require('./helpers/load');
+const { loadFrontend, readCss } = require('./helpers/load');
 
 describe('boot screen', () => {
   let win;
@@ -15,8 +10,6 @@ describe('boot screen', () => {
   const app = () => win.document.getElementById('app');
 
   it('is declared in the static shell and starts visible', () => {
-    // Visible by DEFAULT, before any state arrives: the page loads before the process is up, so "waiting" is
-    // the honest initial state. Starting hidden would flash a live-looking composer on every new tab.
     expect(boot()).toBeTruthy();
     expect(boot().hidden).toBe(false);
   });
@@ -35,10 +28,6 @@ describe('boot screen', () => {
   });
 
   it('stays up when the launch FAILED — the chat is not reachable without a session', () => {
-    // The invariant, and it outranks the older reading of this case. A declined trust prompt or a refused
-    // remote-mount project ends with both flags false; showing the chat then hands the user a composer with
-    // no process behind it, which is how the dashboard came up half-empty. The explaining notification is an
-    // IDE toast outside this view, so it is visible either way.
     win.cc.state({ starting: true, running: false });
     win.cc.state({ starting: false, running: false });
     expect(boot().hidden).toBe(false);
@@ -51,19 +40,35 @@ describe('boot screen', () => {
     expect(boot().hidden).toBe(false);
   });
 
+  it('the waiting screens belong to the CHAT — grouped with the transcript, beside it and not inside it', () => {
+    const conv = win.document.getElementById('conversation');
+    const view = win.document.getElementById('tabview');
+    const work = win.document.getElementById('work');
+    expect(conv.parentNode).toBe(view);
+    for (const screen of [boot(), win.document.getElementById('auth-card')]) {
+      expect(screen.parentNode).toBe(view);
+      expect(conv.contains(screen)).toBe(false);
+    }
+    const dock = win.document.getElementById('dock');
+    expect(view.contains(dock)).toBe(false);
+    expect(work.contains(dock)).toBe(true);
+    expect(work.contains(win.document.getElementById('tabsbar'))).toBe(false);
+  });
+
   it('the sign-in screen replaces the spinner instead of being covered by it', () => {
-    // #boot is z-index 60 and the auth card 55, so "both up" means the user stares at a spinner while the
-    // card they need is underneath it. Exactly one screen at a time.
     win.cc.state({ starting: false, running: false, needsLogin: true });
     expect(boot().hidden).toBe(true);
     expect(win.document.getElementById('auth-card').hidden).toBe(false);
   });
 
-  it('the sign-in card comes down once the session is running', () => {
-    win.cc.state({ starting: false, running: false, needsLogin: true });
-    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+  it('the sign-in card outranks a live session — the spinner is what startup suppresses', () => {
     win.cc.state({ starting: false, running: true, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+    expect(boot().hidden).toBe(true);
+
+    win.cc.state({ starting: true, running: false, needsLogin: true });
     expect(win.document.getElementById('auth-card').hidden).toBe(true);
+    expect(boot().hidden).toBe(false);
   });
 
   it('distinguishes resuming from a cold start', () => {
@@ -77,7 +82,6 @@ describe('boot screen', () => {
     const dots = win.document.querySelector('.boot-dots');
     expect(dots).toBeTruthy();
     expect(dots.getAttribute('aria-hidden')).toBe('true');
-    // The dots live in ::after, not in the text node, so the accessible name is the stable phrase.
     expect(dots.textContent).toBe('');
     expect(win.document.querySelector('.boot-title').textContent.trim()).toBe('Loading Claude Code');
   });
@@ -87,10 +91,47 @@ describe('boot screen', () => {
     win.cc.state({ starting: true, running: false });
     expect(region.textContent).toContain('Loading Claude Code');
   });
+
+  it('takes the transcript out of reach while it covers it, and gives it back', () => {
+    const conv = win.document.getElementById('conversation');
+    win.cc.state({ starting: true, running: false });
+    expect(conv.hasAttribute('inert')).toBe(true);
+
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(conv.hasAttribute('inert')).toBe(true);
+
+    win.cc.state({ starting: false, running: true });
+    expect(conv.hasAttribute('inert')).toBe(false);
+  });
 });
 
-// The FOURTH boot state: no `claude` binary. The overlay stays up but swaps the spinner for the
-// install/path card — a decision to make, not a wait to sit through.
+describe('waiting screens vs. the transcript lifecycle', () => {
+  let win;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js', 'app-transcript.js'], { vendor: false });
+  });
+
+  it('survives cc.clear() and still renders afterwards', () => {
+    win.cc.state({ starting: false, running: true });
+    expect(win.document.getElementById('boot').hidden).toBe(true);
+
+    win.cc.clear();
+
+    expect(win.document.getElementById('boot')).toBeTruthy();
+    expect(win.document.getElementById('auth-card')).toBeTruthy();
+    win.cc.state({ starting: false, running: false });
+    expect(win.document.getElementById('boot').hidden).toBe(false);
+    win.cc.state({ starting: false, running: false, needsLogin: true });
+    expect(win.document.getElementById('auth-card').hidden).toBe(false);
+  });
+
+  it('clearing an emptied transcript leaves only its own idle state behind', () => {
+    win.cc.clear();
+    const kept = Array.from(win.document.getElementById('conversation').children).map((el) => el.id);
+    expect(kept).toEqual(['empty']);
+  });
+});
+
 describe('missing-binary card', () => {
   let win, sent;
   beforeEach(() => {
@@ -159,6 +200,59 @@ describe('missing-binary card', () => {
     expect(card().querySelector('.boot-install-btn').getAttribute('aria-busy')).toBe('false');
   });
 
+  it('offers Check again — a real focusable control with a name that survives out of context', () => {
+    missing();
+    const btn = win.document.getElementById('boot-recheck');
+    expect(btn).toBeTruthy();
+    expect(card().contains(btn)).toBe(true);
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn.type).toBe('button');
+    expect(btn.textContent).toBe('Check again');
+    expect(btn.getAttribute('aria-label')).toMatch(/^Check again/);
+  });
+
+  it('clicking Check again asks the host to look again — and sends nothing else', () => {
+    missing();
+    win.document.getElementById('boot-recheck').click();
+    expect(sent).toEqual([{ type: 'recheckBinary' }]);
+  });
+
+  it('Check again clears a stale error so the next answer is a fresh alert mutation', () => {
+    missing();
+    win.cc.bootPathError('Still not found.');
+    expect(win.document.getElementById('boot-path-err').textContent).toContain('Still not found');
+    win.document.getElementById('boot-recheck').click();
+    expect(win.document.getElementById('boot-path-err').textContent).toBe('');
+  });
+
+  it('Check again has no busy state to wedge in: a second click is a second request', () => {
+    missing();
+    const btn = win.document.getElementById('boot-recheck');
+    btn.click();
+    expect(btn.disabled).toBe(false);
+    expect(btn.getAttribute('aria-busy')).toBeNull();
+    btn.click();
+    expect(sent.filter((m) => m.type === 'recheckBinary').length).toBe(2);
+  });
+
+  it('a fresh installMethods push rebuilds the rows without leaving a second Check again', () => {
+    missing();
+    win.cc.meta({
+      installMethods: [{ id: 'dnf', label: 'Install via dnf', display: 'sudo dnf install claude-code' }],
+    });
+    expect(win.document.querySelectorAll('.boot-recheck').length).toBe(1);
+    expect(card().querySelectorAll('.boot-install').length).toBe(1);
+  });
+
+  it('is honoured with a live process — the binary can vanish under a running session', () => {
+    win.cc.state({ starting: false, running: true, binaryMissing: true });
+    expect(win.document.getElementById('boot').hidden).toBe(false);
+    expect(card().hidden).toBe(false);
+    win.cc.state({ starting: false, running: true, binaryMissing: true, needsLogin: true });
+    expect(card().hidden).toBe(false);
+    expect(win.document.getElementById('auth-card').hidden).toBe(true);
+  });
+
   it('the card comes down when the binary appears', () => {
     missing();
     win.cc.state({ starting: true, running: false, binaryMissing: false });
@@ -167,7 +261,6 @@ describe('missing-binary card', () => {
   });
 });
 
-// The sign-in card: raised by needsLogin (or proactively by the host), driven step by step by cc.authState.
 describe('sign-in card', () => {
   let win, sent;
   beforeEach(() => {
@@ -179,17 +272,15 @@ describe('sign-in card', () => {
   const card = () => win.document.getElementById('auth-card');
   const step = (name) => card().querySelector('.auth-step[data-step="' + name + '"]');
 
-  it('appears on needsLogin and on cc.showAuth, and the install card wins over it', () => {
+  it('is a function of the pushed state alone — needsLogin raises it, the install card wins over it', () => {
     expect(card().hidden).toBe(true);
     win.cc.state({ running: false, needsLogin: true });
     expect(card().hidden).toBe(false);
     win.cc.state({ running: false, needsLogin: true, binaryMissing: true });
-    expect(card().hidden).toBe(true); // signing in is meaningless without a binary
-    // showAuth() is the post-install nudge, and it lands on a tab with no session yet — a running session
-    // means the sign-in it would ask for has already happened.
+    expect(card().hidden).toBe(true);
     win.cc.state({ running: false, needsLogin: false });
-    win.cc.showAuth();
-    expect(card().hidden).toBe(false);
+    expect(card().hidden).toBe(true);
+    expect(win.cc.showAuth).toBeUndefined();
   });
 
   it('subscription click moves to waiting and asks the host to start the flow', () => {
@@ -217,7 +308,6 @@ describe('sign-in card', () => {
     toggle.click();
     expect(fields.hidden).toBe(false);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    // Still fully wired once revealed: the key route must not become second-class by being hidden.
     const input = win.document.getElementById('auth-key');
     input.value = 'sk-ant-secret';
     win.document.getElementById('auth-key-use').click();
@@ -232,10 +322,8 @@ describe('sign-in card', () => {
     win.cc.state({ running: false, needsLogin: true });
     win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });
     expect(step('browser').hidden).toBe(false);
-    // The URL is never rendered as text — it is 200 characters of query string. Two buttons instead.
     expect(win.document.getElementById('auth-url')).toBeNull();
     expect(win.document.getElementById('auth-url-open').disabled).toBe(false);
-    // The optional code field is already on this screen, before any code event arrives.
     expect(win.document.getElementById('auth-code')).toBeTruthy();
     expect(win.document.getElementById('auth-code-label').textContent).toContain('optional');
     win.document.getElementById('auth-url-copy').click();
@@ -243,7 +331,6 @@ describe('sign-in card', () => {
     win.document.getElementById('auth-url-open').click();
     expect(sent).toContainEqual({ type: 'open', url: 'https://claude.ai/oauth/authorize?x=1' });
 
-    // The binary asking for the code stays on the SAME step, re-framed — no screen jump.
     win.cc.authState({ step: 'code' });
     expect(step('browser').hidden).toBe(false);
     expect(win.document.getElementById('auth-code-label').textContent).toContain('authorization code');
@@ -257,7 +344,6 @@ describe('sign-in card', () => {
     win.cc.authState({ step: 'url', url: 'https://claude.ai/oauth/authorize?x=1' });
     expect(win.document.getElementById('auth-url-open').disabled).toBe(false);
 
-    // Restarting the flow invalidates that URL — its consent page belongs to an attempt that is over.
     win.cc.authState({ step: 'waiting' });
     expect(win.document.getElementById('auth-url-open').disabled).toBe(true);
   });
@@ -305,5 +391,72 @@ describe('sign-in card', () => {
     win.cc.state({ running: false, needsLogin: true });
     win.cc.state({ running: true, needsLogin: false });
     expect(card().hidden).toBe(true);
+  });
+});
+
+describe('waiting screens — the sequenced entrance', () => {
+  let win;
+  beforeEach(() => {
+    win = loadFrontend(['app-composer.js'], { vendor: false });
+  });
+
+  const boot = () => win.document.getElementById('boot');
+  const authCard = () => win.document.getElementById('auth-card');
+  const sheet = () => readCss();
+
+  it('stages each row against the screen it belongs to, not against a fixed clock', () => {
+    expect(sheet()).toMatch(/\.boot-inner > \*,\s*\.auth-inner > \*/);
+    expect(sheet()).toContain(
+      'animation-delay: calc(var(--wait-grace) + var(--wait-beat, 0) * var(--wait-step))'
+    );
+  });
+
+  it('the loading screen keeps its grace; the sign-in card has none', () => {
+    expect(sheet()).toMatch(/#boot\s*\{[^}]*--wait-grace:\s*0\.35s/);
+    expect(sheet()).toMatch(/#auth-card\s*\{[^}]*--wait-grace:\s*0s/);
+  });
+
+  it('every sign-in step shares one beat, because position would lie about which one is showing', () => {
+    expect(sheet()).toMatch(/\.boot-sub,\s*\.auth-step\s*\{\s*--wait-beat:\s*2;/);
+    expect(sheet()).not.toMatch(/\.auth-step:nth-/);
+    expect(sheet()).not.toMatch(/\.(boot|auth)-inner > :nth-child/);
+  });
+
+  it('the mark keeps its entrance AND its breathing', () => {
+    const from = sheet().indexOf('.boot-mark {');
+    const rule = sheet().slice(from, sheet().indexOf('}', from));
+    expect(rule).toContain('fade var(--wait-in) var(--ease) var(--wait-grace) both');
+    expect(rule).toContain('bootBreathe');
+  });
+
+  it('reducing motion zeroes the DELAY, not merely the duration', () => {
+    const rules = sheet().replace(/\/\*[\s\S]*?\*\//g, '');
+    const from = rules.indexOf('body.reduced-motion *,');
+    const block = rules.slice(from, rules.indexOf('}', from));
+    expect(block).toContain('animation-delay: 0s !important');
+    expect(block).toContain('transition-delay: 0s !important');
+    expect(block).toContain('animation-duration: 0.001ms !important');
+  });
+
+  it('the entrance is declarative, so a screen that comes back replays it with no script', () => {
+    expect(sheet()).toMatch(/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+
+    win.cc.state({ starting: false, running: true });
+    expect(boot().hidden).toBe(true);
+    win.cc.state({ starting: true, running: false });
+    expect(boot().hidden).toBe(false);
+
+    expect(boot().getAttribute('style')).toBeNull();
+    expect(win.document.querySelector('.boot-mark').getAttribute('style')).toBeNull();
+  });
+
+  it('the host decides, and the class it sets sits above both screens', () => {
+    win.cc.theme({ reducedMotion: true });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(true);
+    expect(win.document.body.contains(boot())).toBe(true);
+    expect(win.document.body.contains(authCard())).toBe(true);
+
+    win.cc.theme({ reducedMotion: false });
+    expect(win.document.body.classList.contains('reduced-motion')).toBe(false);
   });
 });

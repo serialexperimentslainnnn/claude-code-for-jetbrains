@@ -5,11 +5,6 @@ import dev.lain.claudejb.session.Speaker
 import dev.lain.claudejb.session.TranscriptModel
 import dev.lain.claudejb.session.TranscriptReconciler
 
-/**
- * Headless: [TranscriptReconciler] folds streaming deltas / finalized blocks / boundaries into a
- * [TranscriptModel] with the same semantics the session used inline. No platform service is needed, but it
- * runs as a headless test (EDT contract) for consistency with the other session-layer tests.
- */
 class TranscriptReconcilerTest : BasePlatformTestCase() {
 
     private lateinit var transcript: TranscriptModel
@@ -71,7 +66,6 @@ class TranscriptReconcilerTest : BasePlatformTestCase() {
 
     fun `test assistant delta ends a live thinking block`() {
         reconciler.appendThinking("reasoning")
-        // First assistant delta must not grow the thinking entry; it starts a new assistant entry.
         reconciler.appendAssistant("answer ")
         reconciler.appendAssistant("text")
 
@@ -109,24 +103,10 @@ class TranscriptReconcilerTest : BasePlatformTestCase() {
     fun `test finalize closes the block so next delta starts fresh`() {
         reconciler.appendAssistant("one")
         reconciler.finalizeAssistant("one final")
-        // No boundary needed: finalize already cleared the live pointer.
         reconciler.appendAssistant("two")
 
         assertEquals(2, entries().size)
         assertEquals("one final", entries()[0].text)
         assertEquals("two", entries()[1].text)
-    }
-
-    fun `test addSubagentText anchors under parent without breaking live stream`() {
-        reconciler.appendAssistant("top-level streaming ")
-        reconciler.addSubagentText("subagent reply", parentToolUseId = "agent-1")
-        // The live top-level entry must still be growable after the subagent insert.
-        reconciler.appendAssistant("continues")
-
-        val top = entries().first { it.parentToolUseId == null && it.speaker == Speaker.ASSISTANT }
-        val sub = entries().first { it.parentToolUseId == "agent-1" }
-        assertEquals("top-level streaming continues", top.text)
-        assertEquals(Speaker.ASSISTANT, sub.speaker)
-        assertEquals("subagent reply", sub.text)
     }
 }

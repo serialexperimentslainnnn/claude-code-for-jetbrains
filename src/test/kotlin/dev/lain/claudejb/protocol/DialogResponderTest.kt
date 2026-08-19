@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** [DialogResponder] always cancels (the host renders no custom dialog kinds) and notes the request for transparency. */
 class DialogResponderTest {
 
     @Test

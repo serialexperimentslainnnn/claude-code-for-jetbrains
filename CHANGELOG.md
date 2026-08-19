@@ -4,6 +4,286 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.5.0] — 2026-08-19
+
+**This release needs IntelliJ Platform 2025.3.1 (build 253.29346.138) or newer.** On 2026.2 it is the fix:
+5.1.1 could not open a chat there at all. On 2025.1, 2025.2 or the first 2025.3, stay on 5.1.1 — it keeps
+working — or update the IDE.
+
+### Added
+- **A tab per agent, with its own transcript.** A second row under the chats lists everything the open chat
+  started — agents, the agents they started, background tasks — all of it at once rather than behind a menu,
+  and scrollable the same way the chats are. Opening one swaps what the conversation area shows; closing it
+  hides a view and destroys nothing, and the card that started the agent opens it again.
+- **The chat tabs are all one width**, so the row reads as a strip rather than as an accordion of long and
+  short titles, and nothing reflows when you select a tab. A long name ellipsises with the whole of it in the
+  tooltip. Selecting a chat centres it, which is what makes ordinary use need no scrolling at all.
+- **A *Chat settings* menu on the composer** — the wrench beside the prompt box — holding the settings worth
+  changing without leaving the chat, in ten collapsible groups: model, effort, permission mode, the chat
+  toggles, the security lock's rules — 28 of them, behind the nine groups they belong to, so the list is
+  navigable rather than a wall — setting sources, allowed / disallowed / always-allowed tools,
+  and the two MCP switches. Model, effort and mode act on the chat you are in — they are the same controls as
+  the pills beside them, so the two can never disagree — and anything that can only take effect the next time
+  a chat starts says so over its group instead of quietly doing nothing. Everything else is one row away,
+  behind *Open Plugin Settings*.
+- **"Always allow" can be granted in advance** from that menu, instead of only by answering a permission card
+  for that tool first. What it cannot do is widen the deterministic lock: a credential file, a dangerous
+  command, the system temp folder and anything outside your project still stop and ask, for an always-allowed
+  tool exactly as for any other.
+- **The composer's two rows of buttons collect what does not fit behind a ⋮**, instead of running off the edge
+  of a narrow tool window where nothing could reach them. The send button is never collected and never
+  shrinks to make room.
+- **Attach ▸ Files… and Directory… browse your project inside the menu**, as a tree that unfolds in place,
+  rather than opening a separate file dialog over the IDE. Pick as many as you like and press *Done*; marking
+  a folder marks everything under it and tells you how many that is before you commit to it. It offers what
+  the IDE considers yours — your `.gitignore` and the project's excluded folders are honoured, so `build/`
+  and `node_modules/` are simply not there — and it says so out loud when a folder is too large to offer
+  whole, rather than quietly attaching part of it.
+- **The chat's own buttons are in the chat.** New chat, Stop, Commands, Git, Close all diffs and Log out sit
+  in a row above the prompt box, where they are used, instead of in the tool window's title bar — which now
+  holds only the IDE's own controls. Stop is greyed unless a turn is running, and Close all diffs unless
+  there is a diff open.
+- **Install, sign-in and loading are screens over the transcript, and nothing else.** Whichever one a tab
+  owes you covers the conversation and leaves the chat tabs and the prompt box alone, so you can switch
+  chats while one starts and type into a chat whose binary is still coming up — what you type is queued and
+  sent the moment it is ready. A start that takes a moment draws no screen at all.
+- **Workloads**: everything running across every open chat as one diagram, replacing the three lists that
+  were three views of the same tree. Finished work ages out of it on a window you choose in Settings — five
+  minutes through four hours, or All — while anything still running is always shown.
+- **Background tasks keep their tab and their output after they end**, tailed live while they run and
+  rebuilt after a restart. Until now both vanished at exactly the moment the output was worth reading.
+- **Git, without the plugin ever running `git`.** A **Git** button in the chat's own button row opens the
+  repository view, which holds a conversation of its own about the repository — so none of this plumbing
+  lands in the chat you are working in, and none of it makes you leave it either. ⚙ also offers
+  **Initialize Git Repository**, **Commit Changes with Claude** and
+  **Revert This File with Claude** — each one asks Claude to do it, so the command is in front of you in an
+  approval card before it runs and you can answer back ("squash those two", "not that file") instead of
+  getting one shot at a button. On a project that is not a repository yet, opening it offers to create one.
+  - Its turns are **always approved by hand** — whatever permission mode you are in, and whatever you have
+    marked "Always allow". The plugin started the turn, so it does not inherit permissions you granted for
+    your own work.
+  - Each entry is hidden where it means nothing: no *Initialize* where there is already a repository, no
+    *Commit* with nothing to commit, no *Revert* unless the file in the editor has actually changed.
+- **⚙ ▸ Git Operations** — branches and new branch, pull, fetch, push, merge, rebase, stash, unstash and the
+  commit dialog, which *are* the IDE's own actions: the same dialogs, the same shortcuts, the same
+  enablement, one menu away.
+- **Git context in the ⚙ menu**: the checked-out branch in the menu label itself, your recent commits, and
+  the history of the file you have open — all of it handing off to the IDE's own Git Log. It only ever
+  reads, and on an IDE without the Git plugin, or outside a working copy, the entries are simply absent.
+- **A Git view in the session dashboard**, so the same repository picture and the same actions are one click
+  from the conversation: the branch, what is still uncommitted file by file, and the history as **one graph
+  with branch lanes** — a commit list and a separate branch map asked you to hold two pictures of the same
+  history at once. Every line and every fork in it comes from real parents and real refs; nothing is
+  inferred, and a line that continues past the oldest commit shown says so rather than ending in mid-air. It
+  reads every branch, remote branch and tag, not only the one you have checked out, because a fork you can
+  only see one side of cannot be drawn. Colour carries nothing on its own: a branch is a text tag on its row
+  and a merge says the word.
+- **GitHub and GitLab answer for the branch you are on**: the pull or merge requests open from it, and its
+  most recent CI run. Read-only, and opt-in — it does nothing until you paste an access token under Settings ▸
+  Claude Code ▸ **Git forge**, and until then there is no card and no prompt to configure one. The token is stored in
+  your OS keychain and kept **per server**, so a company GitLab and gitlab.com are two separate credentials
+  and one can never be sent to the other. Clearing the field revokes it.
+- **⚙ ▸ Review This Session's Changes…** — everything the agent has touched this session, as native diff
+  tabs, against one base. When the original side cannot be rebuilt exactly the file still opens and that
+  pane says why — new file, binary, too large or restricted, or changed on disk since — because a fabricated
+  original in a review tool is worse than none.
+- **A Plan view in the dashboard**, holding this session's plan in full, with a button that appears only
+  once there is one. It is re-read as soon as you approve a plan, so a revision does not leave the old one
+  on screen.
+- **The transcript keeps a bounded number of rows in memory**, dropping the oldest and saying so in a row at
+  the top. **Nothing is lost**: the whole conversation is on disk, and "Open Previous Session…" reads it
+  back in full.
+- **A chat names itself.** At the end of the first turn Claude is asked to title the conversation, and the
+  title is kept with the conversation — so it survives a restart and is never asked for twice. Until it
+  arrives the tab shows the first thing you typed, one line, rather than "Chat 3" for the rest of its life. A
+  name you set yourself always wins, whenever you set it. The same name appears in the live tab, in the tabs
+  restored at startup and in the list behind "Open Previous Session…".
+- **The agent is told what it is running inside** — that the transcript is a real interface and not a
+  terminal, that its edits become a diff you review and its paths become links you click, and that a
+  deterministic guard may refuse a call outright. It is fixed text: nothing about your machine, your
+  environment or your project, and nothing that softens a rule.
+
+### Changed
+- **Settings moved into the IDE's password safe** (the OS keychain), one encrypted document shared by every
+  project. They used to sit in a plain-text file inside the project, committable, including the environment
+  block where an API key ends up. Existing settings are adopted on first run — and because they are now
+  shared rather than per project, the first project you open after upgrading is the one whose settings
+  become everyone's. If you kept deliberately different settings in two projects, note them down first.
+- **The chat is noticeably lighter.** The tab bar and the dashboard used to redraw everything on every update
+  — several times a turn, including updates that changed nothing you could see — and the dashboard did it
+  even while it was closed. Both now redraw only when what they draw has actually changed, so a tab bar no
+  longer rebuilds itself under your pointer.
+- **The conversation uses the whole width of the tool window.** It was capped at a fixed column, so the wider
+  you made the panel the more of it was margin. Diffs, tables and command output are what you get back.
+- **The dashboard keeps your place.** It sits over the conversation instead of replacing it, so coming back
+  from it no longer drops you at the top of a long chat.
+- **The waiting screens arrive in reading order**, and behind a short grace period, so a session that starts
+  quickly draws nothing at all.
+- **The lines above the prompt box line up.** Status, model and working directory, your account, the plan
+  bars and their reset times are five rows on one grid of four equal columns at one size, so the figures sit
+  under each other instead of drifting from row to row. When the panel is too narrow for four, **Show more**
+  folds away the last two columns of all five rows at once — a bar and its own reset time can never end up
+  separated — and your organisation is left out when it only repeats your email.
+- **The Workloads diagram's cards are half the width they were**, so more of a deep tree fits in a tool
+  window without scrolling sideways.
+
+### Removed
+- **Diff History is gone.** The per-edit **Restore** you actually use was never in it — it is on the edit's
+  own card in the transcript, and it stays there. For everything a whole session changed, use ⚙ ▸ **Review
+  This Session's Changes…**. The composer button that opened it is now the **Git** one.
+- **"Roll back all changes" is gone with it, and is not coming back.** Without Git it also reverts what *you*
+  typed between Claude's edits, with no way to tell the two apart; with Git, Local Changes does the same job
+  better and lets you undo the undo.
+
+### Fixed
+- **A cancelled agent, or one the session limit cut off, stayed on the running animation for ever.** Both leave
+  a transcript with no finished turn at the end, which read as work still in flight — and unlike a turn that is
+  genuinely open, nothing more was ever going to be written that could correct it. Both endings are now
+  recognised for what they are and the agent reads as stopped. Measured over the 672 agent transcripts on one
+  machine, 155 of them ended this way.
+- **Agents stayed "running" for the rest of the session after they had finished, failed or been killed** —
+  and with them the Task card in the transcript and their row in Workloads, which take their state from the
+  agent. That last part is why finished work never aged out of the diagram: the window deliberately never
+  hides anything still running. An agent's own record is now read while the session is live, not only when
+  restoring one, so it settles whether or not the binary announces it; and a status this build does not
+  recognise is shown as a failure rather than as work still in progress, because a red row is wrong loudly
+  and a spinning one is wrong in silence.
+- **"Commit with Claude" wrote its whole turn into the conversation you were in** whenever the Git
+  conversation was not already open — which was most of the time, since nothing opened it on its own. It
+  always goes to the Git conversation now, which is started the first time you look at the Git view and never
+  before: it is a second `claude` process with its own cost, so nobody pays for it who does not use it. Its
+  answers and its approval cards appear in that view, where the button was, rather than in a tab you would
+  have to go and find.
+- **The Git view kept naming the branch you had left.** It now follows the IDE's own Git plugin, so a
+  checkout made anywhere — the IDE, this plugin, a terminal outside it — updates the view.
+- **⚙ ▸ Git Operations did nothing.** The entries are the IDE's own actions and were being invoked without
+  the context they resolve their target from, so each one quietly decided it was unavailable. They run now,
+  and an action the IDE genuinely refuses says so instead of looking broken.
+- **Your plan showed as 100% used until you restarted the binary.** Once a limit window's reset time passes,
+  the plugin reports it as the 0% it is rather than repeating the number from the window that just ended.
+- **The command palette covered the box you were typing in**, and the taller the composer got the more of it
+  it hid. It sits above the prompt box now instead of floating over it, it is bounded to a readable number
+  of rows, and an unqueried list is in alphabetical order rather than whatever order the commands arrived in.
+- **Typing a slash command took two presses of Enter** — the first completed it, the second sent it. The
+  list is for picking with the mouse; the keyboard enters it only when you press an arrow, and until then
+  Enter sends. Scrolling or clicking the list no longer takes the caret out of the composer either.
+- **The plugin was dead on 2026.2.** The IDE now ships its embedded browser as a separate bundled plugin, and
+  the whole chat UI is that browser, so every chat failed to open. The plugin declares that dependency now,
+  which is also why the minimum IDE moved: it first exists in 2025.3.1.
+- **Agents showed as failed while they were working**, and every agent of every past session came back red
+  after a restart. Their real outcome is read from what the agent itself recorded, so a completed, a resumed
+  and a cut-off agent are told apart instead of all reading as a failure.
+- **A nested subagent never stopped running.** It now finishes with the agent that started it, which it
+  cannot outlive.
+- **Every agent was also listed as a background task** — a second, nameless row whose "output" was pages of
+  the agent's own internal records. Only a real backgrounded command is listed now.
+- **The tab row could not be scrolled or reached once a few chats were open.** It is bounded and the titles
+  are capped (the full one is in the tooltip), the mouse wheel scrolls it, you can grab the row and drag it,
+  and selecting a chat centres it.
+- **The Chat / Session / Workloads / Git / Plan buttons floated over the transcript** and over the tabs, and
+  then disappeared entirely whenever the chat list arrived empty. They are a row of their own directly above
+  the prompt box now, in the same shape as the model and mode pills, so they cover nothing and are always
+  there.
+- **`/btw` never showed you an answer.** A side question is answered alongside the conversation by a worker of
+  its own, and the transcript deliberately ignores anything that is not the main run — that is the same filter
+  that keeps a subagent's output from interleaving with your chat — so the reply was dropped every time and
+  the question sat there unanswered. It is now asked over the channel that hands the answer straight back, and
+  it appears as a note under your question rather than as a turn. If the binary declines or does not answer,
+  the note says so instead of leaving nothing.
+- **Opening a new chat looked like the plugin reloading.** The tab was shown the instant it was created, which
+  meant watching an empty panel assemble the whole interface in front of you. The tab still appears
+  immediately; only the switch to it waits for its page to be ready, and it waits no more than a few seconds
+  so the button can never do nothing.
+- **A button pressed while your chats were being restored did nothing at all** — *New chat* during startup,
+  and the replacement chat you are owed when you close the last one. Nothing was wired yet, and nothing said
+  so.
+- **Hovering a tab showed the agents of the chat you were in** rather than the agents of the tab under the
+  pointer. The whole row is now visible for the chat you have open, so there is nothing to hover for.
+- **A restored chat showed the agent's own bookkeeping as things you had said** — task notifications, the
+  "Caveat: the messages below were generated…" preamble, a `/compact` you ran. They are shown for what they
+  are now, and that also stops one of them becoming the chat's title.
+- **The chat was blank under Remote Development.** The page now reaches the thin client by more than one
+  route, and if none of them works it tells you which port to forward and the exact command that does it.
+- **In a resumed or forked chat, a tool call could be filed under an agent it did not belong to**, taking
+  everything after it inside that agent as well.
+- **An access token expiring mid-session asked you to sign in again**, when nothing had been signed out. A
+  renewable expiry now says the turn did not complete and to send the message again; only a genuinely
+  missing identity raises the sign-in card. Your message is never re-sent for you, so nothing runs twice.
+- **The same finished task read green in one view and grey in another.** Running, completed, failed and
+  stopped mean one thing everywhere now.
+- **Closing an agent's tab could kill the chat that started it** — the conversation was left on screen over a
+  process that had already been shut down, and it dropped out of the chats restored at the next startup. An
+  agent is a view of its chat, never a second chat, so there is no longer any arrangement in which two tabs
+  share one conversation; the same defect was also what drew a chat twice in the Workloads diagram.
+
+### Security
+- **A block can now be answered where it happens, and the answer expires on its own.** A refusal used to be a
+  dead end: the row told you which rule stopped the call, and the only way to act on it was a trip to Settings —
+  where the only choice is to turn that rule off *permanently*, which is the most dangerous of the options and
+  the one nobody remembers to undo. The block now carries a **Disable rule** link offering 5 minutes, 15
+  minutes, 30 minutes, 4 hours, 8 hours, until the IDE closes, or for ever. Five of the seven heal themselves,
+  so the lock spends less time open than it did before this existed, not more. Opening the menu commits to
+  nothing — every entry *is* the action, so there is no default a reflex click can accept.
+- **Disabling a rule has never been a bypass, and now nothing implicit can answer for you.** A rule you switch
+  off is downgraded to a question: the same call still stops and puts a card to you, every time, whatever
+  permission mode you are in. One implicit pass remained and is gone — a tool marked "Always allow" used to
+  skip that card, which meant a single click on a `Bash` card silently opened *every command `Bash` can run*,
+  including every other one the rule existed to stop.
+- **"Always allow" on a guard card is now about the command, not the tool.** Answering it on a
+  `terraform destroy` card pre-approves `terraform destroy` — that exact command, whole, and nothing adjacent
+  to it: not `terraform destroy -auto-approve`, not another rule's blocks, not the tool. It lasts only while
+  the rule that stopped it is still open, so re-enabling the rule — or simply letting the suspension run out —
+  revokes it. Anything the guard protects therefore takes a deliberate choice from you, about one command, with
+  the risk knowingly accepted rather than inherited from a setting you made weeks ago.
+- **The release signing keys were rotated, and what vouches for them now travels with the release.** The
+  key that signs the `vX.Y.Z` tag and the `.asc` beside each download is new, and it is certified by two
+  hardware keys whose private halves have never existed as a file. Everything you need to check that
+  arrives as one attached file, `trust-chain.asc` — the signing key and both certifying keys together,
+  because a chain is imported whole or it is not imported at all. Verifying is `gpg --import
+  trust-chain.asc` followed by the same `gpg --verify` and `git verify-tag` as before, and the full
+  procedure is in [`SECURITY.md`](SECURITY.md).
+- **The single public key that used to sit in the repository is gone**, and it is worth being exact about
+  why rather than quietly replacing it: it endorsed nothing a reader could follow — the keys that had
+  certified it no longer exist — and it was not even the key that signed 5.1.1, having been replaced in
+  the tree after that release went out. A key file that verifies nothing is worse than none, because
+  nobody re-checks it and everybody believes it. Each release now carries the chain that was current when
+  it was cut, so a release stays verifiable after the key that signed it has been retired.
+
+### Internal
+
+Repository and build only — none of it changes the plugin you install.
+
+- The repository is indexed by a generated, gated project map, so a stale map fails the build instead of
+  being believed.
+- A reachability gate: code that nothing else references fails the build. What it found on the way in was
+  deleted, this project's signature defect being a feature that is implemented, tested and unreachable.
+- The largest files were split by subject — the protocol models, the chat panel, the security guard, the
+  settings page and the stylesheet — with nothing silenced in static analysis to get there.
+- The end-to-end UI suite runs nightly rather than on every pull request, it does not block a merge, and it
+  now asserts that it actually executed tests instead of trusting a green build.
+- The attribution gate checks that the licence text of every bundled library really travels inside the
+  plugin, which is where the obligation to include it lands.
+- `.gitignore` is an allowlist: it ignores everything and names what belongs, so a new file has to be added
+  deliberately rather than leaking by default.
+- The published artifact is checked against an allowlist of what it may contain, rather than against a list
+  of things it must not. The repository's own project map was riding inside the plugin jar — 20 KB of
+  internal notes in every release — and banning that one filename would only have caught the file already
+  known about.
+- Two more reachability gates, each closing a blind spot the first one declares: one for `private`
+  declarations, which only their own file can reach and which the compiler does not report; and one for a
+  page module or stylesheet that exists on disk and is never loaded, which is served to nobody while its own
+  tests pass.
+- A gate over the tool window's wiring, for a class of defect that leaves no trace: a button is pressed, a
+  nullable lookup resolves to nothing, and there is no error anywhere. It also pins that exactly one place in
+  the code can build a chat panel, which is what makes "one tab per conversation" a property of the code
+  rather than of everyone remembering it.
+- The one place this interface knowingly falls short of WCAG 2.2 AA is written down as a decision rather than
+  left as an oversight: the close on the agent row is 20×20 where the criterion asks for 24×24, because the
+  row is 21 pixels tall and a larger control would make the conversation shift every time you opened an
+  agent. On the chats' row, where there is space, it is the full size. It is scoped to that one control and
+  watched by a test in both directions — one that fails if it shrinks further, and one that fails if the
+  reason for it goes away and nobody notices it could be retired.
+
 ## [5.1.1] — 2026-08-10
 
 ### Fixed
@@ -18,14 +298,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the event-driven refreshes (turn edges, `rate_limit_event`, dashboard open, session ready) are unchanged.
 
 ### Added
-- **The chat's plan-limit row now says how long each window has left** — `Reset time: 4h 18m` on its own line
-  directly under that window's bar, with the full sentence in the tooltip. A percentage alone does not say
+- **The chat's plan-limit row now says how long each window has left** — `4h 18m` right after that window's
+  percentage, on the window's own line, with the full sentence in the tooltip. A percentage alone does not say
   whether it is urgent: 90% with eight minutes to go and 90% with six hours to go are different situations,
-  and only the dashboard was answering that. Under the bar rather than beside it because the row is already
-  three items wide per window, and a fourth made the countdown the first thing to be squeezed out — the one
-  case where it matters most. The countdown is computed by one function in `app-core`
+  and only the dashboard was answering that. The countdown is computed by one function in `app-core`
   (`CC.resetIn`/`resetInShort`) that the dashboard card now shares, and a window with no reset time renders
-  no element rather than an empty slot that would read as "resets now".
+  nothing rather than an empty slot that would read as "resets now". The bars row takes **three** columns
+  instead of the strip's four, which is the one declared exception to the shared column system: the binary
+  reports three windows, so a fourth track is an empty track.
 
 ### Changed
 - **Every `get_usage` poll now logs the reply it got**, `rate_limits` verbatim (truncated), at INFO. The
@@ -227,7 +507,7 @@ card would be the kind of small untruth that makes the rest of the document unus
 - The pull-request template now asks for **risk and rollback** — and for a published plugin, reverting a commit is not a rollback: a user on the bad version stays there until they update.
 
 ### Internal
-- The frontend test harness (`src/test/frontend/helpers/load.js`) now extracts the shell DOM from the real `shell.html` instead of a hand-copied approximation. The copy had already drifted — it lacked `#a11y-status` — which is the worst failure mode a harness has: it does not fail loudly, it quietly tests something that is not the product.
+- The frontend test harness now extracts the shell DOM from the real page instead of a hand-copied approximation. The copy had already drifted — it lacked `#a11y-status` — which is the worst failure mode a harness has: it does not fail loudly, it quietly tests something that is not the product.
 - Frontend suite: 44 → **54** tests. JVM suite 677 → **682**.
 
 ### Static analysis, formatting and coverage — installed, then acted on
@@ -348,7 +628,7 @@ card would be the kind of small untruth that makes the rest of the document unus
 **Jump to code from the conversation**, a chat tab that actually takes the keyboard focus, and an IDE that sees Claude's writes as they happen.
 
 ### Added
-- **Jump-to-code links in the transcript.** A file tool's card names its file **relative to the project** (`Read(src/main/kotlin/permission/PermissionBroker.kt)`, not a bare file name) and the path is clickable: it opens in the editor at the right line and is selected in the Project view. In model text, **paths** (`src/Foo.kt`, `a/b.py:42`, `~/.claude`), **directories** (revealed and expanded in the Project view — or opened in the OS file manager when they live outside the project) and **symbols** (`PermissionBroker`, resolved through *Go to Symbol*, so it works in every JetBrains IDE, not just the Java/Kotlin ones) become links as well. A bare file name resolves too (`app.css:190` — via the IDE's file index, plus a bounded on-disk scan for *excluded* folders like `build/`, which no index knows about), and archives reveal in the tree instead of opening a useless binary buffer.
+- **Jump-to-code links in the transcript.** A file tool's card names its file **relative to the project** (`Read(src/app/session.py)`, not a bare file name) and the path is clickable: it opens in the editor at the right line and is selected in the Project view. In model text, **paths** (`src/Foo.kt`, `a/b.py:42`, `~/.claude`), **directories** (revealed and expanded in the Project view — or opened in the OS file manager when they live outside the project) and **symbols** (`PermissionBroker`, resolved through *Go to Symbol*, so it works in every JetBrains IDE, not just the Java/Kotlin ones) become links as well. A bare file name resolves too (`app.css:190` — via the IDE's file index, plus a bounded on-disk scan for *excluded* folders like `build/`, which no index knows about), and archives reveal in the tree instead of opening a useless binary buffer.
 - Nothing is linked on a guess: the IDE confirms every candidate first, and **only an unambiguous match links** — two `app.css` in the tree means no link at all, rather than a jump to an arbitrary one. Anything unresolvable stays plain text, so a link is never dead.
 
 ### Changed
@@ -496,12 +776,12 @@ A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in th
 - **Tool-use summary + file-upload notices.** `tool_use_summary` renders as a quiet dim note; `files_persisted` now also confirms successful uploads (not only failures). (`session/ClaudeSession.kt`.)
 
 ### Added — protocol drift detection
-- **`./gradlew checkDrift`** — an on-demand Kotlin task that **updates the vendored SDK + the `claude` binary to latest first** (`npm update` + `claude --update`), then diffs the live protocol surface (subtype literals from `sdk.d.ts` + a one-turn binary probe) against the plugin's triaged `KNOWN_EVENT_TYPES`/`KNOWN_SUBTYPES`, printing an agent-consumable markdown report and **failing on actionable drift** (a bare version bump with a covered surface passes). Pure extraction/diff is offline unit-tested; the live half is tagged `driftLive` and excluded from the normal `test` task. Runbook in `docs/DRIFT_DETECTION.md`. (`src/test/.../drift/`, `scripts/drift-baseline.properties`, `build.gradle.kts`.)
+- **`./gradlew checkDrift`** — an on-demand Kotlin task that **updates the vendored SDK + the `claude` binary to latest first** (`npm update` + `claude --update`), then diffs the live protocol surface (subtype literals from `sdk.d.ts` + a one-turn binary probe) against the plugin's triaged `KNOWN_EVENT_TYPES`/`KNOWN_SUBTYPES`, printing an agent-consumable markdown report and **failing on actionable drift** (a bare version bump with a covered surface passes). Pure extraction/diff is offline unit-tested; the live half is tagged `driftLive` and excluded from the normal `test` task. Runbook in `docs/DRIFT_DETECTION.md`.
 
 ### Changed — internals & architecture
 - **New single-responsibility collaborators**, keeping `ClaudeSession` a thin delegating orchestrator (no god-object regrowth): `HookActivityNarrator` (hook-row state machine), and the pure `MemoryRecallFormatter` / `StatusLineFormatter` / `protocol/DialogResponder`. The `onEvent` dispatch now routes `MemoryRecall`, `PromptSuggestion`, `ThinkingTokens`, `HookStarted/Progress/Response`, `ToolUseSummary`, `FilesPersisted`, `UserDialogRequest` and `Elicitation` to these instead of `log.debug`. (`session/`.)
 - **New composer sub-panel** `SuggestionStripPanel` (autonomous, like `QueueStripPanel`); **new transcript kind** `Speaker.MEMORY` + a collapsible `MemoryRow` (its own toggle, **not** driven by Ctrl+O); `PermissionTrayPanel` gains an elicitation-card branch and `PendingPermission` carries an optional `ElicitationCard`. (`ui/`, `permission/PermissionBroker.kt`, `session/TranscriptModel.kt`.)
-- **Protocol baseline → SDK `0.3.162` / `claude` `2.1.162`**, and `KNOWN_SUBTYPES` expanded to the full triaged surface (every subtype the plugin parses, answers, sends, or knowingly leaves as `Other`/`UnsupportedControlRequest`). (`src/test/.../drift/ProtocolSurface.kt`, `scripts/drift-baseline.properties`.)
+- **Protocol baseline → SDK `0.3.162` / `claude` `2.1.162`**, and `KNOWN_SUBTYPES` expanded to the full triaged surface (every subtype the plugin parses, answers, sends, or knowingly leaves as `Other`/`UnsupportedControlRequest`).
 
 ### Security
 - **MCP elicitation URLs are scheme-restricted.** An MCP server is untrusted, so a `url`-mode elicitation link is opened only when it is `http`/`https` — `file:`/`jar:`/`javascript:`/UNC and other schemes are never handed to the browser launcher (gated both in the tray, which won't even offer the button, and at the `BrowserUtil.browse` call site, mirroring the link-scheme allow-list used elsewhere in the UI). Form-input values are built as a plain `content` object of the user's typed values; the reply `action` is constrained to accept/decline/cancel. (`ui/PermissionTrayPanel.kt`, `ui/ChatPanel.kt`.)
@@ -535,7 +815,7 @@ A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in th
 ### Changed
 - **Minimum IDE is now 2025.1 (build 251)** — `since-build` moves up from 243. The composer attach menu uses the fluent `FileChooserDescriptorFactory.multiFiles()` / `singleDir()` descriptors introduced in 2025.1; they don't exist on 2024.3, where the old build would `NoSuchMethodError`. 2024.3 users stay on the last compatible release. (`build.gradle.kts`.)
 - **Attachment mentions are cwd-relative on the wire** — a file attachment is sent to the binary as an `@<cwd-relative>` mention it actually expands (an absolute `@/…` path wasn't recognized), while the user bubble shows a **clickable `jb://open` link** to the file (wire text and display text are now built separately). (`session/ClaudeSession.kt`.)
-- **More file references become links** — the markdown linkifier now links bare file paths **without** a line number too: permissive inside code spans (a `src/Foo.kt` in backticks links at line 1), conservative in prose (only an obvious path with a `/`, or an explicit `path:line`, so a product name like "Node.js" isn't turned into a dead link). (`ui/MarkdownRenderer.kt`.)
+- **More file references become links** — the markdown linkifier now links bare file paths **without** a line number too: permissive inside code spans (a `src/Foo.kt` in backticks links at line 1), conservative in prose (only an obvious path with a `/`, or an explicit `path:line`, so a product name like "Node.js" isn't turned into a dead link).
 - **Compact attachment chips** — smaller chips with a small self-painted ✕ (replacing the chunky stock close button) and a down-scaled file-type glyph. (`ui/AttachmentStripPanel.kt`.)
 - **Settings page no longer sprawls** — the page is pinned to a fixed content width on the left and its HTML security notes wrap, so on a wide (2K+) monitor the form and the tool-checkbox grids stop stretching edge-to-edge. (`ui/ClaudeSettingsConfigurable.kt`.)
 - **Native `/login` — no IDE terminal** — signing in no longer drops you into a terminal tab (which broke once the **Reworked terminal** became the default engine in 2025.2: the legacy `createShellWidget` factory creates a deprecated *Classic* tab whose command-send races shell startup, so `claude auth login` was dropped). `/login` now spawns `claude auth login` under a real PTY (**pty4j**, bundled in the platform), lets the binary drive its own OAuth flow, opens the authorize URL in the IDE browser, collects the code from the callback page via a native input dialog, writes it back to the PTY, and restarts the session on success. The pure output parser (URL / "paste code" prompt / result extraction, layout-agnostic to the Ink TUI's cursor positioning) is unit-tested. (`process/ClaudeLoginFlow.kt`, `process/LoginOutputParser.kt`, `session/ClaudeSession.kt`, `ui/ChatPanel.kt`.)
@@ -607,10 +887,10 @@ A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in th
 ## [2.2.2] — 2026-06-03
 
 ### Added
-- **Headless component tests** (`src/test/.../headless/`, IntelliJ Platform `BasePlatformTestCase`, run in-process): `OpenedDiffsService`, `ChatSessionManager`, `SessionHistory` service round-trip, `ClaudeSettings` service (defaults + always-allow), `ClaudeSettingsConfigurable` (combo fallbacks + apply/reset/dispose), and real **token-accounting** verification (all four usage components fold into the session total across messages).
-- **Integration tests** (`src/test/.../integration/`) driving a real `ClaudeSession` against `bin/fake-claude` with JSONL fixtures: init/streaming, thinking turn, token accounting, multi-message token fold, rate-limit, tool-use permission resolution, resume reconstruction, interrupt, and the "Write-unsafe context" regression path.
-- **End-to-end UI tests** (`src/uiTest/`, RemoteRobot, gated by `-PuiTest.enabled=true`): chat smoke, View diff, Close All Diffs, jump-to-code, thinking toggle, keyboard shortcuts, Open Previous Session, Settings model combo, notifications — ready to run in the nightly UI workflow.
-- **Release automation**: `.github/workflows/release.yml` (tag-triggered: full test + verifyPlugin gate, then sign + publish to Marketplace, plus a GitHub Release) and `.github/workflows/ui-tests.yml` (nightly RemoteRobot under Xvfb). `docs/BRANCHING.md` documents the GitFlow + branch-protection conventions.
+- **Headless component tests** (IntelliJ Platform `BasePlatformTestCase`, run in-process): `OpenedDiffsService`, `ChatSessionManager`, `SessionHistory` service round-trip, `ClaudeSettings` service (defaults + always-allow), `ClaudeSettingsConfigurable` (combo fallbacks + apply/reset/dispose), and real **token-accounting** verification (all four usage components fold into the session total across messages).
+- **Integration tests** driving a real `ClaudeSession` against `bin/fake-claude` with JSONL fixtures: init/streaming, thinking turn, token accounting, multi-message token fold, rate-limit, tool-use permission resolution, resume reconstruction, interrupt, and the "Write-unsafe context" regression path.
+- **End-to-end UI tests** (RemoteRobot, gated by `-PuiTest.enabled=true`): chat smoke, View diff, Close All Diffs, jump-to-code, thinking toggle, keyboard shortcuts, Open Previous Session, Settings model combo, notifications — ready to run in the nightly UI workflow.
+- **Branching and release conventions**: `docs/BRANCHING.md` documents the GitFlow + branch-protection conventions. (This entry originally announced a `release.yml` and a nightly `ui-tests.yml`; neither was ever committed. CI/CD landed in 5.0.0 as `ci.yml`, `codeql.yml`, `release.yml` and `drift.yml`.)
 - `ClaudeSession.handleEventForTest(event)` — a `@TestOnly` seam so headless tests can drive event reconciliation without spawning the binary.
 
 ### Notes
@@ -623,7 +903,7 @@ A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in th
 - **CI**: `.github/workflows/ci.yml` runs `./gradlew test verifyPlugin buildPlugin` on every push/PR with JDK 21 + Gradle cache and uploads the plugin zip as an artifact.
 - **Drift detection**: `.github/workflows/sdk-drift.yml` (weekly) opens an issue when a newer SDK is published; `.github/workflows/binary-drift.yml` (daily) when a newer `claude` binary is released; `.github/workflows/binary-probe.yml` (weekly + manual) runs the real binary against canonical inputs and opens an issue if it emits an event type the plugin doesn't parse.
 - **Documentation**: `docs/RELEASE_PROCEDURE.md`, `docs/RELEASE_CHECKLIST.md`, `docs/BINARY_COMPAT.md`, `docs/FAQ.md`, `docs/TROUBLESHOOTING.md`, `docs/TELEMETRY.md` — a real release/maintenance workflow for an in-Marketplace plugin.
-- **Test pyramid foundations**: new Gradle source sets `integrationTest` and `uiTest` (`./gradlew integrationTest` runs against a deterministic `bin/fake-claude` Python stand-in fed JSONL fixtures from `src/integrationTest/resources/fixtures/`; `uiTest` reserved for the Sprint 3 RemoteRobot end-to-end suite, gated by `-PuiTest.enabled=true`).
+- **Test pyramid foundations**: new Gradle source sets `integrationTest` and `uiTest` (`./gradlew integrationTest` runs against a deterministic `bin/fake-claude` Python stand-in fed JSONL fixtures; `uiTest` reserved for the Sprint 3 RemoteRobot end-to-end suite, gated by `-PuiTest.enabled=true`).
 - **Coverage**: `kotlinx-kover` integrated; `./gradlew koverHtmlReport` produces a coverage report.
 - **Layer A unit tests** (67 new, total **202 / 0 fail / 2 skipped on non-Windows**): `DiffPresenter.isWithinRoot` direct (incl. symlink escape attempts), exhaustive `PermissionBroker` matrix (mode × tool × within-root × remembered), `ClaudeBinaryLocator` (incl. Windows `.cmd` shim regression resolved with `Assumptions.assumeTrue`), `McpConfigBuilder` (SSE / streamable-http / stdio + custom server merging + invalid JSON tolerance), `Protocol.parseAskQuestions`, and `MarkdownRenderer` edge combinations (table cells with code/links, unterminated fences, nested task lists, contiguous autolink + `path:line`).
 - `bin/fake-claude` Python stand-in plus the `init_basic.jsonl` fixture: handles the initialize handshake, replays a streamed text turn with `message_start` / `content_block_delta` / `message_delta` / `result`, and emits per-message usage with all four token components so integration tests can pin token-accounting behaviour without hitting the real model.
@@ -781,13 +1061,3 @@ A broad bug-fix + UX pass (the `claude` binary auto-updated to **2.1.193** in th
 - Status bar with thinking indicator, live token count and "Esc to interrupt"
 - Settings: model, permission mode, effort, thinking tokens, allowed/disallowed tools, setting sources, output style
 - UI rethemed to follow the active IDE theme (light/dark); Claude logo icon
-
-[2.1.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v2.0.1...v2.1.0
-[2.0.1]: https://github.com/lain/claude-code-for-jetbrains/compare/v2.0.0...v2.0.1
-[2.0.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.5...v2.0.0
-[1.3.5]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.1...v1.3.5
-[1.3.1]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.3.0...v1.3.1
-[1.3.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/lain/claude-code-for-jetbrains/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/lain/claude-code-for-jetbrains/releases/tag/v1.0.0

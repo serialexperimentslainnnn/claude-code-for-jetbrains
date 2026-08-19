@@ -49,7 +49,7 @@ jobs:
       packages: read # pull the CI image
       security-events: write # publish findings to the Security tab
     env:
-      # MUST match GRADLE_USER_HOME in .github/ci-image/Dockerfile. If these diverge, the warmed caches
+      # MUST match GRADLE_USER_HOME in .github/ci-image/jvm-test.Dockerfile. If these diverge, the warmed caches
       # baked into the image are invisible and this job silently re-resolves the whole platform.
       GRADLE_USER_HOME: /opt/gradle-home
       GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.console=plain

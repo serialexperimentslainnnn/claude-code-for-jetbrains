@@ -40,8 +40,9 @@ Include:
 - Reproduction steps, proof-of-concept, expected vs observed impact.
 - Whether the issue is already public anywhere.
 
-PGP-encrypted email is welcome; request our key in a first plaintext message
-that contains no sensitive details.
+The advisory thread is already private, so there is nothing to encrypt against —
+and there is deliberately **no contact address published anywhere in this
+repository**. If you need an out-of-band channel, ask for one in the advisory.
 
 ## Our commitments
 
@@ -81,7 +82,20 @@ zero. `npm audit` over the whole tree will report transitive advisories in that
 tooling; they reach a developer's machine at build time, never a user, and are
 handled as maintenance rather than as security releases.
 
-Verify the claim rather than taking it on trust — the artifact is inspectable:
+**This is enforced, not asserted.** `ci.yml` blocks on `npm audit --omit=dev
+--audit-level=low` (the distributed scope) and reports the full tree without
+failing; and the `Build plugin` job asserts, on the exact artifact the verifier
+just checked, that the zip contains **zero** `node_modules` entries and that
+`META-INF/LICENSE`, `META-INF/THIRD-PARTY-NOTICES.md` and a licence text for
+**every** file in this repository's `LICENSES/` directory are present inside the
+plugin jar. That last set is derived from the checkout rather than hardcoded, so
+adding a licence text extends the gate by itself — and the notices file cannot
+end up pointing at texts the artifact does not carry, which is exactly what it
+did before the check was widened. Both are required status checks on `main`. If
+the packaging ever changes, the claim fails the build rather than quietly
+becoming false.
+
+Verify it yourself — the artifact is inspectable:
 
 ```sh
 unzip -l build/distributions/*.zip | grep -c 'node_modules'   # → 0
@@ -148,6 +162,31 @@ project root (`DiffPresenter.isWithinRoot`, enforced in `PermissionBroker` and
 `FileRollback`) and is unaffected by the above. A path that lets the plugin
 **write**, delete or execute outside the project root — or an *open* that
 reaches outside project ∪ `$HOME` — is a real finding. Report it.
+
+## Where credentials and settings are kept
+
+Both moved into the IDE's **PasswordSafe** — the OS credential store (Keychain,
+KWallet/Secret Service, Credential Manager) or the IDE's encrypted file — and
+both moves closed a plaintext-at-rest problem rather than a theoretical one.
+
+- **The OAuth credential (5.0.x).** `claude auth login` writes
+  `~/.claude/.credentials.json`, plaintext on Linux and shared with the terminal
+  CLI. The plugin harvests it into the safe and **deletes that file** — including
+  a login you made in your own terminal, deliberately. It is never written back:
+  the credential reaches the binary as an environment variable, and the plugin
+  holds no OAuth client and calls no token endpoint. Renewal (5.0.1) goes through
+  the binary's own non-interactive refresh branch, so that invariant is intact.
+- **API keys** live in their own per-provider slot, so no provider's key can
+  overwrite another's, and are applied only when that provider is selected.
+- **The settings document (5.5.0).** Previously `.idea/claude-code.xml`: per
+  project, plaintext, and in a directory people commit. It carries the plugin's
+  **env block**, which is exactly where an API key or a credentialed proxy URL
+  ends up. The legacy file is deleted only after the safe has accepted the copy.
+
+Credentials are passed in the environment, **never in argv** (where `ps` would
+show them), and never reach a log, the transcript or any exported XML. Sign-out
+clears the plugin's safe and nothing else — running `auth logout` from an IDE
+button would destroy the user's terminal login too.
 
 ## The sensitive-data lock (4.3.1) — deterministic, not an "AI guardrail"
 
@@ -219,19 +258,27 @@ layer, enforcement is absolute. Report a bypass of the *decision* (a match that
 is auto-approved anyway, a foreign/remote path that is reached) — that is a real
 finding. A path we failed to *recognise* is a pattern PR.
 
-## Release signing: two keys, two different claims
+## Release signing: three keys, three different claims
 
-A release carries **two** signatures, and conflating them is the mistake this
-section exists to prevent. They answer different questions and have very
-different security properties.
+A release carries **two** signatures, and behind both stands a third key that
+signs neither. Conflating any two of them is the mistake this section exists to
+prevent: they answer different questions and have very different security
+properties.
 
-| | Maintainer key | CI signing key |
-|---|---|---|
-| Signs | commits and the `vX.Y.Z` tag | the release `.zip` and its `.sha256` |
-| Claim | *a person chose to release this commit* | *this workflow produced these bytes* |
-| Custody | **hardware (YubiKey)** — non-exportable, touch required | software key in a GitHub **environment** secret |
-| Public key | `6CD3 0675 6132 C6FD DEE8 8A74 CD0C 12D8 3C04 435A` | `docs/ci-signing-key.asc` |
-| Expiry | — | **1 year**, then rotated |
+| | Hardware CAs | Maintainer key | CI signing key |
+|---|---|---|---|
+| Signs | the other two keys, and nothing else | every commit | the `vX.Y.Z` tag, the release `.zip` and its `.sha256` |
+| Claim | *this key belongs to the project* | *a person wrote and merged this commit* | *this workflow cut this tag and produced these bytes* |
+| Custody | **hardware (YubiKey)** — non-exportable, never on a computer | software key on the maintainer's machine | software key in a GitHub **environment** secret |
+| Public key | `docs/trust-chain.asc` — Root `E70A 8865 89AB 9AB9 DC2D  2CA3 B746 AD2C 841D 5CE3`, Intermediate `318B BEFF 6E5D D5A0 3A82  8051 8DAB 773C 3796 B834` | `B12D B7CF BAC5 2556 672E  9B24 E2E4 041C CF03 9102`, registered on the GitHub account | `docs/trust-chain.asc`, the **last** block in the file |
+| Expiry | 2029 | 2029 | **1 year**, then rotated |
+
+**The two CAs are the anchor and they are deliberately idle.** Their private
+halves are on two separate YubiKeys and have never existed as a file; all they
+ever do is certify, which is why nothing routine needs them plugged in. The
+maintainer key is a software key *because* of them — it can be replaced without
+anyone re-learning a fingerprint, since what a reader anchors on is the pair
+above it, not the key that happens to be signing commits this year.
 
 **Why there is a second key at all, stated plainly.** The maintainer key cannot
 sign inside a CI runner: it is hardware-backed and non-exportable, which is
@@ -239,17 +286,23 @@ exactly what makes it worth trusting. Automating artifact signatures therefore
 requires a software key whose private half sits in a secret. That is a real
 weakening and it is an accepted, bounded one:
 
-- The secret is scoped to the **`marketplace` environment**, which requires a
-  human approval. No job reachable by merely pushing a tag can see it.
+- The secret is scoped to the **`marketplace` environment**, whose deployment
+  policy admits only `main` and `v*.*.*` tags. No job on any other ref can see
+  it, and no repository-level secret exists at all.
 - The key **expires after a year**, so a leak nobody noticed stops mattering on
   its own schedule rather than never.
 - Its user ID says out loud that it is a CI key and not the maintainer. If the
   two were indistinguishable, a leaked CI key would impersonate a person; being
   able to tell them apart is the whole mitigation.
 
-**The CI key is certified by the maintainer key.** `docs/ci-signing-key.asc`
-carries a certification signature made on the YubiKey, so the two keys are not
-independent claims: the hardware key vouches for the CI key.
+**The CI key is certified by both hardware CAs.** `docs/trust-chain.asc` carries
+those two certification signatures, each made on its own YubiKey, so the keys in
+it are not independent claims: the hardware vouches for the CI key.
+
+It is **one** file rather than three on purpose. A chain is imported whole or it
+is not imported at all — the leaf on its own is a fingerprint in a repository,
+and a CA on its own certifies nothing you have. Handing out three files invites
+importing one.
 
 This matters for a reason that is easy to miss. Without it, a reader is asked to
 trust a fingerprint printed in a file **inside the same repository** an attacker
@@ -257,22 +310,48 @@ who could swap the key would also control — which is not a trust anchor, it is
 tautology. With it, the chain terminates at a key whose private half is in
 hardware and has never been on a computer.
 
+**And the chain still needs an anchor this repository does not publish.** Being
+certified by hardware makes the bundle internally consistent; it does not make it
+*this project's* bundle, because everything a verifier holds — artifact,
+signature and chain — arrived from the same place. The two CAs are therefore also
+published on **keys.openpgp.org**, which is operated by nobody involved here and
+serves a key by fingerprint with no identity check:
+
+```sh
+gpg --keyserver hkps://keys.openpgp.org --recv-keys E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 318BBEFF6E5DD5A03A8280518DAB773C3796B834
+```
+
+Two copies of the same CA from two unrelated publishers either agree, or the
+disagreement is the finding. That keyserver strips uids it has not verified by
+email, which costs nothing: the fingerprint is the anchor, not the name.
+
 It also buys the one thing a bare key cannot: **a revocation lever.** If the CI
 key is ever exposed, the maintainer revokes the certification from hardware,
 withdrawing the endorsement immediately — without depending on anyone noticing
 that a file changed.
 
 ```sh
-gpg --check-sigs "$(gpg --show-keys --with-colons docs/ci-signing-key.asc | awk -F: '/^fpr:/{print $10; exit}')"
-# expect a certification from 6CD3 0675 6132 C6FD DEE8  8A74 CD0C 12D8 3C04 435A
+# The CI key is the LAST block in the chain — the CAs come first, so take the last, not the first.
+gpg --check-sigs "$(gpg --show-keys --with-colons docs/trust-chain.asc \
+                    | awk -F: '$1=="pub"{getline; if ($1=="fpr") f=$10} END{print f}')"
+# expect a certification from EACH of the two CA fingerprints in the table above
 ```
+
+**A certification that does not survive export is the failure mode here**, and it
+looks exactly like success locally: `gpg --lsign-key` (and Kleopatra's default
+"certify for yourself only") makes a *local* signature, which is stripped the
+moment the key is exported. The published chain then carries the CAs and no
+endorsement at all. `scripts/bootstrap-ci.sh` re-imports its own output into a
+throwaway keyring and checks the signatures are still there, because reading the
+signing machine's keyring can only ever confirm what that machine already thinks.
 
 **Verify both signatures.** They are complementary, not redundant — the artifact
 signature covers the bytes you downloaded, and the tag ties those bytes to a
 commit on `main`:
 
 ```sh
-gpg --import docs/ci-signing-key.asc
+gpg --import docs/trust-chain.asc               # or trust-chain.asc from the release itself
 gpg --verify claude-code-native-X.Y.Z.zip.asc   # bytes came from the workflow
 git verify-tag vX.Y.Z                           # cut from main by that workflow
 gh attestation verify claude-code-native-X.Y.Z.zip \
@@ -281,33 +360,55 @@ gh attestation verify claude-code-native-X.Y.Z.zip \
 
 **What no signature here claims.** Releases are cut automatically when `develop`
 is merged into `main`, and both the tag and the artifact are signed by the CI
-key — which is certified by the maintainer's hardware key, so the chain still
-ends in hardware, but which signs without a human present. **Nothing in a
-release attests that a person authorised it.** That rests on the two gates
-around publication: `main` accepts only reviewed pull requests, and publishing
-requires an approval from a named reviewer on a protected environment. Read
-`git verify-tag` as *"this workflow cut this from main"*, and treat the human
-judgement as living in the pull request, not in the signature.
+key — which is certified by the two hardware CAs, so the chain still ends in
+hardware, but which signs without a human present. **Nothing in a
+release attests that a person authorised it.** Read `git verify-tag` as *"this
+workflow cut this from main"*, and treat the human judgement as living in the
+pull request, not in the signature.
+
+That judgement is **one** gate, not two. This section used to name a second — a
+required reviewer on the `marketplace` environment — and there is no such rule:
+the environment's only protection is the deployment policy restricting it to
+`main` and `v*.*.*` (checked against the API on 2026-08-11; the provisioning
+script sets `reviewers: []` deliberately). **The merge into `main` is the last
+human act before a version reaches users.** Said plainly rather than dropped,
+because a control everyone believes in and nobody configured is worse than one
+that was never claimed. What still holds without it: `main` takes nothing but
+pull requests that are up to date with every required check green (a
+*mechanical* gate — `required_approving_review_count` is 0, deliberately, since
+GitHub will not let an author approve their own PR and a single maintainer
+cannot satisfy any higher value), the credentials exist on no other ref, and the
+lineage guard runs before any of them is in scope.
 
 The attestation is worth having and worth not overtrusting: it proves *where* a
 build ran, not that the result is benign. A compromised runner can produce a
 valid attestation for a malicious artifact. What actually reduces that risk is
 everything around it — every action pinned by commit SHA, a read-only default
-token, and no secrets outside the approval-gated job.
+token, and no secrets outside the one environment-scoped job.
 
 **Rotation** (scheduled, before expiry): regenerate with
-`./scripts/gen-ci-signing-key.sh`, certify the new key with the YubiKey, replace
-both environment secrets, and commit the new `docs/ci-signing-key.asc`.
-Previously published releases stay verifiable against the old public key, which
-is why old public keys are **never deleted** from the repository.
+`./scripts/gen-ci-signing-key.sh` — or `./scripts/bootstrap-ci.sh`, which does
+the whole sequence — certify the new key with **both** YubiKeys, replace both
+environment secrets, and commit the rewritten `docs/trust-chain.asc`.
+
+Rotation **overwrites** that file, and the retired key is not kept beside its
+successor: a bundle that accumulates every key the project ever used makes the
+reader decide which one to believe, which is the one judgement the file exists to
+spare them. Previously published releases stay verifiable because each release
+carries the chain that was current when it was cut, attached as an asset — so
+the retired key is still there, on the release it actually signed, which is where
+anyone verifying that release is already standing.
 
 **Compromise** (the CI key is exposed, or a runner is suspected compromised) —
 in this order, because the first step is the only one that is immediate:
 
 ```sh
-# 1. Withdraw the endorsement. Takes effect for anyone who refreshes the key.
-gpg --local-user 6CD306756132C6FDDEE88A74CD0C12D83C04435A --quick-revoke-sig <CI_FPR> <CI_FPR>
-gpg --armor --export <CI_FPR> > docs/ci-signing-key.asc   # now carries the revocation
+# 1. Withdraw BOTH endorsements — one is enough to keep the key looking endorsed.
+#    Takes effect for anyone who refreshes the key.
+gpg --local-user E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3 --quick-revoke-sig <CI_FPR> <CI_FPR>
+gpg --local-user 318BBEFF6E5DD5A03A8280518DAB773C3796B834 --quick-revoke-sig <CI_FPR> <CI_FPR>
+{ gpg --armor --export E70A886589AB9AB9DC2D2CA3B746AD2C841D5CE3 318BBEFF6E5DD5A03A8280518DAB773C3796B834
+  gpg --armor --export <CI_FPR>; } > docs/trust-chain.asc   # now carries the revocations
 
 # 2. Delete the secrets so nothing can sign with it again.
 gh secret delete GPG_SIGNING_KEY        --env marketplace

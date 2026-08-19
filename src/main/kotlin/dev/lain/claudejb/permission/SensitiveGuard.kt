@@ -1,814 +1,235 @@
 package dev.lain.claudejb.permission
 
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
-/**
- * A guardrail against an agent — by accident, or by prompt injection — reading what a real attacker would come for,
- * or running what a real attacker would run.
- *
- * Read the whole doc before touching a rule: the value here is that it is thought through, not that it is long. It
- * reacts to three curated surfaces and nothing else, so ordinary development never trips it — a guard that cries
- * wolf is a guard the user switches off, and then it protects nothing.
- *
- * ### 1. Credentials & key material — [SENSITIVE_GLOBS]
- * Matched **by shape, wherever the file sits**, never anchored to a specific home. Anchoring to `$HOME` goes blind
- * on Windows (`C:\Users\bob\.ssh`) and WSL (`/mnt/c/Users/bob/.ssh`), where the interesting home is not the one the
- * JVM reports; one structural `.ssh` glob catches Linux, macOS, Windows and WSL at once (and a `.aws` fixture
- * inside a repo too, which is correct).
- *
- * ### 2. Foreign territory — [Category.FOREIGN]
- * Another user's home (`/home/<not-me>`, `/Users/<not-me>`, `C:\Users\<not-me>`, `/root`), a network/removable
- * mount (NFS, CIFS/SMB, SSHFS, UNC `\\server\share`), and — under **WSL** — anything on `/mnt/` that is not
- * `/mnt/c`. None of that is agentic development; it is lateral movement. The only exemption is the open project's
- * own root: a repo on a corporate share is normal and the user opened it on purpose (the credential globs still
- * apply to it).
- *
- * ### 3. Dangerous commands — [DANGEROUS_COMMANDS]
- * Commands that dump a secret at rest, exfiltrate a file, pipe the network into a shell, or invoke recognised
- * offensive/LOLBIN tooling.
- *
- * ### Verdict, by trust of the CALLER — an allowlist, not a blacklist
- * The caller is trusted **only if it is one of the agent's own tools** ([AGENT_TOOLS]). Everything else — every MCP
- * server, every Skill, anything unrecognised — is third-party, because a blacklist of "bad" prefixes is exactly the
- * thing an attacker names their way around. By default this is a **hard lock**:
- *  - a **trusted** tool that trips rule 1 or 3 → **ASK** (a card, every time, even under `bypassPermissions`): the
- *    user may authorise their own agent to read their own key, once, explicitly;
- *  - a **third-party** caller that trips rule 1 or 3 → **DENY**;
- *  - **anyone** who trips rule 2 (foreign territory) → **DENY**.
- *
- * ### Per-rule enforcement toggles (Settings ▸ Claude Code ▸ Security) — never a silent allow
- * Each rule — CREDENTIAL, DANGEROUS_COMMAND, and each of FOREIGN's three sub-rules ([ForeignReason]) — has its own
- * `enforce*` field on [Policy], defaulting to `true` (reproducing the original hard lock exactly). Detection
- * ([classify]) runs **unconditionally**, regardless of these toggles — turning one off never skips recognising a
- * match. What it changes is [verdict]'s OUTCOME: a disabled rule's hit is **downgraded from DENY to ASK**, for every
- * caller, including third-party ones — never to ALLOW. So "disabling a rule" means "I want to decide this one
- * myself, every time", not "stop watching for this". The one thing tunable *without* a toggle is the sensitive-path
- * list itself, and only **additively**: the effective globs are the built-in [SENSITIVE_GLOBS] plus the user's
- * extras — the built-ins cannot be individually removed from that list.
- *
- * ### Why this is enforceable even in `bypassPermissions`
- * The plugin launches the binary in `default` mode **always** — `acceptEdits`/`bypassPermissions` are implemented
- * here by auto-approving in [PermissionBroker] (`SessionLauncher.binaryPermissionMode`). Every tool call arrives as
- * a `can_use_tool` request whatever mode the user picked, so "never auto-approve this one" is the plugin's call to
- * make. The mode itself is untouched; that branch is simply not reached.
- *
- * ### Why the whole input, not a key list
- * A file argument is `file_path` — until an MCP server calls it `path`, `target`, `uri`, `destination`, or
- * something no one has seen. [pathCandidates] walks **every string leaf** of the input, skipping URLs and
- * multi-line blobs so a `Write`'s *contents* are not mistaken for a filename.
- *
- * ### What this is, and what it is not
- * This is **not an LLM guardrail.** It does not ask the model to behave, and there is no prompt that talks it out
- * of a No. It is deterministic Kotlin, out of band, intercepting every `can_use_tool` request before any
- * auto-approval — the model has no access to this code and no say in its verdict. At this layer, enforcement is
- * absolute: a match is a wall, not a suggestion.
- *
- * What is *heuristic* is **detection**, and only for shell strings. Matching a declared file path is exact; but
- * `cat $HOME/.ss''h/id_rsa`, a base64 round-trip, or a script that reads a key indirectly may not *match* a
- * pattern, and a symlink is not resolved. That is a gap in what we recognise — not a way to argue with a match
- * once made. Close it by widening the patterns, never by trusting the caller. (The [AGENT_TOOLS] allowlist is the
- * one trust decision, and it is a whitelist precisely so an attacker cannot name their way onto it.)
- *
- * PURE: no IDE, no filesystem, no OS sniffing. [Policy] carries everything (assembled on the IDE side from settings
- * + [dev.lain.claudejb.session.RemoteMounts]), so every rule is unit-testable — for security code, a requirement.
- */
 object SensitiveGuard {
 
-    /** What to do with a tool call that trips the guard. */
     enum class Verdict { ALLOW, ASK, DENY }
 
-    /** Which surface a call tripped — decides severity ([verdict]) and the card's wording ([reason]). */
-    enum class Category { CREDENTIAL, FOREIGN, DANGEROUS_COMMAND }
-
-    /** Which FOREIGN sub-rule tripped — lets [Policy]'s per-rule toggles govern FOREIGN at finer grain than the
-     *  category as a whole (see the three `enforceForeign*` fields below). */
-    enum class ForeignReason { OTHER_USER_HOME, NETWORK_MOUNT, WSL_MOUNT }
-
-    /**
-     * The agent's OWN tools — the allowlist of trusted callers. Anything not in here (MCP, Skills, unknown) is
-     * third-party and denied by default when it trips the guard.
-     *
-     * Kept in sync with the binary's built-in tool set — cross-referenced against the vendored SDK's own schema
-     * (`node_modules/@anthropic-ai/claude-agent-sdk/sdk-tools.d.ts`, `ToolInputSchemas`), which is the project's
-     * declared protocol source of truth. A REAL incident: this list had gone stale as the CLI grew its own
-     * orchestration surface (background tasks, cron, worktrees…), so those native, first-party tool calls were
-     * silently falling into the "third-party" branch and getting hard-DENIED instead of asking — indistinguishable,
-     * from the user's chair, from an MCP server being blocked. `Skill` and any `mcp__*`-prefixed name are
-     * DELIBERATELY excluded: a Skill's *content* is third-party (community/user-authored), same tier as MCP, by
-     * design — see the class doc's caller-trust matrix.
-     */
-    val AGENT_TOOLS: Set<String> = setOf(
-        "Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "NotebookRead",
-        "Glob", "Grep", "LS", "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch", "ExitPlanMode",
-        "EnterPlanMode", "EnterWorktree", "ExitWorktree",
-        "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "TaskOutput", "TaskStop",
-        "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "SendMessage",
-        "ListMcpResources", "ReadMcpResourceDir", "ReadMcpResource", "RefreshMcpTools",
-        "Artifact", "ClaudeDesign", "DesignSync", "Monitor", "Projects", "ProposeSkills",
-        "PushNotification", "RemoteTrigger", "REPL", "ReportFindings", "SendFeedback",
-        "ShowOnboardingRolePicker", "Workflow",
-        // Re-audited against `claude` 2.1.222 / SDK 0.3.222. Entries are only ever ADDED here, never removed:
-        // this is a TRUST allowlist, not an inventory. A name that no longer exists costs nothing, while a
-        // first-party name that is missing falls into the third-party branch and is hard-DENIED — the 4.4.0
-        // incident described above. NB the CLI can also retire a tool per-session (it ships distinct
-        // "is disabled for this session" / "is not available in this context" messages, and Glob/Grep do get
-        // withdrawn in some sessions), which is another reason absence here must never be inferred from one run.
-        "AskUserQuestion", "Mcp", "FileRead", "FileEdit", "FileWrite",
-        // ToolSearch was absent, and it is the one that mattered most: it is how the agent loads the schema of
-        // every DEFERRED tool (web, tasks, cron, worktrees), so on a session that defers them, the call that
-        // unlocks all the others was the one landing in the untrusted branch. Found by diffing this list
-        // against a live session's actual tool inventory rather than against the SDK's type names — those are
-        // not the runtime registry (the SDK calls them FileRead/FileEdit/FileWrite; the tools are Read/Edit/Write).
-        "ToolSearch",
-    )
-
-    /** Everything the guard needs to judge a call. Assembled by the IDE side; pure input here. */
     data class Policy(
-        val globs: List<String> = SENSITIVE_GLOBS,
-        /** The user's home, for expanding `~`/`$HOME`/`%USERPROFILE%`. */
+        val globs: List<String> = CredentialPaths.SENSITIVE_GLOBS,
         val home: String? = null,
-        /** The current username — anyone else's home directory is foreign territory. */
         val currentUser: String? = null,
-        /** Network/removable mount points discovered on this host — treated as foreign. */
         val guardedRoots: List<String> = emptyList(),
-        /** WSL only: treat every `/mnt/<x>` where x ≠ c as foreign. */
-        val blockForeignWslMounts: Boolean = false,
-        /** The open project. A path under it is exempt from the FOREIGN rules — never from the credential globs. */
+        val wslHost: Boolean = false,
         val projectRoot: String? = null,
-        /**
-         * Optional **canonicaliser**: given a candidate path, return its real on-disk path (symlinks and `..`
-         * resolved), or null if it cannot be resolved. Injected by the IDE side because it touches the filesystem;
-         * the guard stays pure. When present, every RESOLVABLE-looking candidate (see [looksResolvable]) is judged
-         * on BOTH its literal and its resolved form, so a symlink `proj/innocent → ~/.ssh/id_rsa`, or
-         * `proj/../../../etc/shadow`, cannot launder a path past the rules by hiding its true target. A resolver
-         * that throws, returns null, or is too slow (see [expandWithResolved]) just leaves the literal.
-         *
-         * **Caller contract — this WILL be called from whatever thread invokes [verdict]/[reason]/[classify].**
-         * A typical implementation (`File(x).canonicalPath`) is a blocking syscall with **no JDK-level timeout and
-         * no interrupt**: on a hung/unresponsive network mount it can block the calling thread forever. [SensitiveGuard]
-         * defends against that itself (bounded, off-thread, per [expandWithResolved]) — but do not add further
-         * blocking work inside this lambda beyond a single stat-like call, since the bound assumes that shape.
-         */
         val pathResolver: ((String) -> String?)? = null,
-        /**
-         * Enforcement toggles — Settings ▸ Claude Code ▸ Security, one per rule. Defaults (`true`) reproduce the
-         * original hard-lock behaviour exactly. Turning one **off never silently ALLOWs** a call that trips it —
-         * detection ([classify]) always runs regardless; the toggle only downgrades the OUTCOME from the hard
-         * block (DENY) to a permission card (ASK), for every caller, so disabling a rule is never quiet. A trusted
-         * agent tool that trips CREDENTIAL/DANGEROUS_COMMAND already gets a card either way — these toggles only
-         * ever change what an untrusted (MCP/Skill) caller gets: DENY when enforced, ASK when not.
-         */
-        val enforceCredentials: Boolean = true,
-        val enforceDangerousCommands: Boolean = true,
-        /** Sub-rule of FOREIGN: another user's home directory, or `/root` when we aren't root. */
-        val enforceForeignOtherUserHome: Boolean = true,
-        /** Sub-rule of FOREIGN: a UNC path or a discovered network/removable mount ([guardedRoots]). */
-        val enforceForeignNetworkMounts: Boolean = true,
-        /** Sub-rule of FOREIGN: a non-`/mnt/c` WSL drive (only meaningful when [blockForeignWslMounts] is true). */
-        val enforceForeignWslMounts: Boolean = true,
+        val envValues: Map<String, String> = emptyMap(),
+        val fileReader: ((String) -> String?)? = null,
+        val disabledRules: Set<SecurityRule> = emptySet(),
+        val httpProxy: String? = null,
+        val httpsProxy: String? = null,
+        val noProxyHosts: List<String> = emptyList(),
+        val extraBlockedDomains: List<String> = emptyList(),
+        val commandWhitelist: List<String> = emptyList(),
     )
 
-    // ─── Blacklist 1 — the files worth stealing. Structural (match anywhere), cross-OS. ───────────────────
-    val SENSITIVE_GLOBS: List<String> = listOf(
-        // SSH — keys + the recon goldmine (known_hosts / authorized_keys / config)
-        "**/.ssh/**", "**/id_rsa*", "**/id_dsa*", "**/id_ecdsa*", "**/id_ed25519*", "**/*_rsa", "**/*.ppk",
-        // GPG / PKI / generic key material
-        "**/.gnupg/**", "**/.pki/**", "**/*.pem", "**/*.key", "**/*.p8", "**/*.p12", "**/*.pfx",
-        "**/*.jks", "**/*.keystore", "**/*.asc", "**/*.gpg", "**/*.kdbx", "**/*.agekey",
-        // VPN / tunnels
-        "**/*.ovpn", "**/wg*.conf", "/etc/wireguard/**", "/etc/ipsec.secrets", "**/*.mobileconfig",
-        // Cloud, cluster, container, IaC
-        "**/.aws/**", "**/.azure/**", "**/.config/gcloud/**", "**/gcloud/**/credentials.db", "**/.oci/**",
-        "**/.config/doctl/**", "**/.config/hcloud/**", "**/.config/scw/**", "**/.aliyun/**", "**/.config/linode-cli",
-        "**/.kube/config", "**/.kube/**/*config*", "**/.docker/config.json", "**/.config/containers/auth.json",
-        "**/.terraform.d/credentials.tfrc.json", "**/*.tfstate", "**/*.tfstate.backup", "**/.config/pulumi/**",
-        "**/.ansible/**/*vault*", "**/.config/rclone/rclone.conf", "**/.s3cfg", "**/.boto",
-        // Registries, VCS, build tooling
-        "**/.netrc", "**/_netrc", "**/.npmrc", "**/.yarnrc.yml", "**/.pypirc", "**/.gem/credentials",
-        "**/.cargo/credentials*", "**/.gradle/gradle.properties", "**/.m2/settings.xml", "**/.bundle/config",
-        "**/.composer/auth.json", "**/.nuget/NuGet.Config", "**/.git-credentials", "**/.config/gh/hosts.yml",
-        "**/.config/glab-cli/**", "**/.config/hub", "**/.config/git/credentials",
-        // Databases
-        "**/.pgpass", "**/.my.cnf", "**/.mylogin.cnf", "**/.mysql_history", "**/.psql_history", "**/.dbeaver/**",
-        "**/.mongorc.js", "**/.rediscli_history",
-        // Shell / REPL history — where secrets go to be pasted
-        "**/.bash_history", "**/.zsh_history", "**/.sh_history", "**/.python_history", "**/.node_repl_history",
-        "**/.local/share/fish/fish_history", "**/.irb_history", "**/.lesshst",
-        // Password managers & browser stores (cookies = live sessions)
-        "**/.password-store/**", "**/.config/Bitwarden*/**", "**/1Password/**", "**/*.opvault/**",
-        "**/logins.json", "**/key4.db", "**/signons.sqlite", "**/Login Data", "**/Cookies", "**/cookies.sqlite",
-        // Crypto wallets
-        "**/wallet.dat", "**/*.wallet", "**/.electrum/**", "**/.ethereum/keystore/**", "**/.bitcoin/wallet.dat",
-        // Mail
-        "**/.msmtprc", "**/.fetchmailrc", "**/.authinfo", "**/.authinfo.gpg",
-        // macOS keychains
-        "**/Library/Keychains/**", "**/*.keychain-db", "**/*.keychain",
-        // Windows credential + registry stores (native and via WSL /mnt)
-        "**/AppData/Roaming/Microsoft/Credentials/**", "**/AppData/Local/Microsoft/Credentials/**",
-        "**/AppData/Roaming/Microsoft/Protect/**", "**/AppData/Local/Microsoft/Vault/**",
-        "**/AppData/Roaming/Microsoft/SystemCertificates/**", "**/AppData/**/gcloud/**", "**/*.rdp",
-        "**/NTUSER.DAT", "**/Windows/System32/config/SAM", "**/Windows/System32/config/SECURITY",
-        "**/Windows/System32/config/SYSTEM",
-        // Container / orchestrator secrets, and other processes' environment
-        "/run/secrets/**", "/var/run/secrets/**", "**/serviceaccount/token", "/proc/*/environ",
-        // AI-agent access tokens — the crown jewels of this era, ours included (the plugin must not read its own)
-        "**/.claude/.credentials.json", "**/.claude/**/*credential*", "**/.config/anthropic/**",
-        "**/.codex/**", "**/.config/openai/**", "**/.openai/**", // OpenAI / Codex
-        "**/.config/github-copilot/**", "**/github-copilot/hosts.json", "**/github-copilot/apps.json", // Copilot
-        "**/.cursor/**/*token*", "**/.cursor/**/*credential*", "**/.config/Cursor/**/*token*", // Cursor
-        "**/.codeium/**", "**/.codeium/windsurf/**", // Codeium / Windsurf
-        "**/.continue/**/*token*", "**/.continue/config.json", "**/.aider*", "**/.aider.conf.yml",
-        "**/.config/TabNine/**", "**/.gemini/**", "**/.config/zed/**/*token*", // TabNine / Gemini / Zed
-        "**/.config/gh-copilot/**", "**/.sourcegraph/**", "**/.src-config.json", // Copilot CLI / Cody
-        "**/.config/JetBrains/**/*token*", "**/.local/share/JetBrains/**/*token*",
-        // Source-repo & package/registry API keys — access to your code and your supply chain
-        "**/.config/gh/hosts.yml", "**/.config/glab-cli/**", "**/.config/hub", "**/.config/git/credentials",
-        "**/.config/tea/**", "**/.config/bb/**", "**/.gitconfig.local", // gitea / bitbucket
-        "**/.huggingface/token", "**/.cache/huggingface/token", "**/.kaggle/kaggle.json", // model registries
-        "**/.config/heroku/**", "**/.fly/**", "**/.config/fly/**", "**/.railway/**", "**/.config/railway/**",
-        "**/.wrangler/**", "**/.cloudflared/**", "**/.config/stripe/**", "**/.sentryclirc", // PaaS / CDN / SaaS
-        "**/.config/configstore/*.json", "**/.jfrog/**", "**/.config/doctl/**", "**/.vault-token",
-        "**/.supabase/**", "**/.config/supabase/**", "**/.planetscale/**", "**/.config/ngrok*/**",
-        // Unix system secrets
-        "/etc/shadow", "/etc/gshadow", "/etc/master.passwd", "/etc/sudoers", "/etc/sudoers.d/**",
-        "/etc/ssl/private/**", "/etc/ssh/*_key", "/etc/krb5.keytab", "**/krb5cc_*", "**/.k5login", "**/.htpasswd",
-        // Project secrets (also match inside the repo — that is the point)
-        "**/.env", "**/.env.*", "**/.envrc", "**/secrets.y*ml", "**/secrets.json", "**/credentials.json",
-        "**/service-account*.json", "**/.vault-token", "**/.netlify/state.json", "**/.vercel/**",
-    )
-
-    // ─── Blacklist 2 — the commands worth running, if you are the attacker. Curated: high signal. ─────────
-    val DANGEROUS_COMMANDS: List<Regex> = listOf(
-        // Dump a secret at rest
-        re("""\bgpg2?\b[^|;&]*--export-secret-(keys|subkeys)"""),
-        re("""\bssh-keygen\b[^|;&]*\s-y\b"""),
-        re("""\bopenssl\b[^|;&]*\b(rsa|ec|pkcs12|pkcs8)\b[^|;&]*-in\b"""),
-        re("""\bsecurity\b[^|;&]*\b(dump-keychain|find-(generic|internet)-password)\b"""),
-        re("""\b(aws|az|gcloud|oci)\b[^|;&]*\b(configure get|print-access-token|get-token|get-session-token|list-access-tokens)\b"""),
-        re("""\bkubectl\b[^|;&]*\bget\b[^|;&]*\bsecret"""),
-        re("""\b(docker|podman)\b[^|;&]*\blogin\b[^|;&]*(-p\b|--password\b)"""),
-        re("""\bgit\b[^|;&]*\bcredential\b[^|;&]*\bfill\b"""),
-        re("""\b(printenv|env|set)\b\s*(\||>|$)"""),
-        re("""\bcat\b[^|;&]*\b(shadow|master\.passwd|sudoers)\b"""),
-        re("""BEGIN\s+(RSA|OPENSSH|EC|DSA|PGP)\s+PRIVATE\s+KEY"""),
-        // Windows / PowerShell secret dumps
-        re("""\bcertutil\b[^|;&]*(-exportPFX|-store\b|-user\b|-urlcache\b)"""),
-        re("""\b(Export-PfxCertificate|Get-Credential|ConvertFrom-SecureString|Get-ChildItem\s+Cert:)\b"""),
-        re("""\breg\b[^|;&]*\b(save|export)\b[^|;&]*hk(lm|cu).*(sam|security|system)"""),
-        re("""\b(vaultcmd|cmdkey)\b[^|;&]*(/list|/rlist)"""),
-        re("""\b(mimikatz|sekurlsa|lsadump)\b"""),
-        // Exfiltrate
-        re("""\bcurl\b[^|;&]*(-T\b|--upload-file\b|-F\b|--data-binary\s*@|--data\s*@)"""),
-        re("""\bwget\b[^|;&]*--post-file"""),
-        re("""\b(nc|ncat|netcat|socat)\b[^|;&]*(-e\b|\b\d{2,5}\b)"""),
-        re("""\b(scp|rsync|sftp)\b[^|;&]*(\.ssh|\.aws|\.gnupg|\.kube|id_rsa|\.pem|\.env)\b"""),
-        re("""\b(tar|zip|7z|gzip)\b[^|;&]*(\.ssh|\.aws|\.gnupg|\.kube|id_rsa|\.pem|\.env)\b"""),
-        re("""\bbase64\b[^|;&]*(\.ssh|\.aws|\.gnupg|id_rsa|\.pem|\.env)"""),
-        re("""\bInvoke-WebRequest\b[^|;&]*-(InFile|Body)\b"""),
-        re("""/dev/tcp/\d"""),
-        re("""\bdd\b[^|;&]*if=/dev/(sd|nvme|mem|kmem)"""),
-        // Remote code / LOLBINs / reverse shells
-        re("""\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|python\d?|perl|ruby)\b"""),
-        re("""\b(powershell|pwsh)\b[^|;&]*-e(nc|ncodedcommand)?\b\s+[A-Za-z0-9+/=]{16,}"""),
-        re("""\b(bitsadmin|mshta|regsvr32|rundll32|installutil|msbuild)\b[^|;&]*(http|/i:|javascript:|scrobj)"""),
-        // Recognised offensive tooling
-        re("""\b(lazagne|secretsdump(\.py)?|impacket-\w+|responder|bloodhound|sharphound|crackmapexec|nxc)\b"""),
-        re("""\b(hashcat|johntheripper|hydra|medusa|patator|ophcrack|hashid)\b"""),
-        re("""\b(sqlmap|msfconsole|msfvenom|metasploit|beef-xss|setoolkit|empire|covenant|sliver)\b"""),
-        re("""\b(nmap|masscan|zmap|nikto|gobuster|dirbuster|feroxbuster|ffuf|wpscan)\b"""),
-    )
-
-    private fun re(p: String) = Regex(p, RegexOption.IGNORE_CASE)
-
-    /** Keys whose value is (or contains) a command line, however the tool spells it. */
-    private val COMMAND_KEY = re(
-        """^(cmd|command|commands|script|shell|shell_?command|exec|execute|run|args|argv|arguments""" +
-            """|code|program|pty_?input)$""",
-    )
-
-    /** Segment introducing a user home: `/home/<u>`, `/Users/<u>`, `C:/Users/<u>`, `/mnt/c/Users/<u>`. */
-    private val HOME_SEGMENT = re("""(?:^|/)(?:home|users)/([^/]+)""")
-
-    /** A URL, not a path. */
-    private val URLISH = re("""^[a-z][a-z0-9+.\-]*://""")
-
-    /** Longer than a filename → it is a file's *contents*, not its name. */
-    private const val MAX_PATH_LEN = 512
-
-    /**
-     * How much of a matched dangerous command is quoted back in the denial reason. The excerpt is shown to the
-     * user AND sent to the model, so it stays short: enough to recognise which rule fired, not enough to echo a
-     * whole script back into the transcript.
-     */
-    private const val MATCH_EXCERPT_CHARS = 120
-
-    // ── origin: trusted only if it is one of the agent's own tools ───────────────────────────────────────
-
-    /** True only for the agent's OWN tools. Everything else — MCP, Skills, unknown — is third-party. */
-    fun isTrustedCaller(toolName: String): Boolean = toolName in AGENT_TOOLS
-
-    // ── the decision ─────────────────────────────────────────────────────────────────────────────────────
-
-    /** Path to the toggles in Settings — appended to every card/transcript reason, enforced or not, so the lever is
-     *  always discoverable from the block/prompt itself, not just from documentation. */
     private const val SETTINGS_PATH = "Settings ▸ Claude Code ▸ Security"
 
-    /**
-     * A verdict together with the reason behind it — the form callers should use.
-     *
-     * Both are produced from ONE [classify] pass on purpose. Calling [verdict] and [reason] separately runs the
-     * classification twice, and classification is not cheap: [expandWithResolved] canonicalises every path
-     * candidate on disk, under a timeout, precisely because a `stat()` on a dead network mount can block.
-     * Paying that twice to answer one question is waste the user experiences as latency on a permission card.
-     */
-    data class Decision(val verdict: Verdict, val reason: String?)
+    data class Decision(
+        val verdict: Verdict,
+        val reason: String?,
+        val rule: SecurityRule? = null,
+    )
 
-    /** [Verdict] plus its explanation, in a single classification pass. */
-    fun evaluate(toolName: String, input: JsonObject, policy: Policy): Decision {
-        val result = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
-        return Decision(verdictFor(toolName, result, policy), reasonFor(result, policy))
+    fun evaluate(input: JsonObject, policy: Policy): Decision {
+        val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
+        if (liftedByWhitelist(input, hit, policy)) return Decision(Verdict.ALLOW, null)
+        return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule)
     }
 
-    /** The verdict for a tool call. [Verdict.ALLOW] means "not our business" — the normal permission flow runs. */
-    fun verdict(toolName: String, input: JsonObject, policy: Policy): Verdict {
-        val result = classify(input, policy) ?: return Verdict.ALLOW
-        return verdictFor(toolName, result, policy)
+    private fun verdictFor(hit: Hit, policy: Policy): Verdict =
+        if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
+
+    private fun liftedByWhitelist(input: JsonObject, hit: Hit, policy: Policy): Boolean {
+        if (!hit.rule.whitelistable || policy.commandWhitelist.isEmpty()) return false
+        val approved = policy.commandWhitelist.map { canonicalCommand(it, policy) }.filter { it.isNotEmpty() }.toSet()
+        if (approved.isEmpty()) return false
+        val issued = ToolInputScanner.commandCandidates(input)
+        if (issued.isEmpty()) return false
+        return issued.all { canonicalCommand(it, policy) in approved }
     }
 
-    private fun verdictFor(toolName: String, result: Classification, policy: Policy): Verdict {
-        val enforced = isEnforced(result, policy)
-        if (result.category == Category.FOREIGN) {
-            // Enforced (default): DENY for every caller, no exception. Disabled in Settings: downgraded to ASK for
-            // every caller instead — still a card every single time, never a silent allow.
-            return if (enforced) Verdict.DENY else Verdict.ASK
-        }
-        // Credentials / dangerous commands: a trusted agent tool always gets a card regardless of this toggle —
-        // the toggle only ever changes an UNTRUSTED (MCP/Skill) caller's outcome: DENY when enforced, ASK when not.
-        if (!enforced) return Verdict.ASK
-        return if (isTrustedCaller(toolName)) Verdict.ASK else Verdict.DENY
-    }
+    private fun canonicalCommand(command: String, policy: Policy): String =
+        CommandRules.deobfuscate(command, policy.home, policy.envValues)
+            .replace(Regex("""\s+"""), " ")
+            .trim()
 
-    /** Whether [result]'s specific rule is currently enforced (vs. downgraded to ASK) per [policy]'s toggles. */
-    private fun isEnforced(result: Classification, policy: Policy): Boolean = when (result.category) {
-        Category.CREDENTIAL -> policy.enforceCredentials
+    private fun isEnforced(hit: Hit, policy: Policy): Boolean = hit.rule !in policy.disabledRules
 
-        Category.DANGEROUS_COMMAND -> policy.enforceDangerousCommands
-
-        Category.FOREIGN -> when (result.foreignReason) {
-            ForeignReason.OTHER_USER_HOME -> policy.enforceForeignOtherUserHome
-            ForeignReason.NETWORK_MOUNT -> policy.enforceForeignNetworkMounts
-            ForeignReason.WSL_MOUNT -> policy.enforceForeignWslMounts
-            null -> true // unreachable in practice — classify() always tags a FOREIGN hit with its sub-rule
-        }
-    }
-
-    /** The one-line reason a call tripped the guard (for the card / transcript), or null. Always names where to
-     *  change this — see [SETTINGS_PATH] — whether the rule is enforced right now or already downgraded.
-     *  Prefer [evaluate] when the verdict is wanted too: this classifies again. */
-    fun reason(input: JsonObject, policy: Policy): String? =
-        classify(input, policy)?.let { reasonFor(it, policy) }
-
-    private fun reasonFor(result: Classification, policy: Policy): String =
-        if (isEnforced(result, policy)) {
-            "${result.text} — disable this in $SETTINGS_PATH"
+    private fun reasonFor(hit: Hit, policy: Policy): String =
+        if (isEnforced(hit, policy)) {
+            "${hit.text} — disable this in $SETTINGS_PATH"
         } else {
-            "${result.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
+            "${hit.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
         }
 
-    /** [Category] + [ForeignReason] (FOREIGN only) + human-readable text. */
-    private data class Classification(val category: Category, val foreignReason: ForeignReason? = null, val text: String)
+    private data class Hit(val rule: SecurityRule, val text: String)
 
-    /**
-     * Classification + human reason, or null. Order = severity: FOREIGN wins the wording.
-     *
-     * The **project root is the sanctioned zone**: a file the user brought into their own repo is theirs, under
-     * their responsibility, so a credential file *inside the project* is not blocked. Outside it, a credential is
-     * caught. FOREIGN territory is exempt inside the project too (you opened it on purpose). A dangerous **command**
-     * is location-independent — running `mimikatz` is dangerous whatever the working directory — so it is judged
-     * regardless of the project boundary.
-     *
-     * Pure detection: runs identically regardless of [Policy]'s enforcement toggles — those only affect [verdict]'s
-     * OUTCOME (see [isEnforced]), never whether a match is found at all.
-     *
-     * **Takes no tool name, on purpose.** Classification is by the SHAPE of the input — the paths it names, the
-     * command it carries — never by what the caller is called. A name is attacker-supplied: an MCP server picks
-     * its own tool names, so a rule keyed on one could be walked around by choosing a different name. The tool
-     * name governs only *caller trust* ([isTrustedAgentTool], applied in [verdict] after this returns), which is
-     * an allowlist and fails closed. This signature used to accept a `toolName` it never read, which suggested
-     * the opposite of the actual design.
-     */
-    private fun classify(input: JsonObject, policy: Policy): Classification? {
-        // Every candidate is judged on its literal form AND its resolved real path (symlink/`..` laundering).
-        val paths = expandWithResolved(pathCandidates(input, policy.home), policy)
-
-        foreignHit(paths, policy)?.let {
-            return Classification(Category.FOREIGN, it.reason, "reaches outside your own space: ${it.path}")
-        }
-
-        val projRoot = policy.projectRoot?.let { normalize(it, policy.home) }
-        val outsideProject = paths.filter { projRoot == null || !under(it, projRoot) }
-        val matchers = policy.globs.map { compile(it, policy.home) }
-        outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
-            ?.let { return Classification(Category.CREDENTIAL, text = "reads credentials or key material outside the project: $it") }
-
-        dangerousCommand(input)?.let {
-            return Classification(Category.DANGEROUS_COMMAND, text = "runs a command that can expose secrets: $it")
-        }
-
-        return null
-    }
-
-    /**
-     * Each candidate, plus — when a resolver is configured — its canonical real path. Deduped, order-stable.
-     *
-     * **This is the fix for a real incident**: `pathCandidates` treats every bare word of a `Bash` command as a
-     * candidate (`pathish` requires no path separator), so an ordinary command like `git commit -m 'fix: env
-     * parsing'` used to produce a resolver call — a synchronous, unbounded, uninterruptible `stat()` — for EVERY
-     * token (`git`, `commit`, `-m`, `fix:`, `env`, `parsing`…). That ran on the single thread that reads the
-     * `claude` process's entire stdout stream, so a slow or hung filesystem (a stale network mount, WSL's 9p) froze
-     * the whole transcript, not just one card — silently, since `runCatching` swallowed the eventual failure but
-     * not the wait. Introduced alongside this class, caught only by a live report, never by a unit test (pure
-     * functions don't model a hung syscall) — hence the two independent bounds below, not just one:
-     *
-     *  1. [looksResolvable] filters out candidates that cannot plausibly be a path AT ALL (most Bash tokens) before
-     *     ever calling the resolver — this is what makes an ordinary command cheap again;
-     *  2. even a resolvable candidate is only given [RESOLVE_TIMEOUT_MS] on a background thread ([resolveWithTimeout]) —
-     *     this is what keeps a single `~/.ssh/id_rsa`-shaped argument, on a genuinely hung mount, from freezing
-     *     anything: the reader thread moves on, at worst missing that one candidate's canonical form.
-     * Capped at [MAX_RESOLVE_CANDIDATES] resolvable candidates as a third, coarser bound against a command crafted
-     * with dozens of real-looking paths.
-     */
-    private fun expandWithResolved(paths: List<String>, policy: Policy): List<String> {
-        val resolver = policy.pathResolver ?: return paths
-        val out = LinkedHashSet<String>()
-        var resolved = 0
-        for (p in paths) {
-            out += p
-            if (resolved >= MAX_RESOLVE_CANDIDATES || !looksResolvable(p)) continue
-            resolved++
-            resolveWithTimeout(resolver, p)?.let { out += normalize(it, policy.home) }
-        }
-        return out.toList()
-    }
-
-    /**
-     * Cheap, no-I/O pre-filter: could [token] plausibly BE a filesystem path? Most words in a shell command
-     * (subcommands, flags, flag values, commit messages) cannot — they have no separator and no home/drive marker.
-     * Requiring one before ever touching the resolver is what keeps ordinary `Bash` calls fast; a real path
-     * (`~/.ssh/id_rsa`, `./script.sh`, `/etc/passwd`, `C:\Users\bob\x`) always has one.
-     */
-    private fun looksResolvable(token: String): Boolean =
-        token.startsWith("~") || token.contains('/') || token.contains('\\')
-
-    /**
-     * Runs [resolver] on a background thread and waits at most [RESOLVE_TIMEOUT_MS] — never on the caller's thread.
-     * On timeout, exception, or rejection, returns null (the literal candidate is still judged; only its resolved
-     * form is missing). [future.cancel] cannot actually stop a blocked native `stat()` (Java has no safe way to do
-     * that), so a genuinely hung call leaks one idle daemon thread in [resolverExecutor] rather than ever blocking
-     * the process's stdout-reading thread — the trade this class exists to make.
-     */
-    private fun resolveWithTimeout(resolver: (String) -> String?, path: String): String? {
-        val future = runCatching { resolverExecutor.submit(Callable { resolver(path) }) }.getOrNull() ?: return null
-        return try {
-            future.get(RESOLVE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        } catch (_: TimeoutException) {
-            future.cancel(true)
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /** Cap on how many candidates per call get a (bounded, off-thread) resolve attempt — a coarse third bound. */
-    private const val MAX_RESOLVE_CANDIDATES = 16
-
-    /** How long a single resolver call may run before we give up on it and move on. */
-    private const val RESOLVE_TIMEOUT_MS = 200L
-
-    /** Daemon threads only — must never keep the JVM alive, and a stuck one (see [resolveWithTimeout]) is expected. */
-    private val resolverExecutor = Executors.newCachedThreadPool { r ->
-        Thread(r, "SensitiveGuard-resolver").apply { isDaemon = true }
-    }
-
-    // ── rule: foreign territory ──────────────────────────────────────────────────────────────────────────
-
-    /** A FOREIGN-territory match, tagged with WHICH sub-rule tripped (see [ForeignReason]) — [isEnforced] uses the
-     *  tag to look up the right toggle, so each sub-rule can be softened to ASK independently of the others. */
-    private data class ForeignHit(val path: String, val reason: ForeignReason)
-
-    private fun foreignHit(paths: List<String>, policy: Policy): ForeignHit? {
-        val ownRoots = listOfNotNull(
-            policy.projectRoot?.let { normalize(it, policy.home) },
-            policy.home?.let { normalize(it, null) },
+    private fun classify(input: JsonObject, policy: Policy, depth: Int = 0): Hit? {
+        val paths = GuardPaths.expandWithResolved(
+            ToolInputScanner.pathCandidates(input, policy.home, policy.envValues),
+            policy,
         )
-        val guarded = policy.guardedRoots.map { normalize(it, policy.home) }.filter { it.isNotBlank() }
-        return paths.asSequence()
-            .filterNot { p -> ownRoots.any { under(p, it) } } // our own territory is never foreign
-            .mapNotNull { p -> foreignReasonFor(p, policy, guarded)?.let { ForeignHit(p, it) } }
-            .firstOrNull()
+        val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
+        val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(GuardPaths.fold(it), projRoot) }
+
+        // in one function is neither reviewable nor within detekt's limits — and the order across them is exactly
+        return placeRules(paths, outsideProject, policy)
+            ?: actionRules(input, policy, depth)
+            ?: weakRules(input, outsideProject, policy, depth)
     }
 
-    /** Why [path] counts as foreign territory, or null when it does not. First rule that matches wins. */
-    private fun foreignReasonFor(path: String, policy: Policy, guarded: List<String>): ForeignReason? = when {
-        isUnc(path) -> ForeignReason.NETWORK_MOUNT
-        foreignHome(path, policy.currentUser) -> ForeignReason.OTHER_USER_HOME
-        policy.blockForeignWslMounts && underForeignMnt(path) -> ForeignReason.WSL_MOUNT
-        guarded.any { under(path, it) } -> ForeignReason.NETWORK_MOUNT
-        else -> null
+    private fun placeRules(paths: List<String>, outsideProject: List<String>, policy: Policy): Hit? {
+        ForeignTerritory.foreignHit(paths, policy)?.let {
+            return Hit(it.rule, "reaches outside your own space: ${it.path}")
+        }
+
+        SystemDevices.deviceHit(paths)?.let {
+            return Hit(SecurityRule.SYSTEM_DEVICE, "addresses a raw system device: $it")
+        }
+
+        val matchers = policy.globs.map { CredentialPaths.compile(it, policy.home) }
+        return outsideProject.firstOrNull { p -> matchers.any { it.matches(p) } }
+            ?.let { Hit(SecurityRule.CREDENTIALS, "reads credentials or key material outside the project: $it") }
     }
 
-    /** Another user's home (`/home/<other>`, `/Users/<other>`, `C:/Users/<other>`, `/root` unless we are root). */
-    fun foreignHome(path: String, currentUser: String?): Boolean {
-        if (path == "/root" || path.startsWith("/root/")) return !currentUser.equals("root", ignoreCase = true)
-        val user = HOME_SEGMENT.find(path)?.groupValues?.get(1) ?: return false
-        if (user.equals("shared", ignoreCase = true) || user.equals("public", ignoreCase = true)) return false
-        return currentUser != null && !user.equals(currentUser, ignoreCase = true)
-    }
+    private fun actionRules(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        commandFamilies(input, policy)?.let { return it }
 
-    /** WSL: `/mnt/<x>` where x ≠ c — a foreign or network Windows drive surfaced under the Linux root. */
-    private fun underForeignMnt(path: String): Boolean =
-        path.startsWith("/mnt/") && !path.startsWith("/mnt/c/") && path != "/mnt/c"
+        scriptFindings(input, policy, depth)?.let { return it }
+
+        substitutionFindings(input, policy, depth)?.let { return it }
+
+        if (depth > 0) return null
+        return EnvIndirection.indirectionHit(input, policy)?.let {
+            val what = if (it.rule == SecurityRule.RECURSION_LIMIT) {
+                "hides its destination behind more than $MAX_ANALYSIS_DEPTH levels of variable, or a cycle"
+            } else {
+                "acts on a destination hidden behind a variable nothing here can resolve"
+            }
+            Hit(it.rule, "$what: ${it.text}")
+        }
+    }
 
     /**
-     * `\\server\share` / `//server/share` — remote by construction, on any OS.
+     * The families recognised by the SHAPE OF A COMMAND rather than by a path — asked in severity order, first
+     * hit wins the wording.
      *
-     * **Real incident**: a `//`-prefixed value isn't necessarily UNC — an ordinary C/JS-style line comment
-     * (`// see below`) starts with `//` too, and [normalize] preserves that leading `//` (by design, so a real
-     * UNC path survives normalization). The old check only asked "is the third character not another slash",
-     * which a comment's leading space trivially satisfies — so `Edit`'s `old_string`/`new_string` (walked as a
-     * path candidate like any other string leaf, see [pathCandidates]) flagged FOREIGN and hard-denied a
-     * completely ordinary edit, for the agent's own trusted tool, with no way to override it. A real UNC
-     * hostname never contains whitespace; a comment almost always does right after the slashes — so require the
-     * host segment (up to the next `/`) to be non-blank AND whitespace-free.
+     * Split out of [actionRules] rather than inlined there, and the split is not only detekt's return-count
+     * budget: this is the list that grows. Every new command family is one more entry here and one more file
+     * beside this one, which is the package's own rule — a rule is a file, never a branch in the verdict — and
+     * keeping them together is what lets the ordering be READ as an ordering instead of reconstructed from a
+     * chain of early returns interleaved with the opaque rules and the recursion bound.
+     *
+     * The order, and why each step is where it is:
+     *  1. a **blocked destination** — reads as strongly as a credential dump and more specifically than "a
+     *     dangerous command": a call that is both `curl --upload-file` AND aimed at a paste site is best
+     *     described by the site;
+     *  2. a **secret-dumping command** — the actual secret leaving;
+     *  3. a **version-control safeguard being skipped** — a door left open, which is weaker than one already
+     *     walked through;
+     *  4. a **destructive operation** — not confidentiality at all, but "this is about to delete your production
+     *     database" outranks every remaining claim about a command's shape;
+     *  5. **code execution / persistence** — someone else's code, now or after the session;
+     *  6. a **proxy bypass** — the narrowest of the set, worth saying only when nothing worse is true.
      */
-    fun isUnc(path: String): Boolean {
-        val p = path.replace('\\', '/')
-        if (!p.startsWith("//") || p.length <= 2 || p[2] == '/') return false
-        val host = p.substring(2).substringBefore('/')
-        return host.isNotBlank() && host.none { it.isWhitespace() }
+    private fun commandFamilies(input: JsonObject, policy: Policy): Hit? {
+        val families: List<() -> Hit?> = listOf(
+            {
+                DangerousDomains.blockedHit(ToolInputScanner.urlCandidates(input), policy.extraBlockedDomains)
+                    ?.let { Hit(SecurityRule.BLOCKED_DOMAIN, "talks to a known staging or exfiltration service: $it") }
+            },
+            {
+                CommandRules.dangerousCommand(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.SECRET_DUMPING_COMMANDS, "runs a command that can expose secrets: $it") }
+            },
+            {
+                IntrusionTechniques.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "runs a recognised intrusion technique: ${it.text}") }
+            },
+            {
+                VersionControlRules.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "switches off a version-control safeguard: ${it.text}") }
+            },
+            {
+                DestructiveCommands.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "runs an irreversible destructive operation: ${it.text}") }
+            },
+            {
+                CodeExecution.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(it.rule, "makes this machine run code from elsewhere: ${it.text}") }
+            },
+            {
+                ProxyRules.proxyHit(input, policy)
+                    ?.let { Hit(SecurityRule.PROXY_BYPASS, "routes around the proxy you declared: $it") }
+            },
+        )
+        return families.firstNotNullOfOrNull { it() }
     }
 
-    private fun under(path: String, root: String): Boolean {
-        val r = root.trimEnd('/')
-        return r.isNotEmpty() && (path == r || path.startsWith("$r/", ignoreCase = true))
+    private fun weakRules(
+        input: JsonObject,
+        outsideProject: List<String>,
+        policy: Policy,
+        depth: Int,
+    ): Hit? {
+        TempDirs.tempHit(outsideProject)?.let {
+            return Hit(SecurityRule.TEMP_DIR, "acts on the system temporary directory: $it")
+        }
+
+        val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
+
+        val writesOutside = projRoot == null || outsideProject.any { GuardPaths.isAbsolute(it) }
+        if (depth == 0 && writesOutside) {
+            ShellFileWrites.shellFileWrite(input)?.let {
+                return Hit(SecurityRule.SHELL_FILE_WRITE, "writes or modifies files outside the project: $it")
+            }
+        }
+
+        if (projRoot == null) return null
+        return ToolInputScanner.locationCandidates(input, policy.home, policy.envValues)
+            .filter { GuardPaths.isAbsolute(it) }
+            .map { GuardPaths.fold(it) }
+            .firstOrNull { !GuardPaths.under(it, projRoot) }
+            ?.let { Hit(SecurityRule.OUTSIDE_PROJECT, "reaches outside the project: $it") }
     }
 
-    // ── rules exposed for tests ──────────────────────────────────────────────────────────────────────────
-
-    fun touchesSensitivePath(input: JsonObject, globs: List<String>, home: String?): Boolean {
-        val matchers = globs.map { compile(it, home) }
-        return pathCandidates(input, home).any { p -> matchers.any { it.matches(p) } }
+    private fun scriptFindings(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        val scripts = ScriptExecution.scriptsIn(input, policy)
+        if (scripts.isEmpty()) return null
+        if (depth >= MAX_ANALYSIS_DEPTH) {
+            return Hit(SecurityRule.RECURSION_LIMIT, "runs scripts nested deeper than $MAX_ANALYSIS_DEPTH: ${scripts.first()}")
+        }
+        for (script in scripts) {
+            if (isExemptDevTool(script)) continue
+            val text = policy.fileReader?.invoke(script)
+                ?: return Hit(SecurityRule.SCRIPT_EXECUTION, "runs a script this guard could not read: $script")
+            val inner = classifyScript(text, policy, depth + 1) ?: continue
+            return Hit(inner.rule, "${inner.text} — inside the script it runs: $script")
+        }
+        return null
     }
 
-    fun runsDangerousCommand(input: JsonObject): Boolean = dangerousCommand(input) != null
+    private fun isExemptDevTool(script: String): Boolean = DevToolScripts.isKnownDevTool(script)
 
-    /**
-     * True when [input] carries a command/script string under a command-shaped key ([COMMAND_KEY]: `command`,
-     * `cmd`, `script`, `shell`, `exec`, `run`, `args`/`argv`…) — i.e. this call executes something, whatever the
-     * underlying shell (Bash, PowerShell, cmd.exe, sh, zsh…) and whatever the tool is named (the native `Bash`
-     * tool, or an MCP tool like `execute_terminal_command`). A UI concern (the transcript uses this to render the
-     * call's output as a copyable code block) built on the exact same detection the security rules already rely
-     * on, so the two can never quietly drift apart into disagreeing about "is this a command".
-     */
-    fun isCommandCall(input: JsonObject): Boolean = commandCandidates(input).isNotEmpty()
+    private val COMMAND_SUBSTITUTION = Regex("""\$\(([^()]*)\)|`([^`]*)`""")
 
-    /** The raw command/script string [isCommandCall] detected, for rendering — `null` when there isn't one. */
-    fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()
-
-    private fun dangerousCommand(input: JsonObject): String? {
-        for (command in commandCandidates(input)) {
-            // Judge BOTH the raw command and its de-obfuscated form: an attacker hides `cat ~/.ssh/id_rsa` as
-            // `c""at ~/.ss$IFS''h/id_rsa`, or ships it base64-encoded to `sh`. Matching only the raw string is a
-            // sieve; matching the peeled string closes the cheap evasions (never all of them — see the class doc).
-            for (candidate in setOf(expandEnv(command, null), deobfuscate(command))) {
-                DANGEROUS_COMMANDS.firstOrNull { it.containsMatchIn(candidate) }
-                    ?.let { return it.find(candidate)?.value?.take(MATCH_EXCERPT_CHARS) }
+    private fun substitutionFindings(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        if (depth >= MAX_ANALYSIS_DEPTH) return null
+        for (command in ToolInputScanner.commandCandidates(input)) {
+            for (match in COMMAND_SUBSTITUTION.findAll(command)) {
+                val inner = match.groupValues[1].ifEmpty { match.groupValues[2] }.trim()
+                if (inner.isEmpty()) continue
+                val hit = classifyScript(inner, policy, depth + 1) ?: continue
+                return Hit(hit.rule, "${hit.text} — inside a command substitution: $inner")
             }
         }
         return null
     }
 
-    /**
-     * Best-effort shell de-obfuscation: peel the cheap tricks an attacker uses to slip a command or a path past a
-     * literal-string match. Explicitly NOT a shell parser — it cannot and does not claim to catch everything (a
-     * decode-and-`eval`, `$(printf ...)`, a downloaded script). It removes the *common* laundering so the pattern
-     * set is matched against something close to what the shell will actually run:
-     *
-     *  - **quote splitting**: `c""at`, `i''d_rsa`, `` `` `` → the quotes are deleted (`cat`, `id_rsa`);
-     *  - **`$IFS` / `${IFS}`** used as a separator → a space;
-     *  - **line continuations** `\<newline>` and stray backslash-escapes before a normal char → the char;
-     *  - **simple var assignments** `k=~/.ssh/id_rsa; cat $k` → `$k`/`${k}` substituted with the value;
-     *  - **`$HOME`/`~`** expansion (via [expandEnv]);
-     *  - **base64 payloads** long enough to be a command (`echo <b64> | base64 -d | sh`) → decoded and appended,
-     *    so a hidden `nc`/`curl`/key path inside the blob is matched too.
-     */
-    fun deobfuscate(command: String): String {
-        var s = command
-        // Line continuations first, so a command split across lines becomes one line.
-        s = s.replace("\\\n", "").replace("\\\r\n", "")
-        // $IFS (with or without braces, optionally $'...') → a plain space.
-        s = s.replace(Regex("""\$\{?IFS\}?"""), " ").replace(Regex("""\$'\\(?:x09|011|t)'"""), " ")
-        // Delete empty quote pairs and stray quotes/backticks used purely to break up tokens.
-        s = s.replace("''", "").replace("\"\"", "").replace("``", "")
-        // A backslash before a normal (non-space) char is a no-op in the shell for our purposes: drop it.
-        s = s.replace(Regex("""\\([A-Za-z0-9._/~-])"""), "$1")
-        // Now collapse the remaining quotes/backticks that wrap fragments (`"cat"` → cat, `'id'_rsa` → id_rsa).
-        s = s.replace(Regex("""["'`]"""), "")
-        // Resolve trivial `name=value` assignments, then substitute `$name`/`${name}` with the value.
-        s = substituteAssignments(s)
-        // Expand $HOME/~ etc.
-        s = expandEnv(s, null)
-        // Decode any base64 blob long enough to be a hidden command, and append it so its contents get matched.
-        decodeBase64Payloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
-        return s
-    }
-
-    /**
-     * `k=~/.ssh/id_rsa … $k` → `… ~/.ssh/id_rsa`. Only literal, single-token assignments; enough for the net.
-     *
-     * **Real incident**: `String.replace(Regex, String)` treats the replacement argument as a *replacement
-     * template* — `$1`/`${name}` are group references, not literal text. `v` is arbitrary shell-assigned text an
-     * attacker (or an ordinary script) fully controls, e.g. `k=${OTHER}/x`: passing it straight to `replace()`
-     * throws `IllegalArgumentException: Illegal group reference` from deep inside `java.util.regex.Matcher`,
-     * uncaught, crashing `verdict()` for every `Bash` call with such an assignment — confirmed live via a stack
-     * trace in idea.log. [java.util.regex.Matcher.quoteReplacement] escapes `\`/`$` so `v` is substituted
-     * literally, exactly as intended.
-     */
-    private fun substituteAssignments(command: String): String {
-        val assign = Regex("""(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|]+)""")
-        val vars = HashMap<String, String>()
-        assign.findAll(command).forEach { vars[it.groupValues[1]] = it.groupValues[2] }
-        if (vars.isEmpty()) return command
-        var s = command
-        for ((k, v) in vars) {
-            val literal = java.util.regex.Matcher.quoteReplacement(v)
-            s = s.replace(Regex("""\$\{$k\}"""), literal).replace(Regex("""\$$k(?![A-Za-z0-9_])"""), literal)
-        }
-        return s
-    }
-
-    /** Any base64-looking token ≥ 16 chars, decoded to printable ASCII (a hidden `nc`/path/command), else dropped. */
-    private fun decodeBase64Payloads(command: String): List<String> {
-        val out = ArrayList<String>()
-        Regex("""[A-Za-z0-9+/]{16,}={0,2}""").findAll(command).forEach { m ->
-            runCatching {
-                val decoded = String(java.util.Base64.getDecoder().decode(m.value), Charsets.UTF_8)
-                if (decoded.isNotBlank() && decoded.all(::isPrintableAscii)) out += decoded
-            }
-        }
-        return out
-    }
-
-    /** Printable ASCII plus tab/newline — i.e. something that could plausibly BE a command, not binary noise. */
-    private fun isPrintableAscii(c: Char): Boolean = c == '\t' || c == '\n' || c in ' '..'~'
-
-    // ── input surface: every string leaf, not a key list ─────────────────────────────────────────────────
-
-    fun pathCandidates(input: JsonObject, home: String?): List<String> {
-        val out = LinkedHashSet<String>()
-        walkStrings(input) { key, value ->
-            if (COMMAND_KEY.matches(key)) {
-                // A command hides paths in variables and quotes; tokenise the raw AND the de-obfuscated form.
-                val sources = setOf(value, deobfuscate(value))
-                sources.forEach { src ->
-                    commandTokens(src).forEach { tok -> if (pathish(tok)) out += normalize(tok, home) }
-                }
-            } else if (pathish(value)) {
-                out += normalize(value, home)
-            }
-        }
-        return out.toList()
-    }
-
-    private fun commandCandidates(input: JsonObject): List<String> {
-        val out = ArrayList<String>()
-        fun visit(element: JsonElement) {
-            when (element) {
-                is JsonObject -> element.forEach { (k, v) -> visitEntry(k, v, out, ::visit) }
-                is JsonArray -> element.forEach(::visit)
-                else -> Unit
-            }
-        }
-        visit(input)
-        return out
-    }
-
-    /**
-     * One object entry: if the KEY names a command argument, take its value as a command (a string, or an argv
-     * array joined back into one); otherwise keep descending. Split out of [commandCandidates] so the recursion
-     * and the per-key decision are not nested in one another.
-     */
-    private fun visitEntry(key: String, value: JsonElement, out: MutableList<String>, descend: (JsonElement) -> Unit) {
-        if (!COMMAND_KEY.matches(key)) {
-            descend(value)
-            return
-        }
-        when (value) {
-            is JsonPrimitive -> if (value.isString) out.add(value.content)
-
-            is JsonArray -> {
-                val joined = value.filterIsInstance<JsonPrimitive>().filter { it.isString }
-                    .joinToString(" ") { it.content }
-                if (joined.isNotBlank()) out.add(joined)
-            }
-
-            else -> descend(value)
-        }
-    }
-
-    private fun walkStrings(element: JsonElement, key: String = "", visit: (String, String) -> Unit) {
-        when (element) {
-            is JsonObject -> for ((k, v) in element) walkStrings(v, k, visit)
-            is JsonArray -> element.forEach { walkStrings(it, key, visit) }
-            is JsonPrimitive -> if (element.isString) visit(key, element.content)
-        }
-    }
-
-    private fun pathish(value: String): Boolean {
-        if (value.isBlank() || value.length > MAX_PATH_LEN) return false
-        if (value.any { it == '\n' || it == '\r' }) return false
-        if (URLISH.containsMatchIn(value)) return false
-        return true
-    }
-
-    private fun commandTokens(command: String): List<String> =
-        command.split(Regex("""[\s;|&<>=(),"'`]+""")).filter { it.isNotBlank() }
-
-    // ── normalisation ────────────────────────────────────────────────────────────────────────────────────
-
-    /** One canonical form: `\`→`/`, env/`~` expanded, `//`→`/` (UNC's leading `//` kept), trailing `/` dropped. */
-    fun normalize(path: String, home: String?): String {
-        val expanded = expandEnv(path.trim(), home).replace('\\', '/')
-        val unc = expanded.startsWith("//")
-        val collapsed = expanded.replace(Regex("/{2,}"), "/")
-        val result = if (unc) "/$collapsed" else collapsed
-        return if (result.length > 1) result.trimEnd('/') else result
-    }
-
-    private fun expandEnv(value: String, home: String?): String {
-        var v = value
-        if (!home.isNullOrBlank()) {
-            val h = home.replace('\\', '/').trimEnd('/')
-            v = v.replace("\${HOME}", h).replace("\$HOME", h)
-                .replace("\$env:USERPROFILE", h, ignoreCase = true)
-                .replace("%USERPROFILE%", h, ignoreCase = true)
-                .replace("%HOMEPATH%", h, ignoreCase = true)
-                .replace("%APPDATA%", "$h/AppData/Roaming", ignoreCase = true)
-                .replace("%LOCALAPPDATA%", "$h/AppData/Local", ignoreCase = true)
-            if (v == "~") {
-                v = h
-            } else if (v.startsWith("~/") || v.startsWith("~\\")) {
-                v = h + "/" + v.substring(2)
-            }
-        }
-        return v
-    }
-
-    // ── glob engine ──────────────────────────────────────────────────────────────────────────────────────
-
-    private fun compile(glob: String, home: String?): Matcher {
-        val expanded = normalize(glob, home)
-        val sb = StringBuilder()
-        var i = 0
-        while (i < expanded.length) {
-            val c = expanded[i]
-            when {
-                c == '*' && i + 1 < expanded.length && expanded[i + 1] == '*' -> {
-                    sb.append(".*")
-                    i += 2
-                    if (i < expanded.length && expanded[i] == '/') i++
-                }
-
-                c == '*' -> {
-                    sb.append("[^/]*")
-                    i++
-                }
-
-                c == '?' -> {
-                    sb.append("[^/]")
-                    i++
-                }
-
-                else -> {
-                    sb.append(Regex.escape(c.toString()))
-                    i++
-                }
-            }
-        }
-        return Matcher(Regex(sb.toString(), RegexOption.IGNORE_CASE))
-    }
-
-    /** Matches the whole path, or — for a name-only pattern — the final segment (a bare `*.pem` behaves). */
-    @JvmInline
-    value class Matcher(private val re: Regex) {
-        fun matches(path: String): Boolean =
-            re.matches(path) || re.matches(path.substringAfterLast('/'))
-    }
+    private fun classifyScript(text: String, policy: Policy, depth: Int): Hit? =
+        classify(buildJsonObject { put("command", text) }, policy, depth)
 }

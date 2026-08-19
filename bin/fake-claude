@@ -12,6 +12,14 @@ Selection: the fixture path comes from the env var `FAKE_FIXTURE`. If unset, the
 minimal `system/init` and a tiny `result` so a smoke launch doesn't hang. CLI args are accepted and
 ignored (we match the real binary's surface so the plugin's `buildArgs` keeps working unchanged).
 
+ONE exception to "args are ignored": `claude auth …`. The plugin does not only stream — before it
+spawns anything it asks WHO it would run as (`AuthGate.hasCredential` → `AuthCli.status`), and
+`ClaudeSession.start()` refuses to launch without an answer. A stand-in that replays stream-json at
+that question parses as "logged out", so on a machine holding no real credential the UI suite never
+gets a session at all: the tab sits on the sign-in card. See `_run_auth` below. The branch is keyed
+on the FIRST argument being exactly `auth` — the streaming invocation always begins with `--print`
+(`SessionLauncher.buildArgs`), so the stream-json path cannot be diverted into it.
+
 DSL on top of plain JSONL lines:
   - A line with key `_wait_stdin` is consumed: the script reads one line from stdin (typically the
     host's `control_response`) before continuing. Useful right after emitting a `control_request`.
@@ -19,8 +27,9 @@ DSL on top of plain JSONL lines:
   - Anything else: emitted verbatim to stdout as a single line, followed by `\n` and flushed.
 
 Exit codes:
-  0  fixture consumed, EOF on stdin (or end of script).
-  1  fixture file unreadable (only when FAKE_FIXTURE was set).
+  0  fixture consumed, EOF on stdin (or end of script); or `auth status` answered.
+  1  fixture file unreadable (only when FAKE_FIXTURE was set); or an `auth` subcommand this
+     stand-in deliberately does not implement (`auth login` — it mints no credentials).
   2  stdin closed unexpectedly while waiting for a control_response.
 
 This script never makes network calls and prints nothing to stderr by default. Set FAKE_DEBUG=1 to
@@ -54,6 +63,53 @@ def _emit_line(line: str) -> None:
 
 def _default_session_id() -> str:
     return os.environ.get("FAKE_SESSION_ID") or str(uuid.uuid4())
+
+
+# The identity `auth status` reports. Shaped exactly like the real binary's reply (verified against
+# `claude` 2.1.223 and modelled by `AuthCli.AuthState`: loggedIn, authMethod, apiProvider, email,
+# orgId, orgName, subscriptionType — lowerCamelCase, one JSON object, exit 0), and OBVIOUSLY not a
+# person: `.invalid` is the RFC 2606 reserved TLD, so the address cannot resolve or belong to anyone,
+# and the org says out loud what it is. Anyone who sees this in a dashboard is looking at the test
+# double, not at their account — which matters, because a successful reply that names an account is
+# filed in the IDE password safe (`AuthCli.status` → `SecretStore.AUTH_STATUS`), and a sandbox IDE
+# shares the OS keyring with the developer's real one.
+#
+# NOTHING SECRET-SHAPED IN HERE, and that is a rule rather than an accident: no token, no key, no
+# `sk-ant-…`-looking string, nothing an automated scanner should ever flag. `auth status` does not
+# emit credentials in the real binary either — it describes an identity, it does not hand one over.
+FAKE_ACCOUNT = {
+    "loggedIn": True,
+    "authMethod": "claude.ai",
+    "apiProvider": "firstParty",
+    "email": "not-a-real-account@fake-claude.invalid",
+    "orgId": "00000000-0000-0000-0000-000000000000",
+    "orgName": "fake-claude stand-in (NOT a real account)",
+    "subscriptionType": "max",
+}
+
+
+def _run_auth(rest: list[str]) -> int:
+    """`claude auth …` — the non-streaming surface the plugin probes before it launches anything.
+
+    `status` is the one that unblocks the UI suite: `AuthGate.hasCredential` falls through to it when
+    the IDE safe holds nothing, and a machine with no answer here never starts a session.
+
+    `login` is answered with an honest FAILURE, not a fake success. It exists only so the path is
+    deterministic and fast: `CredentialsVault.renewOnDisk` shells out to it (`AuthCli.refreshUsingOwnFiles`)
+    when a vaulted credential has expired, and without this branch the stand-in would replay a whole
+    stream-json fixture as the answer to a login and could sit there until the 20s refresh timeout, in
+    the middle of `launch()`. Exiting non-zero says what is true — a stand-in mints no credentials — and
+    the plugin then re-asks `hasCredential`, which `status` answers.
+    """
+    sub = rest[0] if rest else ""
+    if sub == "status":
+        _emit(FAKE_ACCOUNT)
+        return 0
+    if sub == "login":
+        sys.stderr.write("fake-claude: `auth login` is not implemented — the stand-in mints no credentials.\n")
+        return 1
+    sys.stderr.write(f"fake-claude: unsupported auth subcommand {sub!r}\n")
+    return 1
 
 
 def _run_default_smoke() -> int:
@@ -138,7 +194,13 @@ def _run_fixture(path: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    # The real binary accepts many flags; we ignore them all (the protocol is what matters).
+    # `claude auth …`, matched on the FIRST argument only. The streaming invocation always starts with
+    # `--print` (SessionLauncher.buildArgs), so this cannot swallow it — and everything below stays
+    # byte-identical to what the integration fixtures have always seen.
+    if len(argv) > 1 and argv[1] == "auth":
+        return _run_auth(argv[2:])
+
+    # The real binary accepts many flags; we ignore the rest of them (the protocol is what matters).
     fixture = os.environ.get("FAKE_FIXTURE", "").strip()
     if not fixture:
         return _run_default_smoke()

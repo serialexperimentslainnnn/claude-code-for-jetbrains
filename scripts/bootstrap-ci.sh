@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot CI/CD bootstrap: creates the deployment environment, sets its six secrets, and (optionally)
+# One-shot CI/CD bootstrap: creates the deployment environment, sets its seven secrets, and (optionally)
 # applies the branch protections. Automates everything that can be automated and asks you only for what
 # you actually hold: the Marketplace token, and the JetBrains signing key if you still have it.
 #
@@ -16,12 +16,26 @@
 #     terminal, scrollback, or shell history.
 #
 # See docs/CI_SETUP.md for what each step means and why.
-set -euo pipefail
+set -Eeuo pipefail
+
+# `set -e` kills this script SILENTLY — no line, no command, no status — and it has done so three times
+# in a row on a failure that looked like the step simply doing nothing. Every one of them was the same
+# shape: an assignment whose command substitution failed, usually because `pipefail` promoted the failure
+# of something in the middle of a pipe. That is invisible by construction, so the trap below is not a
+# nicety: it is the difference between a bug report that says "it configures nothing" and one that names
+# the line. `-E` is what makes it fire inside functions, subshells and command substitutions too.
+on_err() {
+  local status=$1 line=$2 cmd=$3
+  printf '\n\033[31merror: line %s exited %s\033[0m\n' "$line" "$status" >&2
+  printf '  while running: %s\n' "$cmd" >&2
+  printf '  nothing further was changed; re-run when the cause is fixed.\n' >&2
+}
+trap 'on_err "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 cd "$(dirname "$0")/.."
 
 # --- preconditions -------------------------------------------------------------------------------------
-for bin in gh jq gpg; do
+for bin in gh jq gpg openssl ykman; do
   command -v "$bin" >/dev/null || { echo "error: $bin is required" >&2; exit 1; }
 done
 gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first" >&2; exit 1; }
@@ -70,7 +84,7 @@ echo "repository:  $REPO"
 echo "environment: $ENVIRONMENT"
 
 # --- 1. environment ------------------------------------------------------------------------------------
-say "1/6  Deployment environment"
+say "1/7  Deployment environment"
 
 # NO required reviewer, deliberately, and this reverses an earlier decision rather than overlooking one.
 #
@@ -116,7 +130,7 @@ for policy in "main:branch" "v*.*.*:tag"; do
 done
 
 # --- 2. Marketplace token ------------------------------------------------------------------------------
-say "2/6  JetBrains Marketplace token"
+say "2/7  JetBrains Marketplace token"
 
 if has_secret PUBLISH_TOKEN && ! ask "PUBLISH_TOKEN is already set. Replace it?"; then
   info "keeping the existing PUBLISH_TOKEN"
@@ -131,7 +145,7 @@ else
 fi
 
 # --- 3. JetBrains plugin signing key -------------------------------------------------------------------
-say "3/6  JetBrains plugin signing key (X.509/RSA — not GPG)"
+say "3/7  JetBrains plugin signing key (X.509 — not GPG)"
 
 if has_secret PRIVATE_KEY && has_secret CERTIFICATE_CHAIN && has_secret PRIVATE_KEY_PASSWORD \
    && ! ask "The signing key is already configured. Replace it?"; then
@@ -143,55 +157,207 @@ else
   # not user-visible, and there is no reason to keep a copy on disk: it is generated here, pushed straight
   # to GitHub, and forgotten. If it is ever lost, generate another.
   #
-  # The one thing worth avoiding is a surprise during the FIRST automated publish, so if you still have
-  # the key 4.4.1 was signed with, reusing it removes that unknown. Otherwise just press Enter.
-  info "This is the Marketplace UPLOAD key. JetBrains re-signs the plugin, so rotating it is invisible to"
-  info "users, and no copy is kept on disk. Reuse an existing key only to keep the first CI publish boring."
-  read -r -p "   Path to an existing private.pem (Enter to generate a fresh one): " pem
-  if [ -n "$pem" ]; then
-    read -r -p "   Path to the matching chain.crt: " crt
-    [ -r "$pem" ] || { echo "error: cannot read $pem" >&2; exit 1; }
-    [ -r "$crt" ] || { echo "error: cannot read $crt" >&2; exit 1; }
-    # Catch the single most common mistake before it becomes a 3am CI failure: handing over the
-    # *encrypted* PEM. signPlugin needs the decrypted key, i.e. the output of `openssl rsa`.
-    if grep -q 'ENCRYPTED PRIVATE KEY' "$pem"; then
-      warn "$pem is the ENCRYPTED key. signPlugin needs the decrypted one:"
-      warn "  openssl rsa -in $pem -out private.pem"
-      exit 1
+  # It cannot be dropped, though, and that is the part the paragraph above invites you to get wrong. A
+  # plugin is signed TWICE by design — author first, Marketplace second — and the author's half is
+  # optional only in the sense that an unsigned upload is accepted: JetBrains then shows a WARNING DIALOG
+  # in the IDE to every user who installs it. So the trade is one software key in an environment secret
+  # against a dialog in front of everyone, which is why this step exists and why `signPlugin` is not
+  # something to remove for the sake of holding no key material.
+  #
+  # ISSUED here, every time, with no question asked and no file to hand over. That is the requirement and
+  # not a nicety: this script exists to leave the pipeline configured end to end, so a prompt asking for
+  # the path to a PEM would be a hole in precisely the thing it delivers.
+  #
+  # Nothing about the maintainer's PKI is written down here — not a serial, not a DN, not a fingerprint,
+  # not a path. Which card carries which CA is DERIVED: the card whose F9 certificate is self-issued is
+  # the root, the other is the intermediate. A reissued PKI is therefore picked up rather than
+  # contradicted, and a repository that anyone can read describes no one's key material.
+  #
+  # The PKI is read, never written: this asks it for one leaf and creates, resets and reissues nothing.
+  info "reading the CA certificates from PIV slot F9"
+  pki_root=""; pki_int=""; int_card=""
+  while read -r serial; do
+    [ -n "$serial" ] || continue
+    f9="$tmp/f9-$serial.pem"
+    # Exporting a certificate is a public read: no PIN, no touch, nothing to approve.
+    ykman --device "$serial" piv certificates export f9 - > "$f9" 2>/dev/null || continue
+    grep -q 'BEGIN CERTIFICATE' "$f9" || continue
+    subj=$(openssl x509 -in "$f9" -noout -subject -nameopt RFC2253); subj=${subj#subject=}; subj=${subj# }
+    iss=$(openssl x509 -in "$f9" -noout -issuer  -nameopt RFC2253);  iss=${iss#issuer=};    iss=${iss# }
+    if [ "$subj" = "$iss" ]; then
+      pki_root=$f9; info "  root         $subj  (card $serial)"
+    else
+      pki_int=$f9; int_card=$serial; info "  intermediate $subj  (card $serial)"
     fi
-    grep -q 'BEGIN.*PRIVATE KEY' "$pem" || { echo "error: $pem does not look like a PEM private key" >&2; exit 1; }
-    grep -q 'BEGIN CERTIFICATE'   "$crt" || { echo "error: $crt does not look like a certificate" >&2; exit 1; }
-    set_secret_from_file PRIVATE_KEY "$pem"
-    set_secret_from_file CERTIFICATE_CHAIN "$crt"
-    read_secret keypass "Passphrase for that key"
-    printf '%s' "$keypass" > "$tmp/keypass"; unset keypass
-    gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
-    info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD from the existing key"
-  else
-    info "generating a 4096-bit RSA key and a self-signed certificate"
-    # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
-    # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
-    gpg --gen-random --armor 2 32 | tr -d '\n' > "$tmp/keypass"
-    # Passphrase read from a FILE, never from argv: process arguments are world-readable in /proc.
-    openssl genpkey -aes-256-cbc -algorithm RSA -out "$tmp/enc.pem" \
-      -pkeyopt rsa_keygen_bits:4096 -pass "file:$tmp/keypass" 2>/dev/null
-    openssl rsa -in "$tmp/enc.pem" -passin "file:$tmp/keypass" -out "$tmp/plain.pem" 2>/dev/null
-    # 10 years, not 1. An expiring upload key would break publishing on a date nobody has in a calendar,
-    # and expiry buys nothing here: this certificate is not a trust anchor for any user.
-    openssl req -key "$tmp/plain.pem" -new -x509 -days 3650 \
-      -subj "/CN=Claude Code Native plugin upload key" -out "$tmp/chain.crt" 2>/dev/null
-    set_secret_from_file PRIVATE_KEY "$tmp/plain.pem"
-    set_secret_from_file CERTIFICATE_CHAIN "$tmp/chain.crt"
-    gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
-    info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written to disk"
-    info "$(openssl x509 -in "$tmp/chain.crt" -noout -subject -enddate | tr '\n' ' ')"
-    warn "If the first publish is rejected as an unknown certificate, your Marketplace profile pins a"
-    warn "public key. Re-run this step with the original private.pem, or update the profile."
+  done < <(ykman list --serials 2>/dev/null)
+
+  if [ -z "$pki_root" ] || [ -z "$pki_int" ]; then
+    echo "error: PIV slot F9 gave root=${pki_root:+found}${pki_root:-MISSING} intermediate=${pki_int:+found}${pki_int:-MISSING}" >&2
+    echo "       both CA YubiKeys must be plugged in. Nothing was changed." >&2
+    exit 1
   fi
+  cp "$pki_root" "$tmp/root.crt"; cp "$pki_int" "$tmp/int.crt"
+
+  # `awk … {print; exit}` would be the obvious spelling and is the one to avoid throughout this script:
+  # awk leaving early closes the pipe, the writer on the left dies of SIGPIPE, and `pipefail` + `set -e`
+  # then abort the whole run with no message at all. Reading the input to the end costs nothing here.
+  int_cn=$(openssl x509 -in "$tmp/int.crt" -noout -subject -nameopt multiline \
+           | awk -F'= ' '/commonName/{ if (v == "") v = $2 } END { print v }')
+  info "issuing under: $int_cn"
+
+  # The CERTIFICATES come off the cards; the SIGNATURE cannot. Slot F9 is the attestation slot, and Yubico's
+  # firmware restricts it to attesting keys generated on the device — "It is only used for attestation of
+  # other keys generated on device with instruction f9". So it holds the CA and refuses to sign with it:
+  # the PIN is accepted, the login succeeds, and GENERAL AUTHENTICATE comes back a device error. No PKCS#11
+  # module, mechanism or digest changes that, and an attempt looks exactly like a wrong PIN, which is why
+  # this paragraph exists rather than a retry.
+  #
+  # The signing key is therefore the CA's own private key on disk — MATCHED to the card, never assumed. The
+  # card's certificate is the reference and the key is found by comparing public halves, so a key file that
+  # merely has the right name cannot be used: a PKI reissued on disk and not on the cards would otherwise
+  # produce a chain that fails `openssl verify` at the end of this step, after the secrets were set.
+  ca_key=${CA_KEY:-}
+  want=$(openssl x509 -in "$tmp/int.crt" -noout -pubkey \
+         | openssl pkey -pubin -outform DER | sha256sum | cut -d' ' -f1)
+  # `|| have=""` on every one of these, and it is load-bearing rather than defensive: MOST of the files
+  # looked at here are expected to fail to open — a key for another purpose, an encrypted one, a PEM that
+  # is a certificate. Without it the first such file ends the run, which is exactly what happened: the
+  # search died on an encrypted key several files before reaching the one it was looking for.
+  if [ -n "$ca_key" ]; then
+    have=$(openssl pkey -in "$ca_key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1) \
+      || have=""
+    [ "$have" = "$want" ] || { echo "error: CA_KEY is not the CA on card $int_card" >&2; exit 1; }
+  else
+    tried=0
+    while read -r cand; do
+      [ -n "$cand" ] || continue
+      tried=$((tried + 1))
+      # `-passin pass:` so an ENCRYPTED key fails immediately instead of stopping the run on a prompt:
+      # a key we cannot open unattended is one this script cannot use, whichever key it turns out to be.
+      have=$(openssl pkey -in "$cand" -pubout -outform DER -passin pass: 2>/dev/null \
+             | sha256sum | cut -d' ' -f1) || have=""
+      if [ "$have" = "$want" ]; then ca_key=$cand; break; fi
+    done < <(find "${PKI_DIR:-$HOME/pki}" -type f \( -name '*.key' -o -name '*.pem' \) 2>/dev/null)
+    info "examined $tried candidate key files"
+  fi
+  if [ -z "$ca_key" ]; then
+    echo "error: no reachable private key matches the CA certificate on card $int_card." >&2
+    echo "       F9 cannot sign (attestation slot), so the CA's key has to be readable here." >&2
+    echo "       Set CA_KEY to its path, or PKI_DIR to the tree holding it. Nothing was changed." >&2
+    exit 1
+  fi
+  info "signing with the CA key (public half verified against the card)"
+  # Never copied into $tmp: openssl reads it in place, so this step creates no second copy of a CA key and
+  # has none to shred. The path is not printed either — a log, a screenshot or a pasted run should not be
+  # the thing that tells a reader where the CA of a trust chain is kept.
+
+  # A random passphrase, never displayed: nobody types this key in by hand. Its only consumer is the CI
+  # job, which reads it from the secret — a memorable passphrase would be a weakness with no upside.
+  gpg --gen-random --armor 2 32 | tr -d '\n' > "$tmp/keypass"
+  # EC P-384 + SHA-384 — the shape this PKI issues in, and one marketplace-zip-signer supports natively
+  # (SignatureAlgorithm.ECDSA_WITH_SHA384). No RSA detour to keep a tool happy that does not need one.
+  # Passphrase read from a FILE, never from argv: process arguments are world-readable in /proc.
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+    -aes-256-cbc -pass "file:$tmp/keypass" -out "$tmp/leaf.key" 2>/dev/null
+  openssl req -new -key "$tmp/leaf.key" -passin "file:$tmp/keypass" -sha384 \
+    -subj "/CN=Claude Code Native plugin upload key" \
+    -out "$tmp/leaf.csr" 2>/dev/null
+
+  # codeSigning, and only that. The PKI's own leaf profile is clientAuth/serverAuth — a TLS certificate —
+  # which is the wrong claim for one that signs an artifact, so the profile is written here rather than
+  # borrowed. keyUsage is digitalSignature alone for the same reason.
+  cat > "$tmp/leaf.ext" <<'EXT'
+basicConstraints       = critical,CA:FALSE
+keyUsage               = critical,digitalSignature
+extendedKeyUsage       = codeSigning
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer
+EXT
+  # 10 years, not the PKI's 1095 days. An expiring upload key would break publishing on a date nobody has
+  # in a calendar, and expiry buys nothing here: this certificate is not a trust anchor for any user.
+  # Random serial rather than -CAcreateserial, which would drop a .srl file next to the CA it read.
+  openssl x509 -req -in "$tmp/leaf.csr" -sha384 \
+    -CA "$tmp/int.crt" -CAkey "$ca_key" \
+    -set_serial "0x$(openssl rand -hex 16)" -days 3650 \
+    -extfile "$tmp/leaf.ext" -out "$tmp/leaf.crt" \
+    || { echo "error: signing failed — $ca_key did not open, or it is not the CA's key" >&2; exit 1; }
+
+  # leaf first, issuer after — the order signPlugin reads the chain in, and the order the PKI's own
+  # fullchain.crt uses. The root is deliberately NOT appended: a self-signed anchor inside the chain adds
+  # nothing a verifier can use, since it either already trusts that root or must not be told to.
+  cat "$tmp/leaf.crt" "$tmp/int.crt" > "$tmp/fullchain.crt"
+  openssl verify -CAfile "$tmp/root.crt" -untrusted "$tmp/int.crt" "$tmp/leaf.crt" >/dev/null \
+    || { echo "error: the issued certificate does not verify against the root — nothing was set" >&2; exit 1; }
+
+  gh secret set PRIVATE_KEY          --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/leaf.key"
+  gh secret set CERTIFICATE_CHAIN    --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/fullchain.crt"
+  gh secret set PRIVATE_KEY_PASSWORD --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/keypass"
+  info "set PRIVATE_KEY, CERTIFICATE_CHAIN, PRIVATE_KEY_PASSWORD — nothing written outside $tmp"
+  info "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -issuer -enddate | tr '\n' ' ')"
+
+  # A copy of what was issued goes into the LOCAL X.509 store (gpgsm, software-held — no YubiKey), and
+  # that is a deliberate exception to "no copy is kept" rather than a contradiction of it. The reason is
+  # the one thing a GitHub secret cannot do: it is write-only. Once these three are set nobody, including
+  # you, can read back what was uploaded — so without a local copy the certificate that signs the plugin
+  # exists in exactly one place you cannot inspect, and questions like "what is in CI right now" and "did
+  # this artifact come from that certificate" stop being answerable at all.
+  #
+  # The store is the right place for it and a file in a directory is not: the private half lands under
+  # gpg-agent's protection instead of sitting in plaintext, and it is a KEY, not a CA — losing it costs
+  # one re-run of this step, while the CAs that issued it never left their cards.
+  #
+  # Carried as PKCS#12 because that is the one container holding key, leaf and issuer together, and with
+  # the same random passphrase used above: pinentry asks once to unlock it and once to protect it, which
+  # is gpg-agent doing its job, not a manual step bolted on.
+  # The SAME passphrase twice, one per line, and that is not redundancy: when `-passin` and `-passout`
+  # name the same file, OpenSSL reads line 1 for the first and line 2 for the SECOND. A one-line file
+  # therefore fails at the passout with "Error reading password from BIO" — an I/O error message for what
+  # is really an empty password, which is why it does not read like the file-format problem it is.
+  # Each line is TERMINATED, which is the whole trick: `$tmp/keypass` is written with no trailing newline,
+  # so concatenating it twice yields one line holding the passphrase twice — the same failure, reached by
+  # a different route, and one that a test using a newline-terminated file cannot see.
+  printf '%s\n%s\n' "$(cat "$tmp/keypass")" "$(cat "$tmp/keypass")" > "$tmp/keypass2"
+
+  # Nothing from here to the end of the local copy may abort the run. It is an audit convenience, the
+  # deliverable (three secrets) is already set, and step 4 — the GPG key the releases are signed with — is
+  # still to come: failing here used to take the whole bootstrap down AFTER the part that mattered
+  # succeeded, which reads as "the script does nothing" for a reason that costs nothing.
+  # The import is LOOPBACK, with the passphrase on a file descriptor. Left to pinentry, gpgsm asks for the
+  # passphrase protecting the PKCS#12 — which is the random one generated above and deliberately never
+  # displayed, so there is nobody who could answer it. A prompt no human can satisfy is worse than none:
+  # it stops the run dead on a step whose whole purpose is to leave nothing manual behind.
+  if openssl pkcs12 -export -inkey "$tmp/leaf.key" -in "$tmp/leaf.crt" -certfile "$tmp/int.crt" \
+       -name "$(openssl x509 -in "$tmp/leaf.crt" -noout -subject -nameopt RFC2253)" \
+       -passin "file:$tmp/keypass2" -passout "file:$tmp/keypass2" -out "$tmp/leaf.p12" 2>"$tmp/p12.err" \
+     && gpgsm --batch --pinentry-mode loopback --passphrase-fd 3 \
+          --import "$tmp/leaf.p12" 3< "$tmp/keypass" 2>>"$tmp/p12.err"; then
+    info "kept a copy of the issued certificate and key in the local gpgsm store"
+  else
+    warn "could not keep a local copy of the issued key — CI has it, you do not."
+    warn "  $(tr '\n' ' ' < "$tmp/p12.err" 2>/dev/null || true)"
+    warn "the certificate is reproducible by re-running this step; nothing is lost but the audit trail."
+  fi
+
+  # The card material goes NOW, not at the exit trap: everything above is done with it, and a file that is
+  # still needed cannot be deleted early — which makes "delete it here" a claim the rest of the step has to
+  # keep true. The trap remains as the backstop for the paths that exit before this line. The CA key is not
+  # in this list because it was never copied here: it was read in place, from the PKI that owns it.
+  for leftover in "$tmp"/f9-*.pem "$tmp/root.crt" "$tmp/int.crt" "$tmp/leaf.p12" "$tmp/p12.err" \
+                  "$tmp/leaf.csr" "$tmp/leaf.ext" "$tmp/leaf.key" "$tmp/leaf.crt" \
+                  "$tmp/fullchain.crt" "$tmp/keypass" "$tmp/keypass2"; do
+    [ -e "$leftover" ] || continue
+    shred -u "$leftover" 2>/dev/null || { : > "$leftover"; rm -f "$leftover"; }
+  done
+  unset ca_key
+  info "card certificates and issued key wiped from $tmp"
+  # No pinning to warn about: JetBrains RE-SIGNS every plugin with its own CA, which is what the user's
+  # IDE verifies, and the vendor-uploads-a-public-key half of that design is still listed as "not
+  # available yet" in the plugin-signing docs. So this key is only ever an upload credential and rotating
+  # it is invisible — to users and to the Marketplace alike. Nothing to upload anywhere.
 fi
 
 # --- 4. CI artifact signing key (GPG) ------------------------------------------------------------------
-say "4/6  CI artifact signing key (GPG)"
+say "4/7  CI artifact signing key (GPG)"
 
 if has_secret GPG_SIGNING_KEY && has_secret GPG_SIGNING_PASSPHRASE \
    && ! ask "The CI signing key is already configured. Rotate it?"; then
@@ -206,6 +372,18 @@ else
 
   ci_fpr=$(cat "$tmp/gpg/fingerprint")
 
+  # The PRIVATE half is imported into your keyring, and that is custody rather than convenience: a GitHub
+  # environment secret is WRITE-ONLY. Nothing — not the API, not the UI, not a workflow — can read back
+  # what was uploaded, so a key that exists only there cannot be inspected, cannot be revoked with its own
+  # revocation certificate, and cannot re-sign anything the day the workflow is not the thing signing. It
+  # stays encrypted with the passphrase it was generated under, so what lands on disk is ciphertext.
+  if gpg --batch --import "$tmp/gpg/private.asc" 2>/dev/null; then
+    info "imported the CI key $ci_fpr into your keyring (private half, still passphrase-protected)"
+  else
+    warn "could not import the CI key into your keyring — it will exist ONLY as a GitHub secret,"
+    warn "  which is write-only: it can never be read back, audited or reused."
+  fi
+
   # --- certify the CI key with the maintainer's hardware key -------------------------------------------
   # This is what turns the CI key from "a key that happens to sign the artifacts" into "a key the
   # maintainer vouches for". Two concrete consequences, and the second is the important one:
@@ -215,37 +393,161 @@ else
   #   * if the CI key ever leaks, the certification can be REVOKED from hardware, which withdraws the
   #     maintainer's endorsement without needing anyone to notice a new file. A bare key has no such lever.
   #
-  # Only the PUBLIC half is imported into your keyring. The private half stays in the temp dir and is
-  # shredded on exit — it exists in exactly two places: that GitHub secret, and nowhere.
-  MAINTAINER_FPR=$(git config --get user.signingkey || true)
-  if [ -z "$MAINTAINER_FPR" ]; then
-    warn "git config user.signingkey is unset — cannot certify the CI key. Set it and re-run this step."
-    cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
-  elif ! gpg --list-keys "$MAINTAINER_FPR" >/dev/null 2>&1; then
-    warn "maintainer key $MAINTAINER_FPR is not in your keyring — cannot certify."
-    cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
-  else
-    gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
-    info "certifying $ci_fpr with $MAINTAINER_FPR"
-    warn "TOUCH YOUR YUBIKEY when it asks."
-    if gpg --batch --yes --local-user "$MAINTAINER_FPR" --quick-sign-key "$ci_fpr"; then
-      # Export AFTER certifying: the exported block then carries the maintainer's signature on the uid.
-      gpg --armor --export "$ci_fpr" > docs/ci-signing-key.asc
-      info "certified — the exported key now carries the maintainer's endorsement"
-      gpg --check-sigs --with-colons "$ci_fpr" \
-        | awk -F: -v m="${MAINTAINER_FPR: -16}" '$1=="sig" && $5 ~ m {found=1} END {exit !found}' \
-        && info "verified: the certification is present in docs/ci-signing-key.asc" \
-        || warn "could not confirm the certification — check with: gpg --check-sigs $ci_fpr"
+  #
+  # BOTH certification authorities sign it, not just one. The certifiers are derived rather than written
+  # down: every primary key whose secret half lives on a SMARTCARD (field 15 of the `sec` colon record is
+  # the token serial), which on this repository is the root key and the intermediate CA. A fingerprint
+  # pasted into this script goes stale the first time a key is rotated and says nothing when it does;
+  # a derived list cannot, and every certification is verified individually below.
+  #
+  # `$15 != "+"` is what makes that test mean what it says, and without it the filter matched EVERY key.
+  # GnuPG writes the token's serial into field 15 for a card-held key and a literal `+` for one whose
+  # secret half is an ordinary file on disk — so `$15 != ""` is true for all of them. On this keyring
+  # that silently widened two certifiers to five, three of them personal identities that must never
+  # certify anything for a public repository. The question is "is there a serial", not "is the field
+  # populated", and the two only look alike until a second key exists.
+  mapfile -t certifiers < <(gpg --list-secret-keys --with-colons \
+    | awk -F: '$1=="sec" && $15!="" && $15!="+" { getline; if ($1=="fpr") print $10 }')
+
+  # The imported private half is useless without its passphrase, and the passphrase's only other home is a
+  # write-only GitHub secret — so the local copy would be a key nobody, including you, can ever open. It is
+  # stashed beside the keyring ENCRYPTED TO THE CAs, never in the clear: a plaintext passphrase file next
+  # to the key it unlocks is the same thing as an unprotected key, spelled in two files instead of one.
+  pass_stash="$HOME/.gnupg/claude-code-native-ci-passphrase.asc"
+  if [ ${#certifiers[@]} -gt 0 ]; then
+    recipients=(); for fpr in "${certifiers[@]}"; do recipients+=(-r "$fpr"); done
+    if gpg --batch --yes --armor --trust-model always "${recipients[@]}" \
+           --output "$pass_stash" --encrypt "$tmp/gpg/passphrase" 2>/dev/null; then
+      chmod 600 "$pass_stash"
+      info "stashed the CI passphrase at $pass_stash (opens with any CA YubiKey)"
     else
-      warn "certification failed (cancelled, or the YubiKey was not present)"
-      warn "re-run later:  gpg --local-user $MAINTAINER_FPR --quick-sign-key $ci_fpr"
-      warn "then:          gpg --armor --export $ci_fpr > docs/ci-signing-key.asc"
-      cp "$tmp/gpg/public.asc" docs/ci-signing-key.asc
+      warn "could not encrypt the CI passphrase to a CA — none of them has an encryption subkey."
+      warn "  the imported CI key stays locked: its passphrase now lives ONLY in the GitHub secret."
     fi
   fi
 
-  info "wrote docs/ci-signing-key.asc  (fingerprint $ci_fpr)"
-  warn "COMMIT docs/ci-signing-key.asc — without the public key nobody can verify a release."
+  if [ ${#certifiers[@]} -eq 0 ]; then
+    warn "no hardware-held key in your keyring — the CI key cannot be certified by a CA."
+    warn "the exported key will carry no endorsement; users can only take its fingerprint on faith."
+    warn "the CI passphrase could not be stashed either — there is no key here to encrypt it to."
+    cp "$tmp/gpg/public.asc" docs/trust-chain.asc
+  else
+    # The public half again, deliberately: the private import above may have failed, and certification
+    # needs the key present. A second import of a key already held is a no-op, not a duplicate.
+    gpg --batch --import "$tmp/gpg/public.asc" 2>/dev/null
+    warn "TOUCH YOUR YUBIKEY once per certifier — ${#certifiers[@]} of them."
+
+    # The CAs certify EACH OTHER first, and that is structure rather than decoration: a bundle whose
+    # blocks carry no signature between them is just three keys in a file, and a reader who trusts one CA
+    # has no path to the other. Both directions, deliberately — which of the two a reader already holds
+    # is not ours to decide, and GPG has no notion of issuer to derive an order from.
+    #
+    # A LOCAL signature is what would silently defeat this: gpg will not add a second certification from a
+    # key that has already signed, and an lsign is stripped on export — so the endorsement sits in the
+    # keyring and reaches nobody. That is exactly why the verification below reads the exported FILE and
+    # not the keyring, and why it prints the recovery when a link is missing.
+    for a in "${certifiers[@]}"; do
+      for b in "${certifiers[@]}"; do
+        [ "$a" = "$b" ] && continue
+        gpg --batch --yes --local-user "$a" --quick-sign-key "$b" >/dev/null 2>&1 \
+          || warn "$a did not certify $b (already signed, cancelled, or that card was absent)"
+      done
+    done
+
+    for fpr in "${certifiers[@]}"; do
+      uid=$(gpg --list-keys --with-colons "$fpr" \
+            | awk -F: '$1=="uid" { if (v == "") v = $10 } END { print v }') || uid="?"
+      info "certifying $ci_fpr with $fpr ($uid)"
+      # --quick-sign-key, never --quick-lsign-key: a LOCAL signature stays in your keyring and is stripped
+      # on export, so the endorsement would be invisible to every user it exists for.
+      gpg --batch --yes --local-user "$fpr" --quick-sign-key "$ci_fpr" \
+        || warn "certification with $fpr failed (cancelled, or that YubiKey was not present)"
+    done
+    # ONE file holding the CAs and the leaf they certify, and that is assurance rather than packaging.
+    # A certification is only followable by someone who already holds the CERTIFIER's public key, so
+    # publishing the CI key alone ships an endorsement nobody can check — which reads, to anybody
+    # verifying, exactly like no endorsement at all. Split across three files it becomes three imports,
+    # and the one people skip is the one carrying the assurance.
+    #
+    # Exported AFTER certifying, so the leaf's block carries the signatures on its uid. Certifiers
+    # first and leaf last, one `--export` each: a single call listing several keys emits them in
+    # KEYRING order, which is not argument order, and a chain that has to be read bottom-up is a chain
+    # nobody reads.
+    { for fpr in "${certifiers[@]}"; do gpg --armor --export "$fpr"; done
+      gpg --armor --export "$ci_fpr"; } > docs/trust-chain.asc
+
+    # Verified as a FILE, never as a keyring query, and the distinction is the entire point of the
+    # check. An export is precisely where a certification vanishes: a signature made with
+    # `--quick-lsign-key` is LOCAL — it lives in the keyring and is stripped on export — so asking gpg
+    # about the keyring reports a chain the user will never receive. Reading the bytes back through a
+    # throwaway GNUPGHOME asks the only question that matters: does what is about to be committed
+    # actually chain, for somebody who has nothing but this file?
+    chain_home="$tmp/chain-verify"; mkdir -p "$chain_home"; chmod 700 "$chain_home"
+    GNUPGHOME="$chain_home" gpg --batch --quiet --import docs/trust-chain.asc 2>/dev/null
+
+    # Asks the file whether one CA vouches for another. Same question as below, different subject: this
+    # one is what makes the bundle a CHAIN rather than a list.
+    survived() {  # $1 = signer fingerprint, $2 = signed fingerprint
+      GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$2" 2>/dev/null \
+        | awk -F: -v m="${1: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }' || true
+    }
+    for a in "${certifiers[@]}"; do
+      for b in "${certifiers[@]}"; do
+        [ "$a" = "$b" ] && continue
+        if [ "$(survived "$a" "$b")" = y ]; then
+          info "docs/trust-chain.asc: $a certifies $b"
+        else
+          warn "no certification by $a of $b survived the export — an lsign is the usual cause."
+          warn "  gpg --edit-key $b   → 'delsig' the local one, then:"
+          warn "  gpg --local-user $a --quick-sign-key $b"
+        fi
+      done
+    done
+
+    for fpr in "${certifiers[@]}"; do
+      # A missing key makes gpg exit non-zero, which is the ANSWER here, not an error: the check exists to
+      # report it. Left bare it would abort the run instead, at the one point whose whole job is to say
+      # what did not survive the export.
+      have_key=$(GNUPGHOME="$chain_home" gpg --list-keys --with-colons 2>/dev/null \
+        | awk -F: -v f="$fpr" '$1=="fpr" && $10==f { v = "y" } END { print v }') || have_key=""
+      have_sig=$(GNUPGHOME="$chain_home" gpg --check-sigs --with-colons "$ci_fpr" 2>/dev/null \
+        | awk -F: -v m="${fpr: -16}" '$1=="sig" && $5==m { v = "y" } END { print v }') || have_sig=""
+      if [ "$have_key" = y ] && [ "$have_sig" = y ]; then
+        info "docs/trust-chain.asc: $fpr is present, and its certification of the CI key survived"
+      else
+        [ "$have_key" = y ] || warn "docs/trust-chain.asc does not carry the CA $fpr at all."
+        [ "$have_sig" = y ] || warn "no certification by $fpr survived the export — was it an lsign?"
+        warn "Re-run with that YubiKey present, then re-export:"
+        warn "  gpg --local-user $fpr --quick-sign-key $ci_fpr"
+      fi
+    done
+    # --- publish the CAs where GitHub is not the publisher ---------------------------------------------
+    # The step that makes any of the above mean something to a stranger, and it is the one that was
+    # missing. Everything a verifier receives — the artifact, its signature, the bundle carrying the CAs
+    # — arrives from this repository, so the chain proves internal CONSISTENCY and says nothing about
+    # provenance: whoever can publish a release can publish a bundle that agrees with it. The endorsement
+    # only becomes evidence for someone holding the CA fingerprint from a channel this repository does
+    # not control.
+    #
+    # keys.openpgp.org is that channel, cheaply: it serves any key BY FINGERPRINT with no identity
+    # checks, so `gpg --recv-keys <CA fingerprint>` reaches an operator unrelated to GitHub, and the two
+    # copies of the CA either agree or the discrepancy is the story. It strips uids that are not
+    # email-verified, which costs nothing here — the fingerprint is the anchor, not the name.
+    #
+    # Uploading a public key is irreversible in practice, and deliberately unconditional anyway: a
+    # certification nobody can anchor is the failure this whole step exists to avoid, and re-uploading an
+    # unchanged key is a no-op.
+    for fpr in "${certifiers[@]}" "$ci_fpr"; do
+      if gpg --batch --keyserver hkps://keys.openpgp.org --send-keys "$fpr" >/dev/null 2>&1; then
+        info "published $fpr to keys.openpgp.org"
+      else
+        warn "could not publish $fpr to keys.openpgp.org — no independent anchor for it yet."
+      fi
+    done
+  fi
+
+  info "wrote docs/trust-chain.asc  (CI signing key $ci_fpr)"
+  warn "COMMIT docs/trust-chain.asc — without it nobody can verify a release."
 
   # --- register the CI key on the GitHub ACCOUNT --------------------------------------------------------
   # This step did not exist, and its absence is the whole reason v5.0.0 shipped with an unverified tag.
@@ -254,8 +556,13 @@ else
   # It does nothing for the "Verified" badge, which is a different mechanism entirely: GitHub marks a
   # signature verified only when the tagger email, an email in a uid of a key REGISTERED ON THE ACCOUNT,
   # and a verified account email all agree. Certification is not registration, and the two were conflated.
+  #
+  # Registered from the SINGLE-key export, never from docs/trust-chain.asc: `gh gpg-key add` posts one
+  # armored key, so handing it a bundle either registers the first block or is rejected outright —
+  # and the first block is a CA, which is emphatically not the key that signs the tag. The endorsement
+  # is irrelevant here anyway; GitHub reads the uid's email and nothing else.
   if gh gpg-key list >/dev/null 2>&1; then
-    if gh gpg-key add docs/ci-signing-key.asc >/dev/null 2>&1; then
+    if gh gpg-key add "$tmp/gpg/public.asc" >/dev/null 2>&1; then
       info "registered the CI public key on the GitHub account"
     else
       info "GitHub already knows this key (or rejected it) — verifying below"
@@ -272,17 +579,55 @@ else
   else
     warn "gh lacks the GPG scope, so the key was NOT registered on your account."
     warn "Without this the release tag will show as unverified. Run:"
-    warn "  gh auth refresh -s write:gpg_key && gh gpg-key add docs/ci-signing-key.asc"
+    warn "  gh auth refresh -s write:gpg_key && gh gpg-key add <(gpg --armor --export $ci_fpr)"
   fi
 fi
 
-# --- 5. verify -----------------------------------------------------------------------------------------
-say "5/6  Verification"
+# --- 5. repository deploy key --------------------------------------------------------------------------
+say "5/7  Repository deploy key"
+
+# An SSH key scoped to THIS repository, for the only write CI performs: pushing the release tag. It is
+# generated here, the public half is registered on the repository and the private half goes straight into
+# the environment secret. Nothing is left on this machine — the pair lives in the 0700 temp dir and the
+# EXIT trap shreds it, so it exists in exactly two places: that secret, and the repository's key list.
+#
+# Two properties, both deliberate:
+#   * no passphrase — a CI job has nobody to type one, and what protects it is the environment scoping of
+#     the secret, not a passphrase stored in the same environment as the key;
+#   * repository scope. An account SSH key would carry write access to everything you can push to; a
+#     deploy key carries this repository and nothing else.
+#
+# NB gh binds a deploy key to the TOKEN that created it: de-authorizing the GitHub CLI, or letting that
+# token expire, REMOVES the key. If a release ever fails on the tag push, check it is still there:
+#   gh api "repos/$REPO/keys"
+if has_secret DEPLOY_KEY && ! ask "DEPLOY_KEY is already set. Rotate it?"; then
+  info "keeping the existing deploy key"
+else
+  title="ci-release-$(date -u +%Y-%m-%d)"
+  ssh-keygen -q -t ed25519 -N '' -C "$title" -f "$tmp/deploy_key"
+  # Retire the ones this script registered before. A rotation that leaves the previous key authorized has
+  # rotated nothing: the old private half is still a write credential wherever it ended up.
+  for id in $(gh api "repos/$REPO/keys" --jq '.[] | select(.title | startswith("ci-release-")) | .id' 2>/dev/null); do
+    gh api --method DELETE "repos/$REPO/keys/$id" >/dev/null && info "removed the previous deploy key ($id)"
+  done
+  gh repo deploy-key add "$tmp/deploy_key.pub" --repo "$REPO" --title "$title" --allow-write >/dev/null
+  gh secret set DEPLOY_KEY --env "$ENVIRONMENT" --repo "$REPO" < "$tmp/deploy_key"
+  info "registered '$title' with write access; private half stored as DEPLOY_KEY and shredded locally"
+  # The fingerprint, not the key material: it is what `gh api "repos/$REPO/keys"` reports, so this line is
+  # the one thing that lets you confirm later that the registered key is the one this run generated.
+  info "fingerprint: $(ssh-keygen -lf "$tmp/deploy_key.pub" | cut -d' ' -f2)"
+  warn "NOTHING CONSUMES DEPLOY_KEY YET. release.yml pushes the tag with GITHUB_TOKEN, and switching that"
+  warn "push to this key also makes it TRIGGER workflows — which fires release.yml's own tag trigger and"
+  warn "starts a second run of the release it just finished. Guard that trigger before wiring it up."
+fi
+
+# --- 6. verify -----------------------------------------------------------------------------------------
+say "6/7  Verification"
 
 actual=$(gh secret list --env "$ENVIRONMENT" --repo "$REPO" --json name -q '.[].name' | sort)
-expected=$(printf '%s\n' CERTIFICATE_CHAIN GPG_SIGNING_KEY GPG_SIGNING_PASSPHRASE PRIVATE_KEY PRIVATE_KEY_PASSWORD PUBLISH_TOKEN | sort)
+expected=$(printf '%s\n' CERTIFICATE_CHAIN DEPLOY_KEY GPG_SIGNING_KEY GPG_SIGNING_PASSPHRASE PRIVATE_KEY PRIVATE_KEY_PASSWORD PUBLISH_TOKEN | sort)
 if [ "$actual" = "$expected" ]; then
-  info "all six environment secrets present"
+  info "all seven environment secrets present"
 else
   warn "missing: $(comm -23 <(echo "$expected") <(echo "$actual") | tr '\n' ' ')"
   warn "unexpected: $(comm -13 <(echo "$expected") <(echo "$actual") | tr '\n' ' ')"
@@ -309,8 +654,8 @@ fi
 info "deployments allowed from: $(gh api "repos/$REPO/environments/$ENVIRONMENT/deployment-branch-policies" \
   -q '[.branch_policies[] | "\(.type):\(.name)"] | join(", ")')"
 
-# --- 6. branch protection ------------------------------------------------------------------------------
-say "6/6  Branch protection"
+# --- 7. branch protection ------------------------------------------------------------------------------
+say "7/7  Branch protection"
 
 ./scripts/apply-rulesets.sh --dry-run
 echo
@@ -325,8 +670,8 @@ say "Done"
 cat <<EOF
    Remaining, and neither can be done for you:
 
-   1. Commit the public key, or releases cannot be verified:
-        git add docs/ci-signing-key.asc && git commit -m "chore(release): publish the CI artifact signing key"
+   1. Commit the trust chain, or releases cannot be verified:
+        git add docs/trust-chain.asc && git commit -m "chore(release): publish the release trust chain"
 
    2. Smoke-test the pipeline before a real release depends on it:
         git checkout -b test/ci-smoke

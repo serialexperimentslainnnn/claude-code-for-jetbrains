@@ -1,19 +1,13 @@
 package dev.lain.claudejb.session
 
+import dev.lain.claudejb.process.PluginContextPrompt
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pure unit tests for [SessionLauncher.buildArgs] (and [SessionLauncher.binaryPermissionMode]). No IDE: these pin the
- * exact flag set and ORDER the `claude` binary is launched with, the regression surface most likely to break silently
- * when options or defaults change. The `--mcp-config` value is injected directly (mcpConfigJson needs the IDE and is
- * covered by McpConfigBuilderTest), so the arg-vector assembly stays a pure function under test here.
- */
 class SessionLauncherTest {
 
-    /** A bare snapshot with everything off; individual tests flip the one field they exercise. */
     private fun opts(
         model: String? = null,
         effort: String? = null,
@@ -61,10 +55,12 @@ class SessionLauncherTest {
         "--permission-mode", "default",
     )
 
+    private val promptTail = listOf("--append-system-prompt", PluginContextPrompt.TEXT)
+
     @Test
-    fun `minimal options emit only the mandatory header`() {
+    fun `minimal options emit the mandatory header and the appended context`() {
         val args = SessionLauncher.buildArgs(opts(), resume = false, mcpConfig = null)
-        assertEquals(baseHead, args)
+        assertEquals(baseHead + promptTail, args)
     }
 
     @Test
@@ -91,8 +87,7 @@ class SessionLauncherTest {
     fun `includePartialMessages adds the flag without a value`() {
         val args = SessionLauncher.buildArgs(opts(includePartialMessages = true), resume = false, mcpConfig = null)
         assertTrue(args.contains("--include-partial-messages"))
-        // It is a bare flag: the next token (if any) must not be its "value".
-        assertEquals(baseHead + "--include-partial-messages", args)
+        assertEquals(baseHead + "--include-partial-messages" + promptTail, args)
     }
 
     @Test
@@ -110,13 +105,13 @@ class SessionLauncherTest {
     @Test
     fun `model and effort are added in order`() {
         val args = SessionLauncher.buildArgs(opts(model = "sonnet", effort = "high"), resume = false, mcpConfig = null)
-        assertEquals(baseHead + listOf("--model", "sonnet", "--effort", "high"), args)
+        assertEquals(baseHead + listOf("--model", "sonnet", "--effort", "high") + promptTail, args)
     }
 
     @Test
     fun `effort without model still appears`() {
         val args = SessionLauncher.buildArgs(opts(effort = "low"), resume = false, mcpConfig = null)
-        assertEquals(baseHead + listOf("--effort", "low"), args)
+        assertEquals(baseHead + listOf("--effort", "low") + promptTail, args)
         assertFalse(args.contains("--model"))
     }
 
@@ -124,7 +119,7 @@ class SessionLauncherTest {
     fun `thinking adaptive is emitted as launch flags when tokens is non-null`() {
         val args = SessionLauncher.buildArgs(opts(thinkingTokens = 1), resume = false, mcpConfig = null)
         assertEquals(
-            baseHead + listOf("--thinking", "adaptive", "--thinking-display", "summarized"),
+            baseHead + listOf("--thinking", "adaptive", "--thinking-display", "summarized") + promptTail,
             args,
         )
     }
@@ -174,7 +169,7 @@ class SessionLauncherTest {
     @Test
     fun `resume appends the session id when requested and present`() {
         val args = SessionLauncher.buildArgs(opts(sessionId = "abc-123"), resume = true, mcpConfig = null)
-        assertEquals(baseHead + listOf("--resume", "abc-123"), args)
+        assertEquals(baseHead + promptTail + listOf("--resume", "abc-123"), args)
     }
 
     @Test
@@ -223,7 +218,7 @@ class SessionLauncherTest {
             mcpConfig = null,
         )
         assertEquals(2, args.count { it == "--add-dir" })
-        assertEquals(baseHead + listOf("--add-dir", "/a", "--add-dir", "/b"), args)
+        assertEquals(baseHead + listOf("--add-dir", "/a", "--add-dir", "/b") + promptTail, args)
     }
 
     @Test
@@ -243,7 +238,7 @@ class SessionLauncherTest {
     @Test
     fun `strict-mcp-config is a bare flag emitted only when enabled`() {
         val on = SessionLauncher.buildArgs(opts(strictMcpConfig = true), resume = false, mcpConfig = null)
-        assertEquals(baseHead + "--strict-mcp-config", on)
+        assertEquals(baseHead + "--strict-mcp-config" + promptTail, on)
         val off = SessionLauncher.buildArgs(opts(strictMcpConfig = false), resume = false, mcpConfig = null)
         assertFalse(off.contains("--strict-mcp-config"))
     }
@@ -279,7 +274,7 @@ class SessionLauncherTest {
                 "--input-format", "stream-json",
                 "--verbose",
                 "--permission-prompt-tool", "stdio",
-                "--permission-mode", "default", // acceptEdits → default
+                "--permission-mode", "default",
                 "--include-partial-messages",
                 "--setting-sources", "user,project",
                 "--model", "opus",
@@ -293,6 +288,7 @@ class SessionLauncherTest {
                 "--add-dir", "/a", "--add-dir", "/b",
                 "--betas", "x,y",
                 "--strict-mcp-config",
+                "--append-system-prompt", PluginContextPrompt.TEXT,
                 "--mcp-config", cfg,
                 "--resume", "sid",
             ),

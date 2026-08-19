@@ -13,8 +13,8 @@
         its stream-json protocol: no Node.js at runtime, no terminal window, no API key required if you
         already have a Claude subscription.</p>
 
-        <p>Works in IntelliJ IDEA, PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip,
-        DataSpell, Aqua, RustRover and Android Studio.</p>
+        <p>Works in any JetBrains IDE on the <b>2025.3 platform or newer</b> — IntelliJ IDEA, PyCharm,
+        WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip, DataSpell, Aqua and RustRover.</p>
 
         <p><em>Unofficial, community-built, open-source plugin. Not affiliated with, sponsored by, or
         endorsed by Anthropic or JetBrains. It requires the user's own separately-installed
@@ -48,7 +48,9 @@
             <li>All commands from the <code>claude</code> binary surfaced natively — type <code>/</code>
                 in the composer or use the Commands toolbar button</li>
             <li>Built-in <code>/btw</code> command added by the plugin</li>
-            <li><code>/login</code> runs the OAuth sign-in for you — no copy-pasting a command into a shell</li>
+            <li>Signing in is a <b>button</b>, not a command to memorise: the welcome card and the dashboard's
+                account row run the OAuth flow for you — no copy-pasting <code>claude auth login</code> into a
+                shell (a typed <code>/login</code> still works)</li>
         </ul>
 
         <h3>Model &amp; runtime controls</h3>
@@ -83,10 +85,13 @@
 
         <h3>Sessions, usage and MCP</h3>
         <ul>
-            <li>Session history read from the binary's own files — reopen past chats, rename, fork, delete;
-                your open tabs are restored on IDE startup</li>
-            <li>Session dashboard: context breakdown, token usage and cost, account, background tasks and
-                running subagents</li>
+            <li>Session history read from the binary's own files — reopen past chats, rename, fork; your open
+                tabs are restored on IDE startup. <b>The plugin never deletes your conversations</b>: there is
+                no delete action, on purpose</li>
+            <li>A tab per running agent: a session that spawns dozens of subagents and background tasks gives
+                each one its own transcript instead of interleaving them all into the chat</li>
+            <li>Session dashboard: context breakdown, token usage and cost, your plan's usage limits with their
+                reset times, account, and a Workloads view of every agent and background task</li>
             <li>Optional MCP support — let Claude query the IDE through JetBrains' MCP server, or register
                 your own MCP servers</li>
         </ul>
@@ -112,12 +117,14 @@
             <li>Attach files, directories, the current selection, or paste and drag-drop images</li>
             <li>The IDE sees the agent's writes immediately — no stale editors, no manual refresh</li>
             <li>Follows your IDE theme, light and dark, with custom icons on every tool call</li>
-            <li>Works in any IntelliJ Platform IDE (IDEA, PyCharm, WebStorm, GoLand, Rider, and the rest)</li>
         </ul>
 
         <h2>Requirements</h2>
         <ul>
-            <li>JetBrains IDE 2025.1 or newer (build 251+); the chat UI requires JCEF, bundled with the IDE's JBR</li>
+            <li>JetBrains IDE <b>2025.3 or newer</b> (build 253+). 2025.1 and 2025.2 are <b>not</b> supported:
+                the whole chat UI is an embedded browser (JCEF), and 2025.3 is the first release where the
+                platform exposes it as a declarable module — which is what keeps the plugin working on 2026.2,
+                where JCEF moved out of the IDE core into a bundled plugin of its own</li>
             <li><a href="https://claude.ai/code"><code>claude</code> CLI</a> installed and on PATH or
                 <code>~/.local/bin/</code> (<code>npm install -g @anthropic-ai/claude-code</code>)</li>
             <li>A Claude subscription (Pro / Max / Team / Enterprise) or an <code>ANTHROPIC_API_KEY</code></li>
@@ -131,11 +138,34 @@
 
     <!-- Works in any IntelliJ-Platform IDE (IDEA, PyCharm, …). -->
     <depends>com.intellij.modules.platform</depends>
+    <!-- The embedded browser. NOT optional and NOT a nicety: the entire chat UI is a JCEF page since 4.0.0,
+         so without it this plugin has no interface at all.
+
+         REQUIRED since 262, where the platform moved JCEF OUT of the core and into a bundled plugin of its
+         own (`plugins/jcef-plugin`, id `com.intellij.modules.jcef`, "Web Browser (JCEF)"). A plugin that does
+         not declare it no longer gets those classes in its classloader, and every chat dies on
+         `NoClassDefFoundError: com/intellij/ui/jcef/JBCefApp` at `JcefHost.<init>` — reported against 5.1.1 on
+         IU-262.9437.185, and the same break hit AsciiDoc, Cline and others on the 2026.2 line.
+
+         Verified build by build, because this is exactly what decides the floor: on 251/252 the id does not
+         exist at all (JBCefApp ships inside `lib/app-client.jar`), on 253 and 261 the platform declares
+         `<module value="com.intellij.modules.jcef"/>` in `product-backend.jar`, and on 262 it is the bundled
+         plugin. So declaring it costs 2025.1 and 2025.2 — see `sinceBuild` in build.gradle.kts — and buys back
+         2026.2, where the plugin is currently unusable rather than degraded. -->
+    <depends>com.intellij.modules.jcef</depends>
     <!-- Bundled IDE Terminal: grants runtime classloader access to TerminalToolWindowManager so we can open an
          interactive `claude login` session (the OAuth flow needs a TTY the stream-json process doesn't have).
          Optional + config-file so the plugin still loads on a (hypothetical) IDE without Terminal; TerminalLauncher
          additionally guards with PluginManager.isPluginInstalled. -->
     <depends optional="true" config-file="claude-terminal.xml">org.jetbrains.plugins.terminal</depends>
+    <!-- Bundled Git plugin: grants runtime classloader access to `git4idea.*` (GitRepositoryManager,
+         GitHistoryUtils) so the plugin can read the project's branch, recent commits and changed files.
+         OPTIONAL on purpose — the opposite call to the JCEF one above. There is no browser-less mode, but there
+         very much is a Git-less one: an IDE without the Git plugin, or a project that simply is not a working
+         copy, must still load this plugin and run every chat. `GitAvailability`/`GitHistoryService.isAvailable`
+         gate every entry point, and `GitGateway` is the ONLY file that names a git4idea type, so nothing can be
+         class-loaded when the dependency is unsatisfied. -->
+    <depends optional="true" config-file="claude-git.xml">Git4Idea</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- Right-hand tool window, next to where the JetBrains AI Assistant lives. -->

@@ -1,0 +1,355 @@
+.perm-guard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.perm-guard-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: var(--bg);
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.perm-guard-rule {
+  font-weight: 600;
+}
+
+.perm-guard-reason {
+  flex-basis: 100%;
+  color: var(--dim);
+}
+
+.perm-guard-restore {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9em;
+}
+
+.perm-guard-restore:hover {
+  border-color: var(--danger);
+}
+
+.perm-card,
+.plan-card,
+.q-card,
+.elicit-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  animation: rise 0.24s var(--ease) both;
+}
+
+.perm-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.perm-head .ic {
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.perm-body {
+  color: var(--dim);
+  font-size: 12px;
+}
+.perm-diff {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  max-height: 28vh;
+  overflow: auto;
+}
+.perm-diff code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.perm-body code {
+  font-family: var(--mono);
+}
+
+.perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 500;
+  min-height: 24px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  transition:
+    background-color 0.14s,
+    border-color 0.14s,
+    color 0.14s,
+    transform 0.1s;
+}
+.btn:hover {
+  border-color: color-mix(in srgb, var(--text) 30%, var(--border));
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: translateY(0) scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.btn.primary:hover {
+  filter: brightness(1.06);
+  border-color: transparent;
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--dim);
+  border-color: transparent;
+  padding: 7px 10px;
+}
+.btn.ghost:hover {
+  color: var(--text);
+  background: var(--surface2);
+  border-color: transparent;
+}
+.btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: transparent;
+}
+.btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.q-question {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 8px 0 8px;
+}
+.q-question:first-of-type {
+  margin-top: 0;
+}
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 10px;
+}
+.q-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  transition:
+    border-color 0.14s,
+    background 0.14s,
+    box-shadow 0.14s;
+}
+.q-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.q-option .q-option-label {
+  font-size: 12.8px;
+  color: var(--text);
+  font-weight: 500;
+}
+.q-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.q-option.selected .q-option-label {
+  color: var(--accent);
+}
+.q-desc {
+  font-size: 11.5px;
+  color: var(--dim);
+  line-height: 1.45;
+}
+
+.elicit-card .elicit-msg {
+  font-size: 12.8px;
+  color: var(--text);
+  margin: 4px 0 10px;
+  line-height: 1.55;
+}
+.elicit-card .elicit-server {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: var(--mono);
+}
+.elicit-card .elicit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 10px 0 12px;
+}
+.elicit-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.elicit-card input,
+.elicit-card select,
+.boot-path-controls input,
+.auth-row input {
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
+}
+.elicit-card input:focus,
+.elicit-card select:focus,
+.boot-path-controls input:focus,
+.auth-row input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.elicit-card input::placeholder,
+.boot-path-controls input::placeholder,
+.auth-row input::placeholder {
+  color: var(--dim);
+}
+.elicit-card a {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.elicit-card a:hover {
+  text-decoration: underline;
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px 2px;
+}
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(240px, 100%);
+  font-size: 11.5px;
+  color: var(--text);
+  padding: 4px 6px 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  transition: border-color 0.14s;
+}
+.att-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.att-icon {
+  flex: 0 0 auto;
+  color: var(--dim);
+  display: inline-flex;
+  font-size: 12px;
+  line-height: 1;
+}
+.att-chip .att-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  color: var(--dim);
+  transition:
+    color 0.14s,
+    background-color 0.14s,
+    transform 0.1s;
+}
+.attach-btn:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.attach-btn:active {
+  transform: scale(0.96);
+}
+.attach-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: currentColor;
+}
+
+.composer-card.drag-over {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px var(--accent-soft);
+}

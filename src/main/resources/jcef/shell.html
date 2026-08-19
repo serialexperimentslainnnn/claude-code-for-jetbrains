@@ -22,165 +22,232 @@
          never announces that first change. `polite` so it waits for a pause instead of interrupting, and
          `atomic` so the whole short phrase is read rather than just the diff. -->
       <div id="a11y-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
-      <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
-        <div id="empty" class="empty-state">
-          <div class="empty-mark">✶</div>
-          <div class="empty-title">Claude Code</div>
-          <div class="empty-sub">Ask Claude, or type / for commands.</div>
-        </div>
-      </div>
-      <div id="dock">
-        <div id="permissions"></div>
-        <div id="composer"></div>
-      </div>
-      <div id="palette" hidden></div>
 
-      <!-- Boot screen, shown while the `claude` binary is launching.
-         Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
-         binary is launched FIRST and this page loads while it boots, so at load time the process is normally
-         not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
-         flashes a live-looking composer it cannot yet send anything with.
+      <!-- The tab bar: chats, their agents, and the background tasks. Declared here (empty, hidden) rather
+         than created on first use, so the page has a stable place to put it and no layout jump when the
+         first agent appears. Filled by app-tabs.js from the host's `cc.tabs` payload. -->
+      <nav id="tabsbar" aria-label="Chats and agents" hidden></nav>
 
-         role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
-      <div id="boot" role="status" aria-live="polite">
-        <div class="boot-inner">
-          <div class="boot-mark" aria-hidden="true">✶</div>
-          <div class="boot-title">Loading Claude Code<span class="boot-dots" aria-hidden="true"></span></div>
-          <div class="boot-sub" id="boot-sub">Starting the agent</div>
+      <!-- The work area: what belongs to ONE chat, and the dock, which belongs to none.
 
-          <!-- The FOURTH boot state: no `claude` binary was found. Static like the rest of the shell (the
+         That split is the whole shape of this file, so it is worth stating as a rule rather than leaving it
+         to be inferred from the nesting. **A chat's context is its transcript and the three screens that
+         stand in for it** — install, sign-in, loading — and nothing else: they are what changes when you
+         switch chat, and they are grouped in `#tabview` for exactly that reason. Everything outside it is
+         one thing shared by every chat: `#tabsbar` above, `#dock` below (the meters, the palette, the
+         permission cards and the prompt box).
+
+         The composer stays usable while the binary starts: a prompt typed then is queued and sent once there
+         is a session (see `ClaudeSession.send`). -->
+      <div id="work">
+        <!-- The chat's own area. Its four layers share ONE grid cell (`grid-area: 1 / 1`), so a screen covers
+           exactly the transcript and the transcript keeps its box — and therefore its scroll offset —
+           underneath instead of being replaced by one.
+
+           The waiting screens have been two other things and both failures are worth stating, because each
+           was a fix for the other. As `position: fixed`/`inset: 0` panels over `#app` they covered what they
+           did not own: first the chat tabs, then the composer. As ROWS INSIDE `#conversation` they were
+           content of the very element `cc.clear()` empties — and it empties it on every transcript switch and
+           every session stop — so the first clear DELETED all three from the document, and every later
+           `renderBoot`/`renderAuth` found no element and returned silently. The screens then only ever
+           appeared in a browser that had not cleared yet, i.e. in a freshly opened chat tab.
+
+           WHERE A LAYER GOES, for whoever adds the next one: here, beside `#conversation` — if it belongs to
+           the chat. Never a child of `#app`, never `position: fixed` over the page, and never inside a
+           container something else owns. If it belongs to the whole tool window it goes in `#dock` instead,
+           and that is now a question with an answer rather than a habit. The stacking is in base.css; the
+           screens' own rules are in boot.css. -->
+        <div id="tabview">
+          <div id="conversation" role="log" aria-label="Conversation" aria-live="off">
+            <div id="empty" class="empty-state">
+              <div class="empty-mark">✶</div>
+              <div class="empty-title">Claude Code</div>
+              <div class="empty-sub">Ask Claude, or type / for commands.</div>
+            </div>
+          </div>
+
+          <!-- Boot screen, shown while the `claude` binary is launching.
+           Declared in the static shell and visible BY DEFAULT, hidden only once the host says otherwise. The
+           binary is launched FIRST and this page loads while it boots, so at load time the process is normally
+           not up yet: the honest initial state is "waiting", not "idle". Starting hidden would mean every tab
+           flashes a live-looking composer it cannot yet send anything with.
+
+           role="status" + aria-live so the wait is announced rather than being a purely visual state. -->
+          <div id="boot" role="status" aria-live="polite">
+            <div class="boot-inner">
+              <div class="boot-mark" aria-hidden="true">✶</div>
+              <div class="boot-title">
+                Loading Claude Code<span class="boot-dots" aria-hidden="true"></span>
+              </div>
+              <div class="boot-sub" id="boot-sub">Starting the agent</div>
+
+              <!-- The FOURTH boot state: no `claude` binary was found. Static like the rest of the shell (the
              a11y lesson: markup that exists at load announces; markup created on first use does not), shown
              by app-composer.js only when the host reports binaryMissing. Each install method renders as a
              button plus the EXACT command it runs, copyable — corporate networks block individual
              installers, and a command the user can read is a command they can take to whatever route their
              machine allows. The path row is the manual escape hatch for an install that lives elsewhere. -->
-          <div id="boot-missing" hidden>
-            <div class="boot-missing-title">Claude Code was not found on this machine</div>
-            <div class="boot-missing-sub">
-              Install it with one of these — the command runs in the IDE terminal, or copy it and run it
-              yourself — and this tab starts on its own once the binary appears.
-            </div>
-            <div id="boot-installs"></div>
-            <div class="boot-path-row">
-              <label class="boot-path-label" for="boot-path"
-                >Already installed? Path to the claude binary</label
-              >
-              <div class="boot-path-controls">
-                <input
-                  id="boot-path"
-                  type="text"
-                  spellcheck="false"
-                  placeholder="/path/to/claude"
-                  autocomplete="off"
-                />
-                <button id="boot-path-use" type="button" class="btn">Use this binary</button>
+              <div id="boot-missing" hidden>
+                <div class="boot-missing-title">Claude Code was not found on this machine</div>
+                <div class="boot-missing-sub">
+                  Install it with one of these — the command runs in the IDE terminal, or copy it and run it
+                  yourself — and this tab starts on its own once the binary appears.
+                </div>
+                <div id="boot-installs"></div>
+                <div class="boot-path-row">
+                  <label class="boot-path-label" for="boot-path"
+                    >Already installed? Path to the claude binary</label
+                  >
+                  <div class="boot-path-controls">
+                    <input
+                      id="boot-path"
+                      type="text"
+                      spellcheck="false"
+                      placeholder="/path/to/claude"
+                      autocomplete="off"
+                    />
+                    <button id="boot-path-use" type="button" class="btn">Use this binary</button>
+                  </div>
+                </div>
+                <div id="boot-path-err" class="boot-path-err" role="alert"></div>
               </div>
             </div>
-            <div id="boot-path-err" class="boot-path-err" role="alert"></div>
           </div>
-        </div>
-      </div>
 
-      <!-- Sign-in card: raised whenever the plugin detects the binary is not authenticated (proactive
-         `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
-         session can lose its login too. Static markup for the same a11y reason as the boot screen; every
-         step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
-      <div id="auth-card" role="status" aria-live="polite" hidden>
-        <div class="auth-inner">
-          <div class="boot-mark" aria-hidden="true">✶</div>
-          <div class="auth-title">Sign in to Claude</div>
+          <!-- Sign-in card: raised whenever the plugin detects the binary is not authenticated (proactive
+           `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
+           session can lose its login too. Static markup for the same a11y reason as the boot screen; every
+           step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
+          <div id="auth-card" role="status" aria-live="polite" hidden>
+            <div class="auth-inner">
+              <div class="boot-mark" aria-hidden="true">✶</div>
+              <div class="auth-title">Sign in to Claude</div>
 
-          <!-- Two sign-ins, both a BUTTON. The Console one is what an organisation needs: its OAuth consent
+              <!-- Two sign-ins, both a BUTTON. The Console one is what an organisation needs: its OAuth consent
              includes `org:create_api_key`, so the binary provisions a key for Claude Code itself — nobody
              pastes a credential and nobody has to distribute one. Typing a key by hand is therefore the
              exception now, not the second option, and lives behind the disclosure below. -->
-          <div class="auth-step" data-step="idle">
-            <button id="auth-sub" type="button" class="btn primary auth-primary">
-              Sign in with your Claude subscription
-            </button>
-            <button id="auth-console" type="button" class="btn auth-primary">
-              Sign in with Anthropic Console
-            </button>
-            <div class="auth-hint">
-              Opens your browser; the whole flow stays in this card. Console signs in against your
-              organization and bills API usage.
-            </div>
-            <div class="auth-divider" aria-hidden="true">or</div>
-            <button
-              id="auth-key-toggle"
-              type="button"
-              class="auth-quiet"
-              aria-expanded="false"
-              aria-controls="auth-key-fields"
-            >
-              Use an API key instead
-            </button>
-            <div id="auth-key-fields" hidden>
-              <label class="auth-label" for="auth-key">Anthropic API key</label>
-              <div class="auth-row">
-                <input
-                  id="auth-key"
-                  type="password"
-                  spellcheck="false"
-                  autocomplete="off"
-                  placeholder="sk-ant-…"
-                />
-                <button id="auth-key-use" type="button" class="btn">Use API key</button>
+              <div class="auth-step" data-step="idle">
+                <button id="auth-sub" type="button" class="btn primary auth-primary">
+                  Sign in with your Claude subscription
+                </button>
+                <button id="auth-console" type="button" class="btn auth-primary">
+                  Sign in with Anthropic Console
+                </button>
+                <div class="auth-hint">
+                  Opens your browser; the whole flow stays in this card. Console signs in against your
+                  organization and bills API usage.
+                </div>
+                <div class="auth-divider" aria-hidden="true">or</div>
+                <button
+                  id="auth-key-toggle"
+                  type="button"
+                  class="auth-quiet"
+                  aria-expanded="false"
+                  aria-controls="auth-key-fields"
+                >
+                  Use an API key instead
+                </button>
+                <div id="auth-key-fields" hidden>
+                  <label class="auth-label" for="auth-key">Anthropic API key</label>
+                  <div class="auth-row">
+                    <input
+                      id="auth-key"
+                      type="password"
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="sk-ant-…"
+                    />
+                    <button id="auth-key-use" type="button" class="btn">Use API key</button>
+                  </div>
+                  <div class="auth-hint">Stored in the IDE's password safe — never in a project file.</div>
+                </div>
+                <button id="auth-dismiss" type="button" class="auth-quiet">Skip for now</button>
               </div>
-              <div class="auth-hint">Stored in the IDE's password safe — never in a project file.</div>
-            </div>
-            <button id="auth-dismiss" type="button" class="auth-quiet">Skip for now</button>
-          </div>
 
-          <!-- Every non-idle step MUST offer a way back to idle. This one did not, and a login flow that
+              <!-- Every non-idle step MUST offer a way back to idle. This one did not, and a login flow that
              never reached the URL stage stranded the card here for good: no Sign in, no API key field,
              no Cancel — the whole card looked dead. A step with no exit is a bug, not a spinner. -->
-          <div class="auth-step" data-step="waiting" hidden>
-            <div class="auth-wait">
-              Opening your browser<span class="boot-dots" aria-hidden="true"></span>
-            </div>
-            <button id="auth-cancel-waiting" type="button" class="auth-quiet">Cancel</button>
-          </div>
+              <div class="auth-step" data-step="waiting" hidden>
+                <div class="auth-wait">
+                  Opening your browser<span class="boot-dots" aria-hidden="true"></span>
+                </div>
+                <button id="auth-cancel-waiting" type="button" class="auth-quiet">Cancel</button>
+              </div>
 
-          <!-- ONE step for the whole browser leg. The binary listens for the OAuth callback itself, so
+              <!-- ONE step for the whole browser leg. The binary listens for the OAuth callback itself, so
              completing the sign-in in the browser finishes this card with nothing to paste — the code
              field is the OPTIONAL fallback for when the callback can't reach it, not a step of its own.
              Splitting them (as this card originally did) jumped straight to a "paste the code" screen
              and made the fallback look mandatory. -->
-          <div class="auth-step" data-step="browser" hidden>
-            <div class="auth-sub-wait">
-              Finish signing in in your browser<span class="boot-dots" aria-hidden="true"></span>
-            </div>
-            <div class="auth-hint">This card completes on its own. If the browser didn't open:</div>
-            <!-- Buttons, not the URL. An OAuth authorize URL is ~200 characters of query string: shown in
+              <div class="auth-step" data-step="browser" hidden>
+                <div class="auth-sub-wait">
+                  Finish signing in in your browser<span class="boot-dots" aria-hidden="true"></span>
+                </div>
+                <div class="auth-hint">This card completes on its own. If the browser didn't open:</div>
+                <!-- Buttons, not the URL. An OAuth authorize URL is ~200 characters of query string: shown in
                  full it swamps the card, and truncated it is worse than useless — it looks like something
                  you could read or retype and it is neither. So the two things anyone actually does with
                  it get a button each. -->
-            <div class="auth-row auth-url-actions">
-              <button id="auth-url-open" type="button" class="btn primary">Open your browser</button>
-              <button id="auth-url-copy" type="button" class="btn ghost">Copy link to your browser</button>
-            </div>
-            <label class="auth-label" for="auth-code" id="auth-code-label"
-              >Shown a code instead? Paste it here (optional)</label
-            >
-            <div class="auth-row">
-              <input id="auth-code" type="password" spellcheck="false" autocomplete="off" />
-              <button id="auth-code-use" type="button" class="btn">Submit</button>
-            </div>
-            <button id="auth-cancel" type="button" class="auth-quiet">Cancel</button>
-          </div>
+                <div class="auth-row auth-url-actions">
+                  <button id="auth-url-open" type="button" class="btn primary">Open your browser</button>
+                  <button id="auth-url-copy" type="button" class="btn ghost">
+                    Copy link to your browser
+                  </button>
+                </div>
+                <label class="auth-label" for="auth-code" id="auth-code-label"
+                  >Shown a code instead? Paste it here (optional)</label
+                >
+                <div class="auth-row">
+                  <input id="auth-code" type="password" spellcheck="false" autocomplete="off" />
+                  <button id="auth-code-use" type="button" class="btn">Submit</button>
+                </div>
+                <button id="auth-cancel" type="button" class="auth-quiet">Cancel</button>
+              </div>
 
-          <div class="auth-step" data-step="verifying" hidden>
-            <div class="auth-wait">Verifying<span class="boot-dots" aria-hidden="true"></span></div>
-            <button id="auth-cancel-verify" type="button" class="auth-quiet">Cancel</button>
-          </div>
+              <div class="auth-step" data-step="verifying" hidden>
+                <div class="auth-wait">Verifying<span class="boot-dots" aria-hidden="true"></span></div>
+                <button id="auth-cancel-verify" type="button" class="auth-quiet">Cancel</button>
+              </div>
 
-          <div class="auth-step" data-step="error" hidden>
-            <div id="auth-error" class="auth-error" role="alert"></div>
-            <button id="auth-retry" type="button" class="btn">Try again</button>
+              <div class="auth-step" data-step="error" hidden>
+                <div id="auth-error" class="auth-error" role="alert"></div>
+                <button id="auth-retry" type="button" class="btn">Try again</button>
+              </div>
+            </div>
           </div>
         </div>
+        <!-- /#tabview -->
+
+        <!-- The dock: what sits under the transcript and above nothing.
+           `#palette` is the FIRST row of it, in the flow, and that placement is the fix for a bug rather than
+           a style: it used to be a `position: fixed` overlay held clear of the composer by
+           `padding-bottom: 72px` — a guess at a height that changes with every pill, queued prompt and
+           attachment chip, so the list covered the box you were typing in exactly when you had most in it. A
+           row above the composer cannot cover the composer at any height. -->
+        <div id="dock">
+          <!-- The slash palette. app-composer.js moves it INTO the prompt card, where it is anchored to the
+             card's top edge and hangs over whatever is above — the meters are worth covering for as long as
+             you are choosing a command; the box you are typing in is not, which is why it hangs upwards. -->
+          <div id="palette" hidden></div>
+          <!-- ONE row above the prompt box: where you are on the left, what you can do to this chat on the
+             right. Two groups rather than one list, because they are two kinds of thing — a state and a set
+             of actions — but one line, because two stacked strips of controls over a text box is a wall.
+             Declared HERE, in the static shell, rather than created by the composer — because two families
+             need them and neither may assume the other has run. `#composer` is filled by app-composer.js on
+             the first state push, so a page that has had a session payload but no state yet would otherwise
+             have a dashboard whose view buttons exist and are attached to nothing.
+             app-composer.js MOVES the row to its final place (under the reset line, above the prompt box); if
+             it never runs it simply stays here, which is the same dock and still works. -->
+          <div id="controls" class="composer-controls">
+            <div id="views" class="composer-views"></div>
+            <div id="actions" class="composer-actions"></div>
+          </div>
+          <div id="permissions"></div>
+          <div id="composer"></div>
+        </div>
       </div>
+      <!-- /#work -->
     </div>
     <!--LIBS-->
     <!--APP-->

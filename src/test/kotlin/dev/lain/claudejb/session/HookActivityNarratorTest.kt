@@ -7,11 +7,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The hook lifecycle is narrated as ONE evolving transcript row per hook: started inserts it, progress mutates
- * the SAME entry, response finalizes it and drops the key. [TranscriptModel] is a plain observable list, so this
- * needs no IDE fixture.
- */
 class HookActivityNarratorTest {
 
     private fun model() = TranscriptModel()
@@ -28,7 +23,7 @@ class HookActivityNarratorTest {
         assertTrue(entry.text.contains("running"))
 
         n.onProgress(HookProgressInfo(hookId = "h1", stdout = "line1\nline2"))
-        assertEquals(1, t.entries.size) // SAME entry, no new row
+        assertEquals(1, t.entries.size)
         assertTrue(t.entries.single().text.contains("line2"))
 
         n.onResponse(HookResponseInfo(hookId = "h1", outcome = "success"))
@@ -73,7 +68,6 @@ class HookActivityNarratorTest {
         n.onStarted(HookStartedInfo(hookId = "h3", hookName = "fmt"))
         n.clear()
         n.onProgress(HookProgressInfo(hookId = "h3", stdout = "later"))
-        // The started row stays, but the (now-untracked) progress neither mutates nor adds anything.
         assertEquals(1, t.entries.size)
         assertTrue(t.entries.single().text.contains("running"))
     }
