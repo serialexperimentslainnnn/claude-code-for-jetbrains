@@ -670,4 +670,82 @@ class AgentRegistryTest {
 
         assertEquals(setOf("mine"), reg.nodes.keys)
     }
+
+    // ── not re-reading a transcript that has not changed ─────────────────────────────────────────────────
+    //
+    // A pass used to read and parse every admitted agent's whole file every five seconds, for the life of the
+    // chat, and most of those files are finished and will never be written again. The skip is keyed on a
+    // `size`/`mtime` stamp, so what these two tests pin is the pair of properties that makes that safe: it
+    // really does skip, and a file that changes really does get re-read.
+
+    /** Sets a transcript's `mtime` by hand — the only way to state "the file did not change" as a fixture. */
+    private fun setModified(id: String, millis: Long) {
+        Files.setLastModifiedTime(
+            dir.resolve(AgentMeta.transcriptFile(id)),
+            java.nio.file.attribute.FileTime.fromMillis(millis),
+        )
+    }
+
+    @Test
+    fun `an unchanged transcript is not read again`() {
+        // `end_turn` and `tool_use` are both eight characters, so these two records are the same LENGTH and
+        // carry opposite verdicts. That is what makes the skip observable: rewrite the file with the other one,
+        // put its `mtime` back, and the status can only stay COMPLETED if the file was never read.
+        //
+        // It also documents the accepted limitation honestly: an in-place rewrite of identical length inside one
+        // timestamp tick IS invisible to this. These files are append-only, so a real new record makes the file
+        // longer — which is the property the skip rests on, and the one `reopenIfGrown` already rested on.
+        agent("a", toolUseId = "toolu_ours")
+        writeTranscript("a", closedTurn)
+        setModified("a", 1_700_000_000_000L)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a").status)
+
+        writeTranscript("a", openTurn)
+        setModified("a", 1_700_000_000_000L)
+        reg.scan()
+
+        assertEquals(
+            AgentStatus.COMPLETED,
+            reg.nodes.getValue("a").status,
+            "same size and same mtime: the file must not have been read a second time",
+        )
+    }
+
+    @Test
+    fun `a transcript whose stamp moved is read again`() {
+        // The other half, and the one that would turn the optimisation into a bug: a cache that never
+        // invalidates is an agent frozen on whatever it was the first time it was seen.
+        agent("a", toolUseId = "toolu_ours")
+        writeTranscript("a", closedTurn)
+        setModified("a", 1_700_000_000_000L)
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a").status)
+
+        writeTranscript("a", openTurn)
+        setModified("a", 1_700_000_060_000L)
+        reg.scan()
+
+        assertEquals(AgentStatus.RUNNING, reg.nodes.getValue("a").status, "a newer mtime must force the read")
+    }
+
+    @Test
+    fun `an agent whose transcript appears later is read the moment it does`() {
+        // The missing file gets a sentinel stamp precisely so this works: without it, "absent" and "unchanged"
+        // would be the same observation and the first records would never be picked up.
+        agent("a", toolUseId = "toolu_ours")
+        val reg = registry()
+        reg.observeSpawn("toolu_ours")
+        reg.scan()
+        assertTrue(reg.nodes.getValue("a").entries.isEmpty())
+
+        writeTranscript("a", closedTurn)
+        reg.scan()
+
+        assertEquals(AgentStatus.COMPLETED, reg.nodes.getValue("a").status)
+    }
 }

@@ -236,15 +236,11 @@ class AgentRegistry(
         // Shallowest first, so a child is always resolved AFTER the parent it inherits its ending from.
         for (id in admitted.sortedWith(compareBy({ metas[it]?.spawnDepth ?: 1 }, { it }))) {
             val meta = metas[id] ?: continue
-            // Read once and parsed ONCE, and that second word used to be a lie: this said "parsed once" while
-            // `parseEntries` and `AgentEnding.of` each ran their own JSON pass over the same lines — every
-            // admitted agent's whole transcript, parsed twice, every five seconds, for the life of the chat.
-            // Now one pass produces the records, and both readings of them are taken from it: the rows the tab
-            // shows, and the evidence of how the agent ended.
-            val records = SessionTranscriptReader.parseRecords(readLines(dir, id))
-            val entries = SessionTranscriptReader.entriesOf(records)
+            val (entries, ending) = transcriptOf(dir, id, previous[id])
             reopenIfGrown(meta, entries.size)
-            val settled = settledStateOf(meta, next, records)
+            // The STATE is always recomputed, even when the file was not read: it depends on the parent's
+            // status and on this run's own bookkeeping, both of which move without the transcript changing.
+            val settled = settledStateOf(meta, next, ending)
             next[id] = AgentNode(
                 meta = meta,
                 status = settled.status,
@@ -253,10 +249,69 @@ class AgentRegistry(
             )
         }
         snapshot = next
+        // The cache lives as long as the session, so it is pruned to what the snapshot still holds — the same
+        // rule [TranscriptModel] follows for its own per-call maps, and for the same reason.
+        cachedTranscripts.keys.retainAll(next.keys)
         val fresh = next.keys - previous.keys
         fresh.forEach(onAdmitted)
         return fresh.toList()
     }
+
+    /**
+     * An agent's rows and its ending — **without re-reading a transcript that has not changed.**
+     *
+     * A pass used to read and parse every admitted agent's whole file, every five seconds, for the life of the
+     * chat. Most of those files are finished and will never be written to again: the sessions this feature
+     * exists for are the ones running dozens of agents, so the work grew with exactly the case that matters.
+     *
+     * The stamp is a `size`/`mtime` pair, and **`size` is the load-bearing half**. These files are
+     * append-only, which is the property [reopenIfGrown] already rests on, so any new record makes the file
+     * longer — a change that this could miss would have to rewrite the file in place at exactly the same
+     * length, within one filesystem timestamp tick. `mtime` is there for the pathological rewrite, not as the
+     * primary signal.
+     *
+     * **What is cached is the VERDICT, not the content.** The file contributes exactly one thing to an agent's
+     * state — how it ended — so that is what is kept, and the rows come back from the previous snapshot node,
+     * which already holds them. Caching the parsed records instead would hold a second copy of every
+     * transcript in memory for the life of the chat, which is a worse trade than the reads it saves.
+     *
+     * A missing file gets a sentinel stamp that no real file can produce, so an agent whose sidecar appears
+     * later is read the moment it does. With no previous node there is nothing to reuse and it is always read.
+     */
+    private fun transcriptOf(
+        dir: Path,
+        id: String,
+        previousNode: AgentNode?,
+    ): Pair<List<EntryDTO>, AgentEnding.Ending?> {
+        val stamp = stampOf(dir.resolve(AgentMeta.transcriptFile(id)))
+        val unchanged = cachedTranscripts[id]?.takeIf { it.stamp == stamp }
+        if (unchanged != null && previousNode != null) return previousNode.entries to unchanged.ending
+        // Read once and parsed ONCE, and both readings come out of that one pass: the rows the tab shows, and
+        // the evidence of how the agent ended.
+        val records = SessionTranscriptReader.parseRecords(readLines(dir, id))
+        val ending = AgentEnding.of(records)
+        cachedTranscripts[id] = CachedTranscript(stamp, ending)
+        return SessionTranscriptReader.entriesOf(records) to ending
+    }
+
+    /** What the last scan saw of a transcript file. A missing file is [missingFile], which no file matches. */
+    private data class FileStamp(val size: Long, val modifiedAtMillis: Long)
+
+    private class CachedTranscript(val stamp: FileStamp, val ending: AgentEnding.Ending?)
+
+    private val cachedTranscripts = ConcurrentHashMap<String, CachedTranscript>()
+
+    /** One `stat` in place of a whole read. An unreadable or absent file is [missingFile], never a guess. */
+    private fun stampOf(file: Path): FileStamp = runCatching {
+        val attrs = Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes::class.java)
+        FileStamp(attrs.size(), attrs.lastModifiedTime().toMillis())
+    }.getOrDefault(missingFile)
+
+    /**
+     * The stamp of a file that is not there. Negative on both halves, which no real file can be, so an agent
+     * whose sidecar has not been written yet is not mistaken for one whose transcript is simply unchanged.
+     */
+    private val missingFile = FileStamp(-1, -1)
 
     /** The two things one rule decides together: what the agent is doing, and since when it stopped. */
     private data class Settled(val status: AgentStatus, val completedAtMillis: Long?)
@@ -332,9 +387,9 @@ class AgentRegistry(
     private fun settledStateOf(
         meta: AgentMeta,
         resolved: Map<String, AgentNode>,
-        records: List<JsonObject>,
+        ending: AgentEnding.Ending?,
     ): Settled {
-        val observed = observedStateOf(meta, resolved, records)
+        val observed = observedStateOf(meta, resolved, ending)
         if (observed.status == AgentStatus.RUNNING || observed.completedAtMillis != null) return observed
         return observed.copy(completedAtMillis = runStartedAtMillis)
     }
@@ -398,7 +453,7 @@ class AgentRegistry(
     private fun observedStateOf(
         meta: AgentMeta,
         resolved: Map<String, AgentNode>,
-        records: List<JsonObject>,
+        ending: AgentEnding.Ending?,
     ): Settled {
         // The transcript is read FIRST, and it is authoritative for an ending. The stream's own record
         // ([statusByToolUse]) is consulted only when the file has NOT closed a turn — as a witness that the
@@ -410,7 +465,10 @@ class AgentRegistry(
         // scan that could have seen it finish on disk was short-circuited — for the rest of the session,
         // because the stream never re-says "done" for an ending it delivered without a `tool_use_id` (which
         // several of the binary's call sites omit) or delivered while the main session sat idle.
-        val ending = AgentEnding.of(records)
+        //
+        // The verdict arrives already judged (see [transcriptOf]) because it is the ONLY thing the file
+        // contributes here, which is what lets an unchanged transcript be skipped without changing any of the
+        // reasoning below — everything else is the parent, the stream and this run's own bookkeeping.
         val streamStatus = meta.toolUseId?.let { statusByToolUse[it] }
         val parent = meta.parentAgentId?.let { resolved[it] }
         val live = meta.toolUseId?.let { it in observedToolUse } == true ||
