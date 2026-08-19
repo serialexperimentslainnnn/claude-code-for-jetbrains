@@ -159,7 +159,7 @@ internal class GitChatConversation(private val project: Project) :
      * blocking you. What makes a card answerable by the right session is the tag, not the location.
      */
     fun permissionGroup(): List<JcefCardPayload.Group> {
-        val pending = current()?.pendingPermissions().orEmpty()
+        val pending = current()?.cards?.pending().orEmpty()
         return if (pending.isEmpty()) emptyList() else listOf(JcefCardPayload.Group(pending, JcefBridge.SCOPE_GIT))
     }
 

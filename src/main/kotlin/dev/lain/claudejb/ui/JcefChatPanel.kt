@@ -297,7 +297,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
      * was drawn. This chat's come first: they are the ones the user is here for.
      */
     internal fun pushPermissions() {
-        val perms = session.pendingPermissions()
+        val perms = session.cards.pending()
         // This chat's first: they are the ones the user is here for. The Git conversation's follow, tagged,
         // so answering one reaches the session that asked.
         val groups = listOf(JcefCardPayload.Group(perms, diffByRequest = edits.diffsFor(perms))) +
