@@ -33,6 +33,18 @@
       raw = CC.escape(src);
     }
 
+    // The sanitiser FAILS CLOSED, and both fallbacks below are that rule rather than defensive noise.
+    //
+    // `raw` is `marked`'s output over model text, i.e. attacker-influenced HTML that has not been through
+    // DOMPurify yet — this is the one channel in the plugin carrying untrusted markup. Returning it when the
+    // sanitiser is missing or throws would hand exactly that to the caller's `innerHTML`, so a page that
+    // loaded without `purify.min.js`, or a DOMPurify that raised on one pathological input, would silently
+    // stop being sanitised at all while everything still rendered. So the fallback is the ESCAPED SOURCE:
+    // the text is shown verbatim, markdown and all, and nothing in it can execute.
+    //
+    // The `marked` branch above already works this way (`CC.escape(src)` when it is absent or throws). The
+    // two paths differ in what they cost when they fire — losing formatting versus losing the whole
+    // control — and only one of them was fail-closed.
     var clean;
     try {
       clean =
@@ -45,9 +57,9 @@
               ALLOWED_URI_REGEXP:
                 /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|jb):|data:image\/|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))/i,
             })
-          : raw;
+          : CC.escape(src);
     } catch (e2) {
-      clean = raw;
+      clean = CC.escape(src);
     }
 
     // Decorate code blocks in a detached container.
