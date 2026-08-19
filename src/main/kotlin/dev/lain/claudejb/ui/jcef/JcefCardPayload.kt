@@ -1,7 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.permission.ElicitationCard
-import dev.lain.claudejb.permission.GuardAlert
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.protocol.AskQuestion
 import kotlinx.serialization.json.JsonArray
@@ -40,25 +39,6 @@ object JcefCardPayload {
         // The two card shapes that carry their own nested payload; each is only present on its own kind of card.
         p.questions?.let { put("questions", questionsJson(it)) }
         p.elicitation?.let { put("elicitation", elicitationJson(it)) }
-        // Present ONLY on a card the guard raised, which is what the page keys the red alert treatment on: its
-        // absence is the ordinary card, so nothing has to decide what "not an alert" looks like.
-        p.guard?.let { put("guard", guardJson(it)) }
-    }
-
-    /**
-     * The guard alert: which rule turned this call into a question, and the guard's own wording for it.
-     *
-     * Both the machine `rule` and the human `label` go on the wire, and they are not redundant. The label is
-     * the exact text of the row in Settings ▸ Security and in the composer's ⚙ menu, so the user can find the
-     * toggle by reading the card; the id is the precise name of the rule, which is what makes a report of a
-     * false positive actionable instead of a paraphrase. `category` is the group that row lives under — the
-     * Settings page is a category selector, so without it the label names a row on a page nobody can open.
-     */
-    private fun guardJson(g: GuardAlert) = buildJsonObject {
-        put("rule", g.rule.name)
-        put("label", g.rule.label)
-        put("category", g.rule.category.label)
-        put("reason", g.reason)
     }
 
     /** The AskUserQuestion payload: questions, each with its options. */

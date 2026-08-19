@@ -1,9 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.permission.ElicitationCard
-import dev.lain.claudejb.permission.GuardAlert
 import dev.lain.claudejb.permission.PendingPermission
-import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.protocol.AskOption
 import dev.lain.claudejb.protocol.AskQuestion
 import dev.lain.claudejb.protocol.ElicitField
@@ -196,46 +194,5 @@ class JcefPayloadTest {
         val o = Json.parseToJsonElement(JcefTranscriptPayload.linksJson(3L, emptyList())).jsonObject
         assertEquals(3, o["rowId"]!!.jsonPrimitive.int)
         assertTrue(o["links"]!!.jsonArray.isEmpty())
-    }
-
-    // ── the guard alert block ────────────────────────────────────────────────────────────────────────────────
-    // Present ONLY on a card the guard raised, which is what the page keys the red treatment on: its absence is the
-    // ordinary card, so nothing on the page has to decide what "not an alert" looks like.
-
-    @Test
-    fun `a guard card carries the rule in both vocabularies, plus the guard's own sentence`() {
-        val card = PendingPermission(
-            requestId = "g1",
-            toolName = "Read",
-            input = buildJsonObject { put("file_path", "x") },
-            title = "Claude wants to use Read",
-            summary = "a key file",
-            reviewable = false,
-            guard = GuardAlert(SecurityRule.CREDENTIALS, "reads credentials or key material — disable this in Settings"),
-        )
-
-        val guard = JcefCardPayload.permissionJson(card)["guard"]!!.jsonObject
-
-        // The machine name, for a report that has to be actionable rather than a paraphrase…
-        assertEquals("CREDENTIALS", guard["rule"]!!.jsonPrimitive.content)
-        // …the row's own label and the category it lives under, because the Settings page is a category selector and
-        // a label alone names a row on a page nobody can find…
-        assertEquals(SecurityRule.CREDENTIALS.label, guard["label"]!!.jsonPrimitive.content)
-        assertEquals(SecurityRule.CREDENTIALS.category.label, guard["category"]!!.jsonPrimitive.content)
-        // …and the guard's sentence verbatim, tail included: the lever has to be discoverable from the card itself.
-        assertTrue(guard["reason"]!!.jsonPrimitive.content.contains("Settings"))
-    }
-
-    @Test
-    fun `an ordinary card omits the guard key entirely, rather than sending it null`() {
-        val card = PendingPermission(
-            requestId = "p1",
-            toolName = "Bash",
-            input = buildJsonObject { put("command", "ls") },
-            title = "Claude wants to use Bash",
-            summary = "$ ls",
-            reviewable = false,
-        )
-        assertNull(JcefCardPayload.permissionJson(card)["guard"])
     }
 }

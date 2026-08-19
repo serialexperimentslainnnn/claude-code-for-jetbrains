@@ -56,8 +56,9 @@ enum class SecurityCategory(val label: String) {
  *
  * Five is past any real configuration and any real build wrapper, and the number is not the point: **reaching it
  * is itself the finding**. Anything that needs a sixth hop to say where it is going, or a sixth file to say what
- * it runs, is structured to be unanalysable, and [SecurityRule.RECURSION_LIMIT] is the rule that says so — the
- * difference between "the plugin cannot see this" and "something went to trouble so it could not be seen".
+ * it runs, is structured to be unanalysable, and [SecurityRule.RECURSION_LIMIT] answers that with a hard block
+ * rather than a card — a card is for "the plugin cannot see this", and this is "something went to trouble so it
+ * could not be seen".
  *
  * It is also what makes both recursions TERMINATE on the thread that reads the binary's entire stdout, which is
  * the thread nothing in this package may hang (see [GuardPaths.expandWithResolved]).
@@ -75,12 +76,16 @@ enum class SecurityRule(
     val category: SecurityCategory,
     val label: String,
     val hint: String,
-    // There was a `deniesEveryCaller` flag here, true for the three foreign-territory rules and for
-    // RECURSION_LIMIT, marking the ones that were a hard block rather than a card even for the agent's own tools.
-    // EVERY enforced rule denies every caller now (see `SensitiveGuard.verdictFor`), so the flag carried no
-    // information — and worse, it read as if the rules without it were somehow softer, which is precisely the
-    // reading that made an enforced rule negotiable in the first place. What decides an outcome today is one fact
-    // and it lives elsewhere: whether the user switched the rule off.
+    /**
+     * Denied for EVERY caller when enforced, agent tools included — not merely asked.
+     *
+     * A property of the rule rather than of its category, which is where this used to live: the verdict asked
+     * "is this FOREIGN_TERRITORY", so the one category that denied everyone was hard-coded into the decision and
+     * a rule outside it could not be given the same weight without moving it into a category it does not belong
+     * to. Two things deny everyone today for two different reasons — reaching into somebody else's space, and
+     * deliberately structuring a call so it cannot be analysed — and neither is a special case of the other.
+     */
+    val deniesEveryCaller: Boolean = false,
 ) {
     CREDENTIALS(
         SecurityCategory.SENSITIVE_DATA,
@@ -113,23 +118,25 @@ enum class SecurityRule(
         SecurityCategory.FOREIGN_TERRITORY,
         "Block other users' home folders",
         "/home/<someone-else>, /Users/<someone-else>, /root",
+        deniesEveryCaller = true,
     ),
     NETWORK_MOUNT(
         SecurityCategory.FOREIGN_TERRITORY,
         "Block network mounts",
         "NFS, CIFS/SMB, SSHFS, UNC \\\\server\\share, removable media",
+        deniesEveryCaller = true,
     ),
     WSL_MOUNT(
         SecurityCategory.FOREIGN_TERRITORY,
         "Block other WSL drives",
         "any /mnt/* other than /mnt/c, under WSL only",
+        deniesEveryCaller = true,
     ),
 
     SYSTEM_DEVICE(
         SecurityCategory.SYSTEM_INTEGRITY,
-        "Block system devices",
-        "/dev/sda, /dev/mem, /proc/<pid>/mem — and the pseudo-devices: /dev/null (hiding output is how a " +
-            "problem hides), /dev/urandom, /dev/stdin (an injection surface), /dev/fd/<n>, a tty, a TPM",
+        "Block raw system devices",
+        "/dev/sda, /dev/nvme0n1, /dev/mem, /proc/<pid>/mem — the disk under the filesystem, or live memory",
     ),
 
     PROXY_BYPASS(
@@ -145,7 +152,7 @@ enum class SecurityRule(
 
     UNRESOLVED_VARIABLE(
         SecurityCategory.OPAQUE,
-        "Block a destination hidden behind a variable",
+        "Ask when a destination stays hidden behind a variable",
         "the launch environment is expanded FIRST, so this is only what nothing could resolve — cat \$CREDS " +
             "with CREDS set nowhere the plugin can read",
     ),
@@ -153,13 +160,14 @@ enum class SecurityRule(
         SecurityCategory.OPAQUE,
         "Analyse scripts before they run",
         "source x.sh, bash x.sh, ./x.sh, python x.py — the file is READ and its commands judged; a script that " +
-            "trips nothing runs unasked, and one that cannot be read at all is refused as unreadable",
+            "trips nothing runs unasked, and one that cannot be read at all is worth a card",
     ),
     RECURSION_LIMIT(
         SecurityCategory.OPAQUE,
         "Block indirection deeper than the analysis follows",
         "a variable defined through a variable, or a script running a script, more than $MAX_ANALYSIS_DEPTH " +
-            "deep — or a cycle. Reaching the bound is itself the finding",
+            "deep — or a cycle. Reaching the bound is the finding, so this one is a hard block",
+        deniesEveryCaller = true,
     ),
     ;
 

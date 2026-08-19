@@ -44,18 +44,8 @@ object CommandRules {
         re("""\b(tar|zip|7z|gzip)\b[^|;&]*(\.ssh|\.aws|\.gnupg|\.kube|id_rsa|\.pem|\.env)\b"""),
         re("""\bbase64\b[^|;&]*(\.ssh|\.aws|\.gnupg|id_rsa|\.pem|\.env)"""),
         re("""\bInvoke-WebRequest\b[^|;&]*-(InFile|Body)\b"""),
-        // `/dev/tcp/<host>/<port>` and its UDP twin: bash opening a network socket spelled as a file. There is no
-        // legitimate use — it is the reverse-shell idiom, and that is the whole of its user base.
-        //
-        // **No digit is required after the slash, and that is a fix rather than a style choice.** This read
-        // `/dev/tcp/\d`, which matched an IP literal and missed `/dev/tcp/evil.example.com/4444` — a bypass one
-        // hostname wide. The lesson is the one this file keeps relearning: a pattern that enumerates what the
-        // ARGUMENT looks like is a pattern that the argument's author chooses their way around. Match the
-        // capability, not the spelling of its target.
-        re("""/dev/(tcp|udp)/"""),
-        // Any raw device as `dd`'s input, not the four families that were listed here: `if=/dev/disk0` (macOS),
-        // `if=/dev/vda`, `if=/dev/mapper/…` were all outside the enumeration. (`of=` is `ShellFileWrites`' job.)
-        re("""\bdd\b[^|;&]*if=/dev/"""),
+        re("""/dev/tcp/\d"""),
+        re("""\bdd\b[^|;&]*if=/dev/(sd|nvme|mem|kmem)"""),
         // Remote code / LOLBINs / reverse shells
         re("""\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(sh|bash|zsh|python\d?|perl|ruby)\b"""),
         re("""\b(powershell|pwsh)\b[^|;&]*-e(nc|ncodedcommand)?\b\s+[A-Za-z0-9+/=]{16,}"""),

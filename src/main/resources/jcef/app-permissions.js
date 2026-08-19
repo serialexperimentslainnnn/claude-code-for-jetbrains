@@ -416,33 +416,7 @@
     var id = card.id;
     var tool = card.tool;
 
-    // A card the deterministic guard pulled off the auto-approval path, rather than one the permission mode
-    // would have raised anyway. Its finding LEADS the body, ahead of the command it is about: why this is being
-    // asked is what has to be read first, and a summary above it turns the alert into a footnote.
-    var guard = card.guard && typeof card.guard === 'object' ? card.guard : null;
-
     var bodyChildren = [];
-    if (guard) {
-      // Three facts, none of them redundant: the rule's exact id (what makes a false-positive report
-      // actionable), the row's label and its category (which is how the user finds the toggle in Settings).
-      var ruleId = guard.rule != null ? String(guard.rule) : '';
-      var where = [guard.label, guard.category]
-        .filter(function (s) {
-          return s != null && String(s) !== '';
-        })
-        .map(String)
-        .join(' · ');
-      bodyChildren.push(
-        h(
-          'div',
-          { class: 'guard-rule' },
-          ruleId ? h('span', { class: 'guard-rule-id', text: ruleId }) : null,
-          where ? h('span', { text: where }) : null
-        )
-      );
-      if (guard.reason) bodyChildren.push(h('div', { class: 'guard-reason', text: String(guard.reason) }));
-    }
-
     var summary = card.summary != null ? String(card.summary) : '';
     var description = card.description != null ? String(card.description) : '';
     if (summary) bodyChildren.push(h('div', { class: 'perm-summary', text: summary }));
@@ -516,21 +490,10 @@
       );
     }
 
-    var headText = card.headline || card.title || tool || 'Permission';
     return h(
       'div',
-      { class: guard ? 'perm-card perm-guard' : 'perm-card' },
-      guard
-        ? h(
-            'div',
-            { class: 'perm-head' },
-            // The badge is TEXT, and that is the point: the red pulse is the attention-getter, but colour and
-            // motion alone are not information (WCAG 1.4.1), and neither survives forced-colors mode or a
-            // screenshot in a bug report. The words are what actually say what this card is.
-            h('span', { class: 'guard-badge', text: 'Guard alert' }),
-            h('span', { text: headText })
-          )
-        : h('div', { class: 'perm-head', text: headText }),
+      { class: 'perm-card' },
+      h('div', { class: 'perm-head', text: card.headline || card.title || tool || 'Permission' }),
       h('div', { class: 'perm-body' }, bodyChildren),
       h('div', { class: 'perm-actions' }, actions)
     );
@@ -575,15 +538,6 @@
       if (only.questions) C.announce('Claude is asking you a question.');
       else if (only.isPlan) C.announce('Claude is proposing a plan for your approval.');
       else if (only.elicitation) C.announce('An MCP server is requesting input.');
-      // A guard card is not the same event as an ordinary one, so it is not announced as one: the rule that
-      // tripped is the whole reason the turn stopped here. Named ahead of the tool for that reason — a screen
-      // reader hears the finding first, in the same order a sighted user reads the badge before the headline.
-      else if (only.guard)
-        C.announce(
-          'Guard alert: ' +
-            String(only.guard.label || only.guard.rule || 'a security rule') +
-            (tool ? '. Claude needs your permission to use ' + tool + '.' : '. Claude needs your response.')
-        );
       else
         C.announce(
           tool ? 'Claude needs your permission to use ' + tool + '.' : 'Claude needs your response.'

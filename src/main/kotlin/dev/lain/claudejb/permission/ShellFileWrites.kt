@@ -50,25 +50,6 @@ object ShellFileWrites {
     private val BLANKET_MUTATORS =
         CommandRules.cmdStart("""tee|cp|mv|rsync|install|truncate|rm|mkdir|touch|ln|chmod|chown|shred""")
 
-    /**
-     * **A download that lands in a file.** `curl` when it names an output (`-o`, `-O`, `--output`,
-     * `--remote-name`), and `wget` always — `wget` writes a file by default, so there is nothing to look for.
-     *
-     * This was missing, and the hole it left is the middle of a real attack chain rather than a technicality: the
-     * `curl … | sh` one-liner is caught by [CommandRules], so the two-step version is what an injected instruction
-     * reaches for — land the payload first, run it second. Landing it in `/tmp` tripped [TempDirs]; landing it
-     * **inside the project** tripped nothing at all, because no rule read a download as a write. A file arriving
-     * from the network with no diff and no review is exactly what this rule is about.
-     *
-     * A `curl` that writes nothing (`curl https://api/…`, output to stdout) is deliberately not matched: this rule
-     * is about a file appearing, not about egress, which is [ProxyRules]' and [DangerousDomains]' business.
-     */
-    private val DOWNLOAD_WRITE = Regex(
-        """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?""" +
-            """(?:curl\b[^;&|\n]*(?:\s-[oO]\b|\s--(?:output|remote-name)\b)|wget\b)""",
-        RegexOption.IGNORE_CASE,
-    )
-
     /** `sed` only counts once it is actually asked to rewrite the file it reads. */
     private val SED_IN_PLACE = Regex(
         """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?sed\b[^;&|\n]*(-i\b|--in-place\b)""",
@@ -89,22 +70,40 @@ object ShellFileWrites {
         for (raw in ToolInputScanner.commandCandidates(input)) {
             val command = CommandRules.deobfuscate(raw)
             BLANKET_MUTATORS.find(command)?.let { return it.value.trim() }
-            DOWNLOAD_WRITE.find(command)?.let { return it.value.trim() }
             SED_IN_PLACE.find(command)?.let { return it.value.trim() }
             DD_WRITE.find(command)?.let { return it.value.trim() }
-            // **Every redirect, with no exempt target.** There was a `BENIGN_REDIRECT_TARGETS` set here
-            // (`/dev/null`, `/dev/zero`, `/dev/full`, `/dev/stdout`, `/dev/stderr`, `/dev/tty`) that let a
-            // `2>/dev/null` through, on the reasoning that those sinks hold no state and so nothing is written
-            // anywhere there is anything to review.
-            //
-            // **Removed on purpose, and the reasoning is Lain's**: an exemption is a hole the moment an attacker
-            // can spell their way into it, and this one is spelled by the model, in a token the guard reads out of
-            // a string the model wrote. `> /dev/null` is not a fact about the world, it is a claim in the input.
-            // The cost is stated rather than discovered — a command that silences stderr is now refused like any
-            // other unreviewed write, which is most ordinary commands — and the way through is the toggle for
-            // [SecurityRule.SHELL_FILE_WRITE], which is a decision taken once and in the cold.
-            REDIRECT.find(command)?.let { return it.value.trim() }
+            // `findAll(…).firstOrNull { … }` and not `find`: a redirect to `/dev/null` must not stop the scan of
+            // the rest of the command, so the hit is the first redirect whose target is NOT benign, which is a
+            // different question from "the first redirect".
+            REDIRECT.findAll(command).firstOrNull { !isBenignTarget(it.groupValues[1]) }
+                ?.let { return it.value.trim() }
         }
         return null
     }
+
+    /**
+     * A redirect target that writes nowhere: one of the inert device sinks, or a descriptor.
+     *
+     * **Matched against [BENIGN_REDIRECT_TARGETS] directly, and NOT through [SystemDevices.isSystemDevice].**
+     * That was the original spelling and it was dead code with teeth: `isSystemDevice` returns **false** for these
+     * nodes *by design*, since exempting them is its own job, so `isSystemDevice(t) && t in BENIGN` was a
+     * conjunction that could never be true — every `2>/dev/null` in every command would have been a card, i.e.
+     * nearly every ordinary command, which is precisely how a rule gets switched off in its first hour.
+     */
+    private fun isBenignTarget(rawTarget: String): Boolean {
+        val target = rawTarget.trim('\'', '"').lowercase()
+        if (target.startsWith("&")) return true // `> &2`-shaped, past the lookahead on a stray token break
+        return BENIGN_REDIRECT_TARGETS.any { target == it || target.endsWith("/$it") }
+    }
+
+    /** The sinks with no persistent state, spelled without a leading separator so [isBenignTarget] can accept
+     *  both `/dev/null` and a `/private`- or drive-prefixed spelling of the same node. */
+    private val BENIGN_REDIRECT_TARGETS = setOf(
+        "dev/null",
+        "dev/zero",
+        "dev/full",
+        "dev/stdout",
+        "dev/stderr",
+        "dev/tty",
+    )
 }
