@@ -73,24 +73,19 @@ package dev.lain.claudejb.permission
  * gated by it either.
  *
  * What the guard IS on the path of is the **agent** reading that same file, which the binary explicitly tells
- * it to do ("To check interim output, use Read on that file path"). While this rule is enforced that read is
- * REFUSED, and the way through is the toggle, not a click. It is a real, recurring cost of the rule on any
- * session that backgrounds a task, and it is stated here rather than engineered away, because the alternative
- * is a path-shaped exemption, and an exemption that names a directory the agent can also WRITE to is a hole
- * with a name: anything the agent could be talked into staging under that same prefix would inherit it.
+ * it to do ("To check interim output, use Read on that file path"). That call is a `Read` — a trusted caller
+ * — so it becomes a card, not a refusal. It is a real, recurring cost of the rule on any session that
+ * backgrounds a task, and it is stated here rather than engineered away, because the alternative is a
+ * path-shaped exemption, and an exemption that names a directory the agent can also WRITE to is a hole with
+ * a name: anything the agent could be talked into staging under that same prefix would inherit it.
  *
- * ### The project root is exempt — a PLACE exemption, and the only kind there is
+ * ### The project root is exempt, like it is for rules 1 and 2
  * A project opened from under the temp directory — a scratch clone, a `git worktree` in `$TMPDIR`, an
- * extracted archive, the IDE's own test fixtures — is still the surface the user is looking at. Without the
- * exemption every single tool call in such a project is refused, which is not a stricter guard but an
- * uninstalled one: it blocks the work rather than a threat, and the user switches the rule off and loses the
- * part that mattered. The exemption is scoped by [GuardPaths.under] to the project SUBTREE, not to the temp
+ * extracted archive, the IDE's own test fixtures — is still the surface the user is looking at, and every
+ * other location rule already says so. Without the exemption every single tool call in such a project is a
+ * card, which is not a stricter guard but a disabled one: the user turns the rule off and loses the part
+ * that mattered. The exemption is scoped by [GuardPaths.under] to the project SUBTREE, not to the temp
  * directory that contains it, so the rest of `/tmp` on that machine is guarded exactly as before.
- *
- * **It does not extend to [SecurityRule.CREDENTIALS]**, which is judged over every candidate including this
- * project's own files: that rule is about what a file IS, and no directory makes a private key not one. This
- * doc used to claim the root was exempt "like it is for rules 1 and 2" — it no longer is for rule 1, and that
- * sentence is exactly the kind that outlives the behaviour it described.
  */
 object TempDirs {
 

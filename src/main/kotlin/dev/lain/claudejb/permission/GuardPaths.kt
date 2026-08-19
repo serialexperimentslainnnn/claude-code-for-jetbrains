@@ -232,21 +232,13 @@ object GuardPaths {
     private const val UNEXPANDED_PREFIXES = "~\$%"
 
     /**
-     * Rooted at `/`, at a UNC host, or at a drive letter (`C:/…`) — **and carrying at least one letter or digit.**
+     * Rooted at `/`, at a UNC host, or at a drive letter — anything else is relative to the working directory.
      *
      * Internal because [SensitiveGuard]'s OUTSIDE_PROJECT rule needs it too: a bare relative token (most of an
      * ordinary command or edit) is not "outside the project" just because its literal spelling does not start
      * with the root's — only an absolute candidate can genuinely name a location elsewhere.
-     *
-     * **The alphanumeric requirement is what makes this a path test rather than a first-character test.** A
-     * candidate of nothing but separators and punctuation — `/`, `//`, `///`, `//$` — names no file that could
-     * exist, so it is not a location, and calling it one is how a `//` fragment of an expression ended up reported
-     * as "outside the project": the right answer for a string that is not a path is *no rule*, not the weakest one.
-     * Note the direction this fails in: it can only ever stop a rule firing on something that cannot name a file,
-     * never on something that can.
      */
-    internal fun isAbsolute(path: String): Boolean =
-        (path.startsWith("/") || isDriveRooted(path)) && path.any { it.isLetterOrDigit() }
+    internal fun isAbsolute(path: String): Boolean = path.startsWith("/") || isDriveRooted(path)
 
     /** `C:/…` — the one absolute spelling that starts with neither `/` nor `//`. */
     private fun isDriveRooted(path: String): Boolean = path.length > 2 && path[1] == ':' && path[2] == '/'
@@ -355,66 +347,6 @@ object GuardPaths {
                 ?.let { out += normalize(it, policy.home) }
         }
         return out.toList()
-    }
-
-    /**
-     * The first candidate that **acts outside** [projectRoot], or null when none does — the whole of
-     * [SecurityRule.OUTSIDE_PROJECT]'s test, in the order the four conditions have to be asked in:
-     *
-     *  1. **rooted** — `/…` or `C:/…`; a relative candidate resolves under the working directory, which IS the root;
-     *  2. **path-shaped** — carries a letter or a digit, so a run of separators and punctuation is not a location
-     *     (both 1 and 2 are [isAbsolute]);
-     *  3. **resolved** — the destination is asked of the filesystem, bounded and off-thread, and the literal is the
-     *     fallback when the resolver cannot answer. NB `File.canonicalPath` resolves a path that does not exist, so
-     *     this step is canonicalisation and not an existence test — those are two different questions and the next
-     *     condition is the other one;
-     *  4. **and it lands outside** — the containment test is applied to that destination, folded.
-     *
-     * **Existence is deliberately NOT a condition.** A destination that is not there is not a reason to allow the
-     * call: it is a mistake or a probe, and a probe for a file outside the project is exactly the reconnaissance this
-     * rule is for. It is also why nothing is gained by asking — a path outside the project is refused either way, so
-     * an existence check would cost a syscall per candidate to compute an answer that changes no outcome. What it
-     * WOULD change is the direction of the failure, from refusing something absent to permitting it.
-     *
-     * **Resolving BEFORE deciding is the difference between where a path is written and where it goes**, and it is
-     * the reason this is a function rather than a filter at the call site. Folding `.`/`..` is textual: it cannot see
-     * a symlink. `proj/link -> /etc` makes `proj/link/passwd` look like one of the project's own files to any string
-     * comparison, and that was exactly what this rule was — so anything outside the project that no *stronger* rule
-     * happens to name (a credential glob, another user's home, a device) was reachable through a link inside it.
-     *
-     * It cuts the other way too, and deliberately: a candidate whose literal is outside but which RESOLVES inside
-     * the project — `/tmp/scratch/link -> proj/src` — is where the call actually acts, so it is not a hit here. That
-     * is not a hole: whatever is objectionable about the path it travelled through belongs to the rule that owns it
-     * ([TempDirs] for that example), and this rule's claim is only ever about the destination.
-     */
-    internal fun firstOutsideRoot(
-        candidates: List<String>,
-        projectRoot: String,
-        policy: SensitiveGuard.Policy,
-    ): String? {
-        val root = fold(normalize(projectRoot, policy.home))
-        // One budget for the whole call, spent across however many candidates there are — the same discipline as
-        // [expandWithResolved]: a request carrying fifty paths must not cost fifty timeouts.
-        val deadline = System.nanoTime() + RESOLVE_BUDGET_MS * NANOS_PER_MS
-        return candidates.firstNotNullOfOrNull { outsideDestination(it, root, policy, deadline) }
-    }
-
-    /** Where [raw] actually lands, if that is outside [root] and real — else null. Conditions 1-5 of the doc above. */
-    private fun outsideDestination(
-        raw: String,
-        root: String,
-        policy: SensitiveGuard.Policy,
-        deadline: Long,
-    ): String? {
-        if (!isAbsolute(raw)) return null
-        val literal = fold(raw)
-        val remainingMs = (deadline - System.nanoTime()) / NANOS_PER_MS
-        val resolved = policy.pathResolver
-            ?.takeIf { remainingMs > 0 }
-            ?.let { resolveWithTimeout(it, literal, minOf(RESOLVE_TIMEOUT_MS, remainingMs)) }
-            ?.let { fold(normalize(it, policy.home)) }
-        val destination = resolved ?: literal
-        return destination.takeUnless { under(it, root) }
     }
 
     /**
