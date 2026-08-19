@@ -1,0 +1,45 @@
+# Verified checksums for the development and devops tooling the guard is allowed to skip reading.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# `DevToolScripts` exempts a build wrapper from the script analyser by NAME, and a name is chosen by whoever
+# creates the file. This is the other half: where an official, publisher-signed checksum exists, the exemption is
+# granted on IDENTITY instead — the file is what the publisher shipped, or it is not exempt.
+#
+# FORMAT
+# ------
+#   <sha256>  <artifact>  <version>
+# Two spaces, `sha256sum`-compatible in the first two columns on purpose, so an entry can be checked by hand.
+# Lines starting with `#` and blank lines are ignored. The artifact name is the file as it lands on disk, not a
+# URL: the guard matches what it is about to skip, never where it came from.
+#
+# WHAT MAY GO IN
+# --------------
+# Only a checksum published by the tool's own vendor, fetched from the vendor's own domain. Never a hash computed
+# from a file found on this machine — that would certify whatever is already installed, including whatever put it
+# there, which is precisely the attack this file exists to refuse.
+#
+# WHAT CANNOT BE IN HERE, AND IS NOT A GAP
+# ----------------------------------------
+# - Distro-packaged binaries (`dnf`/`apt` builds of terraform, kubectl, docker...). They are rebuilt by the
+#   distribution and their hashes do not match upstream by design. Those live in /usr/bin and the guard never
+#   reads them anyway (`ScriptExecution.SYSTEM_BIN_DIRS`).
+# - The `gradlew` / `mvnw` SHELL SCRIPTS. No vendor publishes a checksum for the generated script; what Gradle
+#   signs is the `gradle-wrapper.jar` sitting beside it. A wrapper is therefore verified THROUGH ITS JAR.
+
+# ── Gradle wrapper JAR ────────────────────────────────────────────────────────────────────────────────────
+# Source: https://gradle.org/release-checksums/ (the same values the Gradle Wrapper Validation Action checks).
+# Verified 2026-08-19. NB one JAR checksum covers several Gradle releases — the wrapper JAR only changes when the
+# wrapper itself does, so these are far fewer than the release list.
+7a9ce74cff467ca1bf60a4fcd9f05185acceda4d0f382434d393e17864262c5d  gradle-wrapper.jar  9.7.0
+497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle-wrapper.jar  9.6.1
+497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle-wrapper.jar  9.6.0
+497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle-wrapper.jar  9.5.1
+497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7  gradle-wrapper.jar  9.5.0
+55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c  gradle-wrapper.jar  9.4.1
+55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c  gradle-wrapper.jar  9.4.0
+b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13  gradle-wrapper.jar  9.3.1
+b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13  gradle-wrapper.jar  9.3.0
+423cb469ccc0ecc31f0e4e1c309976198ccb734cdcbb7029d4bda0f18f57e8d9  gradle-wrapper.jar  9.2.1
+7d3a4ac4de1c32b59bc6a4eb8ecb8e612ccd0cf1ae1e99f66902da64df296172  gradle-wrapper.jar  8.14.5
+7d3a4ac4de1c32b59bc6a4eb8ecb8e612ccd0cf1ae1e99f66902da64df296172  gradle-wrapper.jar  8.14.4
