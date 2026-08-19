@@ -102,7 +102,10 @@ class ClaudeSession(
     private val tokens = TokenAccountant()
     private val taskTracker = TaskTracker()
     private val reconciler = TranscriptReconciler(transcript)
-    private val diffs = DiffLifecycleManager(project)
+
+    // Internal: the card facade captures and repoints review snapshots when a request is approved. A property,
+    // so it costs nothing against this class's API size — see [cardManager].
+    internal val diffs = DiffLifecycleManager(project)
     private val rollback = RollbackManager(project, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
     internal val controlClient = SessionControlClient(write = ::write)
 
@@ -153,7 +156,27 @@ class ClaudeSession(
         notifyInfo = ::notifyInfo,
         edt = ::edt,
     )
-    private val cards = PermissionCardManager(::firePermissions)
+
+    /**
+     * The card store. Named `cardManager` rather than `cards` because [cards] is now the verbs — the store holds
+     * pending requests, the facade answers them, and giving them the same name is how a reader ends up calling
+     * the wrong one. Internal, not public: the UI talks to the facade.
+     */
+    internal val cardManager = PermissionCardManager(::firePermissions)
+
+    /**
+     * The cards a turn puts to the user, and what happens when one is answered — `session.cards.resolvePermission(…)`.
+     *
+     * It cannot approve a call the guard denied: a denied call never becomes a card at all, so what arrives here
+     * is only what `PermissionBroker` chose to surface.
+     */
+    val cards = SessionCards(
+        session = this,
+        edt = ::edt,
+        write = ::write,
+        firePermissions = ::firePermissions,
+        fireAttention = ::fireAttention,
+    )
     private val hookBroker = HookBroker()
     private val hookNarrator = HookActivityNarrator(transcript)
 
@@ -636,7 +659,6 @@ class ClaudeSession(
     fun isStarting(): Boolean = starting
 
     fun queuedPrompts(): List<String> = queue.map { it.displayText }
-    fun pendingPermissions(): List<PendingPermission> = cards.all()
 
     // -----------------------------------------------------------------------
     // Lifecycle
@@ -1075,7 +1097,7 @@ class ClaudeSession(
         backgroundTaskRegistry.clear()
         agentScanner.clearTails()
         edt {
-            cards.clear()
+            cardManager.clear()
             diffs.clearReviewDiffs()
             fireState()
         }
@@ -1219,13 +1241,13 @@ class ClaudeSession(
             // Elicitations get an ElicitResult cancel; everything else an explicit deny. No "Rejected" transcript
             // spam — this is teardown, not a user action.
             cancelPendingElicitations()
-            cards.all().filter { it.elicitation == null }.forEach {
+            cardManager.all().filter { it.elicitation == null }.forEach {
                 write(ControlProtocol.permissionDeny(it.requestId, "Interrupted."))
             }
             // Cancel queued prompts so the interrupt doesn't immediately re-pump a brand-new turn (which read as
             // "it never stops").
             queue.clear()
-            cards.clear()
+            cardManager.clear()
             diffs.clearReviewDiffs()
             interrupting = true
             fireState()
@@ -1351,108 +1373,29 @@ class ClaudeSession(
         }
     }
 
-    /** Invoked by the chat UI when the user clicks Accept/Reject on a permission card. */
-    fun resolvePermission(requestId: String, allow: Boolean, denyMessage: String? = null, overrideInput: JsonObject? = null) {
-        val request = cards.remove(requestId) ?: return
-        if (allow) approvePermission(requestId, request, overrideInput) else rejectPermission(requestId, request, denyMessage)
-        firePermissions()
-    }
-
-    private fun approvePermission(requestId: String, request: PendingPermission, overrideInput: JsonObject?) {
-        if (request.reviewable) {
-            // Snapshot/refresh stay on the ORIGINAL input: they describe the real file (before-text + path),
-            // independent of any narrowed payload (e.g. an edited review diff) we actually send.
-            DiffPresenter.filePathOf(request.input)?.let { diffs.markForRefresh(it) }
-            // Snapshot before answering allow (the binary writes right after), so "View diff" works from the
-            // transcript once the transient approval diff has closed. Synchronous read — small project files.
-            request.toolUseId?.let { diffs.captureForReview(request.toolName, request.input, it) }
-        }
-        val effectiveInput = overrideInput ?: reviewEditOverride(requestId, request) ?: request.input
-        // If the user edited the proposed content (or an override narrowed the write), repoint the captured
-        // snapshot at the EFFECTIVE input so the transcript's inline diff + "View diff" show what was actually
-        // written — not Claude's original proposal.
-        if (request.reviewable && effectiveInput !== request.input) {
-            request.toolUseId?.let { diffs.updateSnapshotInput(it, effectiveInput) }
-        }
-        write(ControlProtocol.permissionAllow(requestId, effectiveInput))
-        systemNotice("Approved ${request.headline}")
-        // Approving an ExitPlanMode plan leaves plan mode: the plugin is the source of truth for
-        // permissionMode, so flip it back to default (and push set_permission_mode) — otherwise the binary
-        // proceeds out of plan while the chip stays stuck on "plan".
-        if (request.isPlan && permissionMode == PermissionMode.PLAN.wire) {
-            settings.changePermissionMode(PermissionMode.DEFAULT.wire)
-        }
-    }
+    // Presenting a card and answering one both live in [cards] now — `session.cards.resolvePermission(…)`,
+    // `…resolveQuestion(…)`, `…resolveElicitation(…)`. Nothing about the answers moved: same control responses,
+    // same review-edit override, same plan-mode flip on approval.
 
     /**
-     * If an editable review diff was open and the user TWEAKED the proposed content, re-encodes the tool input
-     * so the binary writes THEIR version (file_path preserved). Also closes the diff.
+     * Two spellings that survive here on purpose, and the reason is not laziness.
      *
-     * Fail-safe by construction: no edit (or a read-only viewer) yields null, and the binary then writes its
-     * own version — an unreadable document can never turn into a wrong write.
+     * The security suite is IMMUTABLE — those tests are the verifiers of the plugin's guardrails, so a refactor
+     * does not get to edit them, and a refactor that needs to is a refactor that is wrong. Two of them drive a
+     * session through these exact names. So the logic lives in [cards], where it belongs, and these forward:
+     * one implementation, one behaviour, and a call spelling that a frozen test can still reach.
+     *
+     * That is the whole difference from the five sign-in delegates deleted a commit ago, which forwarded for no
+     * reason at all. A delegate with a stated constraint behind it is a decision; one without is clutter.
      */
-    private fun reviewEditOverride(requestId: String, request: PendingPermission): JsonObject? =
-        diffs.takeReviewEdit(requestId)?.let { (currentText, editedText) ->
-            dev.lain.claudejb.diff.HunkSelection
-                .encodeInput(request.toolName, request.input, currentText, editedText)
-        }
+    fun pendingPermissions(): List<PendingPermission> = cards.pending()
 
-    private fun rejectPermission(requestId: String, request: PendingPermission, denyMessage: String?) {
-        diffs.closeReviewDiff(requestId) // reject → discard the review diff tab
-        val message = denyMessage ?: "User rejected the ${request.toolName} request."
-        write(ControlProtocol.permissionDeny(requestId, message))
-        systemNotice("Rejected ${request.headline}")
-    }
-
-    /**
-     * Invoked by the chat UI when the user submits answers to an AskUserQuestion card. Replies allow with
-     * updatedInput = original input + {"answers": {questionText: chosenLabel}}; the binary echoes the choice
-     * back as the tool result (verified against claude 2.1.150).
-     */
-    fun resolveQuestion(requestId: String, answers: Map<String, String>) {
-        val request = cards.remove(requestId) ?: return
-        val updated = buildJsonObject {
-            request.input.forEach { (k, v) -> put(k, v) }
-            put("answers", buildJsonObject { answers.forEach { (q, a) -> put(q, a) } })
-        }
-        write(ControlProtocol.permissionAllow(requestId, updated))
-        systemNotice("Answered Claude's question")
-        firePermissions()
-    }
-
-    /**
-     * Surfaces an MCP `elicitation` (binary -> host) as a non-modal card. The user's Accept/Decline/Cancel (via
-     * [resolveElicitation]) is what writes the ElicitResult. EDT-confined, like every other card operation.
-     */
-    private fun presentElicitation(requestId: String, req: ElicitationRequest) = edt {
-        cards.present(
-            PendingPermission(
-                requestId = requestId,
-                toolName = "elicitation",
-                input = JsonObject(emptyMap()),
-                title = req.displayName?.ifBlank { null } ?: req.title?.ifBlank { null } ?: req.mcpServerName,
-                summary = "",
-                reviewable = false,
-                elicitation = ElicitationCard(
-                    serverName = req.mcpServerName,
-                    message = req.message,
-                    description = req.description?.ifBlank { null },
-                    mode = req.mode,
-                    url = req.url,
-                    fields = parseElicitationFields(req.requestedSchema),
-                ),
-            ),
-        )
-        fireAttention(AttentionReason.PERMISSION)
-    }
-
-    /** Invoked by the chat UI when the user resolves an elicitation card. Writes the ElicitResult and clears it. */
-    fun resolveElicitation(requestId: String, action: String, content: JsonObject?) {
-        cards.remove(requestId) ?: return
-        write(ControlProtocol.elicitationResult(requestId, action, content))
-        systemNotice("Elicitation: $action")
-        firePermissions()
-    }
+    fun resolvePermission(
+        requestId: String,
+        allow: Boolean,
+        denyMessage: String? = null,
+        overrideInput: JsonObject? = null,
+    ) = cards.resolvePermission(requestId, allow, denyMessage, overrideInput)
 
     // -----------------------------------------------------------------------
     // Runtime option controls — all of them live in [settings] now
@@ -1909,7 +1852,7 @@ class ClaudeSession(
             }
 
             // elicitation: an MCP server wants user input — surface a non-modal card; the user's choice replies.
-            is ClaudeEvent.Elicitation -> presentElicitation(event.requestId, event.request)
+            is ClaudeEvent.Elicitation -> cards.presentElicitation(event.requestId, event.request)
 
             is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
 
@@ -2129,7 +2072,7 @@ class ClaudeSession(
             initialized = false
             liveThinkingTokens = 0
             promptSuggestion = null
-            cards.clear()
+            cardManager.clear()
             taskTracker.clear()
             hookNarrator.clear()
             if (exitCode != 0 && staleResume) {
@@ -2170,7 +2113,7 @@ class ClaudeSession(
     /** Answers any pending elicitation cards with {action:"cancel"} (called during teardown, process still alive). */
     private fun cancelPendingElicitations() {
         runCatching {
-            cards.all().filter { it.elicitation != null }.forEach {
+            cardManager.all().filter { it.elicitation != null }.forEach {
                 write(ControlProtocol.elicitationResult(it.requestId, "cancel"))
             }
         }

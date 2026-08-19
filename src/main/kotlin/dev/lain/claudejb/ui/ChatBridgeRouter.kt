@@ -161,10 +161,10 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         // Edits are atomic: accept or reject the whole change (no per-line selection — it broke code coherence).
         is JcefBridge.Msg.ResolvePermission -> onResolvePermission(m)
 
-        is JcefBridge.Msg.ResolveQuestion -> cardSession(m.scope).resolveQuestion(m.id, m.answers)
+        is JcefBridge.Msg.ResolveQuestion -> cardSession(m.scope).cards.resolveQuestion(m.id, m.answers)
 
         is JcefBridge.Msg.ResolveElicitation ->
-            cardSession(m.scope).resolveElicitation(m.id, m.action, m.content)
+            cardSession(m.scope).cards.resolveElicitation(m.id, m.action, m.content)
 
         is JcefBridge.Msg.AlwaysAllow -> onAlwaysAllow(m)
     }
@@ -203,8 +203,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
      */
     private fun onResolvePermission(m: JcefBridge.Msg.ResolvePermission) {
         val target = cardSession(m.scope)
-        val wasPlan = target.pendingPermissions().firstOrNull { it.requestId == m.id }?.isPlan == true
-        target.resolvePermission(m.id, m.allow)
+        val wasPlan = target.cards.pending().firstOrNull { it.requestId == m.id }?.isPlan == true
+        target.cards.resolvePermission(m.id, m.allow)
         // Only on approval: a rejected plan is not the session's plan, and the file the binary holds is
         // whatever it was before. And only for THIS panel's session — the dashboard's Plan card is fed from
         // it, so re-reading it after approving a plan in the Git conversation would ask the wrong process.
@@ -325,14 +325,14 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
      */
     private fun onGuardAllowAlways(m: JcefBridge.Msg.GuardAllowAlways) {
         val chat = cardSession(m.scope)
-        val target = chat.pendingPermissions().firstOrNull { it.requestId == m.id } ?: return
+        val target = chat.cards.pending().firstOrNull { it.requestId == m.id } ?: return
         val rule = target.guard?.rule ?: return
         val command = ToolInputScanner.commandText(target.input)
         ClaudeSettings.getInstance(panel.project).update {
             it.securityCommandApprovals =
                 SecurityCommandApprovals.withApproval(it.securityCommandApprovals, rule, command)
         }
-        chat.resolvePermission(target.requestId, true)
+        chat.cards.resolvePermission(target.requestId, true)
     }
 
     private fun onAlwaysAllow(m: JcefBridge.Msg.AlwaysAllow) {
@@ -341,22 +341,22 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         // tool name — with two pending Bash cards, "Always allow" on the second used to approve (and run)
         // the first, unseen command. Fall back to tool-name match only if the id didn't come through.
         val chat = cardSession(m.scope)
-        val pending = chat.pendingPermissions()
+        val pending = chat.cards.pending()
         val target = pending.firstOrNull { it.requestId == m.id }
             ?: pending.firstOrNull { it.toolName == m.tool }
-        target?.let { chat.resolvePermission(it.requestId, true) }
+        target?.let { chat.cards.resolvePermission(it.requestId, true) }
     }
 
     private fun onDiffs(m: JcefBridge.Msg.Diffs) = when (m) {
         is JcefBridge.Msg.ViewDiff -> {
-            cardSession(m.scope).pendingPermissions().firstOrNull { it.requestId == m.id }
+            cardSession(m.scope).cards.pending().firstOrNull { it.requestId == m.id }
                 ?.let { DiffPresenter.openDiff(panel.project, it.toolName, it.input) }
             Unit
         }
 
         is JcefBridge.Msg.ViewDiffByTool -> {
             // Completed edit: open the native diff from the captured pre-write snapshot.
-            session.editSnapshot(m.toolUseId)?.let {
+            session.cards.editSnapshot(m.toolUseId)?.let {
                 DiffPresenter.openDiff(panel.project, it.toolName, it.input, it.beforeText)
             }
             Unit
