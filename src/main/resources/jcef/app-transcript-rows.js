@@ -96,13 +96,46 @@
     return { el: node, bodyNode: body, kind: isError ? 'text' : 'md' };
   }
 
-  // A call a rule matched and that ran anyway, because Allow All is on or the command is whitelisted.
-  // A warning rather than a block: nothing was stopped, and the point of the row is that the user can see
-  // WHICH rule went unenforced and why, instead of the bypass being invisible.
-  function buildBypassNotice() {
+  // What each kind of standing bypass offers to do about itself. A row with no entry here — a card the user
+  // answered once, a whitelist entry that belongs on its own settings page — offers nothing, because there
+  // is either nothing left standing or nothing this row should be deleting.
+  var BYPASS_ACTIONS = {
+    enableGuard: {
+      label: 'Enable Sensitive Guard',
+      message: { type: 'guardMaster', on: true, duration: '' },
+    },
+    revokeApproval: { label: 'Disable this authorization', message: { type: 'guardRevokeApproval' } },
+  };
+
+  // A call a rule matched and that ran anyway. A warning rather than a block: nothing was stopped, and the
+  // point of the row is that the user can see WHICH rule went unenforced, why, and undo the reason.
+  function buildBypassNotice(entry) {
     var node = el('div', { class: 'notice guard-bypass' });
     var body = el('div', { class: 'body' });
     node.appendChild(body);
+
+    var action = BYPASS_ACTIONS[entry.bypassAction];
+    if (action) {
+      var actions = el('div', { class: 'guard-block-actions' });
+      actions.appendChild(
+        el('button', {
+          class: 'guard-whitelist-link',
+          text: action.label,
+          attrs: { type: 'button' },
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              var message = Object.assign({}, action.message);
+              if (entry.bypassedRule) message.rule = String(entry.bypassedRule);
+              if (entry.command) message.command = String(entry.command);
+              safeSend(message);
+            },
+          },
+        })
+      );
+      node.appendChild(actions);
+    }
     return { el: node, bodyNode: body, kind: 'md' };
   }
 
@@ -187,7 +220,7 @@
         return buildNotice(true);
       case 'SYSTEM':
         if (entry && entry.blockedRule) return buildBlockNotice(entry.blockedRule, entry.command);
-        if (entry && entry.bypassedRule) return buildBypassNotice();
+        if (entry && entry.bypassedRule) return buildBypassNotice(entry);
         return buildNotice(false);
       default:
         return buildNotice(false);

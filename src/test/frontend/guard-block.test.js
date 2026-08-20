@@ -272,11 +272,18 @@ describe('a guard block can also put the command on the whitelist', () => {
 });
 
 describe('a bypass is a warning, not a silence', () => {
-  function bypassRow(win, rule = 'DESTRUCTIVE_IAC') {
+  function bypassRow(win, rule = 'DESTRUCTIVE_IAC', extra = {}) {
     win.cc.batch([
-      row(1, 0, 'SYSTEM', 'Allowed Bash: Block infrastructure teardown matched, and Allow All is on.', {
-        bypassedRule: rule,
-      }),
+      row(
+        1,
+        0,
+        'SYSTEM',
+        'Allowed Bash: Block infrastructure teardown matched — it runs a destructive operation.',
+        {
+          bypassedRule: rule,
+          ...extra,
+        }
+      ),
     ]);
     return document.querySelector('.notice.guard-bypass');
   }
@@ -286,7 +293,50 @@ describe('a bypass is a warning, not a silence', () => {
     const notice = bypassRow(win);
 
     expect(notice).toBeTruthy();
-    expect(notice.textContent).toContain('Allow All is on');
+    expect(notice.textContent).toContain('runs a destructive operation');
+  });
+
+  it('offers to put the guard back on when that is why the call ran', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    const notice = bypassRow(win, 'TEMP_DIR', { bypassAction: 'enableGuard' });
+    const link = notice.querySelector('.guard-whitelist-link');
+
+    expect(link.textContent).toBe('Enable Sensitive Guard');
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(sent).toEqual([{ type: 'guardMaster', on: true, duration: '', rule: 'TEMP_DIR' }]);
+  });
+
+  it('offers to withdraw the authorisation when that is why the call ran', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    const notice = bypassRow(win, 'DESTRUCTIVE_IAC', {
+      bypassAction: 'revokeApproval',
+      command: 'terraform destroy',
+    });
+    const link = notice.querySelector('.guard-whitelist-link');
+
+    expect(link.textContent).toBe('Disable this authorization');
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(sent).toEqual([
+      { type: 'guardRevokeApproval', rule: 'DESTRUCTIVE_IAC', command: 'terraform destroy' },
+    ]);
+  });
+
+  it('offers nothing when there is nothing left standing to undo', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const notice = bypassRow(win);
+
+    expect(
+      notice.querySelector('.guard-whitelist-link'),
+      'a card answered once is over, and a whitelist entry belongs on its own page'
+    ).toBeNull();
   });
 
   it('is not the red block row — nothing was stopped', () => {

@@ -31,10 +31,14 @@ fun ClaudeSettings.sensitiveDecision(
 ): SensitiveGuard.Decision {
     val decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
     if (decision.verdict == SensitiveGuard.Verdict.ALLOW || !guardSuspended()) return decision
+    // Which rule, what it saw, and why it ran anyway — in that order, because a warning that names only the
+    // switch leaves the reader guessing at the thing the switch let past.
+    val what = decision.detail?.let { " — it $it" }.orEmpty()
     return SensitiveGuard.Decision(
         SensitiveGuard.Verdict.ALLOW,
-        "${decision.rule?.label ?: "A guard rule"} matched, and Allow All is on",
+        "${decision.rule?.label ?: "A guard rule"} matched$what — allowed because the Sensitive Guard is disabled",
         decision.rule,
+        decision.detail,
     )
 }
 

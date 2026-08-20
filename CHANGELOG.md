@@ -52,12 +52,14 @@ you change something in it. The sign-in is not affected — it was never a per-p
   than from the click, so every open chat agrees, and the shield is unlit whenever it is on. The same switch
   is on the settings page. It does not reach the audit of your own environment script, which happens before
   the session starts.
-- **Every route past a rule says so in the transcript, and says which one it was.** When a call matches a
-  rule and runs anyway, a **warning row** names the rule and what let it through: Allow All, which of the
-  three whitelists, an *Always allow* answered earlier in this chat, or the card you just accepted. The
-  guard keeps evaluating while Allow All is on for exactly this reason. The per-chat approval mattered most
-  — it is the only route that shows no card at all, so before this it was also the only one that left no
-  trace. Ordinary work that matched nothing says nothing.
+- **Every route past a rule says so in the transcript, and offers to undo itself.** When a call matches a
+  rule and runs anyway, a **warning row** names the rule, quotes what the rule actually saw, and says what
+  let it through: the guard being disabled, an *Always allow* answered earlier in this chat, one of the
+  three whitelists, or the card you just accepted. The two that leave something standing carry a link —
+  **Enable Sensitive Guard**, **Disable this authorization** — because the row is where you find out the
+  thing is still in force. The guard keeps evaluating while it is disabled for exactly this reason. The
+  per-chat approval mattered most: it is the only route that shows no card at all, so before this it was
+  also the only one that left no trace. Ordinary work that matched nothing says nothing.
 - **Settings ▸ Claude Code Security is its own entry** in the settings tree, and every block now names that
   path. It gained the controls the old section did not have: the guard's own mode, Allow All with its expiry
   and an *Enforce now* button, a mode combo per rule with *All Enforcing* / *All Permissive* per category,

@@ -19,8 +19,13 @@ class TranscriptEntry(
     val commandText: String? = null,
     val messageText: String? = null,
     val blockedRule: String? = null,
-    /** The rule that matched on a call the guard let through anyway — an *Allow All* or a whitelist. */
+    /** The rule that matched on a call the guard let through anyway. */
     val bypassedRule: String? = null,
+    /**
+     * What the user can do about that, if anything: turn the guard back on, or withdraw the authorisation
+     * they gave this command. Null when there is nothing standing — a card they answered once is over.
+     */
+    val bypassAction: String? = null,
 ) {
     var text: String = text
         internal set
@@ -82,10 +87,11 @@ class TranscriptModel {
         messageText: String? = null,
         blockedRule: String? = null,
         bypassedRule: String? = null,
+        bypassAction: String? = null,
     ): TranscriptEntry {
         val entry = TranscriptEntry(
             nextId++, speaker, text, meta, toolUseId, parentToolUseId, toolState, filePath, commandText,
-            messageText, blockedRule, bypassedRule,
+            messageText, blockedRule, bypassedRule, bypassAction,
         )
         if (speaker == Speaker.TOOL && toolUseId != null) {
             byToolUseId[toolUseId] = entry

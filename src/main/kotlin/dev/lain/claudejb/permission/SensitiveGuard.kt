@@ -39,6 +39,12 @@ object SensitiveGuard {
         val verdict: Verdict,
         val reason: String?,
         val rule: SecurityRule? = null,
+        /**
+         * What the rule actually saw, as its own verb phrase and the excerpt that tripped it — no settings
+         * path, no verdict, no advice. [reason] is that dressed for one audience; anything that has to
+         * explain the same match to a different one needs the bare sentence rather than a substring of it.
+         */
+        val detail: String? = null,
     )
 
     fun evaluate(input: JsonObject, policy: Policy): Decision {
@@ -47,9 +53,9 @@ object SensitiveGuard {
         // above: the difference between "nothing matched" and "something matched and you permitted it" is
         // what lets the transcript warn about the second one instead of staying silent.
         liftedByWhitelist(input, hit, policy)?.let { list ->
-            return Decision(Verdict.ALLOW, "${hit.text} — allowed by the $list", hit.rule)
+            return Decision(Verdict.ALLOW, "${hit.text} — allowed by the $list", hit.rule, hit.text)
         }
-        return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule)
+        return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule, hit.text)
     }
 
     private fun verdictFor(hit: Hit, policy: Policy): Verdict =

@@ -31,6 +31,20 @@ data class PendingPermission(
         get() = DiffPresenter.filePathOf(input)?.substringAfterLast('/')?.let { "$toolName on $it" } ?: toolName
 }
 
+/**
+ * A call a rule matched and that ran anyway, and everything the transcript needs to say so.
+ *
+ * [action] is what the user can still do about it — put the guard back on, withdraw the authorisation they
+ * gave this command — or null when nothing is left standing to undo.
+ */
+data class GuardBypass(
+    val toolName: String,
+    val reason: String?,
+    val rule: SecurityRule,
+    val command: String? = null,
+    val action: String? = null,
+)
+
 data class GuardAlert(val rule: SecurityRule, val reason: String?) {
     val label: String get() = rule.label
 
@@ -65,8 +79,7 @@ class PermissionBroker(
      * this is for the case where something WOULD have been stopped, so the transcript can say which rule it
      * was and why it ran.
      */
-    private val onSensitiveBypassed: (toolName: String, reason: String?, rule: SecurityRule) -> Unit =
-        { _, _, _ -> },
+    private val onSensitiveBypassed: (GuardBypass) -> Unit = {},
     private val isGuardCommandApproved: (rule: SecurityRule, command: String?) -> Boolean = { _, _ -> false },
     private val forceAsk: () -> Boolean = { false },
 ) {
@@ -85,6 +98,24 @@ class PermissionBroker(
             else -> return false
         }
         return true
+    }
+
+    /**
+     * The one route past a rule that shows no card at all, reported so it is not also the one that leaves no
+     * trace — with the rule, what the rule saw, and the offer to withdraw the authorisation.
+     */
+    private fun reportChatApproval(request: CanUseToolRequest, decision: SensitiveGuard.Decision) {
+        val rule = decision.rule ?: return
+        val what = decision.detail?.let { " — it $it" }.orEmpty()
+        onSensitiveBypassed(
+            GuardBypass(
+                toolName = request.toolName,
+                reason = "${rule.label} matched$what — allowed because $APPROVED_IN_CHAT",
+                rule = rule,
+                command = ToolInputScanner.commandText(request.input),
+                action = REVOKE_APPROVAL,
+            ),
+        )
     }
 
     private fun applySensitiveGuard(requestId: String, request: CanUseToolRequest): Boolean {
@@ -108,11 +139,7 @@ class PermissionBroker(
                 } == true
                 if (!forceAsk() && approved) {
                     autoAllow(requestId, request, reviewable)
-                    // The one route past a rule that shows no card at all. Without this it is also the one
-                    // route that leaves no trace, which would make it the quietest of the three bypasses.
-                    decision.rule?.let {
-                        onSensitiveBypassed(request.toolName, "${it.label} matched, and $APPROVED_IN_CHAT", it)
-                    }
+                    reportChatApproval(request, decision)
                 } else {
                     present(presentable(requestId, request, reviewable, decision))
                 }
@@ -120,7 +147,11 @@ class PermissionBroker(
             }
 
             SensitiveGuard.Verdict.ALLOW -> {
-                decision.rule?.let { onSensitiveBypassed(request.toolName, decision.reason, it) }
+                // No action offered from here: whether this was the guard being off or a whitelist entry is
+                // decided in settings, and so is what the user could do about it.
+                decision.rule?.let {
+                    onSensitiveBypassed(GuardBypass(request.toolName, decision.reason, it))
+                }
                 false
             }
         }
@@ -232,7 +263,13 @@ class PermissionBroker(
         private const val MAX_SUMMARY_CHARS = 2000
 
         /** Why a watched command ran with no card: the user answered for it earlier, in this conversation. */
-        private const val APPROVED_IN_CHAT = "you approved this command in this chat"
+        private const val APPROVED_IN_CHAT = "you gave Allow All for this exact command in this chat"
+
+        /** What the transcript offers to do about that, as a key the page turns into a link. */
+        const val REVOKE_APPROVAL = "revokeApproval"
+
+        /** And what it offers when the reason is that the guard is not running at all. */
+        const val ENABLE_GUARD = "enableGuard"
 
         const val SENSITIVE_DENIED: String =
             "Denied by the IDE: this call touches credentials, a dangerous command, or territory it must not. " +

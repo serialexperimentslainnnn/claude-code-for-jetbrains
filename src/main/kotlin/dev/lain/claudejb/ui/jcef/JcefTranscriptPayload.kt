@@ -30,6 +30,7 @@ object JcefTranscriptPayload {
             put("blockedRuleWarns", SecurityRule.from(rule)?.whitelistable == false)
         }
         e.bypassedRule?.let { put("bypassedRule", it) }
+        e.bypassAction?.let { put("bypassAction", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         if (e.speaker.name == "TOOL" && e.toolUseId != null && e.meta in REVIEWABLE_TOOLS) {

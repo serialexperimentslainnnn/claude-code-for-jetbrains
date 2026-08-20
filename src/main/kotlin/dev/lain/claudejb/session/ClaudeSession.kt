@@ -412,8 +412,19 @@ class ClaudeSession(
                 }
                 fireState()
             },
-            onSensitiveBypassed = { toolName, reason, rule ->
-                guardNotice(toolName, reason ?: "${rule.label} matched, and a bypass is in force", rule)
+            onSensitiveBypassed = { bypass ->
+                // The broker knows about its own route; the other two are settings facts, so the offer to
+                // undo them is decided here. A whitelist entry gets none: it is edited on its own page,
+                // and one call is not the place to delete a line somebody wrote in the cold.
+                val offer = bypass.action
+                    ?: PermissionBroker.ENABLE_GUARD.takeIf { ClaudeSettings.getInstance(project).guardSuspended() }
+                guardNotice(
+                    bypass.toolName,
+                    bypass.reason ?: "${bypass.rule.label} matched, and a bypass is in force",
+                    bypass.rule,
+                    offer,
+                    bypass.command,
+                )
             },
         )
     }
@@ -1328,8 +1339,20 @@ class ClaudeSession(
      * one was taken: which rule matched, and what let it through. A call nobody stopped is ordinary work and
      * gets none of this.
      */
-    internal fun guardNotice(toolName: String, reason: String, rule: SecurityRule) = edt {
-        transcript.add(Speaker.SYSTEM, "Allowed $toolName: $reason.", bypassedRule = rule.name)
+    internal fun guardNotice(
+        toolName: String,
+        reason: String,
+        rule: SecurityRule,
+        action: String? = null,
+        command: String? = null,
+    ) = edt {
+        transcript.add(
+            Speaker.SYSTEM,
+            "Allowed $toolName: $reason.",
+            commandText = command?.takeIf { it.isNotBlank() },
+            bypassedRule = rule.name,
+            bypassAction = action,
+        )
     }
 
     fun scanAgents() = agentScanner.scan()

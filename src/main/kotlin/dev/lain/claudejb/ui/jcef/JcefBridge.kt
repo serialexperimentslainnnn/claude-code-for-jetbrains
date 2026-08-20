@@ -66,6 +66,8 @@ object JcefBridge {
 
         data class GuardWhitelist(val rule: String, val command: String) : Guard
 
+        data class GuardRevokeApproval(val rule: String, val command: String) : Guard
+
         data class GuardAllowAlways(val id: String, val scope: String = "") : Guard
 
         object SettingsRefresh : Settings
@@ -204,6 +206,7 @@ object JcefBridge {
         "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
         "guardMaster" -> Msg.GuardMaster(f.bool("on"), f.text("duration"))
         "guardWhitelist" -> Msg.GuardWhitelist(f.text("rule"), f.text("command"))
+        "guardRevokeApproval" -> Msg.GuardRevokeApproval(f.text("rule"), f.text("command"))
         "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
         else -> null
     }

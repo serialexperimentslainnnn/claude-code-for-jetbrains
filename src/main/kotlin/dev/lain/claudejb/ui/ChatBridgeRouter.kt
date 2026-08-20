@@ -89,7 +89,25 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
         is JcefBridge.Msg.GuardMaster -> onGuardMaster(m)
         is JcefBridge.Msg.GuardWhitelist -> onGuardWhitelist(m)
+        is JcefBridge.Msg.GuardRevokeApproval -> onGuardRevokeApproval(m)
         is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
+    }
+
+    /**
+     * Withdraws the *Allow All* the user gave this command earlier in this chat.
+     *
+     * Offered from the warning row rather than only from the chat menu, because the row is where the user
+     * finds out the authorisation is still standing — usually by seeing it act.
+     */
+    private fun onGuardRevokeApproval(m: JcefBridge.Msg.GuardRevokeApproval) {
+        val rule = SecurityRule.from(m.rule)
+        if (rule == null || m.command.isBlank()) {
+            logger.warn("A bypass warning asked to revoke something this build cannot place: ${m.rule}")
+            return
+        }
+        session.guardApprovals.revoke(rule, m.command.trim())
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`${m.command.trim()}` is no longer pre-approved. ${rule.label} decides again.")
     }
 
     private fun onSettingsToggle(m: JcefBridge.Msg.SettingsToggle) {

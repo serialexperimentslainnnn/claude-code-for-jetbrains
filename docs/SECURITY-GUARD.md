@@ -345,12 +345,18 @@ The whitelist is the one that lasts: **this project, this IDE, until the entry i
 Every route past a rule is silent to *Claude* and loud to *you*. A call that matched a rule and ran anyway
 leaves a **warning row** in the transcript naming the rule and what let it through:
 
-| The row says | Because |
-|---|---|
-| …and Allow All is on | the shield is down |
-| …allowed by the whitelist for *X* | the command is on one of the three lists, and it says which |
-| …and you approved this command in this chat | *Always allow* was answered earlier in this conversation |
-| …and you accepted it | you answered the card just now |
+| The row says | Because | And offers |
+|---|---|---|
+| …allowed because the Sensitive Guard is disabled | the guard is in Allow All | **Enable Sensitive Guard** |
+| …allowed because you gave Allow All for this exact command in this chat | *Always allow* was answered earlier in this conversation | **Disable this authorization** |
+| …allowed by the whitelist for *X* | the command is on one of the three lists, and it says which | — |
+| …and you accepted it | you answered the card just now | — |
+
+Every row names **the rule that matched and what it saw**, not only the switch that let it past: *Block the
+system temporary directory matched — it acts on the system temporary directory: /tmp/test.txt — allowed
+because…*. The two that leave something standing offer to undo it from the row itself, which is where the
+user finds out it is still in force. The other two have nothing left to undo: a card answered once is over,
+and a whitelist entry is deleted where it was written, on the settings page.
 
 Nothing was stopped in any of them, so none is the red block row. The point is that a rule going unenforced
 is visible in the conversation it affected, and distinguishable — an approval you gave five minutes ago and

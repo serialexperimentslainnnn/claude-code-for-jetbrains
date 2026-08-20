@@ -16,7 +16,7 @@ class GuardCardMandatoryTest {
         var respond: String? = null
         var presented: PendingPermission? = null
         var denied: Denial? = null
-        var bypassed: Denial? = null
+        var bypassed: GuardBypass? = null
 
         val autoApproved: Boolean get() = respond != null && presented == null
         val manualCard: Boolean get() = presented != null
@@ -57,10 +57,11 @@ class GuardCardMandatoryTest {
             isRemembered = { tool, _ -> tool in alwaysAllowedTools },
             projectRoot = null,
             sensitiveDecision = {
-                SensitiveGuard.Decision(verdict, hit?.let { "runs a destructive command" }, hit)
+                val seen = hit?.let { "runs a destructive command" }
+                SensitiveGuard.Decision(verdict, seen, hit, seen)
             },
             onSensitiveDenied = { tool, reason, r, command -> obs.denied = Denial(tool, reason, r, command) },
-            onSensitiveBypassed = { tool, reason, r -> obs.bypassed = Denial(tool, reason, r, null) },
+            onSensitiveBypassed = { obs.bypassed = it },
             isGuardCommandApproved = { r, command ->
                 approvedCommands.any { it.first == r && it.second == command }
             },
@@ -125,8 +126,27 @@ class GuardCardMandatoryTest {
         assertEquals(rule, obs.bypassed?.rule, "the row has to name the rule that went unenforced")
         assertTrue(
             obs.bypassed?.reason.orEmpty().contains("in this chat"),
-            "the three bypasses are told apart by their reason, so it must say which one this was",
+            "the bypasses are told apart by their reason, so it must say which one this was",
         )
+        assertEquals(
+            PermissionBroker.REVOKE_APPROVAL,
+            obs.bypassed?.action,
+            "an authorisation still standing has to be undoable from the row that reports it",
+        )
+        assertEquals("terraform destroy", obs.bypassed?.command, "and undoing it needs the command")
+    }
+
+    @Test
+    fun `the warning says which rule matched and what it saw, not only the switch`() {
+        val obs = run(
+            SensitiveGuard.Verdict.ASK,
+            bashReq("terraform destroy"),
+            approvedCommands = setOf(rule to "terraform destroy"),
+        )
+
+        val reason = obs.bypassed?.reason.orEmpty()
+        assertTrue(reason.contains(rule.label), "naming the switch without the rule leaves the reader guessing")
+        assertTrue(reason.contains("runs a destructive command"), "and without the finding, guessing harder")
     }
 
     @Test
