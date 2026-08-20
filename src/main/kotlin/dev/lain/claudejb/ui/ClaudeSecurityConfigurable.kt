@@ -2,11 +2,10 @@ package dev.lain.claudejb.ui
 
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.panel
 import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JPanel
 
 /**
  * Settings ▸ **Claude Code Security** — the guard, on its own page.
@@ -38,10 +37,11 @@ class ClaudeSecurityConfigurable(private val project: Project) : Configurable {
     }
 
     override fun createComponent(): JComponent {
-        var form = FormBuilder.createFormBuilder()
-        sections.forEach { form = it.addTo(form) }
-        form = form.addSeparator().addComponent(restoreButton)
-        val built = form.addComponentFillVertically(JPanel(), 0).panel
+        val built = panel {
+            sections.forEach { it.addTo(this) }
+            separator()
+            row { cell(restoreButton) }
+        }
         reset()
         settings.reload { if (!isModified()) reset() }
         return settingsScroller(built)

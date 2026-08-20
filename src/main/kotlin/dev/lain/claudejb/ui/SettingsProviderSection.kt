@@ -2,7 +2,9 @@ package dev.lain.claudejb.ui
 
 import com.intellij.openapi.options.ConfigurationException
 import com.intellij.ui.components.JBPasswordField
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.MAX_LINE_LENGTH_WORD_WRAP
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.Provider
 import javax.swing.DefaultListCellRenderer
@@ -33,12 +35,13 @@ internal class SettingsProviderSection(private val settings: ClaudeSettings) : S
         emptyText.text = "Required for non-Anthropic providers — paste the provider's own issued key"
     }
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addSeparator()
-        .addComponent(sectionLabel("API provider"))
-        .addLabeledComponent("Provider:", providerCombo)
-        .addLabeledComponent("API key:", apiKeyField)
-        .addComponent(providerWarningLabel())
+    override fun addTo(panel: Panel) {
+        panel.group("API provider") {
+            row("Provider:") { cell(providerCombo) }
+            row("API key:") { cell(apiKeyField).align(AlignX.FILL) }
+                .rowComment(PROVIDER_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+        }
+    }
 
     override fun reset(s: ClaudeSettings.State) {
         providerCombo.selectedItem = settings.provider
@@ -86,11 +89,11 @@ internal class SettingsProviderSection(private val settings: ClaudeSettings) : S
         apiKeyField.text = if (p.requiresApiKey) settings.getProviderApiKey(p) else ""
     }
 
-    private fun providerWarningLabel() = noteLabel(
-        "<b>Anthropic</b> uses the <code>claude</code> binary's own login (subscription/OAuth). A non-Anthropic " +
-            "provider (e.g. <b>DeepSeek</b>) routes to its Anthropic-compatible endpoint and <b>requires its own " +
-            "issued key</b> — your Anthropic credentials are <b>never</b> reused for another provider. The key is " +
-            "stored in the IDE <b>password safe</b>, in that provider's own slot. Changing the provider restarts " +
-            "the session.",
-    )
+    private companion object {
+        const val PROVIDER_NOTE =
+            "<b>Anthropic</b> uses the <code>claude</code> binary's own login. Any other provider routes to its " +
+                "Anthropic-compatible endpoint and needs <b>its own issued key</b> — your Anthropic credentials are " +
+                "never reused elsewhere. Keys live in the IDE password safe. Changing the provider restarts the " +
+                "session."
+    }
 }

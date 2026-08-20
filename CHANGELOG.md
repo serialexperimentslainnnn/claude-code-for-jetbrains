@@ -20,6 +20,11 @@ of its own starts from the ones you already had.
 - **The guard has a mode: Enforcing, Permissive or Allow All.** Enforcing refuses, Permissive asks on a card
   every time, Allow All lets the call run. Rules take the first two and are Enforcing by default; the guard
   as a whole takes all three.
+- **Both settings pages rebuilt, and they now fit the window.** Titled groups instead of one column of forty
+  rows, with Tools, MCP and Advanced folded away; every note is a comment under its own field and re-wraps as
+  you resize. Nothing scrolls sideways and nothing runs off the right edge any more.
+- **The security page shows all nine rule categories at once**, each a group you can fold, instead of one
+  category at a time behind a dropdown.
 
 ### Added
 - **A shield in the chat's button row**, left of auto-scroll: switches the guard to Allow All for a chosen

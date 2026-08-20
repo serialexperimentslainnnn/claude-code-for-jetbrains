@@ -1,7 +1,8 @@
 package dev.lain.claudejb.ui
 
 import com.intellij.ui.components.JBLabel
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.MAX_LINE_LENGTH_WORD_WRAP
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.GuardMode
 import dev.lain.claudejb.settings.SecuritySuspensions
@@ -34,22 +35,15 @@ internal class SettingsGuardMasterSection : SettingsSection {
 
     private var shownAllowAll = false
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addComponent(sectionLabel("Sensitive Guard — what happens when a rule matches"))
-        .addLabeledComponent("Mode:", mode)
-        .addComponent(explanation)
-        .addLabeledComponent("Allow All for:", duration)
-        .addComponent(expiry)
-        .addComponent(
-            noteLabel(
-                "This is the mode for the guard as a whole. Each rule below has its own, and a rule set to " +
-                    "<b>Permissive</b> stays Permissive while this says Enforcing. <b>Allow All</b> is the " +
-                    "only setting that stops the guard deciding anything — it still evaluates, so the " +
-                    "transcript records which rule went unenforced, but it blocks nothing and asks nothing. " +
-                    "Every duration except <i>Forever</i> ends on its own, and the shield in the chat is the " +
-                    "same control.",
-            ),
-        )
+    override fun addTo(panel: Panel) {
+        panel.group("Sensitive Guard") {
+            row("Mode:") { cell(mode) }
+            row("") { cell(explanation) }
+            row("Allow All for:") { cell(duration) }
+            row("") { cell(expiry) }
+                .rowComment(GUARD_MODE_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+        }
+    }
 
     override fun reset(s: ClaudeSettings.State) {
         val now = System.currentTimeMillis()
@@ -99,5 +93,14 @@ internal class SettingsGuardMasterSection : SettingsSection {
         if (until == null) return ""
         val at = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(until))
         return "Allow All ends at $at, and the guard decides again from then on."
+    }
+
+    private companion object {
+        const val GUARD_MODE_NOTE =
+            "This is the guard as a whole. Each rule below keeps its own mode, and one set to <b>Permissive</b> " +
+                "stays Permissive while this says Enforcing. <b>Allow All</b> is the only setting that stops the " +
+                "guard deciding: it still evaluates, so the transcript names the rule that went unenforced, but " +
+                "it blocks nothing and asks nothing. Every duration except <i>Forever</i> ends on its own, and " +
+                "the shield in the chat is the same control."
     }
 }

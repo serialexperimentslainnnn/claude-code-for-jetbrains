@@ -3,13 +3,12 @@ package dev.lain.claudejb.ui
 import com.intellij.openapi.components.service
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.panel
 import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JComponent
-import javax.swing.JPanel
 
 class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -43,10 +42,11 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private var shown: ClaudeSettings.State? = null
 
     override fun createComponent(): JComponent {
-        var form = FormBuilder.createFormBuilder()
-        sections.forEach { form = it.addTo(form) }
-        form = form.addSeparator().addComponent(restoreButton)
-        val built = form.addComponentFillVertically(JPanel(), 0).panel
+        val built = panel {
+            sections.forEach { it.addTo(this) }
+            separator()
+            row { cell(restoreButton) }
+        }
         reset()
         settings.reload { if (!isModified()) reset() }
         return settingsScroller(built)

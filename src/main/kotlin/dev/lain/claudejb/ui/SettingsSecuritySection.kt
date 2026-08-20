@@ -1,24 +1,16 @@
 package dev.lain.claudejb.ui
 
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
-import com.intellij.util.ui.FormBuilder
-import com.intellij.util.ui.JBFont
-import com.intellij.util.ui.JBUI
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.MAX_LINE_LENGTH_WORD_WRAP
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.permission.SecurityCategory
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.GuardMode
-import dev.lain.claudejb.settings.GuardWhitelists
 import dev.lain.claudejb.settings.SecuritySuspensions
-import java.awt.BorderLayout
-import java.awt.CardLayout
-import java.awt.Component
-import java.awt.FlowLayout
-import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComboBox
-import javax.swing.JPanel
 
 /**
  * The guard's rules, one **mode** each, and the three lists of commands that are allowed past them.
@@ -27,6 +19,10 @@ import javax.swing.JPanel
  * individual **rule** inside it still has its own — the group is only a way to navigate the catalogue, and
  * the narrow thing is what people actually need to change. The same shape governs the whitelists: one
  * global, one per category, one per rule, asked narrowest-first by the guard.
+ *
+ * Every category is a collapsible group rather than one card behind a dropdown. A dropdown hides how many
+ * there are and makes finding the rule that just fired a hunt; nine folded headers say what exists and open
+ * where you look.
  *
  * Enforcing and Permissive are the same two words the guard as a whole uses, and they mean the same thing at
  * both levels: refuse the match, or put it to the user as a card. Neither is a silent allow — the only two
@@ -43,77 +39,53 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
 
     private val whitelist = WhitelistTable()
 
-    private val extraDomainsArea = area(
-        EXTRA_DOMAIN_ROWS,
-        "One domain per line, e.g. paste.example.com — added to the built-in list, never replacing it",
-    )
+    private val extraDomainsArea = area(EXTRA_DOMAIN_ROWS)
 
-    private val extraGlobsArea = area(
-        EXTRA_GLOB_ROWS,
-        "One glob per line, e.g. **/secret.env — added to the built-in credential list, never replacing it",
-    )
+    private val extraGlobsArea = area(EXTRA_GLOB_ROWS)
 
     private val cancelSuspensionsButton = JButton().apply {
         addActionListener { cancelSuspensions() }
     }
 
-    private val categoryCards = JPanel(CardLayout())
-
-    private val categoryCombo = JComboBox(SecurityCategory.entries.toTypedArray()).apply {
-        renderer = labelRenderer { (it as? SecurityCategory)?.label }
-        addActionListener { showSelectedCategory() }
-    }
-
-    init {
-        SecurityCategory.entries.forEach { category ->
-            categoryCards.add(cardFor(category), category.name)
+    override fun addTo(panel: Panel) {
+        panel.group("Rules — evaluated before every permission, in every mode", indent = false) {
+            SecurityCategory.entries.forEach { category -> addCategory(this, category) }
+            row { cell(cancelSuspensionsButton) }
+        }
+        panel.group("Whitelist — commands that run without a card, whatever mode their rule is in") {
+            row { cell(whitelist.component).align(AlignX.FILL) }
+                .rowComment(WHITELIST_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+        }
+        panel.collapsibleGroup("Advanced") {
+            row("Extra credential globs:") { scrollCell(extraGlobsArea).align(AlignX.FILL) }
+                .rowComment(
+                    "One glob per line, e.g. <code>**/secret.env</code> — added to the built-in credential " +
+                        "list, never replacing it.",
+                    MAX_LINE_LENGTH_WORD_WRAP,
+                )
+            row { comment(SECURITY_NOTE, MAX_LINE_LENGTH_WORD_WRAP) }
         }
     }
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addSeparator()
-        .addComponent(sectionLabel("Rules — evaluated before every permission, in every mode"))
-        .addLabeledComponent("Category:", categoryCombo)
-        .addComponent(categoryCards)
-        .addComponent(cancelSuspensionsButton)
-        .addSeparator()
-        .addComponent(sectionLabel("Whitelist — commands that run without a card, whatever mode their rule is in"))
-        .addComponent(whitelist.component)
-        .addComponent(whitelistNote())
-        .addSeparator()
-        .addComponent(sectionLabel("Extra credential globs — files to treat as credentials, beyond the built-in list"))
-        .addComponent(wrap(extraGlobsArea))
-        .addComponent(securityWarningLabel())
-
-    private fun cardFor(category: SecurityCategory): JPanel {
-        val card = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-        card.add(rowOf(bulkButton(category, GuardMode.ENFORCING), bulkButton(category, GuardMode.PERMISSIVE)))
-        SecurityRule.of(category).forEach { rule -> card.add(ruleRow(rule)) }
-        if (category == SecurityCategory.NETWORK_EGRESS) {
-            card.add(sectionLabel("Extra blocked domains — added to the built-in list, never replacing it"))
-            card.add(wrap(extraDomainsArea))
+    private fun addCategory(panel: Panel, category: SecurityCategory) {
+        panel.collapsibleGroup(category.label) {
+            row {
+                cell(bulkButton(category, GuardMode.ENFORCING))
+                cell(bulkButton(category, GuardMode.PERMISSIVE))
+            }
+            SecurityRule.of(category).forEach { rule ->
+                row(rule.label) { modes[rule]?.let { cell(it) } }
+                    .rowComment(rule.hint, MAX_LINE_LENGTH_WORD_WRAP)
+            }
+            if (category == SecurityCategory.NETWORK_EGRESS) {
+                row("Extra blocked domains:") { scrollCell(extraDomainsArea).align(AlignX.FILL) }
+                    .rowComment(
+                        "One domain per line, e.g. <code>paste.example.com</code> — added to the built-in " +
+                            "list, never replacing it.",
+                        MAX_LINE_LENGTH_WORD_WRAP,
+                    )
+            }
         }
-        return card
-    }
-
-    /**
-     * One rule: its mode and its name on a line, and what it actually stops wrapped underneath.
-     *
-     * The hint used to sit on the same line as the name, and some of them are three sentences long — which
-     * made every row as wide as its longest sentence and the whole page scroll sideways. The detail is the
-     * part worth reading slowly, so it gets the width and the name gets the glance.
-     */
-    private fun ruleRow(rule: SecurityRule) = JPanel(BorderLayout()).apply {
-        alignmentX = java.awt.Component.LEFT_ALIGNMENT
-        border = JBUI.Borders.emptyBottom(ROW_GAP)
-        add(
-            JPanel(FlowLayout(FlowLayout.LEFT, HGAP, 0)).apply {
-                modes[rule]?.let { add(it) }
-                add(JBLabel(rule.label).apply { font = JBFont.label().asBold() })
-            },
-            BorderLayout.NORTH,
-        )
-        add(noteLabel(rule.hint), BorderLayout.CENTER)
     }
 
     private fun modeCombo() = JComboBox(GuardMode.entries.toTypedArray()).apply {
@@ -124,11 +96,6 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         JButton("All ${mode.label}").apply {
             addActionListener { SecurityRule.of(category).forEach { modes[it]?.selectedItem = mode } }
         }
-
-    private fun showSelectedCategory() {
-        val selected = categoryCombo.selectedItem as? SecurityCategory ?: SecurityCategory.entries.first()
-        (categoryCards.layout as CardLayout).show(categoryCards, selected.name)
-    }
 
     override fun reset(s: ClaudeSettings.State) {
         val stored = idsIn(s.disabledSecurityRules)
@@ -144,8 +111,6 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         whitelist.reset(s)
         cancelSuspensionsButton.text = "End ${shownSuspended.size} temporary suspension(s)"
         cancelSuspensionsButton.isEnabled = shownSuspended.isNotEmpty()
-        if (categoryCombo.selectedItem == null) categoryCombo.selectedItem = SecurityCategory.entries.first()
-        showSelectedCategory()
     }
 
     override fun apply(s: ClaudeSettings.State) {
@@ -192,50 +157,31 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
     private fun idsIn(csv: String): List<String> =
         csv.split(',').map { it.trim() }.filter { it.isNotEmpty() }
 
-    private fun area(rows: Int, hint: String) = JBTextArea(rows, 0).apply {
-        lineWrap = false
-        emptyText.text = hint
-    }
-
-    private fun wrap(component: Component) = JPanel(BorderLayout()).apply { add(component, BorderLayout.CENTER) }
-
-    private fun rowOf(vararg parts: Component) = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-        parts.forEach { add(it) }
-    }
-
-    private fun whitelistNote() = noteLabel(
-        "Pick which list you are editing above — <b>All rules</b>, one <b>category</b>, or one <b>rule</b> — " +
-            "and the commands below belong to it. The " +
-            "guard checks the narrowest first, so a permission can always be traced to one entry. Matching is " +
-            "on the <b>whole command</b> — <code>terraform destroy</code> does not authorise " +
-            "<code>terraform destroy &amp;&amp; rm -rf /</code> — and both sides are de-obfuscated first, so " +
-            "an entry written normally still covers a spelling meant to slip past it. <b>Any rule can be " +
-            "whitelisted</b>, credential and foreign-path rules included: an unliftable rule that fires on " +
-            "legitimate work leaves no way to finish it.",
-    )
-
-    private fun securityWarningLabel() = noteLabel(
-        "⚠ <b>Security:</b> every rule is <b>Enforcing</b> by default, and an empty list of exceptions is the " +
-            "plugin's original hard lock exactly. <b>Permissive</b> is never a silent allow — detection still " +
-            "runs, and a match becomes a <b>permission card</b>, shown every time, for every caller " +
-            "(including MCP servers and Skills), so you still decide case by case. The two things that do " +
-            "allow silently are <b>Allow All</b> at the top of this page and a whitelisted command, and both " +
-            "say so in the transcript when they act. Only relax a rule you understand and specifically need — " +
-            "a project on a corporate network share, for example, needs the network-mount rule Permissive, " +
-            "not the whole guard. The <b>open project is exempt</b> from the location rules, the temporary " +
-            "directory included: they are about what happens <i>outside</i> the surface you are looking at. " +
-            "Two rules are deliberately not: a <b>dangerous command</b> and a <b>shell file write</b> are " +
-            "judged wherever they run, because a <code>tee</code> or a <code>sed -i</code> has no diff to " +
-            "review inside the project either.",
-    )
+    private fun area(rows: Int) = JBTextArea(rows, 0).apply { lineWrap = false }
 
     private companion object {
         const val EXTRA_DOMAIN_ROWS = 4
 
         const val EXTRA_GLOB_ROWS = 3
 
-        const val HGAP = 8
+        const val WHITELIST_NOTE =
+            "Pick which list you are editing — <b>All rules</b>, one <b>category</b>, or one <b>rule</b> — and " +
+                "the commands below belong to it. The guard checks the narrowest first, so a permission can " +
+                "always be traced to one entry. Matching is on the <b>whole command</b>: " +
+                "<code>terraform destroy</code> does not authorise <code>terraform destroy &amp;&amp; rm -rf /</code>. " +
+                "Both sides are de-obfuscated first, so an entry written normally still covers a spelling meant " +
+                "to slip past it. <b>Any rule can be whitelisted</b>, credential and foreign-path rules included: " +
+                "an unliftable rule that fires on legitimate work leaves no way to finish it."
 
-        const val ROW_GAP = 6
+        const val SECURITY_NOTE =
+            "⚠ Every rule is <b>Enforcing</b> by default, and an empty list of exceptions is the plugin's " +
+                "original hard lock exactly. <b>Permissive</b> is never a silent allow — detection still runs and " +
+                "a match becomes a permission card, shown every time, for every caller including MCP servers and " +
+                "Skills. The two things that do allow silently are <b>Allow All</b> and a whitelisted command, and " +
+                "both say so in the transcript when they act. The <b>open project is exempt</b> from the location " +
+                "rules, the temporary directory included: those are about what happens outside the surface you are " +
+                "looking at. Two rules are deliberately not — a dangerous command and a shell file write are judged " +
+                "wherever they run, because a <code>tee</code> or a <code>sed -i</code> has no diff to review " +
+                "inside the project either."
     }
 }

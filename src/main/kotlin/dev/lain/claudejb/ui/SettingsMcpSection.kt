@@ -2,9 +2,10 @@ package dev.lain.claudejb.ui
 
 import com.intellij.openapi.options.ConfigurationException
 import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.MAX_LINE_LENGTH_WORD_WRAP
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JComboBox
@@ -22,18 +23,17 @@ internal class SettingsMcpSection : SettingsSection {
     }
     private val strictMcpCheck = JBCheckBox("Strict MCP config (only use servers from --mcp-config)")
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addSeparator()
-        .addComponent(sectionLabel("JetBrains MCP server (opt-in) — requires the MCP Server plugin enabled"))
-        .addComponent(ideMcpCheck)
-        .addLabeledComponent("Transport:", ideMcpTransportCombo)
-        .addLabeledComponent("Port:", ideMcpPortSpinner)
-        .addComponent(jetbrainsMcpWarningLabel())
-        .addSeparator()
-        .addComponent(sectionLabel("Custom MCP servers (advanced) — add any number"))
-        .addComponent(JBScrollPane(customMcpArea))
-        .addComponent(customMcpWarningLabel())
-        .addComponent(strictMcpCheck)
+    override fun addTo(panel: Panel) {
+        panel.collapsibleGroup("MCP") {
+            row { cell(ideMcpCheck) }
+            row("Transport:") { cell(ideMcpTransportCombo) }
+            row("Port:") { cell(ideMcpPortSpinner) }
+                .rowComment(JETBRAINS_MCP_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+            row("Custom servers:") { scrollCell(customMcpArea).align(AlignX.FILL) }
+                .rowComment(CUSTOM_MCP_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+            row { cell(strictMcpCheck) }
+        }
+    }
 
     override fun reset(s: ClaudeSettings.State) {
         ideMcpCheck.isSelected = s.ideMcpEnabled
@@ -68,21 +68,19 @@ internal class SettingsMcpSection : SettingsSection {
     private fun mcpTransportText() = (ideMcpTransportCombo.selectedItem as? String) ?: "sse"
     private fun mcpPortValue() = (ideMcpPortSpinner.value as Number).toInt()
 
-    private fun jetbrainsMcpWarningLabel() = noteLabel(
-        "⚠ <b>Security:</b> requires JetBrains' MCP Server plugin enabled. sse / streamable-http expose a " +
-            "localhost port any local process can reach; stdio launches a helper from the IDE (no port). Enable only " +
-            "on a machine you trust. Tool calls are still gated by the permission prompt.",
-    )
-
-    private fun customMcpWarningLabel() = noteLabel(
-        "Format: <code>{ \"server-name\": { \"type\": \"…\", … }, … }</code>. " +
-            "⚠ third-party servers run with your privileges and can read what you share — add only ones you trust.",
-    )
-
     private companion object {
         const val MIN_PORT = 1
         const val MAX_PORT = 65_535
 
         const val CUSTOM_MCP_ROWS = 7
+
+        const val JETBRAINS_MCP_NOTE =
+            "⚠ Requires JetBrains' own MCP Server plugin. <code>sse</code> and <code>streamable-http</code> expose " +
+                "a localhost port any local process can reach; <code>stdio</code> launches a helper instead. Tool " +
+                "calls are still gated by the permission prompt and by the guard."
+
+        const val CUSTOM_MCP_NOTE =
+            "A JSON object of name → server config: <code>{ \"name\": { \"type\": \"…\", … } }</code>. " +
+                "⚠ Third-party servers run with your privileges and can read what you share with them."
     }
 }
