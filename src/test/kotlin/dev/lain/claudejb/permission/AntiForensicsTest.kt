@@ -31,12 +31,23 @@ class AntiForensicsTest {
             "unset HISTFILE",
             "set +o history",
             "HISTFILE=/dev/null bash",
+            "export HISTFILESIZE=0",
+            "HISTSIZE=0",
             "journalctl --vacuum-time=1s",
             "journalctl --vacuum-size=1M",
             "Clear-History",
             "Set-PSReadlineOption -HistorySaveStyle SaveNothing",
+            "Set-PSReadlineOption -AddToHistoryHandler { return \$false }",
+            "Remove-Item (Get-PSReadlineOption).HistorySavePath",
+            "truncate --size=0 /var/log/auth.log",
+            "cat /dev/null > /var/log/wtmp",
+            "echo > /var/log/auth.log",
+            ": > /var/log/btmp",
             "wevtutil cl System",
             "Clear-EventLog -LogName Security",
+            "Remove-EventLog -LogName Security",
+            "fsutil usn deletejournal /d C:",
+            "log erase --all",
             "touch -t 197001010000 a.txt",
             "touch -r ref.txt target.txt",
             "touch -acmr ref.txt target.txt",
@@ -46,6 +57,18 @@ class AntiForensicsTest {
             assertEquals(Verdict.DENY, v(bash(it)), it)
             assertEquals(SecurityRule.ANTI_FORENSIC, rule(bash(it)), it)
         }
+    }
+
+    @Test
+    fun `emptying the shell history file is blocked`() {
+        listOf(
+            "cat /dev/null > ~/.bash_history",
+            ": > ~/.zsh_history",
+            "echo -n > /home/me/.bash_history",
+            "ln -sf /dev/null ~/.bash_history",
+            "cp /dev/null ~/.zsh_history",
+            "truncate -s0 ~/.bash_history",
+        ).forEach { assertEquals(Verdict.DENY, v(bash(it)), it) }
     }
 
     @Test
@@ -60,11 +83,16 @@ class AntiForensicsTest {
         listOf(
             "history",
             "history 20",
+            "history -a",
             "journalctl -u myapp -n 100",
             "journalctl --since today",
             "set -o pipefail",
             "Set-PSReadlineOption -EditMode Emacs",
             "cat ~/.bash_history",
+            "cat /var/log/auth.log",
+            "git log --oneline",
+            "truncate -s 100M disk.img",
+            "echo build done > /var/log/myapp.log",
             "touch newfile.txt",
             "touch -c existing.txt",
         ).forEach { assertNotEquals(SecurityRule.ANTI_FORENSIC, rule(bash(it)), it) }
