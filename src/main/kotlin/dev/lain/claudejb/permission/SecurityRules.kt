@@ -269,6 +269,17 @@ enum class SecurityRule(
             "command, which is how a restricted context — or a sudo rule — becomes full command execution.",
     ),
 
+    RESOURCE_HIJACKING(
+        SecurityCategory.INTRUSION_TECHNIQUE,
+        "Block cryptocurrency miners",
+        "known mining binaries (xmrig, minerd, cpuminer, ethminer, cgminer, t-rex and the like) and the " +
+            "stratum+tcp:// pool-protocol scheme they connect with — matched at command position",
+        "You can't run a cryptocurrency miner.",
+        "Mining software exists to spend this machine's CPU, GPU and power on someone else's behalf. A " +
+            "coding session never runs one, and it is a common payload dropped after a machine is " +
+            "compromised.",
+    ),
+
     ANTI_FORENSIC(
         SecurityCategory.DEFENCE_EVASION,
         "Block erasing the session's own tracks",

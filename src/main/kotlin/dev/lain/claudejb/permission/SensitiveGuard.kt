@@ -158,6 +158,10 @@ object SensitiveGuard {
                     ?.let { Hit(SecurityRule.ANTI_FORENSIC, "erases the record of what it did: $it") }
             },
             {
+                ResourceHijacking.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.RESOURCE_HIJACKING, "runs a cryptocurrency miner: $it") }
+            },
+            {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
             },
