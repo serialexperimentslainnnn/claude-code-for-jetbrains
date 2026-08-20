@@ -127,7 +127,10 @@ object SensitiveGuard {
         }
     }
 
-    private fun commandFamilies(input: JsonObject, policy: Policy): Hit? {
+    private fun commandFamilies(input: JsonObject, policy: Policy): Hit? =
+        coreCommandFamilies(input, policy) ?: defenceCommandFamilies(input, policy)
+
+    private fun coreCommandFamilies(input: JsonObject, policy: Policy): Hit? {
         val families: List<() -> Hit?> = listOf(
             {
                 DangerousDomains.blockedHit(ToolInputScanner.urlCandidates(input), policy.extraBlockedDomains)
@@ -153,6 +156,12 @@ object SensitiveGuard {
                 CodeExecution.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(it.rule, "makes this machine run code from elsewhere: ${it.text}") }
             },
+        )
+        return families.firstNotNullOfOrNull { it() }
+    }
+
+    private fun defenceCommandFamilies(input: JsonObject, policy: Policy): Hit? {
+        val families: List<() -> Hit?> = listOf(
             {
                 AntiForensics.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.ANTI_FORENSIC, "erases the record of what it did: $it") }
@@ -172,6 +181,10 @@ object SensitiveGuard {
             {
                 Tunneling.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.TUNNELING, "opens a network tunnel or anonymiser: $it") }
+            },
+            {
+                DisableDefences.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.DISABLE_DEFENCES, "turns off a security defence: $it") }
             },
             {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)

@@ -319,6 +319,19 @@ enum class SecurityRule(
             "compromised.",
     ),
 
+    DISABLE_DEFENCES(
+        SecurityCategory.DEFENCE_EVASION,
+        "Block turning off security defences",
+        "disabling the host's protections — setenforce 0, stopping auditd/firewalld/apparmor, ufw disable, " +
+            "flushing the firewall, spctl/csrutil disable on macOS, and disabling Windows Defender or the " +
+            "firewall (Set-MpPreference, netsh advfirewall off, auditpol /clear)",
+        "You can't disable the machine's security defences.",
+        "Turning off the firewall, the audit system, SELinux/AppArmor, Gatekeeper or the antivirus removes " +
+            "the protection an attack has to get past. A legitimate need is the user's to whitelist, not " +
+            "ours to leave open.",
+        whitelistable = true,
+    ),
+
     ANTI_FORENSIC(
         SecurityCategory.DEFENCE_EVASION,
         "Block erasing the session's own tracks",
