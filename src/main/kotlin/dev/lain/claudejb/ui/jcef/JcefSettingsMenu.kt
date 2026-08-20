@@ -8,6 +8,7 @@ import dev.lain.claudejb.session.EffortLevel
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.ToolNaming
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardMode
 import dev.lain.claudejb.settings.SecuritySuspensions
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
@@ -22,6 +23,7 @@ internal object JcefSettingsMenu {
         val model: String,
         val effort: String?,
         val mode: String,
+        val approvals: Map<SecurityRule, Set<String>> = emptyMap(),
     )
 
     fun json(state: ClaudeSettings.State, session: ClaudeSession): JsonArray = json(state, selectedIn(session))
@@ -32,6 +34,7 @@ internal object JcefSettingsMenu {
         modeRows(selected)
         chatRows(state)
         securityRows(state)
+        sessionApprovalRows(selected.approvals)
         sourceRows(state)
         toolRows(ALLOW, "Allowed tools", state.allowedTools, deferred = true)
         toolRows(DENY, "Disallowed tools", state.disallowedTools, deferred = true)
@@ -94,12 +97,42 @@ internal object JcefSettingsMenu {
         val now = System.currentTimeMillis()
         val suspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
             SecuritySuspensions.sessionSuspended()
+        // Its own group, emitted whole before Security starts: Security is a group of checkboxes and this is
+        // a choice of one, and a group the page draws in two pieces is a group it draws twice.
+        val mode = GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT
+        GuardMode.entries.forEach { m ->
+            entry("$GUARD_MODE:${m.wire}", "Guard mode", m.label, m == mode, radio = true)
+        }
+        entry(GUARD, "Security", "Sensitive Guard", !SecuritySuspensions.guardSuspended(s, now))
         SecurityCategory.entries.forEach { category ->
             SecurityRule.of(category).forEach { rule ->
                 val enforced = rule.name !in disabled && rule !in suspended
                 entry("$RULE:${rule.name}", "Security", rule.label, enforced, sub = category.label)
             }
         }
+    }
+
+    /**
+     * The commands answered with *Always allow this command* on a card **in this chat**.
+     *
+     * They live here rather than on the Settings page because that is where their scope is: this
+     * conversation, until the IDE closes. Switching one off revokes it; there is nothing stored to delete.
+     */
+    private fun JsonArrayBuilder.sessionApprovalRows(approvals: Map<SecurityRule, Set<String>>) {
+        approvals.forEach { (rule, commands) ->
+            commands.forEach { command ->
+                entry("$APPROVAL:${rule.name}:$command", "Approved in this chat", command, true, sub = rule.label)
+            }
+        }
+    }
+
+    /** The rule and command behind an `approval:<RULE>:<command>` key, or null when [key] is not one. */
+    fun sessionApproval(key: String): Pair<SecurityRule, String>? {
+        if (!key.startsWith("$APPROVAL:")) return null
+        val rest = key.removePrefix("$APPROVAL:")
+        val rule = SecurityRule.from(rest.substringBefore(':', "")) ?: return null
+        val command = rest.substringAfter(':', "").takeIf { it.isNotEmpty() } ?: return null
+        return rule to command
     }
 
     private fun JsonArrayBuilder.sourceRows(s: ClaudeSettings.State) {
@@ -139,6 +172,15 @@ internal object JcefSettingsMenu {
     }
 
     private val FLAG_SETTERS: Map<String, (ClaudeSettings.State, Boolean) -> Unit> = mapOf(
+        // Off from this menu is Forever, because a menu checkbox has nowhere to ask "for how long?".
+        // The shield in the composer is the door that asks; this one is the honest blunt instrument.
+        GUARD to { s, on ->
+            if (on) {
+                SecuritySuspensions.guardOn(s)
+            } else {
+                SecuritySuspensions.guardOff(s, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis())
+            }
+        },
         "restoreChats" to { s, on -> s.restoreOpenChatsOnStartup = on },
         "reduceMotion" to { s, on -> s.reduceMotion = on },
         "checkpointing" to { s, on -> s.enableFileCheckpointing = on },
@@ -160,6 +202,7 @@ internal object JcefSettingsMenu {
         on: Boolean,
         models: List<String>,
     ): Boolean? = when (prefix) {
+        GUARD_MODE -> select(GuardMode.from(value) != null, on) { state.guardMode = value }
         MODEL -> select(value in models, on) { state.model = value }
         EFFORT -> select(EffortLevel.from(value) != null, on) { state.effort = value }
         MODE -> select(PermissionMode.from(value) != null, on) { state.permissionMode = value }
@@ -225,8 +268,12 @@ internal object JcefSettingsMenu {
         model = session.model ?: session.preferredDefaultModel(),
         effort = session.effort,
         mode = session.permissionMode,
+        approvals = session.guardApprovals.all(),
     )
 
+    private const val APPROVAL = "approval"
+    private const val GUARD = "guard"
+    private const val GUARD_MODE = "guardmode"
     private const val MODEL = "model"
     private const val EFFORT = "effort"
     private const val MODE = "mode"

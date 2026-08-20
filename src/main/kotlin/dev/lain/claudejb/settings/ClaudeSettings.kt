@@ -42,8 +42,6 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var customMcpServers: String = ""
 
-        @JvmField var signedOut: Boolean = false
-
         @JvmField var claudePath: String = ""
 
         @JvmField var nodePath: String = ""
@@ -66,17 +64,34 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var rewindFallback: String = ""
 
+        @JvmField var executionTrusted: Boolean = false
+
         @JvmField var sensitiveExtraGlobs: String = ""
 
+        @JvmField var guardEnabled: Boolean = true
+
+        @JvmField var guardDisabledUntil: Long = 0
+
+        @JvmField var guardMode: String = GuardMode.DEFAULT.wire
+
+        /**
+         * The rules running in **Permissive** mode, as a CSV of ids.
+         *
+         * The field keeps its old name because it is persisted and every installation already carries it;
+         * what it stores has not changed either — the set the user moved off Enforcing. Only the word for it
+         * did.
+         */
         @JvmField var disabledSecurityRules: String = ""
 
         @JvmField var securityRuleSuspensions: String = ""
 
-        @JvmField var securityCommandApprovals: String = ""
-
         @JvmField var securityExtraBlockedDomains: String = ""
 
         @JvmField var securityCommandWhitelist: String = ""
+
+        @JvmField var securityCategoryWhitelists: String = ""
+
+        @JvmField var securityRuleWhitelists: String = ""
 
         @JvmField var securityBlockCredentials: Boolean = true
 
@@ -162,12 +177,32 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     val strictMcpConfig: Boolean get() = state.strictMcpConfig
 
+    /**
+     * Which stored document this service reads and writes — one per IDE installation per project.
+     *
+     * Lazy rather than eager because the service is constructed while the project is still opening, and
+     * `basePath` is what the identity is derived from.
+     */
+    val scope: SettingsScope by lazy { SettingsScope.of(project) }
+
+    /**
+     * Whether the user signed out — **global**, not per project, because a credential is.
+     *
+     * Kept in its own PasswordSafe entry rather than in the document for exactly that reason: a window that
+     * disagreed would launch the binary expecting a credential the safe no longer holds.
+     */
+    var signedOut: Boolean
+        get() = runCatching { SecretStore.get(SecretStore.SIGNED_OUT) }.getOrNull().toBoolean()
+        set(value) = runCatching {
+            if (value) SecretStore.set(SecretStore.SIGNED_OUT, true.toString()) else SecretStore.clear(SecretStore.SIGNED_OUT)
+        }.getOrDefault(Unit)
+
     private var loaded: State? = null
 
     val state: State
         @Synchronized get() = loaded ?: run {
-            project?.let { runCatching { LegacyProjectSettings.getInstance(it).migrate(it) } }
-            SettingsStore.load().also { loaded = it }
+            project?.let { runCatching { LegacyProjectSettings.getInstance(it).migrate(it, scope) } }
+            SettingsStore.load(scope).also { loaded = it }
         }
 
     @org.jetbrains.annotations.TestOnly
@@ -175,14 +210,28 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     fun update(block: (State) -> Unit) {
         block(state)
-        writes.execute { SettingsStore.mutate(block) }
+        val target = scope
+        writes.execute { SettingsStore.mutate(target, block) }
     }
 
-    fun save() = SettingsStore.save(state)
+    fun save() = SettingsStore.save(scope, state)
+
+    /**
+     * *Clean Settings* — this project's configuration back to a fresh install's, in this IDE only.
+     *
+     * Credentials are not configuration and are not touched: the sign-in, the provider keys and the Git host
+     * tokens survive, and so does every other project.
+     */
+    fun wipe(): Boolean {
+        val cleared = SettingsStore.wipe(scope)
+        if (cleared) replace(State())
+        return cleared
+    }
 
     fun reload(onReloaded: () -> Unit) {
+        val target = scope
         writes.execute {
-            val fresh = SettingsStore.loadOrNull()
+            val fresh = SettingsStore.loadOrNull(target)
             ApplicationManager.getApplication()?.invokeLater({
                 if (fresh != null) replace(fresh)
                 onReloaded()

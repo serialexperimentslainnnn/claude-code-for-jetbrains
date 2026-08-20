@@ -25,6 +25,9 @@ object JcefBridge {
 
         sealed interface Settings : Msg
 
+        /** Everything the page can say about the Sensitive Guard, so the router dispatches it as one family. */
+        sealed interface Guard : Settings
+
         sealed interface RequestCard : Msg
 
         sealed interface Diffs : Msg
@@ -57,9 +60,13 @@ object JcefBridge {
 
         data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
-        data class GuardSuspend(val rule: String, val duration: String) : Settings
+        data class GuardSuspend(val rule: String, val duration: String) : Guard
 
-        data class GuardAllowAlways(val id: String, val scope: String = "") : Settings
+        data class GuardMaster(val on: Boolean, val duration: String) : Guard
+
+        data class GuardWhitelist(val rule: String, val command: String) : Guard
+
+        data class GuardAllowAlways(val id: String, val scope: String = "") : Guard
 
         object SettingsRefresh : Settings
 
@@ -161,6 +168,7 @@ object JcefBridge {
         val f = Fields(obj)
         return parseComposer(type, f)
             ?: parseSettings(type, f)
+            ?: parseGuard(type, f)
             ?: parseRequestCards(type, f)
             ?: parseDiffs(type, f)
             ?: parseAttachments(type, f)
@@ -187,10 +195,16 @@ object JcefBridge {
         "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
         "changeProvider" -> Msg.ChangeProvider(f.text("id"))
         "settingsToggle" -> Msg.SettingsToggle(f.text("key"), f.bool("on"))
-        "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
-        "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
         "settingsRefresh" -> Msg.SettingsRefresh
         "openSettings" -> Msg.OpenSettings
+        else -> null
+    }
+
+    private fun parseGuard(type: String, f: Fields): Msg? = when (type) {
+        "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
+        "guardMaster" -> Msg.GuardMaster(f.bool("on"), f.text("duration"))
+        "guardWhitelist" -> Msg.GuardWhitelist(f.text("rule"), f.text("command"))
+        "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
         else -> null
     }
 

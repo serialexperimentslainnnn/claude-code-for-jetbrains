@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Settings are per IDE installation and per project again, and the login is not.** Since 4.x the plugin
+  kept one configuration document in the OS keychain, shared by every project and every IDE — the release
+  notes for that change warned what it cost, and this is the reversal. Each *(IDE installation, project)*
+  pair now gets its own document, keyed by a digest of the IDE's config directory and the project path, so
+  two repositories can disagree about the model, the permission mode or a security rule, and two IDEs
+  pointed at one checkout keep their own. **Nothing is lost on upgrade**: a project with no document of its
+  own inherits the shared one, which is read and never deleted, so the first project you open — and the
+  tenth — looks exactly as you left it, and only diverges once you change something in it. The chain behind
+  that walks four places in order (this project's document, the shared one, the 4.x `settings.json` file,
+  the 3.x `.idea/claude-code.xml`), and the project file is now adopted into **that project's** settings
+  rather than into everyone's.
+  What stays global is what a credential is: the sign-in, `credentials.json`, the account profile, the
+  per-provider API keys and the Git host tokens. `signedOut` moved out of the document into its own keychain
+  entry for the same reason — being signed out is a fact about the credential, not about a project, and a
+  second window disagreeing about it would launch the binary expecting a token the safe no longer holds.
+- **Signing out no longer wipes your settings.** `SecretStore.clearAll()`, which runs on sign-out, swept the
+  whole configuration document along with the credentials. It now clears credentials only.
+- **Trust-on-open for a source script or a stdio MCP server is stored in the keychain**, not in
+  `.idea/workspace.xml`. It is a security answer, and this plugin's configuration does not live in plaintext
+  inside the repository. The answer given before this release is not carried over, so the prompt appears
+  once more.
+- **The guard's rules have a *mode*, not a checkbox.** *Enforcing* refuses a match; *Permissive* puts it to
+  you as a card, every time. Same two words for one rule and for the guard as a whole, and the same meaning
+  at both levels — the stored value and the behaviour are unchanged, and Enforcing is still the default for
+  everything.
+
+### Added
+- **A shield in the chat's button row, left of auto-scroll, and *Allow All*.** Clicking it while the guard
+  is deciding asks *for how long* — the same seven durations a blocked rule offers, five of which expire on
+  their own — and then the guard stops deciding: a matching call runs with no card and no block. Clicking it
+  again is one click with nothing to confirm. It is **off by default**, its state comes from the host rather
+  than from the click, so every open chat agrees, and the shield is unlit whenever it is on. The same switch
+  is on the settings page. It does not reach the audit of your own environment script, which happens before
+  the session starts.
+- **A bypass says so in the transcript.** When a call matches a rule and runs anyway — because Allow All is
+  on, or because the command is whitelisted — a **warning row** names the rule and which of the two let it
+  through. The guard keeps evaluating while Allow All is on for exactly this reason. Ordinary work that
+  matched nothing says nothing.
+- **Settings ▸ Claude Code Security is its own entry** in the settings tree, and every block now names that
+  path. It gained the controls the old section did not have: the guard's own mode, Allow All with its expiry
+  and an *Enforce now* button, a mode combo per rule with *All Enforcing* / *All Permissive* per category,
+  the temporary suspensions made visible and endable, an editor for the extra credential globs (a setting
+  that existed with no UI at all), and the three whitelists.
+- **Three whitelists instead of one, and no rule is exempt from them.** A command can be permitted for one
+  rule, for a whole category, or everywhere, and the guard asks the narrowest first so a permission can
+  always be traced to one entry. **Any rule can be whitelisted now**, credential and foreign-path rules
+  included: those families are where every false positive this plugin has shipped came from, and an
+  unliftable rule that fires on legitimate work leaves no way to finish it. Whitelisting from a block on one
+  of them opens a dialog stating that rule's own reason first.
+- **A *Whitelist Command* link on a guard block**, beside *Disable rule*. It files the exact command under
+  the rule that refused it — never the wider lists, which are edited in the cold on the settings page — and
+  it compares in the guard's own canonical form, so `t""erraform  destroy` does not land beside
+  `terraform destroy` as a second entry.
+- **Restore buttons on both pages**: *Restore Plugin to default state* on Settings ▸ Claude Code, and
+  *Restore Sensitive Guard settings to default* on Settings ▸ Claude Code Security. Both ask first, both are
+  scoped to this project in this IDE, and neither signs you out or touches your provider keys or Git tokens.
+
+### Fixed
+- ***Always allow this command* on a guard alert no longer persists.** It was written into the settings
+  document, so an approval given in one conversation answered for every other one, for ever. It is now held
+  in memory per chat and dies with the IDE — the durable answer is the whitelist, and the two are now
+  different things rather than the same thing with two doors. Approvals given in a chat are listed in that
+  chat's ⚙ menu and can be revoked there.
+
 ## [5.5.0] — 2026-08-19
 
 **This release needs IntelliJ Platform 2025.3.1 (build 253.29346.138) or newer.** On 2026.2 it is the fix:

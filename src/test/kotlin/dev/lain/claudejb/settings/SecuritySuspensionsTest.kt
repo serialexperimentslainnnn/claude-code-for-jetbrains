@@ -139,65 +139,80 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `the page offers exactly the durations the host understands`() {
-        val js = File("src/main/resources/jcef/app-transcript-rows.js")
-        assertTrue(js.isFile, "the row builders moved: this contract test has to move with them")
+        val js = File("src/main/resources/jcef/app-core.js")
+        assertTrue(js.isFile, "CC.GUARD_DURATIONS moved: this contract test has to move with it")
         val tokens = Regex("""\{\s*token:\s*'([^']+)'""").findAll(js.readText()).map { it.groupValues[1] }.toList()
 
         assertEquals(SecuritySuspensions.Duration.entries.map { it.token }, tokens)
     }
 }
 
-class SecurityCommandApprovalsTest {
+/**
+ * The per-chat, in-memory half of "this command may run" — answering *Always allow this command* on a card.
+ *
+ * What these pin is the boundary against the other half: nothing here reaches another chat, and nothing here
+ * is written down. The durable answer is the whitelist, and [GuardWhitelistsTest] owns that side.
+ */
+class GuardCommandApprovalsTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
     private val other = SecurityRule.DESTRUCTIVE_CLOUD
 
     @Test
     fun `an approved command matches, and only that command`() {
-        val lines = SecurityCommandApprovals.withApproval("", rule, "terraform destroy")
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
 
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy"))
-        assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy -auto-approve"))
-        assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform apply"))
+        assertTrue(approvals.isApproved(rule, "terraform destroy"))
+        assertFalse(approvals.isApproved(rule, "terraform destroy -auto-approve"))
+        assertFalse(approvals.isApproved(rule, "terraform apply"))
     }
 
     @Test
     fun `an approval does not travel to another rule`() {
-        val lines = SecurityCommandApprovals.withApproval("", rule, "terraform destroy")
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
 
-        assertFalse(SecurityCommandApprovals.isApproved(lines, other, "terraform destroy"))
+        assertFalse(approvals.isApproved(other, "terraform destroy"))
+    }
+
+    @Test
+    fun `an approval does not travel to another chat`() {
+        val mine = GuardCommandApprovals()
+        val theirs = GuardCommandApprovals()
+        mine.approve(rule, "terraform destroy")
+
+        assertFalse(theirs.isApproved(rule, "terraform destroy"), "one chat's card must not answer another's")
     }
 
     @Test
     fun `a blank command is never stored`() {
-        assertEquals("", SecurityCommandApprovals.withApproval("", rule, null))
-        assertEquals("", SecurityCommandApprovals.withApproval("", rule, "   "))
-        assertFalse(SecurityCommandApprovals.isApproved("${rule.name}=", rule, ""))
-        assertFalse(SecurityCommandApprovals.isApproved("${rule.name}=", rule, null))
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, null)
+        approvals.approve(rule, "   ")
+
+        assertTrue(approvals.all().isEmpty())
+        assertFalse(approvals.isApproved(rule, ""))
+        assertFalse(approvals.isApproved(rule, null))
     }
 
     @Test
-    fun `approving twice does not grow the document`() {
-        val once = SecurityCommandApprovals.withApproval("", rule, "kubectl delete ns prod")
-        val twice = SecurityCommandApprovals.withApproval(once, rule, "kubectl delete ns prod")
+    fun `approving twice does not grow the set`() {
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "kubectl delete ns prod")
+        approvals.approve(rule, "kubectl delete ns prod")
 
-        assertEquals(once, twice)
+        assertEquals(setOf("kubectl delete ns prod"), approvals.all()[rule])
     }
 
     @Test
-    fun `a stale rule name is dropped rather than guessed`() {
-        assertFalse(SecurityCommandApprovals.isApproved("NOT_A_RULE=terraform destroy", rule, "terraform destroy"))
-    }
+    fun `revoking one leaves the rest`() {
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
+        approvals.approve(rule, "terraform destroy -target=x")
+        approvals.revoke(rule, "terraform destroy")
 
-    @Test
-    fun `several approvals coexist under one rule`() {
-        val lines = SecurityCommandApprovals.withApproval(
-            SecurityCommandApprovals.withApproval("", rule, "terraform destroy"),
-            rule,
-            "terraform destroy -target=x",
-        )
-
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy"))
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy -target=x"))
+        assertFalse(approvals.isApproved(rule, "terraform destroy"))
+        assertTrue(approvals.isApproved(rule, "terraform destroy -target=x"))
     }
 }

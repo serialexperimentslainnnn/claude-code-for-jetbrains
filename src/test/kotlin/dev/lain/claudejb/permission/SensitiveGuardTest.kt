@@ -399,14 +399,14 @@ class SensitiveGuardTest {
     @Test
     fun `the default policy enforces every rule there is`() {
         val defaults = SensitiveGuard.Policy()
-        assertEquals(emptySet<SecurityRule>(), defaults.disabledRules)
-        SecurityRule.entries.forEach { assertFalse(it in defaults.disabledRules, it.name) }
+        assertEquals(emptySet<SecurityRule>(), defaults.permissiveRules)
+        SecurityRule.entries.forEach { assertFalse(it in defaults.permissiveRules, it.name) }
     }
 
     @Test
     fun `disabling the credential rule downgrades DENY to ASK, never to ALLOW`() {
         assertEquals(Verdict.DENY, v(read("/home/me/.ssh/id_rsa")))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.CREDENTIALS))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.CREDENTIALS))
         assertEquals(Verdict.ASK, v(read("/home/me/.ssh/id_rsa"), relaxed))
         assertEquals(SecurityRule.CREDENTIALS, rule(read("/home/me/.ssh/id_rsa"), relaxed))
     }
@@ -415,7 +415,7 @@ class SensitiveGuardTest {
     fun `disabling the dangerous-command rule downgrades DENY to ASK, never to ALLOW`() {
         val cmd = bash("gpg --export-secret-keys --armor")
         assertEquals(Verdict.DENY, v(cmd))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.SECRET_DUMPING_COMMANDS))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.SECRET_DUMPING_COMMANDS))
         assertEquals(Verdict.ASK, v(cmd, relaxed))
         assertEquals(SecurityRule.SECRET_DUMPING_COMMANDS, rule(cmd, relaxed))
     }
@@ -423,7 +423,7 @@ class SensitiveGuardTest {
     @Test
     fun `disabling the foreign-other-user-home rule downgrades DENY to ASK, never to ALLOW`() {
         assertEquals(Verdict.DENY, v(read("/home/bob/notes.txt")))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OTHER_USER_HOME))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.OTHER_USER_HOME))
         assertEquals(Verdict.ASK, v(read("/home/bob/notes.txt"), relaxed))
         assertEquals(SecurityRule.OTHER_USER_HOME, rule(read("/home/bob/notes.txt"), relaxed))
         assertEquals(Verdict.DENY, v(read("/mnt/share/data.csv"), relaxed))
@@ -433,7 +433,7 @@ class SensitiveGuardTest {
     fun `disabling the foreign-network-mounts rule downgrades DENY to ASK, never to ALLOW`() {
         assertEquals(Verdict.DENY, v(read("/mnt/share/data.csv")))
         assertEquals(Verdict.DENY, v(read("\\\\fileserver\\share\\secret.doc")))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.NETWORK_MOUNT))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.NETWORK_MOUNT))
         assertEquals(Verdict.ASK, v(read("/mnt/share/data.csv"), relaxed))
         assertEquals(Verdict.ASK, v(read("\\\\fileserver\\share\\secret.doc"), relaxed))
         assertEquals(SecurityRule.NETWORK_MOUNT, rule(read("/mnt/share/data.csv"), relaxed))
@@ -444,7 +444,7 @@ class SensitiveGuardTest {
     fun `disabling the foreign-WSL-mounts rule downgrades DENY to ASK for EVERY caller`() {
         val wsl = policy.copy(wslHost = true, projectRoot = "/mnt/c/dev/proj")
         assertEquals(Verdict.DENY, v(read("/mnt/d/other/file"), wsl))
-        val relaxed = wsl.copy(disabledRules = setOf(SecurityRule.WSL_MOUNT))
+        val relaxed = wsl.copy(permissiveRules = setOf(SecurityRule.WSL_MOUNT))
         assertEquals(Verdict.ASK, v(read("/mnt/d/other/file"), relaxed))
         assertEquals(SecurityRule.WSL_MOUNT, rule(read("/mnt/d/other/file"), relaxed))
     }
@@ -452,18 +452,21 @@ class SensitiveGuardTest {
     @Test
     fun `disabling the outside-project rule downgrades DENY to ASK, never to ALLOW`() {
         assertEquals(Verdict.DENY, v(read("/opt/other/lib.so")))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OUTSIDE_PROJECT))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.OUTSIDE_PROJECT))
         assertEquals(Verdict.ASK, v(read("/opt/other/lib.so"), relaxed))
         assertEquals(SecurityRule.OUTSIDE_PROJECT, rule(read("/opt/other/lib.so"), relaxed))
     }
 
     @Test
     fun `reason() always names where to change the rule, whether enforced or downgraded`() {
-        assertTrue(SensitiveGuard.evaluate(read("/home/bob/x"), policy).reason!!.contains("Settings"))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.OTHER_USER_HOME))
+        // The exact page, not merely the word "Settings": the whole value of the sentence is that the user
+        // can act on it, and a path that no longer resolves sends them looking for a screen that is not there.
+        val page = "Settings ▸ Claude Code Security"
+        assertTrue(SensitiveGuard.evaluate(read("/home/bob/x"), policy).reason!!.contains(page))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.OTHER_USER_HOME))
         val downgradedReason = SensitiveGuard.evaluate(read("/home/bob/x"), relaxed).reason!!
-        assertTrue(downgradedReason.contains("Settings"))
-        assertTrue(downgradedReason.contains("downgraded", ignoreCase = true))
+        assertTrue(downgradedReason.contains(page))
+        assertTrue(downgradedReason.contains("Permissive", ignoreCase = true))
     }
 
     @Test
@@ -533,14 +536,14 @@ class SensitiveGuardTest {
     }
 
     @Test
-    fun `disabling the temp-directory rule downgrades DENY to ASK, never to ALLOW`() {
+    fun `a Permissive temp-directory rule asks instead of refusing, and never allows`() {
         assertEquals(Verdict.DENY, v(read("/tmp/stage.sh")))
-        val relaxed = policy.copy(disabledRules = setOf(SecurityRule.TEMP_DIR))
+        val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.TEMP_DIR))
         assertEquals(Verdict.ASK, v(read("/tmp/stage.sh"), relaxed))
         assertEquals(SecurityRule.TEMP_DIR, rule(read("/tmp/stage.sh"), relaxed))
-        val downgraded = SensitiveGuard.evaluate(read("/tmp/stage.sh"), relaxed).reason!!
-        assertTrue(downgraded.contains("Settings"))
-        assertTrue(downgraded.contains("downgraded", ignoreCase = true))
+        val asked = SensitiveGuard.evaluate(read("/tmp/stage.sh"), relaxed).reason!!
+        assertTrue(asked.contains("Settings"))
+        assertTrue(asked.contains("Permissive", ignoreCase = true))
     }
 
     @Test

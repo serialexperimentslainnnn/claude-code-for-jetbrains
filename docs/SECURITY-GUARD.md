@@ -18,6 +18,33 @@ variable that turned out empty. Nobody has to be malicious for those to ruin a w
 
 ---
 
+## Two words, and two axes
+
+Everything below is described with the same two words at every level.
+
+- **Enforcing** — a match is refused. Claude is told what it cannot do and why.
+- **Permissive** — a match becomes a card. You answer it, every time. Detection still runs; nothing is
+  allowed silently.
+
+They apply to **one rule** and to **the guard as a whole**, and they mean the same thing at both. Every rule
+is Enforcing by default, and so is the guard. Setting one rule to Permissive changes that rule; setting the
+guard to Permissive puts the whole catalogue there whatever the individual rules say.
+
+That is one axis. The other is **Allow All**, and it is not the same thing: it decides whether the guard
+judges anything at all. It lives on a **shield in the chat's own button row** and on
+**Settings ▸ Claude Code Security**, and it is **off out of the box**.
+
+While Allow All is on, a matching call runs with no card and no block. The guard still evaluates — that is
+what lets the transcript say **which** rule went unenforced each time, as a warning row rather than as
+nothing at all — but it stops nothing. Switching it on asks *for how long*: the same seven choices a blocked
+rule offers, five of which expire on their own. Switching it back off is one click. The shield is lit while
+the guard is deciding and unlit while Allow All is on, in every open chat.
+
+One thing Allow All does **not** reach: the check that reads your own environment script before sourcing it.
+That is not a call the model made, and it happens before there is anything to watch.
+
+---
+
 ## The three outcomes
 
 Every action Claude takes goes through the guard first — before any approval, in every permission mode,
@@ -27,9 +54,9 @@ including the ones whose whole purpose is not being asked.
 flowchart LR
     A["Claude wants to<br/>do something"] --> B{"The guard<br/>looks at it"}
     B -->|"nothing matches"| C["Runs"]
-    B -->|"matches a rule"| D{"Is that rule on?"}
-    D -->|"yes — the default"| E["Blocked<br/><i>Claude is told why</i>"]
-    D -->|"you switched it off"| F["You decide<br/><i>a card, every time</i>"]
+    B -->|"matches a rule"| D{"That rule's<br/>mode"}
+    D -->|"Enforcing — the default"| E["Blocked<br/><i>Claude is told why</i>"]
+    D -->|"Permissive"| F["You decide<br/><i>a card, every time</i>"]
 
     style A fill:#2A2A2A,color:#fff,stroke:#555
     style B fill:#E07B5A,color:#fff,stroke:#B85C3E,stroke-width:2px
@@ -39,17 +66,20 @@ flowchart LR
     style D fill:#37474F,color:#fff,stroke:#455A64
 ```
 
-The middle branch is the one people get wrong, so it is worth stating flatly: switching a rule off does
-not make the guard ignore it. Detection always runs. All you change is who decides — the guard
-automatically, or you, on a card, every single time. There is no setting anywhere that makes a match
-disappear silently.
+The middle branch is the one people get wrong, so it is worth stating flatly: **Permissive** does not make
+the guard ignore a rule. Detection always runs. All it changes is who decides — the guard automatically, or
+you, on a card, every single time. No mode makes a match disappear silently.
+
+Exactly two things do, and both announce themselves in the transcript when they act: **Allow All**, and a
+command on a **whitelist**. Neither is reachable from anything the model says.
 
 **Nothing implicit answers that card.** Not the permission mode: `bypassPermissions` and `acceptEdits` mean
 "stop asking about my ordinary work", never "stop watching for this". And not a tool marked *Always allow*
 either — that used to skip it, which meant one click on a `Bash` card quietly opened every command `Bash` can
-run, including every other one the rule existed to stop. The only thing that can answer such a card without
-asking again is something you said **on a card of exactly that kind, about exactly that command** — see
-*Pre-approving one command*.
+run, including every other one the rule existed to stop. **The guard sits above the permission layer**, and
+nothing in that layer can answer for it. The only things that can are the two named above and *Always allow*
+on the card itself, which is about **that command** and lasts for **that chat** — see *Whitelisting a
+command*.
 
 Two consequences follow from that, and both are deliberate. A blocked action tells Claude what it can't
 do and why, but never where the off switch is: telling a possibly-hijacked model which lever to ask you
@@ -65,13 +95,13 @@ the wire and an MCP server picks its own. Policy that keys on an attacker-suppli
 
 ## What it stops
 
-Eight groups of narrow rules. The groups exist so the settings page can be navigated, not because they
+Nine groups of narrow rules. The groups exist so the settings page can be navigated, not because they
 mean anything on their own.
 
-The granularity is the important part. There is no single "block dangerous things" switch, because the
-first time it got in your way you would turn it off and lose everything with it. Instead each rule covers
-one narrow thing, so switching off `terraform destroy` leaves `DROP DATABASE`, `git push --force` and
-every credential check exactly where they were.
+The granularity is the important part. Each rule covers one narrow thing, so moving `terraform destroy` to
+Permissive leaves `DROP DATABASE`, `git push --force` and every credential check exactly where they were.
+The blunt instruments — a whole category at once, and Allow All — exist and are one click each, but they are
+the last resort rather than the only one, which is what the narrow rules buy.
 
 ### Secrets
 
@@ -234,66 +264,91 @@ open that project at all. No exemption anywhere says "this kind of file is fine"
 
 ## Living with it
 
-Most people never open the security settings. Everything is on by default, and the default is the point.
+Most people never open the security settings. Everything is Enforcing by default, and the default is the
+point.
 
-When something does get blocked, the fix comes to you rather than the other way round: the block names the
-rule in plain words and carries a **Disable rule** link that opens **that one rule** — not its group, not the
-category, not everything. That is why the rules are narrow in the first place. A one-click action can
-only ever be as safe as the smallest thing it can turn off.
+When something does get blocked, the fix comes to you rather than the other way round. The block names the
+rule in plain words and carries two links.
+
+**Disable rule** moves **that one rule** to Permissive — not its group, not the category, not everything.
+That is why the rules are narrow in the first place. A one-click action can only ever be as safe as the
+smallest thing it can relax.
+
+**Whitelist Command** takes the exact command that was refused and adds it to the whitelist of **the rule
+that refused it**, so that command runs and nothing else changes. It is not offered when the block names no
+command to match on; it never writes to the category or global lists, which are edited on the Settings page;
+and it checks the command is not already permitted, so pressing it twice does not grow the list.
 
 **And it asks for how long.** Seven choices — 5 minutes, 15 minutes, 30 minutes, 4 hours, 8 hours, until the
 IDE closes, or for ever — with no pre-selected default, so opening the menu commits to nothing and the choice
 is the click that follows. Five of the seven expire on their own, which is the point: before this existed the
-only way to open a rule was the Settings toggle, i.e. *for ever*, and a rule opened once for one command tended
-to stay open for months. A suspension is re-checked on every single call, so when it runs out the rule is
-enforced again immediately — nothing has to be remembered, run, or cleaned up.
+only way to relax a rule was the Settings page, i.e. *for ever*, and a rule relaxed once for one command
+tended to stay that way for months. A suspension is re-checked on every single call, so when it runs out the
+rule is Enforcing again immediately — nothing has to be remembered, run, or cleaned up.
 
 What it buys is a **question**, not a pass: for as long as it lasts, the same call stops and puts a card to you
-every time. Enforcing the rule again — from the ⚙ menu or Settings — cancels the suspension at once.
+every time. Setting the rule back to Enforcing — from the ⚙ menu or Settings — ends the suspension at once.
 
-The full catalogue lives in **Settings ▸ Claude Code ▸ Security**, one group at a time, with enable and
-disable for a whole group and a **Restore all protections** button that puts everything back. It is a
-page for auditing or deliberate tuning, not somewhere you should need to visit.
+The full catalogue lives in **Settings ▸ Claude Code Security**, its own entry in the settings tree, one
+group at a time. A whole group can be moved to one mode in a single click, every rule inside it still has its
+own, and **Restore Sensitive Guard settings to default** puts all of it back — every rule Enforcing, Allow
+All off, all three whitelists empty. It is a page for auditing or deliberate tuning, not somewhere you should
+need to visit — and what it holds is **per project**, so tuning one repository's rules says nothing about the
+next one you open.
 
-### Pre-approving one command
+### Whitelisting a command
 
-If `terraform destroy` is part of your actual job, the always-allow list takes a full command and runs it
-without asking. It is fenced fairly tightly, and each fence is there for a reason:
+If `terraform destroy` is part of your actual job, a whitelist takes a full command and runs it without
+asking. There are three, and they differ only in **reach**:
 
-- **Matched as the whole command**, de-obfuscated on both sides. `terraform destroy` does not authorise
+| List | Applies to |
+|---|---|
+| **This rule** | only the rule that stopped the command |
+| **This category** | every rule in one group |
+| **Everywhere** | any rule at all |
+
+The guard asks them narrowest first, so a permission can always be traced to one entry rather than to
+"it is whitelisted somewhere".
+
+Two fences remain, and they are about *what* is matched, never about *which rule* you are allowed to lift:
+
+- **The whole command, de-obfuscated on both sides.** `terraform destroy` does not authorise
   `terraform destroy && rm -rf /` — that is a different string — and `t""erraform destroy` cannot sneak
   past an entry written normally.
-- **Only lifts an action rule.** A destructive or install command can be whitelisted. A credential,
-  foreign-path, device, egress or unreadable-script rule cannot, ever. You can allow-list
-  `terraform destroy`; there is no way to allow-list `cat ~/.ssh/id_rsa`.
+- **Every command the call issues has to be covered.** One approved command in a chain of three approves
+  nothing.
 
-That last guarantee is structural rather than a promise: the walls are evaluated before the action rules,
-so a command that trips one is reported as the wall, and walls are not whitelistable. The flag that marks
-a rule liftable defaults to *off*, which means a rule added next year cannot be whitelisted past until
-somebody deliberately decides it can be.
+**Any rule can be whitelisted, including the ones that stop credential reads.** This reverses what this
+document said before 5.6, where credential, foreign-path, device, egress and unreadable-script rules were
+structurally unliftable. The mechanism behind the change: those are the families every shipped false
+positive has come from, and an unliftable rule that fires on legitimate work leaves no way to complete it.
+Which commands are permitted is the user's decision. Whitelisting one from a block on a rule in those
+families opens a dialog first, stating that rule's own reason, and then proceeds.
 
 #### …and the other way in: *Always allow* on a card
 
-There is a second way to pre-approve a command, and it is worth being exact about it because it reverses a
-position this document used to state. It said pre-authorising belonged in Settings and **never** on a card,
-since a button offered mid-task is pressed while you are impatient. That reasoning stands; what changed is
-that refusing it entirely left the *permanent* toggle as the only unblock anyone was offered, which is worse.
+There is a second way to let a watched command through, and the two are not the same thing.
 
-So: **Always allow** on a lock card pre-approves **that one command**, and every bound below is what pays for it.
+**Always allow** on a lock card authorises **that one command, in that one chat, until the IDE closes**.
+Nothing is written down and nothing reaches another conversation — close the chat, or the IDE, and it is
+gone.
 
-- **It takes two deliberate steps, not one.** The card only exists for a rule you have already opened, and
-  opening it is its own explicit choice with its own duration. A single click on a refusal can never reach here.
 - **The unit is the command, not the tool.** Answering it on a `terraform destroy` card authorises
-  `terraform destroy` — whole, exact, de-obfuscated. Not `terraform destroy -auto-approve`, not `Bash`.
-- **It dies with the rule.** The approval is honoured only while that rule is still open, so re-enabling it, or
-  simply letting a 15-minute suspension expire, revokes every command approved under it. Nothing has to be
-  cleaned up for that to be true — it is a condition, not a stored expiry.
-- **It cannot reach a wall.** Same fence as the Settings list: a credential, foreign-path, device, egress or
-  unreadable-script rule is not liftable, so there is no sequence of clicks that pre-approves
-  `cat ~/.ssh/id_rsa`.
+  `terraform destroy` — whole, exact. Not `terraform destroy -auto-approve`, not `Bash`.
+- **It is a guard authorisation, not a tool one.** Marking `Bash` as *Always allow* in Settings, or running
+  in `bypassPermissions`, cannot answer a guard card and never could. The guard sits above the permission
+  layer, and the only things that lift it are the whitelists and this.
 
-The Settings list remains the calmer surface, and it is still the right one for a command you run every day.
-This one is for the command in front of you, once, with the risk taken knowingly.
+The whitelist is the one that lasts: **this project, this IDE, until the entry is deleted.**
+
+### When a bypass acts, it says so
+
+Both bypasses are silent to *Claude* and loud to *you*. A call that matched a rule and ran anyway leaves a
+**warning row** in the transcript naming the rule and which of the two let it through — Allow All, or which
+whitelist. Nothing was stopped, so it is not the red block row; the point is that a bypass in force is
+visible in the conversation it affected rather than only on a settings page nobody has open.
+
+Ordinary work that matched nothing says nothing. The row appears only where there was something to say.
 
 ---
 
@@ -325,7 +380,9 @@ and the verdict; every rule family is a file of its own.
 Adding a rule means adding a file, never a branch in the verdict:
 
 1. Add the `SecurityRule` constant under the right category, with its label, its hint, and the two
-   sentences the model is shown when it fires. Set `whitelistable` only if it is an action rule.
+   sentences the model is shown when it fires. Set `whitelistable` when the rule is an action rule — it no
+   longer decides whether the rule can be lifted (every rule can), only whether whitelisting one of its
+   commands from a block warns the user first.
 2. Put the detection in the matching family file, or a new one.
 3. Add its case to `GuardPolicyContractTest` — the `when` over every rule is exhaustive, so **a new rule
    without a test case does not compile.**
@@ -333,6 +390,10 @@ Adding a rule means adding a file, never a branch in the verdict:
 Both settings surfaces iterate the enum, so the rule appears in the UI on its own. And because the stored
 configuration is the set of rules the user switched *off*, a new rule is enforced from the moment it
 exists — there is no boolean anybody has to remember to wire up.
+
+The master switch is not in `permission/` and should not move there: `SensitiveGuard` has exactly one
+behaviour, and the thing that can silence it is a decision taken in the user's own UI, applied in
+`settings/SettingsSensitivePolicy.sensitiveDecision` — the single point the permission broker asks through.
 
 The test suite is the widest in the repository, and it is held to one standard: never a false pass. Every
 positive asserts *which rule* fired, not merely that something was blocked, so a block that happens for

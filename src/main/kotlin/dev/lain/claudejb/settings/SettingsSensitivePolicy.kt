@@ -11,10 +11,39 @@ fun ClaudeSettings.sensitiveGlobs(): List<String> {
     return CredentialPaths.SENSITIVE_GLOBS + extra
 }
 
+/**
+ * The guard's answer for one tool call, with **Allow All** applied on top of it.
+ *
+ * Allow All is applied here rather than inside the guard, and that placement is the point: `SensitiveGuard`
+ * keeps having exactly one behaviour, and the thing that overrides it is a switch in the user's own UI.
+ *
+ * The evaluation still runs while Allow All is on, and that is deliberate: the call is permitted either way,
+ * but knowing WHICH rule it would have tripped is what lets the transcript say so instead of staying silent.
+ * A hit becomes an ALLOW that still carries its rule and a reason — the shape the whitelist lift already
+ * uses — and the two are told apart by the reason, because they are two different bypasses.
+ *
+ * The audit of the user's own environment script goes through [sensitivePolicy] directly and is therefore
+ * NOT covered: it judges a file the user configured, before the process starts.
+ */
 fun ClaudeSettings.sensitiveDecision(
     input: JsonObject,
     projectRoot: String?,
-): SensitiveGuard.Decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
+): SensitiveGuard.Decision {
+    val decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
+    if (decision.verdict == SensitiveGuard.Verdict.ALLOW || !guardSuspended()) return decision
+    return SensitiveGuard.Decision(
+        SensitiveGuard.Verdict.ALLOW,
+        "${decision.rule?.label ?: "A guard rule"} matched, and Allow All is on",
+        decision.rule,
+    )
+}
+
+/** True while the shield is down — the **Allow All** bypass. */
+fun ClaudeSettings.guardSuspended(): Boolean =
+    SecuritySuspensions.guardSuspended(state, System.currentTimeMillis())
+
+/** The guard's own mode, which every Enforcing rule defers to. */
+fun ClaudeSettings.guardMode(): GuardMode = GuardMode.from(state.guardMode) ?: GuardMode.DEFAULT
 
 fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
     val snap = RemoteMounts.snapshot()
@@ -29,28 +58,36 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
         pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
         envValues = launchEnvValues(env),
         fileReader = ::readForAnalysis,
-        disabledRules = disabledSecurityRules(),
+        permissiveRules = permissiveRules(),
         httpProxy = env.proxyValue("http_proxy"),
         httpsProxy = env.proxyValue("https_proxy"),
         noProxyHosts = env.proxyValue("no_proxy").orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
         extraBlockedDomains = extraBlockedDomains(),
         commandWhitelist = commandWhitelist(),
+        categoryWhitelist = GuardWhitelists.byCategory(state.securityCategoryWhitelists),
+        ruleWhitelist = GuardWhitelists.byRule(state.securityRuleWhitelists),
     )
 }
 
-internal fun ClaudeSettings.disabledSecurityRules(): Set<SecurityRule> {
-    val permanent = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
+/**
+ * Every rule currently running in **Permissive** mode.
+ *
+ * Four sources, unioned: the guard's own mode — which puts the whole catalogue in Permissive when the user
+ * sets it there — plus the rules set to Permissive one by one, the ones on a timed suspension, and the ones
+ * suspended until the IDE closes.
+ */
+internal fun ClaudeSettings.permissiveRules(): Set<SecurityRule> {
+    if (guardMode() == GuardMode.PERMISSIVE) return SecurityRule.entries.toSet()
+    val perRule = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
     val timed = SecuritySuspensions.active(state.securityRuleSuspensions, System.currentTimeMillis())
-    return permanent.toSet() + timed + SecuritySuspensions.sessionSuspended()
+    return perRule.toSet() + timed + SecuritySuspensions.sessionSuspended()
 }
-
-internal fun ClaudeSettings.approvedGuardCommands(): String = state.securityCommandApprovals
 
 internal fun ClaudeSettings.extraBlockedDomains(): List<String> =
     state.securityExtraBlockedDomains.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
 
 internal fun ClaudeSettings.commandWhitelist(): List<String> =
-    state.securityCommandWhitelist.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+    GuardWhitelists.commands(state.securityCommandWhitelist)
 
 private fun launchEnvValues(settingsEnv: Map<String, String>): Map<String, String> =
     System.getenv() + settingsEnv

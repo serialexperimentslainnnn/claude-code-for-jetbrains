@@ -23,9 +23,15 @@ object SecretStore {
 
     const val SETTINGS_JSON = "CLAUDE_SETTINGS_JSON"
 
+    const val SIGNED_OUT = "CLAUDE_SIGNED_OUT"
+
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
-    private val NAMES = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS + ENV_VARS + SETTINGS_JSON
+    private val CREDENTIALS = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
+
+    private val NAMES = CREDENTIALS + ENV_VARS + SETTINGS_JSON + SIGNED_OUT
+
+    private val SCOPED_SETTINGS_PREFIX = "$SETTINGS_JSON@"
 
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
 
@@ -59,10 +65,13 @@ object SecretStore {
     fun get(name: String): String? = readCredential(name, attributes(name))
 
     fun set(name: String, value: String) {
-        require(name in NAMES) { "unknown secret: $name" }
+        require(isKnown(name)) { "unknown secret: $name" }
         writeCredential(name, attributes(name), value)
         if (name in EXCLUSIVE) EXCLUSIVE.filter { it != name }.forEach { clear(it) }
     }
+
+    private fun isKnown(name: String): Boolean =
+        name in NAMES || (name.startsWith(SCOPED_SETTINGS_PREFIX) && name.length > SCOPED_SETTINGS_PREFIX.length)
 
     fun setVerified(name: String, value: String): Boolean = runCatching {
         set(name, value)
@@ -73,7 +82,7 @@ object SecretStore {
         writeCredential(name, attributes(name), null)
     }
 
-    fun clearAll() = NAMES.forEach(::clear)
+    fun clearAll() = CREDENTIALS.forEach(::clear)
 
     fun envOverlay(explicitNames: Set<String>): Map<String, String> {
         if (API_KEY in explicitNames) return emptyMap()

@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.session.EntryDTO
 import dev.lain.claudejb.session.TranscriptEntry
 import kotlinx.serialization.json.JsonArray
@@ -22,7 +23,13 @@ object JcefTranscriptPayload {
         e.filePath?.let { put("filePath", it) }
         e.commandText?.let { put("command", it) }
         e.messageText?.let { put("message", it) }
-        e.blockedRule?.let { put("blockedRule", it) }
+        e.blockedRule?.let { rule ->
+            put("blockedRule", rule)
+            // Whether adding this command to a whitelist warns first. The page needs it up front, because the
+            // dialog is a host dialog and the link must not promise a silent add it is not going to make.
+            put("blockedRuleWarns", SecurityRule.from(rule)?.whitelistable == false)
+        }
+        e.bypassedRule?.let { put("bypassedRule", it) }
         put("state", e.toolState.name)
         put("elapsed", e.elapsedSeconds)
         if (e.speaker.name == "TOOL" && e.toolUseId != null && e.meta in REVIEWABLE_TOOLS) {

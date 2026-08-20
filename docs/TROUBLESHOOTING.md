@@ -133,9 +133,17 @@ the card again.
 
 The reverse also happens and is not a bug: **a card appears even in
 `bypassPermissions`** when the call touches credential material, a dangerous
-command or foreign territory. That check runs before any auto-approval and has no
-opt-out; the per-rule toggles under Settings ▸ Claude Code ▸ Security only
-downgrade an automatic refusal to a card, never to a silent allow.
+command or foreign territory. That check runs before any auto-approval, and no
+permission mode and no *Always allow* tool can answer it. The per-rule toggles
+under Settings ▸ Claude Code Security only downgrade an automatic refusal to a
+card, never to a silent allow.
+
+Three things do let a watched call through, all of them switched by hand: the
+**shield** in the composer (or the master switch on that page), which stops the
+guard evaluating anything for a chosen duration; a **whitelisted command**; and
+*Always allow* on the card itself, which lasts for that chat until the IDE
+closes. If a call you expected to be stopped went through, the shield is the
+first thing to look at — it is unlit whenever the guard is off.
 
 If the card is missing in `default` mode, check the IDE log
 (see [Logs](#logs)) for entries from `PermissionBroker` — a hung control

@@ -24,9 +24,40 @@ object SecuritySuspensions {
 
     private val sessionScoped = ConcurrentHashMap.newKeySet<SecurityRule>()
 
+    /**
+     * The master switch's *Until IDE closes* choice — the one duration that has nowhere to be written.
+     *
+     * Its two persisted siblings live on the settings document ([ClaudeSettings.State.guardEnabled] for
+     * *Forever*, [ClaudeSettings.State.guardDisabledUntil] for the five that expire), which is the same
+     * three-store shape a single suspended rule already uses.
+     */
+    @Volatile
+    private var guardOffForSession = false
+
     fun suspendUntilIdeCloses(rule: SecurityRule) {
         sessionScoped += rule
     }
+
+    /** Opens the whole guard for [duration], writing to whichever of the three stores that duration needs. */
+    fun guardOff(state: ClaudeSettings.State, duration: Duration, now: Long) = when (duration) {
+        Duration.FOREVER -> state.guardEnabled = false
+        Duration.UNTIL_IDE_CLOSES -> guardOffForSession = true
+        else -> state.guardDisabledUntil = now + (duration.millis ?: 0)
+    }
+
+    /** Enforces the guard again, and clears **all three** stores — otherwise one of them silently outlives it. */
+    fun guardOn(state: ClaudeSettings.State) {
+        state.guardEnabled = true
+        state.guardDisabledUntil = 0
+        guardOffForSession = false
+    }
+
+    fun guardSuspended(state: ClaudeSettings.State, now: Long): Boolean =
+        !state.guardEnabled || guardOffForSession || state.guardDisabledUntil > now
+
+    /** When the timed suspension runs out, or null when nothing timed is open. */
+    fun guardSuspendedUntil(state: ClaudeSettings.State, now: Long): Long? =
+        state.guardDisabledUntil.takeIf { it > now }
 
     fun sessionSuspended(): Set<SecurityRule> = sessionScoped.toSet()
 
@@ -61,28 +92,4 @@ object SecuritySuspensions {
     private const val THIRTY_MINUTES = 30 * MINUTE
     private const val FOUR_HOURS = 4 * HOUR
     private const val EIGHT_HOURS = 8 * HOUR
-}
-
-object SecurityCommandApprovals {
-
-    fun isApproved(lines: String, rule: SecurityRule, command: String?): Boolean {
-        val wanted = command?.trim().orEmpty()
-        if (wanted.isEmpty()) return false
-        return parse(lines).any { it.first == rule && it.second == wanted }
-    }
-
-    fun withApproval(lines: String, rule: SecurityRule, command: String?): String {
-        val wanted = command?.trim().orEmpty()
-        if (wanted.isEmpty()) return lines
-        if (isApproved(lines, rule, wanted)) return lines
-        return (parse(lines) + (rule to wanted)).joinToString("\n") { "${it.first.name}=${it.second}" }
-    }
-
-    private fun parse(lines: String): List<Pair<SecurityRule, String>> =
-        lines.lines().mapNotNull { line ->
-            val name = line.substringBefore('=', "").trim()
-            val command = line.substringAfter('=', "").trim()
-            if (command.isEmpty()) return@mapNotNull null
-            SecurityRule.from(name)?.let { it to command }
-        }
 }

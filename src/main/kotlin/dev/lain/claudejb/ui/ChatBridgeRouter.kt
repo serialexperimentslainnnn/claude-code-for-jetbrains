@@ -9,13 +9,15 @@ import dev.lain.claudejb.context.ImageAttachments
 import dev.lain.claudejb.context.ProjectTree
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.permission.SecurityRule
+import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardWhitelists
 import dev.lain.claudejb.settings.Provider
-import dev.lain.claudejb.settings.SecurityCommandApprovals
 import dev.lain.claudejb.settings.SecuritySuspensions
+import dev.lain.claudejb.settings.sensitivePolicy
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
@@ -74,15 +76,20 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
 
-        is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
-
-        is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
+        is JcefBridge.Msg.Guard -> onGuard(m)
 
         JcefBridge.Msg.SettingsRefresh ->
             ClaudeSettings.getInstance(panel.project).reload { JcefChatPanel.pushSettingsMenuToAll() }
 
         JcefBridge.Msg.OpenSettings ->
             ShowSettingsUtil.getInstance().showSettingsDialog(panel.project, ClaudeSettingsConfigurable::class.java)
+    }
+
+    private fun onGuard(m: JcefBridge.Msg.Guard) = when (m) {
+        is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
+        is JcefBridge.Msg.GuardMaster -> onGuardMaster(m)
+        is JcefBridge.Msg.GuardWhitelist -> onGuardWhitelist(m)
+        is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
     }
 
     private fun onSettingsToggle(m: JcefBridge.Msg.SettingsToggle) {
@@ -97,6 +104,12 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val settings = ClaudeSettings.getInstance(panel.project)
         JcefSettingsMenu.alwaysAllowTool(m.key)?.let { tool ->
             if (m.on) settings.alwaysAllow.remember(tool) else settings.alwaysAllow.forget(tool)
+            return true
+        }
+        // A session approval belongs to this chat and to nothing else, so it is revoked here rather than
+        // through the settings document — there is no document entry to remove.
+        JcefSettingsMenu.sessionApproval(m.key)?.let { (rule, command) ->
+            if (!m.on) session.guardApprovals.revoke(rule, command)
             return true
         }
         val models = session.models.map { it.value }
@@ -180,15 +193,69 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         )
     }
 
+    private fun onGuardMaster(m: JcefBridge.Msg.GuardMaster) {
+        val settings = ClaudeSettings.getInstance(panel.project)
+        if (m.on) {
+            settings.update { SecuritySuspensions.guardOn(it) }
+            announceGuard("The Sensitive Guard is back on. Every tool call is judged again.")
+            return
+        }
+        val duration = SecuritySuspensions.Duration.from(m.duration)
+        if (duration == null) {
+            logger.warn("The shield asked to stand down for a duration this build does not have: ${m.duration}")
+            return
+        }
+        settings.update { SecuritySuspensions.guardOff(it, duration, System.currentTimeMillis()) }
+        announceGuard(
+            "The Sensitive Guard is off ${duration.phrase}. Nothing is being judged — no rule, no card, " +
+                "no block — until it comes back on.",
+        )
+    }
+
+    private fun announceGuard(notice: String) {
+        JcefChatPanel.pushSettingsMenuToAll()
+        JcefChatPanel.pushStateToAll()
+        session.systemNotice(notice)
+    }
+
+    /**
+     * Adds the blocked command to the whitelist of **the rule that blocked it**, never to the global one.
+     *
+     * The global list is edited on the Settings page, in the cold, because "this command is fine everywhere"
+     * is a wider claim than a block in front of you can justify. Matching is on the guard's own canonical
+     * form, so `t""erraform  destroy` does not land next to `terraform destroy` as a second entry.
+     */
+    private fun onGuardWhitelist(m: JcefBridge.Msg.GuardWhitelist) {
+        val rule = SecurityRule.from(m.rule)
+        val command = m.command.trim()
+        if (rule == null || command.isEmpty()) {
+            logger.warn("A guard block asked to whitelist something this build cannot place: ${m.rule}")
+            return
+        }
+        val settings = ClaudeSettings.getInstance(panel.project)
+        if (!GuardWhitelistPrompt.confirm(panel.project, rule, command)) return
+        val policy = settings.sensitivePolicy(panel.project.basePath)
+        val canonical = SensitiveGuard.canonicalCommand(command, policy)
+        val already = GuardWhitelists.byRule(settings.state.securityRuleWhitelists)[rule].orEmpty()
+            .plus(GuardWhitelists.byCategory(settings.state.securityCategoryWhitelists)[rule.category].orEmpty())
+            .plus(GuardWhitelists.commands(settings.state.securityCommandWhitelist))
+            .any { SensitiveGuard.canonicalCommand(it, policy) == canonical }
+        if (already) {
+            session.systemNotice("`$command` is already whitelisted — nothing added.")
+            return
+        }
+        settings.update {
+            it.securityRuleWhitelists = GuardWhitelists.withEntry(it.securityRuleWhitelists, rule.name, command)
+        }
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`$command` is whitelisted for ${rule.label}. Every other rule still judges it.")
+    }
+
     private fun onGuardAllowAlways(m: JcefBridge.Msg.GuardAllowAlways) {
         val chat = cardSession(m.scope)
         val target = chat.cards.pending().firstOrNull { it.requestId == m.id } ?: return
         val rule = target.guard?.rule ?: return
-        val command = ToolInputScanner.commandText(target.input)
-        ClaudeSettings.getInstance(panel.project).update {
-            it.securityCommandApprovals =
-                SecurityCommandApprovals.withApproval(it.securityCommandApprovals, rule, command)
-        }
+        chat.guardApprovals.approve(rule, ToolInputScanner.commandText(target.input))
         chat.cards.resolvePermission(target.requestId, true)
     }
 

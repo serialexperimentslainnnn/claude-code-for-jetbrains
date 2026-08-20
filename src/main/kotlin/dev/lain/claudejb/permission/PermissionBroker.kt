@@ -56,7 +56,16 @@ class PermissionBroker(
     private val projectRoot: String? = null,
     private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
         { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
-    private val onSensitiveDenied: (toolName: String, reason: String?, rule: SecurityRule?) -> Unit =
+    private val onSensitiveDenied: (toolName: String, reason: String?, rule: SecurityRule?, command: String?) -> Unit =
+        { _, _, _, _ -> },
+    /**
+     * A call the guard matched and let through anyway — the two bypasses, *Allow All* and a whitelist.
+     *
+     * Only fired when a rule actually matched. A call nothing objected to is ordinary work and says nothing;
+     * this is for the case where something WOULD have been stopped, so the transcript can say which rule it
+     * was and why it ran.
+     */
+    private val onSensitiveBypassed: (toolName: String, reason: String?, rule: SecurityRule) -> Unit =
         { _, _, _ -> },
     private val isGuardCommandApproved: (rule: SecurityRule, command: String?) -> Boolean = { _, _ -> false },
     private val forceAsk: () -> Boolean = { false },
@@ -83,7 +92,12 @@ class PermissionBroker(
         return when (decision.verdict) {
             SensitiveGuard.Verdict.DENY -> {
                 respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
-                onSensitiveDenied(request.toolName, decision.reason, decision.rule)
+                onSensitiveDenied(
+                    request.toolName,
+                    decision.reason,
+                    decision.rule,
+                    ToolInputScanner.commandText(request.input),
+                )
                 true
             }
 
@@ -100,7 +114,10 @@ class PermissionBroker(
                 true
             }
 
-            SensitiveGuard.Verdict.ALLOW -> false
+            SensitiveGuard.Verdict.ALLOW -> {
+                decision.rule?.let { onSensitiveBypassed(request.toolName, decision.reason, it) }
+                false
+            }
         }
     }
 

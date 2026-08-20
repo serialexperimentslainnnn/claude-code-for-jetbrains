@@ -2,23 +2,33 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.permission.SecurityRule
+import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardMode
 import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SecuritySuspensions
 import dev.lain.claudejb.settings.SettingsStore
+import dev.lain.claudejb.settings.guardSuspended
 import dev.lain.claudejb.settings.parseEnv
+import dev.lain.claudejb.settings.sensitiveDecision
 import dev.lain.claudejb.settings.sensitivePolicy
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
 
     private val settings get() = ClaudeSettings.getInstance(project)
     private val emptyInput = JsonObject(emptyMap())
 
+    private val credentialRead = JsonObject(
+        mapOf("command" to JsonPrimitive("cat ${System.getProperty("user.home")}/.ssh/id_rsa")),
+    )
+
     override fun setUp() {
         super.setUp()
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStore.load()
+        SettingsStore.load(settings.scope)
         settings.replaceState(ClaudeSettings.State())
     }
 
@@ -43,20 +53,104 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         assertTrue(settings.state.restoreOpenChatsOnStartup)
         assertEquals("", settings.state.disabledSecurityRules)
         assertEquals("", settings.state.securityExtraBlockedDomains)
+        assertTrue("the Sensitive Guard is on out of the box", settings.state.guardEnabled)
+        assertFalse("and nothing is suspending it", settings.guardSuspended())
+    }
+
+    fun `test the master switch is what makes the guard stop answering`() {
+        assertEquals(
+            SensitiveGuard.Verdict.DENY,
+            settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
+        )
+
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.MINUTES_5, System.currentTimeMillis()) }
+
+        assertEquals(
+            "with the shield down nothing is judged at all — that is the whole point of it",
+            SensitiveGuard.Verdict.ALLOW,
+            settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
+        )
+
+        settings.update { SecuritySuspensions.guardOn(it) }
+
+        assertEquals(
+            SensitiveGuard.Verdict.DENY,
+            settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
+        )
+    }
+
+    fun `test Allow All still says which rule it let past`() {
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
+
+        val decision = settings.sensitiveDecision(credentialRead, projectRoot = null)
+
+        assertEquals(SensitiveGuard.Verdict.ALLOW, decision.verdict)
+        assertEquals(
+            "a bypass nobody can see is a bypass nobody can undo",
+            SecurityRule.CREDENTIALS,
+            decision.rule,
+        )
+        assertTrue("the transcript row needs the why, not only the what", decision.reason.orEmpty().isNotBlank())
+    }
+
+    fun `test an ordinary call carries no rule and so warns about nothing`() {
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
+        val harmless = kotlinx.serialization.json.JsonObject(
+            mapOf("command" to JsonPrimitive("git status")),
+        )
+
+        val decision = settings.sensitiveDecision(harmless, projectRoot = null)
+
+        assertEquals(SensitiveGuard.Verdict.ALLOW, decision.verdict)
+        assertNull("ordinary work must not be narrated as a bypass", decision.rule)
+    }
+
+    fun `test the guard in Permissive mode asks instead of refusing, whatever the rules say`() {
+        assertEquals(
+            SensitiveGuard.Verdict.DENY,
+            settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
+        )
+
+        settings.update { it.guardMode = GuardMode.PERMISSIVE.wire }
+
+        assertEquals(
+            "Permissive is a card, never a silent allow",
+            SensitiveGuard.Verdict.ASK,
+            settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
+        )
+        assertEquals(SecurityRule.entries.toSet(), settings.sensitivePolicy(projectRoot = null).permissiveRules)
+    }
+
+    fun `test one rule set to Permissive leaves every other rule Enforcing`() {
+        settings.update { it.disabledSecurityRules = SecurityRule.CREDENTIALS.name }
+
+        val policy = settings.sensitivePolicy(projectRoot = null)
+
+        assertEquals(setOf(SecurityRule.CREDENTIALS), policy.permissiveRules)
+    }
+
+    fun `test switching it back on clears all three stores at once`() {
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.UNTIL_IDE_CLOSES, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis()) }
+
+        settings.update { SecuritySuspensions.guardOn(it) }
+
+        assertFalse("one store outliving the others is how a switch lies", settings.guardSuspended())
     }
 
     fun `test sensitivePolicy wires the disabled rules through`() {
         settings.state.disabledSecurityRules = "CREDENTIALS,WSL_MOUNT"
         val policy = settings.sensitivePolicy(projectRoot = null)
-        assertEquals(setOf(SecurityRule.CREDENTIALS, SecurityRule.WSL_MOUNT), policy.disabledRules)
-        assertFalse(SecurityRule.SHELL_FILE_WRITE in policy.disabledRules)
-        assertFalse(SecurityRule.BLOCKED_DOMAIN in policy.disabledRules)
+        assertEquals(setOf(SecurityRule.CREDENTIALS, SecurityRule.WSL_MOUNT), policy.permissiveRules)
+        assertFalse(SecurityRule.SHELL_FILE_WRITE in policy.permissiveRules)
+        assertFalse(SecurityRule.BLOCKED_DOMAIN in policy.permissiveRules)
     }
 
     fun `test an unresolvable rule id is dropped rather than guessed at`() {
         settings.state.disabledSecurityRules = "credentials,NOT_A_RULE,TEMP_DIR"
         val policy = settings.sensitivePolicy(projectRoot = null)
-        assertEquals(setOf(SecurityRule.TEMP_DIR), policy.disabledRules)
+        assertEquals(setOf(SecurityRule.TEMP_DIR), policy.permissiveRules)
     }
 
     fun `test the extra blocked domains reach the policy, comments and blanks dropped`() {
@@ -97,22 +191,22 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     fun `test remembering a tool persists`() {
         settings.alwaysAllow.remember("Write")
         ClaudeSettings.awaitWrites()
-        assertTrue("Write" in SettingsStore.load().alwaysAllowTools)
+        assertTrue("Write" in SettingsStore.load(settings.scope).alwaysAllowTools)
     }
 
-    fun `test an update does not overwrite what another IDE stored`() {
-        settings.update { it.model = "chosen-in-this-ide" }
+    fun `test an update does not overwrite what another window stored`() {
+        settings.update { it.model = "chosen-in-this-window" }
         ClaudeSettings.awaitWrites()
 
-        val elsewhere = SettingsStore.load().apply { effort = "low" }
-        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+        val elsewhere = SettingsStore.load(settings.scope).apply { effort = "low" }
+        assertTrue("the fixture store must accept the write", SettingsStore.save(settings.scope, elsewhere))
 
         settings.update { it.permissionMode = "plan" }
         ClaudeSettings.awaitWrites()
 
-        val stored = SettingsStore.load()
-        assertEquals("this IDE's own earlier change was lost", "chosen-in-this-ide", stored.model)
-        assertEquals("the other IDE's change was overwritten", "low", stored.effort)
+        val stored = SettingsStore.load(settings.scope)
+        assertEquals("this window's own earlier change was lost", "chosen-in-this-window", stored.model)
+        assertEquals("the other window's change was overwritten", "low", stored.effort)
         assertEquals("plan", stored.permissionMode)
     }
 
@@ -123,7 +217,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         threads.forEach { it.join() }
         ClaudeSettings.awaitWrites()
 
-        val stored = SettingsStore.load()
+        val stored = SettingsStore.load(settings.scope)
         (1..8).forEach { n -> assertTrue("K$n=v$n was lost", "K$n=v$n" in stored.envVars) }
     }
 
@@ -141,7 +235,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         SecretStore.storeOverride = backing
 
         assertEquals("a failed read must produce no write at all", before, backing.toMap())
-        assertEquals("the-real-configuration", SettingsStore.load().model)
+        assertEquals("the-real-configuration", SettingsStore.load(settings.scope).model)
     }
 
     private class UnreadableStore(backing: MutableMap<String, String>) :

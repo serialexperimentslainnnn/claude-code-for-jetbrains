@@ -464,11 +464,21 @@ substitution, base64 payloads) before matching.
 - **MCP servers and Skills** → denied outright; third-party code has no business reading your keys;
 - **foreign territory** → denied for every caller, trusted or not.
 
-**Per-rule switches** (Settings ▸ Claude Code ▸ Security). Credentials, dangerous commands, and each of
-the three foreign-territory checks can be turned off independently — all **on** by default. Turning one
-off is never a silent allow: detection still runs, and a hit is only *downgraded* from an automatic
-deny to a permission card, shown every time, to every caller. There is no toggle that makes a match
-invisible, and every card names the rule and the Settings path.
+**Per-rule switches** (Settings ▸ Claude Code Security, its own entry in the settings tree, kept per
+project). Every rule can be turned off independently, and so can a whole category at once — all **on** by
+default. Turning one off is never a silent allow: detection still runs, and a hit is only *downgraded* from
+an automatic deny to a permission card, shown every time, to every caller. Every card names the rule and the
+Settings path.
+
+**One switch above all of them**: a shield in the chat's button row, and the same control on that page,
+turns the guard off for a chosen duration — 5 minutes up to *Forever*, five of the seven choices expiring on
+their own. It is **on** by default, the shield is unlit whenever it is not, and while it is off the guard
+evaluates nothing at all.
+
+**Whitelisting a command** is the narrow alternative to switching a rule off: an exact command, matched whole
+and de-obfuscated on both sides, at one of three reaches — that rule, that category, or everywhere. Any rule
+can be whitelisted, and a blocked call offers a **Whitelist Command** link that files the command under the
+rule that stopped it.
 
 The built-in sensitive-path list is additive only by construction: it can be widened with extra globs and
 can never be shrunk. Paths under the project root are exempt from both the credential and

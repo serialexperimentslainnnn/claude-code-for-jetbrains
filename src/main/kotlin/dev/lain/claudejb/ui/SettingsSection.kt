@@ -29,11 +29,47 @@ internal interface SettingsSection {
 
 internal const val SETTINGS_FORM_WIDTH = 600
 
+/**
+ * The scroll pane every Claude settings page is wrapped in — pinned to the left so a wide monitor does not
+ * stretch the form and its HTML notes edge to edge.
+ */
+internal fun settingsScroller(built: JComponent): JComponent {
+    val holder = JPanel(java.awt.BorderLayout()).apply {
+        isOpaque = false
+        border = com.intellij.util.ui.JBUI.Borders.empty(0, 0, 0, JBUIScale.scale(12))
+        add(built, java.awt.BorderLayout.WEST)
+    }
+    return com.intellij.ui.components.JBScrollPane(holder).apply {
+        border = com.intellij.util.ui.JBUI.Borders.empty()
+        viewport.isOpaque = false
+        isOpaque = false
+        verticalScrollBar.unitIncrement = JBUIScale.scale(16)
+        horizontalScrollBarPolicy = com.intellij.ui.components.JBScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+    }
+}
+
 internal fun sectionLabel(text: String) = JBLabel(text).apply { font = JBFont.medium().asBold() }
 
 internal fun noteLabel(bodyHtml: String) = JBLabel(
     "<html><body style='width:${SETTINGS_FORM_WIDTH}px'>$bodyHtml</body></html>",
 ).apply { font = JBFont.small() }
+
+/**
+ * A combo renderer that shows an enum's own label instead of its constant name.
+ *
+ * Shared because the alternative is one anonymous `DefaultListCellRenderer` per combo, and the ones on the
+ * security page all want the same thing: the word the user reads elsewhere in the plugin.
+ */
+internal fun labelRenderer(label: (Any?) -> String?) = object : javax.swing.DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: javax.swing.JList<*>?,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ): java.awt.Component =
+        super.getListCellRendererComponent(list, label(value) ?: value, index, isSelected, cellHasFocus)
+}
 
 internal fun csvSet(s: String): Set<String> =
     s.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()

@@ -96,120 +96,66 @@
     return { el: node, bodyNode: body, kind: isError ? 'text' : 'md' };
   }
 
-  var SUSPEND_DURATIONS = [
-    { token: '5m', label: '5 minutes' },
-    { token: '15m', label: '15 minutes' },
-    { token: '30m', label: '30 minutes' },
-    { token: '4h', label: '4 hours' },
-    { token: '8h', label: '8 hours' },
-    { token: 'ide', label: 'Until IDE closes' },
-    { token: 'forever', label: 'Forever' },
-  ];
+  // A call a rule matched and that ran anyway, because Allow All is on or the command is whitelisted.
+  // A warning rather than a block: nothing was stopped, and the point of the row is that the user can see
+  // WHICH rule went unenforced and why, instead of the bypass being invisible.
+  function buildBypassNotice() {
+    var node = el('div', { class: 'notice guard-bypass' });
+    var body = el('div', { class: 'body' });
+    node.appendChild(body);
+    return { el: node, bodyNode: body, kind: 'md' };
+  }
 
-  function buildBlockNotice(rule) {
+  function buildBlockNotice(rule, command) {
     var node = el('div', { class: 'notice guard-block' });
     var body = el('div', { class: 'body' });
     node.appendChild(body);
 
-    var menu = el('div', {
-      class: 'guard-disable-menu',
-      attrs: { role: 'menu', hidden: 'hidden', 'aria-label': 'Disable this rule for' },
-    });
     var link = el('button', {
       class: 'guard-disable-link',
       text: 'Disable rule',
       attrs: { type: 'button', 'aria-expanded': 'false', 'aria-haspopup': 'menu' },
     });
     var actions = el('div', { class: 'guard-block-actions' });
-    var options = [];
-    var isOpen = false;
 
-    function focusOption(at) {
-      var target = options[(at + options.length) % options.length];
-      if (target) target.focus({ preventScroll: true });
-    }
-
-    function onOutside(e) {
-      if (menu.contains(e.target) || link.contains(e.target)) return;
-      setOpen(false);
-    }
-
-    function onEscape(e) {
-      if (e.key !== 'Escape') return;
-      setOpen(false);
-      link.focus();
-    }
-
-    function onViewChange() {
-      setOpen(false);
-    }
-
-    var rowWatch = window.MutationObserver
-      ? new window.MutationObserver(function () {
-          if (!link.isConnected) setOpen(false);
-        })
-      : null;
-
-    function setOpen(open) {
-      if (open === isOpen) return;
-      isOpen = open;
-      link.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (!open) {
-        menu.setAttribute('hidden', 'hidden');
-        actions.appendChild(menu);
-        document.removeEventListener('mousedown', onOutside, true);
-        document.removeEventListener('keydown', onEscape, true);
-        document.removeEventListener('scroll', onViewChange, true);
-        window.removeEventListener('resize', onViewChange);
-        if (rowWatch) rowWatch.disconnect();
-        return;
-      }
-      document.body.appendChild(menu);
-      menu.removeAttribute('hidden');
-      CC.placeMenu(menu, link);
-      document.addEventListener('mousedown', onOutside, true);
-      document.addEventListener('keydown', onEscape, true);
-      document.addEventListener('scroll', onViewChange, true);
-      window.addEventListener('resize', onViewChange);
-      var conversation = conversationEl();
-      if (rowWatch && conversation) rowWatch.observe(conversation, { childList: true });
-      focusOption(0);
-    }
+    var menu = CC.durationMenu({
+      anchor: link,
+      home: actions,
+      label: 'Disable this rule for',
+      watch: conversationEl,
+      onPick: function (token) {
+        safeSend({ type: 'guardSuspend', rule: String(rule), duration: token });
+      },
+    });
 
     link.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      setOpen(!isOpen);
-    });
-    menu.addEventListener('keydown', function (e) {
-      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-      e.preventDefault();
-      var step = e.key === 'ArrowDown' ? 1 : -1;
-      var at = options.indexOf(document.activeElement);
-      focusOption(at < 0 ? (step > 0 ? 0 : options.length - 1) : at + step);
-    });
-
-    SUSPEND_DURATIONS.forEach(function (d) {
-      var option = el('button', {
-        class: 'guard-disable-option',
-        text: d.label,
-        attrs: { type: 'button', role: 'menuitem' },
-        on: {
-          click: function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            safeSend({ type: 'guardSuspend', rule: String(rule), duration: d.token });
-            setOpen(false);
-            link.focus();
-          },
-        },
-      });
-      options.push(option);
-      menu.appendChild(option);
+      menu.toggle();
     });
 
     actions.appendChild(link);
-    actions.appendChild(menu);
+    actions.appendChild(menu.menu);
+
+    // Only when the call carried a command. Whitelisting is about an exact command string, so a block with
+    // nothing to match on — a bare path read, say — must not offer a link that would silently do nothing.
+    if (command) {
+      actions.appendChild(
+        el('button', {
+          class: 'guard-whitelist-link',
+          text: 'Whitelist Command',
+          attrs: { type: 'button' },
+          on: {
+            click: function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              safeSend({ type: 'guardWhitelist', rule: String(rule), command: String(command) });
+            },
+          },
+        })
+      );
+    }
+
     node.appendChild(actions);
     return { el: node, bodyNode: body, kind: 'md' };
   }
@@ -240,7 +186,9 @@
       case 'ERROR':
         return buildNotice(true);
       case 'SYSTEM':
-        return entry && entry.blockedRule ? buildBlockNotice(entry.blockedRule) : buildNotice(false);
+        if (entry && entry.blockedRule) return buildBlockNotice(entry.blockedRule, entry.command);
+        if (entry && entry.bypassedRule) return buildBypassNotice();
+        return buildNotice(false);
       default:
         return buildNotice(false);
     }

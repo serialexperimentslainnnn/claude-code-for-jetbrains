@@ -18,15 +18,22 @@ object SensitiveGuard {
         val pathResolver: ((String) -> String?)? = null,
         val envValues: Map<String, String> = emptyMap(),
         val fileReader: ((String) -> String?)? = null,
-        val disabledRules: Set<SecurityRule> = emptySet(),
+        /**
+         * The rules running in **Permissive** mode: detection still happens, and a hit becomes a card
+         * instead of a refusal. Every rule not in here is **Enforcing**, which is the default for all of
+         * them — an empty set is the original hard lock exactly.
+         */
+        val permissiveRules: Set<SecurityRule> = emptySet(),
         val httpProxy: String? = null,
         val httpsProxy: String? = null,
         val noProxyHosts: List<String> = emptyList(),
         val extraBlockedDomains: List<String> = emptyList(),
         val commandWhitelist: List<String> = emptyList(),
+        val categoryWhitelist: Map<SecurityCategory, Set<String>> = emptyMap(),
+        val ruleWhitelist: Map<SecurityRule, Set<String>> = emptyMap(),
     )
 
-    private const val SETTINGS_PATH = "Settings ▸ Claude Code ▸ Security"
+    private const val SETTINGS_PATH = "Settings ▸ Claude Code Security"
 
     data class Decision(
         val verdict: Verdict,
@@ -36,34 +43,61 @@ object SensitiveGuard {
 
     fun evaluate(input: JsonObject, policy: Policy): Decision {
         val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
-        if (liftedByWhitelist(input, hit, policy)) return Decision(Verdict.ALLOW, null)
+        // An ALLOW that came from a whitelist carries the rule and the list that lifted it, unlike the ALLOW
+        // above: the difference between "nothing matched" and "something matched and you permitted it" is
+        // what lets the transcript warn about the second one instead of staying silent.
+        liftedByWhitelist(input, hit, policy)?.let { list ->
+            return Decision(Verdict.ALLOW, "${hit.text} — allowed by the $list", hit.rule)
+        }
         return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule)
     }
 
     private fun verdictFor(hit: Hit, policy: Policy): Verdict =
         if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
 
-    private fun liftedByWhitelist(input: JsonObject, hit: Hit, policy: Policy): Boolean {
-        if (!hit.rule.whitelistable || policy.commandWhitelist.isEmpty()) return false
-        val approved = policy.commandWhitelist.map { canonicalCommand(it, policy) }.filter { it.isNotEmpty() }.toSet()
-        if (approved.isEmpty()) return false
-        val issued = ToolInputScanner.commandCandidates(input)
-        if (issued.isEmpty()) return false
-        return issued.all { canonicalCommand(it, policy) in approved }
+    /**
+     * Whether the user has already said this exact command may run.
+     *
+     * Asked **narrowest first** — the rule that fired, then that rule's category, then the global list — so
+     * the permission can be attributed to one entry rather than to "somewhere". Every command the call
+     * issues has to be covered: authorising `terraform destroy` does not authorise
+     * `terraform destroy && rm -rf /`, which is a different string.
+     *
+     * There is no rule this cannot lift, deliberately. A false positive the user cannot get past stops work
+     * the user asked for, and deciding which of their own commands they are allowed to permit is not this
+     * code's call — [SecurityRule.whitelistable] survives only as the flag that decides whether adding one
+     * from a block warns first.
+     */
+    private fun liftedByWhitelist(input: JsonObject, hit: Hit, policy: Policy): String? {
+        val issued = ToolInputScanner.commandCandidates(input).map { canonicalCommand(it, policy) }
+        if (issued.isEmpty() || issued.any { it.isEmpty() }) return null
+        if (liftedBy(issued, policy.ruleWhitelist[hit.rule], policy)) return "whitelist for ${hit.rule.label}"
+        if (liftedBy(issued, policy.categoryWhitelist[hit.rule.category], policy)) {
+            return "whitelist for ${hit.rule.category.label}"
+        }
+        if (liftedBy(issued, policy.commandWhitelist, policy)) return "whitelist that applies everywhere"
+        return null
     }
 
-    private fun canonicalCommand(command: String, policy: Policy): String =
+    private fun liftedBy(issued: List<String>, allowed: Collection<String>?, policy: Policy): Boolean {
+        if (allowed.isNullOrEmpty()) return false
+        val approved = allowed.map { canonicalCommand(it, policy) }.filter { it.isNotEmpty() }.toSet()
+        if (approved.isEmpty()) return false
+        return issued.all { it in approved }
+    }
+
+    internal fun canonicalCommand(command: String, policy: Policy): String =
         CommandRules.deobfuscate(command, policy.home, policy.envValues)
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-    private fun isEnforced(hit: Hit, policy: Policy): Boolean = hit.rule !in policy.disabledRules
+    private fun isEnforced(hit: Hit, policy: Policy): Boolean = hit.rule !in policy.permissiveRules
 
     private fun reasonFor(hit: Hit, policy: Policy): String =
         if (isEnforced(hit, policy)) {
-            "${hit.text} — disable this in $SETTINGS_PATH"
+            "${hit.text} — set this rule to Permissive in $SETTINGS_PATH"
         } else {
-            "${hit.text} (downgraded to a prompt: disabled in $SETTINGS_PATH)"
+            "${hit.text} (asked rather than refused: this rule is Permissive in $SETTINGS_PATH)"
         }
 
     private data class Hit(val rule: SecurityRule, val text: String)

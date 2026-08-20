@@ -55,6 +55,15 @@ de-obfuscation and path canonicalisation.
 **Repudiation.** Every decision is a visible card; nothing auto-approves silently in the categories above,
 including when a per-rule toggle is off — a disabled rule downgrades DENY to ASK, never to ALLOW.
 
+**Two exceptions, both the user's** (5.6). A master switch stops the evaluation itself for a chosen duration,
+and a command on a whitelist is allowed outright — any command, under any rule, credential reads included.
+Neither is reachable from the wire: the switch is a control in the user's own UI and the whitelists are
+authored in Settings, so nothing the model relays can request either. They narrow this section's claim from
+"nothing auto-approves silently" to "nothing the model can influence auto-approves silently". The trade is
+recorded in `SECURITY-GUARD.md`: an unliftable rule that fires on legitimate work leaves no way to complete
+it, and the families that were unliftable are the ones every shipped false positive came from. *Defending
+against the user* is already a stated non-goal below; these make it explicit rather than implicit.
+
 **Denial of service.** A wedged binary stalls one chat tab. The 30 s control-request watchdog and the
 drain-on-stop path bound it. *Low severity, accepted.*
 

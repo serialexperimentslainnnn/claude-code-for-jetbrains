@@ -40,10 +40,10 @@ import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardCommandApprovals
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SecurityCommandApprovals
-import dev.lain.claudejb.settings.approvedGuardCommands
+import dev.lain.claudejb.settings.guardSuspended
 import dev.lain.claudejb.settings.requiresTrustPrompt
 import dev.lain.claudejb.settings.resolveEnv
 import dev.lain.claudejb.settings.sensitiveDecision
@@ -349,6 +349,9 @@ class ClaudeSession(
 
     val checkpointingEnabled: Boolean get() = ClaudeSettings.getInstance(project).enableFileCheckpointing
 
+    /** Whether the Sensitive Guard is judging tool calls right now — what the composer's shield is drawn from. */
+    val guardEnforced: Boolean get() = !ClaudeSettings.getInstance(project).guardSuspended()
+
     private val poll = PollSchedule(
         isRunning = ::isRunning,
         turnActive = { turnActive },
@@ -374,6 +377,14 @@ class ClaudeSession(
     var initialized: Boolean = false
         private set
 
+    /**
+     * The commands pre-approved from a guard alert **in this chat**, for as long as this chat lives.
+     *
+     * One store per session on purpose: an approval given under one conversation's card says nothing about
+     * another's, and none of it is written down. The durable answer is the whitelist in Settings.
+     */
+    val guardApprovals = GuardCommandApprovals()
+
     private val broker by lazy {
         PermissionBroker(
             permissionMode = { permissionMode },
@@ -387,23 +398,27 @@ class ClaudeSession(
             sensitiveDecision = { input ->
                 ClaudeSettings.getInstance(project).sensitiveDecision(input, project.basePath)
             },
-            isGuardCommandApproved = { rule, command ->
-                SecurityCommandApprovals.isApproved(
-                    ClaudeSettings.getInstance(project).approvedGuardCommands(),
-                    rule,
-                    command,
-                )
-            },
-            onSensitiveDenied = { toolName, reason, rule ->
+            isGuardCommandApproved = { rule, command -> guardApprovals.isApproved(rule, command) },
+            onSensitiveDenied = { toolName, reason, rule, command ->
                 edt {
                     transcript.add(
                         Speaker.SYSTEM,
                         reason?.let { "Blocked $toolName: it $it." }
-                            ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code ▸ Security.",
+                            ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code Security.",
+                        commandText = command?.takeIf { it.isNotBlank() },
                         blockedRule = rule?.name,
                     )
                 }
                 fireState()
+            },
+            onSensitiveBypassed = { toolName, reason, rule ->
+                edt {
+                    transcript.add(
+                        Speaker.SYSTEM,
+                        "Allowed $toolName: ${reason ?: "${rule.label} matched, and a bypass is in force"}.",
+                        bypassedRule = rule.name,
+                    )
+                }
             },
         )
     }

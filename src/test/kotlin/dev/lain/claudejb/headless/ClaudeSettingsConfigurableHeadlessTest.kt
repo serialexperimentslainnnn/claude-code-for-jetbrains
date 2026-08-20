@@ -14,10 +14,12 @@ import javax.swing.JComboBox
 
 class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
 
+    private val scope get() = ClaudeSettings.getInstance(project).scope
+
     override fun setUp() {
         super.setUp()
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStore.load()
+        SettingsStore.load(scope)
         ClaudeSettings.getInstance(project).replaceState(ClaudeSettings.State())
     }
 
@@ -233,7 +235,6 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         addDirs = "/tmp/a\n/tmp/b"
         betas = "beta-one"
         strictMcpConfig = true
-        signedOut = true
         enableFileCheckpointing = false
         rewindFallback = "never"
         sensitiveExtraGlobs = "**/secret.env"
@@ -243,7 +244,6 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         val FORM_OWNED = setOf(
             "effort", "permissionMode", "thinkingTokens", "includePartialMessages",
             "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",
-            "disabledSecurityRules", "securityExtraBlockedDomains", "securityCommandWhitelist",
             "provider",
             "claudePath", "nodePath", "sourceScript", "envVars",
             "settingSources", "allowedTools", "disallowedTools", "alwaysAllowTools",
@@ -251,12 +251,18 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             "maxTurns", "maxBudgetUsd", "fallbackModel", "addDirs", "betas",
         )
 
+        // Everything the guard owns moved to Settings ▸ Claude Code Security in 5.6, and this page must not
+        // write it any more — a page that rewrites a field it no longer shows is how a setting gets reset by
+        // somebody pressing OK on an unrelated screen.
         val NOT_ON_THE_FORM = setOf(
-            "signedOut", "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs",
+            "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs", "executionTrusted",
+            "guardEnabled", "guardDisabledUntil", "guardMode",
+            "disabledSecurityRules", "securityExtraBlockedDomains", "securityCommandWhitelist",
+            "securityCategoryWhitelists", "securityRuleWhitelists",
             "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
             "securityBlockForeignOtherUserHome", "securityBlockForeignNetworkMounts",
             "securityBlockForeignWslMounts", "securityBlockOutsideProject",
-            "securityRuleSuspensions", "securityCommandApprovals",
+            "securityRuleSuspensions",
         )
 
         val UNWRITTEN_UNLESS_EDITED = setOf("model")
@@ -266,7 +272,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         val settings = ClaudeSettings.getInstance(project)
         settings.replaceState(ClaudeSettings.State())
         val elsewhere = ClaudeSettings.State().apply { permissionMode = "acceptEdits" }
-        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+        assertTrue("the fixture store must accept the write", SettingsStore.save(scope, elsewhere))
 
         val c = newConfigurable()
         try {
@@ -280,7 +286,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         assertEquals(
             "OK on an untouched page replaced the other IDE's configuration",
             "acceptEdits",
-            SettingsStore.load().permissionMode,
+            SettingsStore.load(scope).permissionMode,
         )
     }
 
@@ -291,7 +297,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             model = "from-the-other-ide"
             sensitiveExtraGlobs = "**/other.env"
         }
-        assertTrue("the fixture store must accept the write", SettingsStore.save(elsewhere))
+        assertTrue("the fixture store must accept the write", SettingsStore.save(scope, elsewhere))
 
         val c = newConfigurable()
         try {
@@ -308,7 +314,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
         } finally {
             c.disposeUIResources()
         }
-        val stored = SettingsStore.load()
+        val stored = SettingsStore.load(scope)
         assertEquals("OK did not win", "typed-by-the-user", stored.model)
         assertEquals(
             "the refresh was skipped instead of merely not drawn, so the other IDE's field was clobbered",

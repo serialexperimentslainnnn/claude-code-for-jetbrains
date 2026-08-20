@@ -182,6 +182,15 @@
                 id="dev.lain.claudejb.settings"
                 displayName="Claude Code"
                 nonDefaultProject="false"/>
+
+        <!-- The guard gets its own entry rather than a section of the page above: it is what people come
+             looking for while something is being blocked, and every control on it decides what may reach
+             the machine. SensitiveGuard.SETTINGS_PATH names this page in every block it writes. -->
+        <projectConfigurable
+                instance="dev.lain.claudejb.ui.ClaudeSecurityConfigurable"
+                id="dev.lain.claudejb.settings.security"
+                displayName="Claude Code Security"
+                nonDefaultProject="false"/>
     </extensions>
 
     <applicationListeners>

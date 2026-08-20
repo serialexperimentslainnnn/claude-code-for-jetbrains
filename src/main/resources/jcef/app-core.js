@@ -174,6 +174,118 @@
     menu.style.top = Math.round(top) + 'px';
   };
 
+  // How long the guard — one rule, or the whole thing — stands down for. ONE list in the whole page, and it
+  // is a contract: SecuritySuspensionsTest reads this array out of this file and asserts it matches
+  // SecuritySuspensions.Duration token for token, in order. Adding one means both files in the same commit.
+  CC.GUARD_DURATIONS = [
+    { token: '5m', label: '5 minutes' },
+    { token: '15m', label: '15 minutes' },
+    { token: '30m', label: '30 minutes' },
+    { token: '4h', label: '4 hours' },
+    { token: '8h', label: '8 hours' },
+    { token: 'ide', label: 'Until IDE closes' },
+    { token: 'forever', label: 'Forever' },
+  ];
+
+  // The "for how long?" popup, shared by the Disable-rule link on a block and the shield in the composer.
+  // Lives on document.body while open and goes back to its owner when closed, so a transcript clear cannot
+  // take a floating menu down with it. Returns { toggle, close, isOpen }.
+  CC.durationMenu = function (opts) {
+    var anchor = opts.anchor;
+    var home = opts.home;
+    var options = [];
+    var isOpen = false;
+    var menu = document.createElement('div');
+    menu.className = 'guard-disable-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('hidden', 'hidden');
+    menu.setAttribute('aria-label', opts.label || 'Disable for');
+
+    function focusOption(at) {
+      var target = options[(at + options.length) % options.length];
+      if (target) target.focus({ preventScroll: true });
+    }
+    function onOutside(e) {
+      if (menu.contains(e.target) || anchor.contains(e.target)) return;
+      setOpen(false);
+    }
+    function onEscape(e) {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      anchor.focus();
+    }
+    function onViewChange() {
+      setOpen(false);
+    }
+    var watch =
+      window.MutationObserver && opts.watch
+        ? new window.MutationObserver(function () {
+            if (!anchor.isConnected) setOpen(false);
+          })
+        : null;
+
+    function setOpen(open) {
+      if (open === isOpen) return;
+      isOpen = open;
+      anchor.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!open) {
+        menu.setAttribute('hidden', 'hidden');
+        home.appendChild(menu);
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onEscape, true);
+        document.removeEventListener('scroll', onViewChange, true);
+        window.removeEventListener('resize', onViewChange);
+        if (watch) watch.disconnect();
+        return;
+      }
+      document.body.appendChild(menu);
+      menu.removeAttribute('hidden');
+      CC.placeMenu(menu, anchor);
+      document.addEventListener('mousedown', onOutside, true);
+      document.addEventListener('keydown', onEscape, true);
+      document.addEventListener('scroll', onViewChange, true);
+      window.addEventListener('resize', onViewChange);
+      if (watch && opts.watch()) watch.observe(opts.watch(), { childList: true });
+      focusOption(0);
+    }
+
+    menu.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      var step = e.key === 'ArrowDown' ? 1 : -1;
+      var at = options.indexOf(document.activeElement);
+      focusOption(at < 0 ? (step > 0 ? 0 : options.length - 1) : at + step);
+    });
+
+    CC.GUARD_DURATIONS.forEach(function (d) {
+      var option = document.createElement('button');
+      option.className = 'guard-disable-option';
+      option.type = 'button';
+      option.setAttribute('role', 'menuitem');
+      option.textContent = d.label;
+      option.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        opts.onPick(d.token);
+        setOpen(false);
+        anchor.focus();
+      });
+      options.push(option);
+      menu.appendChild(option);
+    });
+
+    home.appendChild(menu);
+    return {
+      menu: menu,
+      toggle: function () {
+        setOpen(!isOpen);
+      },
+      close: function () {
+        setOpen(false);
+      },
+    };
+  };
+
   var covering = {};
   CC.coverTranscript = function (owner, covered) {
     if (covered) covering[owner] = true;

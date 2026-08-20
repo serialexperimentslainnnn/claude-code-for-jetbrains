@@ -43,7 +43,7 @@ class JcefSettingsMenuTest {
     fun `the groups are drawn in the declared order`() {
         assertEquals(
             listOf(
-                "Model", "Effort", "Permission mode", "Chat", "Security",
+                "Model", "Effort", "Permission mode", "Chat", "Guard mode", "Security",
                 "Setting sources", "Allowed tools", "Disallowed tools", "Always allowed tools", "MCP",
             ),
             menu().map { it.str("group") }.distinct(),
@@ -258,7 +258,7 @@ class JcefSettingsMenuTest {
 
     @Test
     fun `every rule of every category has a row, and each carries its category as its sub-level`() {
-        val rows = menu().filter { it.str("group") == "Security" }
+        val rows = menu().filter { it.str("group") == "Security" && it.str("key") != "guard" }
         assertEquals(SecurityRule.entries.size, rows.size)
         rows.forEach { row ->
             val rule = SecurityRule.from(row.str("key").removePrefix("rule:"))
@@ -267,5 +267,26 @@ class JcefSettingsMenuTest {
             assertEquals(rule.label, row.str("label"))
             assertTrue(row.bool("on"), row.str("key"))
         }
+    }
+
+    @Test
+    fun `the master switch is a row of its own, above the rules and on by default`() {
+        val rows = menu().filter { it.str("group") == "Security" }
+
+        assertEquals("guard", rows.first().str("key"), "the switch that governs the rest belongs above them")
+        assertEquals("Sensitive Guard", rows.first().str("label"))
+        assertTrue(rows.first().bool("on"), "a default configuration is a protected one")
+    }
+
+    @Test
+    fun `switching the master row off is Forever, because a checkbox cannot ask for how long`() {
+        val state = ClaudeSettings.State()
+
+        assertTrue(write(state, "guard", false))
+        assertFalse(state.guardEnabled)
+        assertEquals(0L, state.guardDisabledUntil, "a menu checkbox must not invent a deadline")
+
+        assertTrue(write(state, "guard", true))
+        assertTrue(state.guardEnabled)
     }
 }

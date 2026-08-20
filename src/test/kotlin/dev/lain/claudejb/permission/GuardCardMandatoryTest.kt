@@ -6,6 +6,7 @@ import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -14,11 +15,18 @@ class GuardCardMandatoryTest {
     private class Observation {
         var respond: String? = null
         var presented: PendingPermission? = null
-        var denied: Triple<String, String?, SecurityRule?>? = null
+        var denied: Denial? = null
 
         val autoApproved: Boolean get() = respond != null && presented == null
         val manualCard: Boolean get() = presented != null
     }
+
+    private data class Denial(
+        val tool: String,
+        val reason: String?,
+        val rule: SecurityRule?,
+        val command: String?,
+    )
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
 
@@ -45,7 +53,7 @@ class GuardCardMandatoryTest {
             isRemembered = { tool, _ -> tool in alwaysAllowedTools },
             projectRoot = null,
             sensitiveDecision = { SensitiveGuard.Decision(verdict, "runs a destructive command", rule) },
-            onSensitiveDenied = { tool, reason, r -> obs.denied = Triple(tool, reason, r) },
+            onSensitiveDenied = { tool, reason, r, command -> obs.denied = Denial(tool, reason, r, command) },
             isGuardCommandApproved = { r, command ->
                 approvedCommands.any { it.first == r && it.second == command }
             },
@@ -125,8 +133,29 @@ class GuardCardMandatoryTest {
 
         assertFalse(obs.manualCard, "an enforced rule is refused, not asked about")
         assertNotNull(obs.respond)
-        assertEquals(rule, obs.denied?.third, "the rule must reach the transcript block")
-        assertEquals("Bash", obs.denied?.first)
+        assertEquals(rule, obs.denied?.rule, "the rule must reach the transcript block")
+        assertEquals("Bash", obs.denied?.tool)
+        assertEquals(
+            "terraform destroy",
+            obs.denied?.command,
+            "the block's Whitelist Command link has nothing to act on without it",
+        )
+    }
+
+    @Test
+    fun `a block with no command to name carries none`() {
+        val write = CanUseToolRequest(
+            toolName = "Write",
+            input = buildJsonObject { put("file_path", "/etc/hosts") },
+            toolUseId = "tu_w",
+        )
+
+        val obs = run(SensitiveGuard.Verdict.DENY, write)
+
+        assertNull(
+            obs.denied?.command,
+            "a link offering to whitelist an empty string would be a button that does nothing",
+        )
     }
 
     @Test

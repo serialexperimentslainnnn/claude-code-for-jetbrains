@@ -1,24 +1,28 @@
 package dev.lain.claudejb.settings
 
-import com.intellij.ide.util.PropertiesComponent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-private const val TRUST_KEY = "claudejb.trustedExecOnOpen"
-
 private val LENIENT_JSON = Json {
     ignoreUnknownKeys = true
     isLenient = true
 }
 
-fun ClaudeSettings.isExecutionTrusted(): Boolean =
-    project?.let { PropertiesComponent.getInstance(it).getBoolean(TRUST_KEY, false) } ?: false
+/**
+ * Whether the user has said this project's source script and stdio MCP servers may run.
+ *
+ * Kept in the settings document like every other setting, which means the IDE's PasswordSafe. It used to be
+ * a `PropertiesComponent` flag in `.idea/workspace.xml` — a security answer in a plaintext file inside the
+ * repository, which is the one place this plugin's configuration is not allowed to be. Nobody who answered
+ * the prompt before 5.6 is remembered, so the prompt appears once more and the answer lands in the safe.
+ */
+fun ClaudeSettings.isExecutionTrusted(): Boolean = state.executionTrusted
 
 fun ClaudeSettings.setExecutionTrusted(trusted: Boolean) {
-    project?.let { PropertiesComponent.getInstance(it).setValue(TRUST_KEY, trusted) }
+    update { it.executionTrusted = trusted }
 }
 
 fun ClaudeSettings.hasRiskyExecConfig(): Boolean =

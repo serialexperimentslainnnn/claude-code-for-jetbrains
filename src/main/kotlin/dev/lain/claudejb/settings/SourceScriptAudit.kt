@@ -42,7 +42,7 @@ internal object SourceScriptAudit {
                         "<i>$reason</i><br><br>" +
                         "It is your file: fix the line, point <b>Settings ▸ Claude Code ▸ Executable</b> at " +
                         "another script, or accept it by switching that rule off in " +
-                        "<b>Settings ▸ Claude Code ▸ Security</b>.",
+                        "<b>Settings ▸ Claude Code Security</b>.",
                     NotificationType.WARNING,
                 )
                 .notify(null)
