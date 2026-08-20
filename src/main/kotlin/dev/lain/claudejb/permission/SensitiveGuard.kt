@@ -166,6 +166,10 @@ object SensitiveGuard {
                     ?.let { Hit(SecurityRule.INHIBIT_RECOVERY, "destroys the means to recover the system: $it") }
             },
             {
+                ContainerEscape.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.CONTAINER_ESCAPE, "breaks a container out onto the host: $it") }
+            },
+            {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
             },

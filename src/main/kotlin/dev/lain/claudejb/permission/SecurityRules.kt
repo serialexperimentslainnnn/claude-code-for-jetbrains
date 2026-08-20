@@ -282,6 +282,19 @@ enum class SecurityRule(
             "command, which is how a restricted context — or a sudo rule — becomes full command execution.",
     ),
 
+    CONTAINER_ESCAPE(
+        SecurityCategory.INTRUSION_TECHNIQUE,
+        "Block container escapes to the host",
+        "entering the host's namespaces (nsenter into PID 1, /proc/1/ns), mounting the host's root " +
+            "filesystem into a container (-v /:/…, --mount source=/), and running a container with full " +
+            "host control (--privileged, hostPID, privileged: true) — the documented ways out onto the host",
+        "You can't break a container out onto the host.",
+        "Entering PID 1's namespaces, mounting the host's root filesystem, or running a --privileged " +
+            "container hands it full control of the machine it runs on. That has legitimate uses, so it is " +
+            "whitelistable — but it is a decision with a record, not a default, exactly like sudo.",
+        whitelistable = true,
+    ),
+
     RESOURCE_HIJACKING(
         SecurityCategory.INTRUSION_TECHNIQUE,
         "Block cryptocurrency miners",
