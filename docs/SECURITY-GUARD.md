@@ -85,6 +85,12 @@ do and why, but never where the off switch is: telling a possibly-hijacked model
 to pull would be a workaround with extra steps. You get that link instead, on a red alert card that names
 the exact rule.
 
+It also tells the model that the refusal is about **that call**, and nothing more. The refusal used to end
+with *do not retry it and do not attempt another way*, which read as prudent and behaved badly: the model
+generalised from one block to the whole session and stopped working. That sentence was never a control
+anyway — the guard re-judges every call, so a different approach is judged on its own merits whatever the
+model was told.
+
 And the guard never asks who is calling. Claude's own tools, a third-party MCP add-on and a Skill are all
 judged by identical rules. This is not simplification for its own sake — an earlier version did consult a
 list of trusted tool names, and that was a mistake worth understanding, because a tool name arrives over

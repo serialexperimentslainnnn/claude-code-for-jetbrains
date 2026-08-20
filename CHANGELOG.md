@@ -20,8 +20,6 @@ of its own starts from the ones you already had.
 - **The guard has a mode: Enforcing, Permissive or Allow All.** Enforcing refuses, Permissive asks on a card
   every time, Allow All lets the call run. Rules take the first two and are Enforcing by default; the guard
   as a whole takes all three.
-- **Settings ▸ Claude Code and Settings ▸ Claude Code Security are at the top of the settings tree**, not
-  under *Other Settings*, and both pages reflow instead of scrolling sideways.
 
 ### Added
 - **A shield in the chat's button row**, left of auto-scroll: switches the guard to Allow All for a chosen
@@ -41,6 +39,9 @@ of its own starts from the ones you already had.
   Both ask first, both are scoped to this project, and neither signs you out.
 
 ### Fixed
+- **A block no longer tells Claude to stop trying.** The refusal ended with *do not retry it and do not
+  attempt another way*, and the model generalised from one block to the whole session and stopped working.
+  It now says which rule refused, why, and that the decision is about that call only.
 - ***Always allow this command* on a guard alert no longer persists.** It was written to the settings
   document, so one conversation answered for every other one, for ever. It is per chat and in memory now,
   revocable from that chat's ⚙ menu.

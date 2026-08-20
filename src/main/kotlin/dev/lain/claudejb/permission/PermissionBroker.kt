@@ -271,12 +271,24 @@ class PermissionBroker(
         /** And what it offers when the reason is that the guard is not running at all. */
         const val ENABLE_GUARD = "enableGuard"
 
+        /**
+         * What the model is told when a rule refuses a call: the reason, and the scope of the refusal.
+         *
+         * It used to end with *do not retry it and do not attempt another way*, and that came out worse than
+         * it read. The model generalised from one refusal to the whole session and stopped acting at all,
+         * which is not a safer outcome — it is a broken one. The sentence was advice, never a control: the
+         * guard re-judges every call, so a different approach is evaluated on its own merits either way.
+         *
+         * What replaces it says the one thing that stops the over-reading, and it is a fact rather than an
+         * instruction: this decision is about this call. It still does not say where the off switch is —
+         * see docs/SECURITY-GUARD.md on why a possibly-hijacked model is not told which lever to ask for.
+         */
         const val SENSITIVE_DENIED: String =
-            "Denied by the IDE: this call touches credentials, a dangerous command, or territory it must not. " +
-                "Do not retry it and do not attempt another way to reach the same result."
+            "Denied by the IDE's security guard: this call touches credentials, a dangerous command, or " +
+                "territory it must not. This applies to this call only."
 
         fun denialMessage(reason: String?): String =
-            reason?.let { "Denied by the IDE: it $it. Do not retry it and do not attempt another way to do the same thing." }
+            reason?.let { "Denied by the IDE's security guard: it $it. This applies to this call only." }
                 ?: SENSITIVE_DENIED
     }
 }

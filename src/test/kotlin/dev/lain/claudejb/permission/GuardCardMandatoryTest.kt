@@ -201,6 +201,22 @@ class GuardCardMandatoryTest {
 
         assertFalse(obs.manualCard, "an enforced rule is refused, not asked about")
         assertNotNull(obs.respond)
+        assertTrue(
+            obs.respond.orEmpty().contains("runs a destructive command"),
+            "the model is told why, because a refusal with no reason is one it cannot work around correctly",
+        )
+        assertFalse(
+            obs.respond.orEmpty().contains("Do not retry", ignoreCase = true),
+            "telling the model not to retry made it stop working entirely, and it never was a control",
+        )
+        assertFalse(
+            obs.respond.orEmpty().contains("another way", ignoreCase = true),
+            "same sentence, same over-reading: the guard re-judges every call on its own merits",
+        )
+        assertTrue(
+            obs.respond.orEmpty().contains("this call only"),
+            "what stops the over-reading is saying the decision is about this call, as a fact",
+        )
         assertEquals(rule, obs.denied?.rule, "the rule must reach the transcript block")
         assertEquals("Bash", obs.denied?.tool)
         assertEquals(
