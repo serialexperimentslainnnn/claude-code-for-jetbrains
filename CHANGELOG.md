@@ -43,9 +43,15 @@ of its own starts from the ones you already had.
 - **A warning row whenever a rule matched and the call ran anyway.** It names the rule, what the rule saw,
   and what let it through, and carries **Enable Sensitive Guard** or **Disable this authorization** when
   there is something still in force to undo.
-- **Whitelists at three reaches** — all rules, one category, one rule — edited as a list with a scope
-  dropdown. **Any rule can be whitelisted**, credential and foreign-path rules included; those ask for
-  confirmation first.
+- **Whitelists at three reaches** — all rules, one category, one rule — edited as a list, with a category
+  dropdown and a rule dropdown under it, each carrying its own *All*. **Any rule can be whitelisted**,
+  credential and foreign-path rules included; those ask for confirmation first.
+- **Export, import and migrate.** *Export settings…* and *Import settings…* write and read one JSON file you
+  choose; *Migrate from another IDE…* copies straight from another JetBrains IDE on this machine — pick the
+  IDE, the projects, and whether you want the general settings, the guard's, or its alert history.
+  An exported file **never carries your environment variables**, because that is where an API key ends up
+  and a file leaves the machine; a keychain-to-keychain migration does carry them, because it does not.
+  A permission mode that would weaken security is refused on the way in, by either route.
 - **A *Whitelist Command* link on a guard block**, beside *Disable rule*. Files the exact command under the
   rule that refused it, and will not add a duplicate.
 - **Restore buttons**: *Restore Plugin to default state* and *Restore Sensitive Guard settings to default*.

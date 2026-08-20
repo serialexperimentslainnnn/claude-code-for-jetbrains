@@ -22,6 +22,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val toolsSection = SettingsToolsSection(settings)
     private val mcpSection = SettingsMcpSection()
     private val advancedSection = SettingsAdvancedSection()
+    private val transferSection = SettingsTransferSection(project) { reset() }
 
     private val sections: List<SettingsSection> = listOf(
         modelSection,
@@ -31,6 +32,7 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
         toolsSection,
         mcpSection,
         advancedSection,
+        transferSection,
     )
 
     private val restoreButton = javax.swing.JButton(CleanSettings.PLUGIN_TITLE).apply {
