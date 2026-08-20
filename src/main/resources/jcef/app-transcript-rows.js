@@ -105,6 +105,7 @@
       message: { type: 'guardMaster', on: true, duration: '' },
     },
     revokeApproval: { label: 'Disable this authorization', message: { type: 'guardRevokeApproval' } },
+    removeFromWhitelist: { label: 'Remove from whitelist', message: { type: 'guardRemoveWhitelist' } },
   };
 
   // A call a rule matched and that ran anyway. A warning rather than a block: nothing was stopped, and the

@@ -41,6 +41,8 @@ import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardAlert
+import dev.lain.claudejb.settings.GuardAlertLog
 import dev.lain.claudejb.settings.GuardCommandApprovals
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
@@ -400,30 +402,51 @@ class ClaudeSession(
                 ClaudeSettings.getInstance(project).sensitiveDecision(input, project.basePath)
             },
             isGuardCommandApproved = { rule, command -> guardApprovals.isApproved(rule, command) },
-            onSensitiveDenied = { toolName, reason, rule, command ->
+            onSensitiveDenied = { denial ->
                 edt {
                     transcript.add(
                         Speaker.SYSTEM,
-                        reason?.let { "Blocked $toolName: it $it." }
-                            ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code Security.",
-                        commandText = command?.takeIf { it.isNotBlank() },
-                        blockedRule = rule?.name,
+                        denial.reason?.let { "Blocked ${denial.toolName}: it $it." }
+                            ?: "Blocked ${denial.toolName} by the sensitive-data guard. " +
+                            "See Settings ▸ Claude Code Security.",
+                        commandText = denial.command?.takeIf { it.isNotBlank() },
+                        blockedRule = denial.rule?.name,
                     )
                 }
+                recordAlert(
+                    GuardAlert.DENIED,
+                    denial.rule,
+                    denial.toolName,
+                    command = denial.command,
+                    toolUseId = denial.toolUseId,
+                    detail = denial.detail,
+                )
                 fireState()
             },
             onSensitiveBypassed = { bypass ->
-                // The broker knows about its own route; the other two are settings facts, so the offer to
-                // undo them is decided here. A whitelist entry gets none: it is edited on its own page,
-                // and one call is not the place to delete a line somebody wrote in the cold.
-                val offer = bypass.action
-                    ?: PermissionBroker.ENABLE_GUARD.takeIf { ClaudeSettings.getInstance(project).guardSuspended() }
+                // The broker knows about its own route; the other two are settings facts, so what the row
+                // offers to undo is decided here — put the guard back on, or take the command off the list
+                // it is on. Which list is worked out at removal time, in the guard's own precedence order.
+                val offer = bypass.action ?: if (ClaudeSettings.getInstance(project).guardSuspended()) {
+                    PermissionBroker.ENABLE_GUARD
+                } else {
+                    PermissionBroker.REMOVE_FROM_WHITELIST
+                }
                 guardNotice(
                     bypass.toolName,
                     bypass.reason ?: "${bypass.rule.label} matched, and a bypass is in force",
                     bypass.rule,
                     offer,
                     bypass.command,
+                )
+                recordAlert(
+                    GuardAlert.ALLOWED,
+                    bypass.rule,
+                    bypass.toolName,
+                    via = offer,
+                    command = bypass.command,
+                    toolUseId = bypass.toolUseId,
+                    detail = bypass.detail,
                 )
             },
         )
@@ -811,7 +834,52 @@ class ClaudeSession(
         fireState()
     }
 
+    /**
+     * Writes one guard decision into the alert log.
+     *
+     * Every route the guard can take ends here as well as in the transcript, and for two reasons: it is the
+     * audit trail, and it is the only place a restored conversation can learn that a rule ever matched — the
+     * binary's own file records a refusal as an ordinary failed tool result and a bypass as nothing at all.
+     */
+    private fun recordAlert(
+        verdict: String,
+        rule: SecurityRule?,
+        toolName: String,
+        via: String? = null,
+        command: String? = null,
+        toolUseId: String? = null,
+        detail: String? = null,
+    ) {
+        val matched = rule ?: return
+        GuardAlertLog.record(
+            ClaudeSettings.getInstance(project).scope,
+            GuardAlert(
+                at = System.currentTimeMillis(),
+                rule = matched.name,
+                category = matched.category.name,
+                verdict = verdict,
+                sessionId = sessionId,
+                toolUseId = toolUseId,
+                via = via,
+                tool = toolName,
+                detail = detail,
+                command = command,
+            ),
+        )
+    }
+
     private fun presentPermission(request: PendingPermission) = edt {
+        // A card shown is an alert raised, whatever the user then answers — the answer is its own entry.
+        request.guard?.let {
+            recordAlert(
+                GuardAlert.ASKED,
+                it.rule,
+                request.toolName,
+                command = ToolInputScanner.commandText(request.input),
+                toolUseId = request.toolUseId,
+                detail = it.reason,
+            )
+        }
         cards.present(request)
         if (request.reviewable && request.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
             diffs.openReviewDiff(request.requestId, request.toolName, request.input)
@@ -826,9 +894,13 @@ class ClaudeSession(
         agentScanner.restoreAdmitted(onTasksReplayed = ::fireState)
         toolUseTurn.clear()
         currentUserMessageId = null
+        val withGuard = GuardRestore.reinstate(
+            dtos,
+            GuardAlertLog.forSession(ClaudeSettings.getInstance(project).scope, savedSessionId),
+        )
         edt {
             transcript.clear()
-            for (dto in dtos) {
+            for (dto in withGuard) {
                 val speaker = runCatching { Speaker.valueOf(dto.speaker) }.getOrNull() ?: continue
                 transcript.add(
                     speaker,
@@ -839,6 +911,9 @@ class ClaudeSession(
                     filePath = dto.filePath,
                     commandText = dto.commandText,
                     messageText = dto.messageText,
+                    blockedRule = dto.blockedRule,
+                    bypassedRule = dto.bypassedRule,
+                    bypassAction = dto.bypassAction,
                     toolState = when {
                         dto.failed -> ToolState.ERROR
                         dto.inFlight -> ToolState.ERROR

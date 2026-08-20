@@ -38,7 +38,18 @@ of its own starts from the ones you already had.
 - **Restore buttons**: *Restore Plugin to default state* and *Restore Sensitive Guard settings to default*.
   Both ask first, both are scoped to this project, and neither signs you out.
 
+- **The guard keeps a log of every alert it raises**, in the IDE's password safe, per project: what matched,
+  what it saw, the verdict, and what let the call through if anything did. Capped at the most recent 500.
+  Nothing shows it yet — it is the groundwork for a later feature, and it is what makes the next item work.
+
 ### Fixed
+- **Guard rows survive restoring a session.** Reopening a chat brought the block and bypass rows back as
+  ordinary tool calls: they are the plugin's own rows and the binary's transcript has no record of them —
+  a refusal is a failed tool result with no rule name in it, and an allowed call looks like any other. They
+  are now rebuilt from the alert log and anchored back to the call they belonged to. An *Allow All* given on
+  a card comes back without its undo link, because that approval lived in memory and died with the IDE.
+- **A whitelisted bypass can be undone from the warning row**, with **Remove from whitelist** — it takes the
+  command off whichever of the three lists is letting it through, narrowest first.
 - **A block no longer tells Claude to stop trying.** The refusal ended with *do not retry it and do not
   attempt another way*, and the model generalised from one block to the whole session and stopped working.
   It now says which rule refused, why, and that the decision is about that call only.

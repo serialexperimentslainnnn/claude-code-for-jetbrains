@@ -90,6 +90,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GuardMaster -> onGuardMaster(m)
         is JcefBridge.Msg.GuardWhitelist -> onGuardWhitelist(m)
         is JcefBridge.Msg.GuardRevokeApproval -> onGuardRevokeApproval(m)
+        is JcefBridge.Msg.GuardRemoveWhitelist -> onGuardRemoveWhitelist(m)
         is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
     }
 
@@ -267,6 +268,63 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
         JcefChatPanel.pushSettingsMenuToAll()
         session.systemNotice("`$command` is whitelisted for ${rule.label}. Every other rule still judges it.")
+    }
+
+    /**
+     * Takes a command back off whichever whitelist is letting it through.
+     *
+     * Which list is worked out here rather than carried on the message, and in the guard's own precedence
+     * order — the rule's list, then its category's, then the global one — so the row removes exactly the
+     * entry that acted. Matching is on the canonical form, or an entry written normally would survive being
+     * removed from a warning about a spelling meant to evade it.
+     */
+    private fun onGuardRemoveWhitelist(m: JcefBridge.Msg.GuardRemoveWhitelist) {
+        val rule = SecurityRule.from(m.rule)
+        if (rule == null || m.command.isBlank()) {
+            logger.warn("A bypass warning asked to un-whitelist something this build cannot place: ${m.rule}")
+            return
+        }
+        val settings = ClaudeSettings.getInstance(panel.project)
+        val policy = settings.sensitivePolicy(panel.project.basePath)
+        val wanted = SensitiveGuard.canonicalCommand(m.command, policy)
+        val same = { entry: String -> SensitiveGuard.canonicalCommand(entry, policy) == wanted }
+
+        val removedFrom = removeWhitelisted(settings, rule, same)
+        if (removedFrom == null) {
+            session.systemNotice("`${m.command.trim()}` is not on any whitelist any more.")
+            return
+        }
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`${m.command.trim()}` is off the $removedFrom. ${rule.label} decides it again.")
+    }
+
+    private fun removeWhitelisted(
+        settings: ClaudeSettings,
+        rule: SecurityRule,
+        same: (String) -> Boolean,
+    ): String? {
+        val state = settings.state
+        return when {
+            GuardWhitelists.holds(state.securityRuleWhitelists, rule.name, same) -> {
+                settings.update { it.securityRuleWhitelists = GuardWhitelists.without(it.securityRuleWhitelists, rule.name, same) }
+                "whitelist for ${rule.label}"
+            }
+
+            GuardWhitelists.holds(state.securityCategoryWhitelists, rule.category.name, same) -> {
+                settings.update {
+                    it.securityCategoryWhitelists =
+                        GuardWhitelists.without(it.securityCategoryWhitelists, rule.category.name, same)
+                }
+                "whitelist for ${rule.category.label}"
+            }
+
+            GuardWhitelists.holds(state.securityCommandWhitelist, null, same) -> {
+                settings.update { it.securityCommandWhitelist = GuardWhitelists.without(it.securityCommandWhitelist, null, same) }
+                "whitelist that applies everywhere"
+            }
+
+            else -> null
+        }
     }
 
     private fun onGuardAllowAlways(m: JcefBridge.Msg.GuardAllowAlways) {

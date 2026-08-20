@@ -355,7 +355,7 @@ leaves a **warning row** in the transcript naming the rule and what let it throu
 |---|---|---|
 | …allowed because the Sensitive Guard is disabled | the guard is in Allow All | **Enable Sensitive Guard** |
 | …allowed because you gave Allow All for this exact command in this chat | *Always allow* was answered earlier in this conversation | **Disable this authorization** |
-| …allowed by the whitelist for *X* | the command is on one of the three lists, and it says which | — |
+| …allowed by the whitelist for *X* | the command is on one of the three lists, and it says which | **Remove from whitelist** |
 | …and you accepted it | you answered the card just now | — |
 
 Every row names **the rule that matched and what it saw**, not only the switch that let it past: *Block the

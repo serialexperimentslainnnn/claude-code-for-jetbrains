@@ -38,6 +38,25 @@ object GuardWhitelists {
         return if (text.isBlank()) line else text.trimEnd() + "\n" + line
     }
 
+    /**
+     * True when [text] has an entry under [key] whose command [same] recognises — `key == null` is the
+     * global list, whose lines carry no key at all.
+     *
+     * [same] rather than string equality because a whitelist is matched in the guard's canonical form: the
+     * entry the user typed and the command that ran can be different spellings of one thing.
+     */
+    fun holds(text: String, key: String?, same: (String) -> Boolean): Boolean =
+        entries(text).any { matches(it, key, same) }
+
+    /** [text] with those entries removed. */
+    fun without(text: String, key: String?, same: (String) -> Boolean): String =
+        entries(text).filterNot { matches(it, key, same) }.joinToString("\n")
+
+    private fun matches(entry: String, key: String?, same: (String) -> Boolean): Boolean {
+        if (key == null) return same(entry)
+        return entry.substringBefore('=', "").trim() == key && same(entry.substringAfter('=', "").trim())
+    }
+
     private fun entries(text: String): List<String> =
         text.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
 

@@ -35,7 +35,8 @@ data class PendingPermission(
  * A call a rule matched and that ran anyway, and everything the transcript needs to say so.
  *
  * [action] is what the user can still do about it — put the guard back on, withdraw the authorisation they
- * gave this command — or null when nothing is left standing to undo.
+ * gave this command — or null when nothing is left standing to undo. [toolUseId] is what a restored
+ * conversation anchors the row to, because it is the one identifier the binary's own transcript also keeps.
  */
 data class GuardBypass(
     val toolName: String,
@@ -43,6 +44,18 @@ data class GuardBypass(
     val rule: SecurityRule,
     val command: String? = null,
     val action: String? = null,
+    val toolUseId: String? = null,
+    val detail: String? = null,
+)
+
+/** A call a rule refused, and everything the transcript and the alert log need to say so. */
+data class GuardDenial(
+    val toolName: String,
+    val reason: String?,
+    val rule: SecurityRule?,
+    val command: String? = null,
+    val toolUseId: String? = null,
+    val detail: String? = null,
 )
 
 data class GuardAlert(val rule: SecurityRule, val reason: String?) {
@@ -70,8 +83,7 @@ class PermissionBroker(
     private val projectRoot: String? = null,
     private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
         { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
-    private val onSensitiveDenied: (toolName: String, reason: String?, rule: SecurityRule?, command: String?) -> Unit =
-        { _, _, _, _ -> },
+    private val onSensitiveDenied: (GuardDenial) -> Unit = {},
     /**
      * A call the guard matched and let through anyway — the two bypasses, *Allow All* and a whitelist.
      *
@@ -114,6 +126,8 @@ class PermissionBroker(
                 rule = rule,
                 command = ToolInputScanner.commandText(request.input),
                 action = REVOKE_APPROVAL,
+                toolUseId = request.toolUseId.ifBlank { null },
+                detail = decision.detail,
             ),
         )
     }
@@ -124,10 +138,14 @@ class PermissionBroker(
             SensitiveGuard.Verdict.DENY -> {
                 respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
                 onSensitiveDenied(
-                    request.toolName,
-                    decision.reason,
-                    decision.rule,
-                    ToolInputScanner.commandText(request.input),
+                    GuardDenial(
+                        toolName = request.toolName,
+                        reason = decision.reason,
+                        rule = decision.rule,
+                        command = ToolInputScanner.commandText(request.input),
+                        toolUseId = request.toolUseId.ifBlank { null },
+                        detail = decision.detail,
+                    ),
                 )
                 true
             }
@@ -150,7 +168,16 @@ class PermissionBroker(
                 // No action offered from here: whether this was the guard being off or a whitelist entry is
                 // decided in settings, and so is what the user could do about it.
                 decision.rule?.let {
-                    onSensitiveBypassed(GuardBypass(request.toolName, decision.reason, it))
+                    onSensitiveBypassed(
+                        GuardBypass(
+                            toolName = request.toolName,
+                            reason = decision.reason,
+                            rule = it,
+                            command = ToolInputScanner.commandText(request.input),
+                            toolUseId = request.toolUseId.ifBlank { null },
+                            detail = decision.detail,
+                        ),
+                    )
                 }
                 false
             }
@@ -270,6 +297,9 @@ class PermissionBroker(
 
         /** And what it offers when the reason is that the guard is not running at all. */
         const val ENABLE_GUARD = "enableGuard"
+
+        /** …or that the command is on one of the whitelists, which the row can take it off again. */
+        const val REMOVE_FROM_WHITELIST = "removeFromWhitelist"
 
         /**
          * What the model is told when a rule refuses a call: the reason, and the scope of the refusal.

@@ -26,6 +26,9 @@ value class SettingsScope(val id: String) {
     /** The PasswordSafe entry this scope's document lives under. */
     val secretName: String get() = "${SecretStore.SETTINGS_JSON}@$id"
 
+    /** And the one its guard alert log lives under — same scope, separate entry, separate lifetime. */
+    val guardLogName: String get() = "${SecretStore.GUARD_LOG}@$id"
+
     companion object {
 
         /**

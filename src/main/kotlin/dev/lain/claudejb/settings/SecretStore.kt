@@ -25,13 +25,21 @@ object SecretStore {
 
     const val SIGNED_OUT = "CLAUDE_SIGNED_OUT"
 
+    const val GUARD_LOG = "CLAUDE_GUARD_LOG"
+
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
     private val CREDENTIALS = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
 
     private val NAMES = CREDENTIALS + ENV_VARS + SETTINGS_JSON + SIGNED_OUT
 
-    private val SCOPED_SETTINGS_PREFIX = "$SETTINGS_JSON@"
+    /**
+     * The entries there is one of per IDE installation and project, written `NAME@<scopeId>`.
+     *
+     * A prefix rather than a fixed list because the scope ids are derived, not enumerable — see
+     * [SettingsScope]. Everything not here is global, and [clearAll] sweeps only the credentials.
+     */
+    private val SCOPED_PREFIXES = listOf(SETTINGS_JSON, GUARD_LOG).map { "$it@" }
 
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
 
@@ -71,7 +79,7 @@ object SecretStore {
     }
 
     private fun isKnown(name: String): Boolean =
-        name in NAMES || (name.startsWith(SCOPED_SETTINGS_PREFIX) && name.length > SCOPED_SETTINGS_PREFIX.length)
+        name in NAMES || SCOPED_PREFIXES.any { name.startsWith(it) && name.length > it.length }
 
     fun setVerified(name: String, value: String): Boolean = runCatching {
         set(name, value)

@@ -15,19 +15,12 @@ class GuardCardMandatoryTest {
     private class Observation {
         var respond: String? = null
         var presented: PendingPermission? = null
-        var denied: Denial? = null
+        var denied: GuardDenial? = null
         var bypassed: GuardBypass? = null
 
         val autoApproved: Boolean get() = respond != null && presented == null
         val manualCard: Boolean get() = presented != null
     }
-
-    private data class Denial(
-        val tool: String,
-        val reason: String?,
-        val rule: SecurityRule?,
-        val command: String?,
-    )
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
 
@@ -60,7 +53,7 @@ class GuardCardMandatoryTest {
                 val seen = hit?.let { "runs a destructive command" }
                 SensitiveGuard.Decision(verdict, seen, hit, seen)
             },
-            onSensitiveDenied = { tool, reason, r, command -> obs.denied = Denial(tool, reason, r, command) },
+            onSensitiveDenied = { obs.denied = it },
             onSensitiveBypassed = { obs.bypassed = it },
             isGuardCommandApproved = { r, command ->
                 approvedCommands.any { it.first == r && it.second == command }
@@ -218,7 +211,8 @@ class GuardCardMandatoryTest {
             "what stops the over-reading is saying the decision is about this call, as a fact",
         )
         assertEquals(rule, obs.denied?.rule, "the rule must reach the transcript block")
-        assertEquals("Bash", obs.denied?.tool)
+        assertEquals("Bash", obs.denied?.toolName)
+        assertEquals("tu_b", obs.denied?.toolUseId, "the anchor a restored conversation puts the row back on")
         assertEquals(
             "terraform destroy",
             obs.denied?.command,
