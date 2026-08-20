@@ -233,6 +233,7 @@ object SensitiveGuard {
         return ToolInputScanner.locationCandidates(input, policy.home, policy.envValues)
             .filter { GuardPaths.isAbsolute(it) }
             .map { GuardPaths.fold(it) }
+            .filterNot { ScriptExecution.inSystemBinDir(it) || SystemDevices.isDeviceNode(it) }
             .firstOrNull { !GuardPaths.under(it, projRoot) }
             ?.let { Hit(SecurityRule.OUTSIDE_PROJECT, "reaches outside the project: $it") }
     }

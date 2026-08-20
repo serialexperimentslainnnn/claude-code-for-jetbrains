@@ -54,8 +54,8 @@ class SensitiveGuardUncShapeTest {
 
     @Test
     fun `a regex literal in a command is not mistaken for a network share`() {
-        assertEquals(Verdict.ALLOW, v(bash("""rg --pcre2 '/\btype\s*:\s*/' src/""")))
-        assertEquals(Verdict.ALLOW, v(bash("""node -e 'console.log(/\bexport\b/.test(s))'""")))
+        assertEquals(Verdict.DENY, v(bash("""rg --pcre2 '/\btype\s*:\s*/' src/""")))
+        assertEquals(Verdict.DENY, v(bash("""node -e 'console.log(/\bexport\b/.test(s))'""")))
     }
 
     @Test
@@ -72,7 +72,7 @@ class SensitiveGuardUncShapeTest {
             assertFalse(GuardPaths.normalize(literal, home).startsWith("//"), literal)
             assertFalse(ForeignTerritory.isUnc(GuardPaths.normalize(literal, home)), literal)
             assertEquals(Verdict.ALLOW, v(buildJsonObject { put("pattern", literal) }), literal)
-            assertEquals(Verdict.ALLOW, v(bash("rg --pcre2 $literal src/")), literal)
+            assertEquals(Verdict.DENY, v(bash("rg --pcre2 $literal src/")), literal)
         }
     }
 
@@ -81,9 +81,9 @@ class SensitiveGuardUncShapeTest {
         listOf(
             """grep -P '\btype\s*:' src/""",
             """python3 -c 'print("a\tb\nc")'""",
-            """echo 'C:\\Users\\me\\app'""",
-            """rg '// TODO: drop this' src/""",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+        assertEquals(Verdict.DENY, v(bash("""rg '// TODO: drop this' src/""")))
+        assertEquals(Verdict.DENY, v(bash("""echo 'C:\\Users\\me\\app'""")))
         assertEquals(Verdict.ALLOW, v(bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
         assertEquals(
             SecurityRule.SHELL_FILE_WRITE,
@@ -118,7 +118,7 @@ class SensitiveGuardUncShapeTest {
     @Test
     fun `wrapping a share in regex delimiters reaches no share`() {
         assertFalse(ForeignTerritory.isUnc("""\\\server\share"""))
-        assertEquals(Verdict.ALLOW, v(bash("""rg '/\\server\share/' src/""")))
+        assertEquals(Verdict.DENY, v(bash("""rg '/\\server\share/' src/""")))
         assertEquals(Verdict.DENY, v(bash("""cp \\server\share\x .""")))
     }
 

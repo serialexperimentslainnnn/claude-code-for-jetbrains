@@ -68,9 +68,18 @@ object ToolInputScanner {
     ): List<String> {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
-            if (COMMAND_KEY.matches(key) || PATTERN_KEY.matches(key)) return@walkStrings
+            if (PATTERN_KEY.matches(key)) return@walkStrings
             if (CONTENT_KEY.matches(key) && BLOCK_COMMENT_ONLY.matches(value.trim())) return@walkStrings
-            bothSpellings(value, home, env, out)
+            if (COMMAND_KEY.matches(key)) {
+                val sources = setOf(value, CommandRules.deobfuscate(value, home, env))
+                sources.forEach { src ->
+                    val parsed = commandPaths(src)
+                    val scope = if (parsed.bindings.isEmpty()) env else env + parsed.bindings
+                    parsed.tokens.forEach { tok -> bothSpellings(tok, home, scope, out) }
+                }
+            } else {
+                bothSpellings(value, home, env, out)
+            }
         }
         return out.toList()
     }
@@ -121,7 +130,28 @@ object ToolInputScanner {
 
     private val SPLIT_CHARS = charArrayOf(';', '|', '&', '<', '>', '=', '(', ')', ',')
 
-    private fun commandTokens(command: String): List<String> {
+    private val LOCATION_SPLIT_CHARS = charArrayOf(';', '|', '&', '<', '>', '(', ')', ',')
+
+    private val SEGMENT_SPLIT = Regex("""[;&|\n]""")
+
+    private val ASSIGNMENT = Regex("""^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$""")
+
+    private val ASSIGNMENT_PREFIX = setOf("export", "declare", "local", "readonly", "typeset", "env", "set")
+
+    private val PATH_SHAPED = Regex("""^(?:[/~]|\.{1,2}/|[A-Za-z]:[/\\]|[\x24%])""")
+
+    private val EXECUTION_CONTROLLING = setOf(
+        "PATH", "BASH_ENV", "ENV", "SHELL",
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+        "NODE_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP", "PERL5LIB", "RUBYOPT",
+        "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "PAGER", "EDITOR", "VISUAL",
+    )
+
+    private class CommandPaths(val tokens: List<String>, val bindings: Map<String, String>)
+
+    private fun commandTokens(command: String): List<String> = splitTokens(command, SPLIT_CHARS)
+
+    private fun splitTokens(command: String, splitChars: CharArray): List<String> {
         val tokens = ArrayList<String>()
         val current = StringBuilder()
         var quote: Char? = null
@@ -131,7 +161,7 @@ object ToolInputScanner {
 
                 c == '\'' || c == '"' || c == '`' -> quote = c
 
-                c.isWhitespace() || c in SPLIT_CHARS -> if (current.isNotEmpty()) {
+                c.isWhitespace() || c in splitChars -> if (current.isNotEmpty()) {
                     tokens += current.toString()
                     current.clear()
                 }
@@ -141,6 +171,43 @@ object ToolInputScanner {
         }
         if (current.isNotEmpty()) tokens += current.toString()
         return tokens
+    }
+
+    private fun bind(declared: MatchResult, bindings: MutableMap<String, String>, tokens: MutableList<String>) {
+        val name = declared.groupValues[1]
+        val value = declared.groupValues[2]
+        bindings[name] = value
+        if (name.uppercase() in EXECUTION_CONTROLLING) {
+            value.split(':').filterTo(tokens) { PATH_SHAPED.containsMatchIn(it) }
+        }
+    }
+
+    private fun emitPathShaped(token: String, tokens: MutableList<String>) {
+        val assigned = token.indexOf('=')
+        val candidates = if (assigned >= 0) listOf(token, token.substring(assigned + 1)) else listOf(token)
+        candidates.filterTo(tokens) { PATH_SHAPED.containsMatchIn(it) }
+    }
+
+    private fun commandPaths(command: String): CommandPaths {
+        val tokens = ArrayList<String>()
+        val bindings = LinkedHashMap<String, String>()
+        for (segment in command.split(SEGMENT_SPLIT)) {
+            var declaring = true
+            for (token in splitTokens(segment, LOCATION_SPLIT_CHARS)) {
+                val declared = if (declaring) ASSIGNMENT.matchEntire(token) else null
+                when {
+                    declared != null -> bind(declared, bindings, tokens)
+
+                    token.lowercase() in ASSIGNMENT_PREFIX -> Unit
+
+                    else -> {
+                        declaring = false
+                        emitPathShaped(token, tokens)
+                    }
+                }
+            }
+        }
+        return CommandPaths(tokens, bindings)
     }
 
     fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()

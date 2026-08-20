@@ -13,6 +13,8 @@ object SystemDevices {
 
     internal fun deviceHit(paths: List<String>): String? = paths.firstOrNull { isSystemDevice(it) }
 
+    internal fun isDeviceNode(path: String): Boolean = matches(path) || matches(GuardPaths.fold(path))
+
     fun isSystemDevice(path: String): Boolean {
         if (path.isBlank()) return false
         val folded = GuardPaths.fold(path)

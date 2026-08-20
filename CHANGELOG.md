@@ -61,6 +61,18 @@ of its own starts from the ones you already had.
   what it saw, the verdict, and what let the call through if anything did. Capped at the most recent 500.
   Nothing shows it yet — it is the groundwork for a later feature, and it is what makes the next item work.
 
+### Security
+- **The "outside the project" rule now sees paths inside shell commands.** It only ever read them from a
+  tool's own location argument, so `Read /home/you/notes.txt` was refused while `cat ~/notes.txt` was not —
+  and the shell is where the work happens. The documentation had promised both since 5.x.
+- **Declaring a path in a variable is not reaching it, but expanding it is.**
+  `JAVA_HOME=~/.jdks/jbr-21 ./gradlew check` passes; `OUT=/home/you/other; cat $OUT/log` does not.
+- **A variable that decides which code runs is never an innocent declaration.** `PATH`, `LD_PRELOAD`,
+  `BASH_ENV`, `GIT_SSH_COMMAND` and their family are checked wherever they are set, so
+  `PATH=/somewhere/evil:$PATH git status` is refused.
+- **System binaries and inert devices are not reaches**: `/usr/bin/git status` and `2>/dev/null` still run.
+  A real device is still refused, by the rule that owns it.
+
 ### Fixed
 - **Guard rows survive restoring a session.** Reopening a chat brought the block and bypass rows back as
   ordinary tool calls: they are the plugin's own rows and the binary's transcript has no record of them —

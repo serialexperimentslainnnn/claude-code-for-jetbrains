@@ -135,9 +135,28 @@ would be switched off within an afternoon — taking the two genuinely dangerous
 | **Temp directory** | `/tmp`, `/var/tmp`, `%TEMP%` and equivalents | The one world-writable place with no review, which makes it where data gets staged before it leaves |
 | **Shell file writes** | Changing files through commands that show you nothing — `rm`, `mv`, `sed -i`, a `>` redirect, `curl -o` | An edit becomes a reviewable diff; a `sed -i` just happens |
 
-A search pattern that merely looks like a path (`grep -P '/etc/passwd/'`) is not treated as one — the
-guard knows which argument it arrived as. And a project that itself lives under `/tmp` is exempt from the
-temp rule, because that exemption is about *where your project is* rather than about what a file is.
+A search pattern that arrives in a tool's own `pattern` argument is not treated as a path — the guard
+knows which argument it came as. One written inline in a shell command is a different matter: `rg
+'/\btype\s*:\s*/' src/` is refused, because nothing in the text distinguishes that from a real absolute
+path, and the alternative is a hole that any path can be dressed up to fit. Quote-free rewrites (`rg
+'\btype\s*:' src/`) are unaffected. A project that itself lives under `/tmp` is exempt from the temp rule,
+because that exemption is about *where your project is* rather than about what a file is.
+
+Three things are deliberately not reaches:
+
+- **A system binary**: `/usr/bin/git status` runs a program, it does not go looking through your disk.
+  `/usr/bin`, `/bin`, `/sbin`, `/usr/local/bin`, Homebrew and `C:\Windows\System32` are all exempt.
+- **An inert device**: `2>/dev/null` is a sink, not a location. A *real* device is still refused, by the
+  device rule, which runs first.
+- **A path you only declare**: `JAVA_HOME=~/.jdks/jbr-21 ./gradlew check` names a directory outside the
+  project but never reads it. Expanding that variable in the same command *is* reading it, and is refused
+  — `OUT=/home/me/other; cat $OUT/log` does not get past by going the long way round.
+
+The exception to that last one is any variable that decides **which code runs** — `PATH`, `LD_PRELOAD`,
+`BASH_ENV`, `GIT_SSH_COMMAND` and their family. `PATH=/home/me/evil:$PATH git status` is not an innocent
+declaration: it is how `git` stops meaning `git`, and it is the reason the guard does not bother resolving
+command names to full paths. Resolving would tell you what `git` means *now*; the shell decides what it
+means at exec time, and this is the only place that decision is visible.
 
 Shell writes are the noisiest rule here, and that is an accepted cost rather than an oversight. An agent
 runs `mkdir`, `touch` and `rm` constantly. It stays on by default because "no diff to review" is exactly

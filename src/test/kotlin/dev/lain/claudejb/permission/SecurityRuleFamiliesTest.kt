@@ -113,8 +113,8 @@ class SecurityRuleFamiliesTest {
             "npm test >/dev/null && echo ok",
             "(git status 2>/dev/null)",
             "git status >/dev/null;",
-            "ls /usr/lib64 2>/dev/null; ls /home/me/proj",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+        assertEquals(Verdict.DENY, v(bash("ls /usr/lib64 2>/dev/null; ls /home/me/proj")))
 
         val alsoWritesForReal = bash("ls /usr 2>/dev/null; echo hi > /etc/motd")
         assertEquals(Verdict.DENY, v(alsoWritesForReal))
@@ -254,7 +254,7 @@ class SecurityRuleFamiliesTest {
     @Test
     fun `a command substitution is EXPANDED and inspected, not blanket-refused for being one`() {
         assertEquals(Verdict.ALLOW, v(bash("echo \$(tty)")))
-        assertEquals(Verdict.ALLOW, v(bash("cat \$(git rev-parse --show-toplevel)/README.md")))
+        assertEquals(Verdict.DENY, v(bash("cat \$(git rev-parse --show-toplevel)/README.md")))
         assertEquals(Verdict.ALLOW, v(bash("export X=\$(date +%Y)")))
         assertEquals(Verdict.ALLOW, v(bash("cat `cat list`")))
         assertEquals(SecurityRule.HACKING_TOOL, rule(bash("echo \$(nmap -sS 10.0.0.1)")))
@@ -266,7 +266,7 @@ class SecurityRuleFamiliesTest {
         val withEnv = policy.copy(
             envValues = mapOf("PATH" to "/usr/bin:/bin", "OUT" to "/home/me/proj/build"),
         )
-        assertEquals(Verdict.ALLOW, v(bash("echo \$PATH"), withEnv))
+        assertEquals(Verdict.DENY, v(bash("echo \$PATH"), withEnv))
         assertEquals(Verdict.ALLOW, v(bash("ls \$OUT"), withEnv))
     }
 

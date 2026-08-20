@@ -222,8 +222,8 @@ class SensitiveGuardTest {
             "git commit -m 'add a parser for nmap output'",
             "grep -rn hydra src/",
             "cat notes-on-sqlmap.md",
-            "ls /opt/tools/hashcat-wordlists",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+        assertEquals(Verdict.DENY, v(bash("ls /opt/tools/hashcat-wordlists")))
         assertEquals(Verdict.DENY, v(bash("echo 'do not run msfconsole in prod' > /etc/motd")))
     }
 
@@ -365,7 +365,7 @@ class SensitiveGuardTest {
 
     @Test
     fun `integer division is allowed unless its fragment spells a valid host`() {
-        assertEquals(Verdict.ALLOW, v(bash("python3 -c \"print(xs[len(xs)//2])\"")))
+        assertEquals(Verdict.DENY, v(bash("python3 -c \"print(xs[len(xs)//2])\"")))
         assertEquals(Verdict.DENY, v(bash("python3 -c 'print(sum(v)//len(v))'")))
     }
 

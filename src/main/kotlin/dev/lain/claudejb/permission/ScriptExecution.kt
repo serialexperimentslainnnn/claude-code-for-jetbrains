@@ -92,6 +92,11 @@ object ScriptExecution {
         return SYSTEM_BIN_DIRS.none { lower.startsWith(it) }
     }
 
+    internal fun inSystemBinDir(path: String): Boolean {
+        val lower = path.replace('\\', '/').lowercase()
+        return SYSTEM_BIN_DIRS.any { lower.startsWith(it) }
+    }
+
     private fun commandWords(command: String): List<String> =
         command.split(';', '|', '&', '\n')
             .mapNotNull { segment ->
