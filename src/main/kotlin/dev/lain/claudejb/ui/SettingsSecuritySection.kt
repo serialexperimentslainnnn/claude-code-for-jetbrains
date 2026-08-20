@@ -3,6 +3,8 @@ package dev.lain.claudejb.ui
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.FormBuilder
+import com.intellij.util.ui.JBFont
+import com.intellij.util.ui.JBUI
 import dev.lain.claudejb.permission.SecurityCategory
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.settings.ClaudeSettings
@@ -94,9 +96,24 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         return card
     }
 
-    private fun ruleRow(rule: SecurityRule) = JPanel(FlowLayout(FlowLayout.LEFT, HGAP, 0)).apply {
-        modes[rule]?.let { add(it) }
-        add(JBLabel("${rule.label} (${rule.hint})"))
+    /**
+     * One rule: its mode and its name on a line, and what it actually stops wrapped underneath.
+     *
+     * The hint used to sit on the same line as the name, and some of them are three sentences long — which
+     * made every row as wide as its longest sentence and the whole page scroll sideways. The detail is the
+     * part worth reading slowly, so it gets the width and the name gets the glance.
+     */
+    private fun ruleRow(rule: SecurityRule) = JPanel(BorderLayout()).apply {
+        alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        border = JBUI.Borders.emptyBottom(ROW_GAP)
+        add(
+            JPanel(FlowLayout(FlowLayout.LEFT, HGAP, 0)).apply {
+                modes[rule]?.let { add(it) }
+                add(JBLabel(rule.label).apply { font = JBFont.label().asBold() })
+            },
+            BorderLayout.NORTH,
+        )
+        add(noteLabel(rule.hint), BorderLayout.CENTER)
     }
 
     private fun modeCombo() = JComboBox(GuardMode.entries.toTypedArray()).apply {
@@ -187,8 +204,9 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
     }
 
     private fun whitelistNote() = noteLabel(
-        "Pick how far each command reaches: <b>All rules</b>, one <b>category</b>, or one <b>rule</b>. The " +
-            "guard checks the narrowest first, so a permission can always be traced to one row. Matching is " +
+        "Pick which list you are editing above — <b>All rules</b>, one <b>category</b>, or one <b>rule</b> — " +
+            "and the commands below belong to it. The " +
+            "guard checks the narrowest first, so a permission can always be traced to one entry. Matching is " +
             "on the <b>whole command</b> — <code>terraform destroy</code> does not authorise " +
             "<code>terraform destroy &amp;&amp; rm -rf /</code> — and both sides are de-obfuscated first, so " +
             "an entry written normally still covers a spelling meant to slip past it. <b>Any rule can be " +
@@ -216,8 +234,8 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
 
         const val EXTRA_GLOB_ROWS = 3
 
-        const val WHITELIST_ROWS = 3
-
         const val HGAP = 8
+
+        const val ROW_GAP = 6
     }
 }
