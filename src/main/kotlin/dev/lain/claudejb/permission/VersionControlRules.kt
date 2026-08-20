@@ -12,9 +12,19 @@ object VersionControlRules {
 
     private val VECTORS: List<Pair<SecurityRule, Regex>> = listOf(
         SecurityRule.VCS_PROTECTION_BYPASS to
-            re("""\bgit\b[^|;&]*\b(add|stage)\b[^|;&]*\s-(f|-force)(?=\s|$)"""),
+            re("""\bgit\b[^|;&\n]*\b(add|stage)\b[^|;&\n]*\s-(f|-force)(?=\s|$|[;&|])"""),
         SecurityRule.VCS_PROTECTION_BYPASS to
-            re("""\bgit\b[^|;&]*\b(commit|push)\b[^|;&]*\s--no-verify(?=\s|$)"""),
+            re("""\bgit\b[^|;&\n]*\b(commit|push)\b[^|;&\n]*\s--no-verify(?=\s|$|[;&|])"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*\s-n(?=\s|$|[;&|])"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bgit\b[^|;&\n]*\b(commit|tag)\b[^|;&\n]*--no-gpg-sign(?=\s|$|[;&|])"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bgit\b[^|;&\n]*-c\s+commit\.gpgsign=false\b"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bgit\b[^|;&\n]*-c\s+core\.hooksPath="""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bHUSKY=0\b"""),
     )
 
     internal fun hit(input: JsonObject, home: String? = null, env: Map<String, String> = emptyMap()): Hit? =
