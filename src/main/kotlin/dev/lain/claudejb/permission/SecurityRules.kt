@@ -17,6 +17,8 @@ enum class SecurityCategory(val label: String) {
 
     INTRUSION_TECHNIQUE("Intrusion techniques"),
 
+    DEFENCE_EVASION("Defence evasion"),
+
     OPAQUE("Opaque to the guard"),
 }
 
@@ -265,6 +267,19 @@ enum class SecurityRule(
         "You can't use that binary to escape to a shell.",
         "These are the documented GTFOBins escapes: a trusted tool coerced into spawning a shell or running a " +
             "command, which is how a restricted context — or a sudo rule — becomes full command execution.",
+    ),
+
+    ANTI_FORENSIC(
+        SecurityCategory.DEFENCE_EVASION,
+        "Block erasing the session's own tracks",
+        "clearing the shell history (history -c, unset HISTFILE, set +o history), vacuuming the systemd " +
+            "journal, and the Windows equivalents (Clear-History, Set-PSReadlineOption SaveNothing, " +
+            "wevtutil cl, Clear-EventLog) — matched at command position, never as a bare mention",
+        "You can't erase the record of what happened here.",
+        "A coding session has no legitimate reason to wipe the shell history or the system logs. Clearing " +
+            "the trail is what an intrusion does to hide, and it destroys the evidence of everything else " +
+            "that was done.",
+        whitelistable = true,
     ),
 
     UNRESOLVED_VARIABLE(

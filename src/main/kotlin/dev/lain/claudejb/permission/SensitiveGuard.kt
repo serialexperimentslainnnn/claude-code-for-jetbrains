@@ -154,6 +154,10 @@ object SensitiveGuard {
                     ?.let { Hit(it.rule, "makes this machine run code from elsewhere: ${it.text}") }
             },
             {
+                AntiForensics.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.ANTI_FORENSIC, "erases the record of what it did: $it") }
+            },
+            {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
             },
