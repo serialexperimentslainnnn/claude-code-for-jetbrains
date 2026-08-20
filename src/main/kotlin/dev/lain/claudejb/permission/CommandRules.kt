@@ -64,7 +64,7 @@ object CommandRules {
             if (next == s) break
             s = next
         }
-        decodeBase64Payloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
+        decodePayloads(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
         expandBraces(s).takeIf { it.isNotEmpty() }?.let { s += " " + it.joinToString(" ") }
         return s
     }
@@ -157,16 +157,43 @@ object CommandRules {
         return s
     }
 
-    private fun decodeBase64Payloads(command: String): List<String> {
-        val out = ArrayList<String>()
-        Regex("""[A-Za-z0-9+/]{16,}={0,2}""").findAll(command).forEach { m ->
-            runCatching {
-                val decoded = String(java.util.Base64.getDecoder().decode(m.value), Charsets.UTF_8)
-                if (decoded.isNotBlank() && decoded.all(::isPrintableAscii)) out += decoded
-            }
+    private const val MAX_DECODED_PAYLOADS = 32
+
+    private val BASE64_RUN = Regex("""[A-Za-z0-9+/]{16,}={0,2}""")
+
+    private val HEX_RUN = Regex("""[0-9a-fA-F]{16,}""")
+
+    private val REV_PIPE = Regex("""\|\s*rev\b""")
+
+    private fun decodePayloads(command: String): List<String> {
+        val out = LinkedHashSet<String>()
+        var frontier = listOf(command)
+        var depth = 0
+        while (frontier.isNotEmpty() && depth++ < MAX_ANALYSIS_DEPTH && out.size < MAX_DECODED_PAYLOADS) {
+            frontier = frontier.flatMap(::decodeLayer).filter { it != command && out.add(it) }
         }
-        return out
+        return out.toList()
     }
+
+    private fun decodeLayer(text: String): List<String> =
+        decodeBase64Payloads(text) + decodeHexPayloads(text) + reversedPayload(text)
+
+    private fun decodeBase64Payloads(command: String): List<String> =
+        BASE64_RUN.findAll(command).mapNotNull { m ->
+            runCatching { String(java.util.Base64.getDecoder().decode(m.value), Charsets.UTF_8) }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() && it.all(::isPrintableAscii) }
+        }.toList()
+
+    private fun decodeHexPayloads(command: String): List<String> =
+        HEX_RUN.findAll(command).mapNotNull { m ->
+            m.value.takeIf { it.length % 2 == 0 }
+                ?.let { hex -> runCatching { hex.chunked(2).map { it.toInt(16).toChar() }.joinToString("") }.getOrNull() }
+                ?.takeIf { it.isNotBlank() && it.all(::isPrintableAscii) }
+        }.toList()
+
+    private fun reversedPayload(command: String): List<String> =
+        if (REV_PIPE.containsMatchIn(command)) listOf(command.reversed()) else emptyList()
 
     private fun isPrintableAscii(c: Char): Boolean = c == '\t' || c == '\n' || c in ' '..'~'
 }
