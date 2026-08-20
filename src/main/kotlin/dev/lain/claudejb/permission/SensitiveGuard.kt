@@ -170,6 +170,10 @@ object SensitiveGuard {
                     ?.let { Hit(SecurityRule.CONTAINER_ESCAPE, "breaks a container out onto the host: $it") }
             },
             {
+                Tunneling.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.TUNNELING, "opens a network tunnel or anonymiser: $it") }
+            },
+            {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
             },

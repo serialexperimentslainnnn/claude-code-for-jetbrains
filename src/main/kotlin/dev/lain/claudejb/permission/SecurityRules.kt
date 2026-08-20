@@ -136,6 +136,19 @@ enum class SecurityRule(
         "You can't route network traffic around the proxy that's declared.",
         "Bypassing it hides that traffic from whatever inspection or logging the user put the proxy there for.",
     ),
+    TUNNELING(
+        SecurityCategory.NETWORK_EGRESS,
+        "Block tunnels and anonymising proxies",
+        "outbound tunnels and command-and-control or exfiltration channels — ssh -R/-D/-L, ngrok, " +
+            "cloudflared, chisel, frp, localtunnel, bore, iodine/dnscat2 DNS tunnels, and tor/proxychains " +
+            "anonymisers",
+        "You can't open a network tunnel or route through an anonymiser.",
+        "A reverse or dynamic tunnel turns this machine into an entry point or an exfiltration channel, " +
+            "and an anonymiser hides where traffic goes. Legitimate port-forwarding is the user's to " +
+            "whitelist, not ours to leave open.",
+        whitelistable = true,
+    ),
+
     BLOCKED_DOMAIN(
         SecurityCategory.NETWORK_EGRESS,
         "Block staging and exfiltration domains",
