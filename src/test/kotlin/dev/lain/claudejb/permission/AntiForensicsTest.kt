@@ -37,6 +37,11 @@ class AntiForensicsTest {
             "Set-PSReadlineOption -HistorySaveStyle SaveNothing",
             "wevtutil cl System",
             "Clear-EventLog -LogName Security",
+            "touch -t 197001010000 a.txt",
+            "touch -r ref.txt target.txt",
+            "touch -acmr ref.txt target.txt",
+            "touch -d 2020-01-01 a.txt",
+            "SetFile -m 01/01/2020 a.txt",
         ).forEach {
             assertEquals(Verdict.DENY, v(bash(it)), it)
             assertEquals(SecurityRule.ANTI_FORENSIC, rule(bash(it)), it)
@@ -60,6 +65,8 @@ class AntiForensicsTest {
             "set -o pipefail",
             "Set-PSReadlineOption -EditMode Emacs",
             "cat ~/.bash_history",
+            "touch newfile.txt",
+            "touch -c existing.txt",
         ).forEach { assertNotEquals(SecurityRule.ANTI_FORENSIC, rule(bash(it)), it) }
     }
 

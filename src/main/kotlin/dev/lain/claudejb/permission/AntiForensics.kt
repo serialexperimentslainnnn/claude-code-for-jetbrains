@@ -20,6 +20,10 @@ object AntiForensics {
         re(AT + """Set-PSReadlineOption\b[^|;&]*-HistorySaveStyle\s+SaveNothing\b"""),
         re(AT + """wevtutil\b[^|;&]*\bcl\b"""),
         re(AT + """Clear-EventLog(?=\s|$|[;&|])"""),
+        re(AT + """touch\b[^|;&]*\s-[a-z]*[trd]"""),
+        re(AT + """touch\b[^|;&]*\s--(reference|date|time)\b"""),
+        re(AT + """SetFile\b[^|;&]*\s-[dm]\b"""),
+        re("""\b(CreationTime|LastWriteTime|LastAccessTime)\s*="""),
     )
 
     internal fun hit(input: JsonObject, home: String? = null, env: Map<String, String> = emptyMap()): String? =
