@@ -11,9 +11,10 @@ import org.junit.jupiter.api.Test
  * **What the guard's alert log is allowed to contain, and why it is the opposite of the rule next door.**
  *
  * `AgentIndexPrivacyTest` says the persisted form carries the tree and never the content. This one says the
- * persisted form carries the content, the command verbatim included. Both are right, because they are about
- * different places: the agent index is a **plaintext file** under the user's home, and this is an entry in
- * the OS keychain, encrypted, beside the credentials the plugin already keeps there.
+ * persisted form carries the content, the command verbatim included. Both are right, and since 6.0 the
+ * difference is no longer where they live — both are encrypted entries in the OS keychain, beside the
+ * credentials the plugin already keeps there. It is what each is for: an index of who spawned whom has
+ * never needed the content, and a log that cannot say what was attempted is not a log.
  *
  * The reason to record the command at all is that a security log which cannot say what was attempted can be
  * counted but not audited, and auditing is the entire point of keeping one.
