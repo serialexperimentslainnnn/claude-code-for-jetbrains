@@ -11,12 +11,13 @@ object ResourceHijacking {
     private const val AT = """(?:^|[;&|\n]\s*|\bthen\s+|\bdo\s+)(?:\S*/)?"""
 
     private const val MINERS =
-        "xmrig|xmrig-cuda|minerd|cpuminer|cgminer|bfgminer|ethminer|nbminer|lolminer|" +
-            "phoenixminer|xmr-stak|t-rex|nheqminer|ccminer|teamredminer|gminer"
+        "xmrig|minerd|cpuminer|cgminer|bfgminer|ethminer|nbminer|lolminer|phoenixminer|" +
+            "xmr-stak|t-rex|nheqminer|ccminer|teamredminer|gminer|srbminer|nanominer|" +
+            "wildrig|sgminer|ethdcrminer64"
 
     private val VECTORS: List<Regex> = listOf(
-        re(AT + "($MINERS)(?=\\s|\$|[;&|])"),
-        re("""\bstratum\+(tcp|ssl|tcps)://"""),
+        re(AT + "($MINERS)(?=[-\\s]|\$|[;&|])"),
+        re("""\bstratum2?\+(tcp|ssl|tcps)://"""),
     )
 
     internal fun hit(input: JsonObject, home: String? = null, env: Map<String, String> = emptyMap()): String? =
