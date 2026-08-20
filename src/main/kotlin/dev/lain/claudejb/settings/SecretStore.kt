@@ -27,11 +27,18 @@ object SecretStore {
 
     const val GUARD_LOG = "CLAUDE_GUARD_LOG"
 
+    const val OPEN_CHATS = "CLAUDE_OPEN_CHATS"
+
+    const val AGENT_INDEX = "CLAUDE_AGENT_INDEX"
+
+    /** Global, not scoped: the plugin asks once per user, not once per project. */
+    const val REVIEW_PROMPT = "CLAUDE_REVIEW_PROMPT"
+
     private val EXCLUSIVE = listOf(OAUTH_TOKEN, CREDENTIALS_JSON)
 
     private val CREDENTIALS = EXCLUSIVE + ACCOUNT_PROFILE + AUTH_STATUS
 
-    private val NAMES = CREDENTIALS + ENV_VARS + SETTINGS_JSON + SIGNED_OUT
+    private val NAMES = CREDENTIALS + ENV_VARS + SETTINGS_JSON + SIGNED_OUT + REVIEW_PROMPT
 
     /**
      * The entries there is one of per IDE installation and project, written `NAME@<scopeId>`.
@@ -39,7 +46,8 @@ object SecretStore {
      * A prefix rather than a fixed list because the scope ids are derived, not enumerable — see
      * [SettingsScope]. Everything not here is global, and [clearAll] sweeps only the credentials.
      */
-    private val SCOPED_PREFIXES = listOf(SETTINGS_JSON, GUARD_LOG).map { "$it@" }
+    private val SCOPED_PREFIXES =
+        listOf(SETTINGS_JSON, GUARD_LOG, OPEN_CHATS, AGENT_INDEX).map { "$it@" }
 
     private val ENV_NAMES = listOf(OAUTH_TOKEN)
 

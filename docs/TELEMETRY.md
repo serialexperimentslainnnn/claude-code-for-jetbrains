@@ -27,12 +27,17 @@ Everything the plugin keeps, it keeps locally:
   `~/.claude/.credentials.json` is deleted; API keys sit in their own safe slot.
   They reach the binary as environment variables — never as arguments, never in
   a log, never in the transcript.
-- **Which agents this plugin spawned.**
-  `~/.claude/ide/claude-code-native/agent-index.json` — ids, who spawned whom,
-  the agent *type* (`general-purpose` and the like) and whether you had the tab
-  open. No prompts, no descriptions, no transcript content. It exists so that
-  after a restart your agents can be told apart from ones a terminal session
-  left in the same directory.
+- **Which agents this plugin spawned.** In the safe, one entry per IDE
+  installation per project — ids, who spawned whom, the agent *type*
+  (`general-purpose` and the like) and whether you had the tab open. No prompts,
+  no descriptions, no transcript content. It exists so that after a restart your
+  agents can be told apart from ones a terminal session left in the same
+  directory. It was a plaintext `~/.claude/ide/claude-code-native/agent-index.json`
+  shared by every IDE on the machine; each installation moves its own projects
+  into the safe on first use and the file is deleted once empty.
+- **Which chats to reopen.** The same treatment, and the same story: a list of
+  session ids per project, in the safe, migrated out of
+  `~/.claude/ide/claude-code-native/open-chats.json`.
 - **Logs.** The IDE's own `idea.log`, on your machine. Nothing is uploaded.
 - **The one socket.** The chat page is normally handed to the embedded browser
   without any network at all. Where that cannot work — Remote Development, where

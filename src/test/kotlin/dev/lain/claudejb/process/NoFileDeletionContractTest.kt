@@ -27,6 +27,9 @@ class NoFileDeletionContractTest {
             "LegacyProjectSettings.kt",
             "LegacySessionHistory.kt",
             "SettingsStore.kt",
+            // It deletes exactly two files, both written by this plugin and both now migrated into the
+            // safe: `open-chats.json` and `agent-index.json`, and only once they hold nothing.
+            "SharedPluginFiles.kt",
         )
     }
 

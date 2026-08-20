@@ -103,9 +103,9 @@ Most of these are the intended behaviour, so it is worth knowing which is which.
   green.
 - **Agents you started from a terminal never appear**, even in the same session.
   An agent is shown only if this plugin saw the `Task` call, or recorded it
-  previously in `~/.claude/ide/claude-code-native/agent-index.json`, or its
-  parent is already shown. Deleting that index file makes past agents disappear
-  from restored chats.
+  previously in its agent index, or its parent is already shown. That index lives
+  in the IDE's safe, per project; *Restore Plugin to default state* clears it, and
+  past agents then disappear from restored chats.
 - **A backgrounded task with no output** is showing you the truth: a backgrounded
   shell command publishes no output file, so what is displayed is what the binary
   actually reported. A backgrounded *agent* does publish one, and it is tailed

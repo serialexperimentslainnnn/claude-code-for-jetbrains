@@ -29,6 +29,12 @@ value class SettingsScope(val id: String) {
     /** And the one its guard alert log lives under — same scope, separate entry, separate lifetime. */
     val guardLogName: String get() = "${SecretStore.GUARD_LOG}@$id"
 
+    /** The chats this project had open when it was last closed. */
+    val openChatsName: String get() = "${SecretStore.OPEN_CHATS}@$id"
+
+    /** The agent/task tree of this project's sessions. */
+    val agentIndexName: String get() = "${SecretStore.AGENT_INDEX}@$id"
+
     companion object {
 
         /**
@@ -38,7 +44,15 @@ value class SettingsScope(val id: String) {
          * unit test builds — shares one fixed scope rather than inventing one, because it has nothing
          * stable to derive an identity from.
          */
-        fun of(project: Project?): SettingsScope = of(installationKey(), project?.basePath)
+        fun of(project: Project?): SettingsScope = ofPath(project?.basePath)
+
+        /**
+         * The scope **this** installation uses for [basePath], for a project that is not the open one.
+         *
+         * Migration and the import-from-another-IDE dialog both need to address a project by path rather
+         * than by an open window, and the identity is the same calculation either way.
+         */
+        fun ofPath(basePath: String?): SettingsScope = of(installationKey(), basePath)
 
         /** The pure half, so the identity can be reasoned about — and tested — without an IDE around it. */
         internal fun of(installation: String, basePath: String?): SettingsScope {

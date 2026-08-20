@@ -4,6 +4,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.MessageDialogBuilder
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardAlertLog
+import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.settings.SecuritySuspensions
 
 /**
@@ -19,15 +21,29 @@ internal object CleanSettings {
 
     const val GUARD_TITLE = "Restore Sensitive Guard settings to default"
 
-    /** Everything the plugin stores for this project, back to a fresh install. */
+    /**
+     * Everything the plugin stores for this project, back to a fresh install.
+     *
+     * Four keychain entries now, not one: the settings document, the guard's alert log, the open-chat list
+     * and the agent index all hang off the same scope. Wiping only the first would leave the button
+     * promising more than it does.
+     */
     fun restorePlugin(project: Project): Boolean {
         val body = "Put this project's Claude Code settings back to a fresh install?\n\n" +
             "This clears the model, permission mode, executable paths, environment, MCP servers and every " +
-            "Sensitive Guard rule, mode and whitelist — for this project, in this IDE.\n\n" +
-            "It does not sign you out, and it does not touch your provider keys, your Git host tokens, or " +
-            "any other project's settings. There is no undo."
+            "Sensitive Guard rule, mode and whitelist, along with the guard's alert history, the list of " +
+            "chats to reopen and the agent index — for this project, in this IDE.\n\n" +
+            "Your conversations are not touched. It does not sign you out, and it does not touch your " +
+            "provider keys, your Git host tokens, or any other project's settings. There is no undo."
         if (!confirm(project, PLUGIN_TITLE, body)) return false
-        return ClaudeSettings.getInstance(project).wipe().also { if (it) repaint() }
+        val settings = ClaudeSettings.getInstance(project)
+        val scope = settings.scope
+        if (!settings.wipe()) return false
+        GuardAlertLog.clear(scope)
+        SecretStore.clear(scope.openChatsName)
+        SecretStore.clear(scope.agentIndexName)
+        repaint()
+        return true
     }
 
     /** Only what the guard owns; every other setting on the plugin's page is left alone. */

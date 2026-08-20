@@ -25,6 +25,14 @@ of its own starts from the ones you already had.
   you resize. Nothing scrolls sideways and nothing runs off the right edge any more.
 - **The security page shows all nine rule categories at once**, each a group you can fold, instead of one
   category at a time behind a dropdown.
+- **Everything the plugin stores is now in the IDE's safe.** The open-chat list, the agent index and the
+  review-prompt counter were the last things it kept in the clear. The two files under
+  `~/.claude/ide/claude-code-native/` were shared by every IDE on the machine: each installation takes the
+  projects it knows, leaves the rest for whoever owns them, and the file is deleted once empty. A project
+  open in two IDEs has one entry, so the first to migrate takes it — the other restores its most recent
+  session once and then writes its own.
+- ***Restore Plugin to default state* now clears all four of this project's entries** — settings, guard alert
+  log, open-chat list and agent index. It cleared only the settings, which made its wording untrue.
 
 ### Added
 - **A shield in the chat's button row**, left of auto-scroll: switches the guard to Allow All for a chosen
