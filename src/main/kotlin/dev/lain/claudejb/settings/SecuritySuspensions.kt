@@ -24,13 +24,6 @@ object SecuritySuspensions {
 
     private val sessionScoped = ConcurrentHashMap.newKeySet<SecurityRule>()
 
-    /**
-     * The master switch's *Until IDE closes* choice — the one duration that has nowhere to be written.
-     *
-     * Its two persisted siblings live on the settings document ([ClaudeSettings.State.guardEnabled] for
-     * *Forever*, [ClaudeSettings.State.guardDisabledUntil] for the five that expire), which is the same
-     * three-store shape a single suspended rule already uses.
-     */
     @Volatile
     private var guardOffForSession = false
 
@@ -38,19 +31,12 @@ object SecuritySuspensions {
         sessionScoped += rule
     }
 
-    /** Puts the guard into Allow All for [duration], writing to whichever store that duration needs. */
     fun guardOff(state: ClaudeSettings.State, duration: Duration, now: Long) = when (duration) {
         Duration.FOREVER -> state.guardMode = GuardMode.ALLOW_ALL.wire
         Duration.UNTIL_IDE_CLOSES -> guardOffForSession = true
         else -> state.guardDisabledUntil = now + (duration.millis ?: 0)
     }
 
-    /**
-     * Takes the guard back out of Allow All, clearing **all three** stores.
-     *
-     * A timed Allow All over a Permissive guard leaves the mode alone, so it returns to Permissive on its
-     * own; only the *Forever* end has to pick something, and it picks the default.
-     */
     fun guardOn(state: ClaudeSettings.State) {
         if (GuardMode.from(state.guardMode) == GuardMode.ALLOW_ALL) state.guardMode = GuardMode.DEFAULT.wire
         state.guardDisabledUntil = 0
@@ -62,7 +48,6 @@ object SecuritySuspensions {
             guardOffForSession ||
             state.guardDisabledUntil > now
 
-    /** When the timed suspension runs out, or null when nothing timed is open. */
     fun guardSuspendedUntil(state: ClaudeSettings.State, now: Long): Long? =
         state.guardDisabledUntil.takeIf { it > now }
 

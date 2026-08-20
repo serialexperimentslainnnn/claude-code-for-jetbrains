@@ -9,13 +9,6 @@ import dev.lain.claudejb.settings.SettingsScope
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/**
- * Which chats this project had open, so reopening it puts them back.
- *
- * It lives in the IDE's safe under this project's own scope, like the settings beside it. It used to be one
- * shared plaintext file under `~/.claude` keyed by project path — see [SharedPluginFiles] for what that cost
- * and how the leftovers are collected.
- */
 @Service(Service.Level.PROJECT)
 class SessionHistory(private val project: Project) {
 
@@ -38,7 +31,6 @@ class SessionHistory(private val project: Project) {
 
     private fun stored(): List<String>? = SecretStore.get(scope.openChatsName)?.let { decodeIds(it) }
 
-    /** The 4.x location: the IDE's own workspace file. Read once, then written where everything else is. */
     private fun adoptFromWorkspace(): List<String> {
         val legacy = runCatching { LegacySessionHistory.getInstance(project).openSessions() }
             .getOrDefault(emptyList())

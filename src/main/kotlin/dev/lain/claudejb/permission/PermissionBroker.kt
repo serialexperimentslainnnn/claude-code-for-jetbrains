@@ -31,13 +31,6 @@ data class PendingPermission(
         get() = DiffPresenter.filePathOf(input)?.substringAfterLast('/')?.let { "$toolName on $it" } ?: toolName
 }
 
-/**
- * A call a rule matched and that ran anyway, and everything the transcript needs to say so.
- *
- * [action] is what the user can still do about it — put the guard back on, withdraw the authorisation they
- * gave this command — or null when nothing is left standing to undo. [toolUseId] is what a restored
- * conversation anchors the row to, because it is the one identifier the binary's own transcript also keeps.
- */
 data class GuardBypass(
     val toolName: String,
     val reason: String?,
@@ -48,7 +41,6 @@ data class GuardBypass(
     val detail: String? = null,
 )
 
-/** A call a rule refused, and everything the transcript and the alert log need to say so. */
 data class GuardDenial(
     val toolName: String,
     val reason: String?,
@@ -84,13 +76,6 @@ class PermissionBroker(
     private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
         { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
     private val onSensitiveDenied: (GuardDenial) -> Unit = {},
-    /**
-     * A call the guard matched and let through anyway — the two bypasses, *Allow All* and a whitelist.
-     *
-     * Only fired when a rule actually matched. A call nothing objected to is ordinary work and says nothing;
-     * this is for the case where something WOULD have been stopped, so the transcript can say which rule it
-     * was and why it ran.
-     */
     private val onSensitiveBypassed: (GuardBypass) -> Unit = {},
     private val isGuardCommandApproved: (rule: SecurityRule, command: String?) -> Boolean = { _, _ -> false },
     private val forceAsk: () -> Boolean = { false },
@@ -112,10 +97,6 @@ class PermissionBroker(
         return true
     }
 
-    /**
-     * The one route past a rule that shows no card at all, reported so it is not also the one that leaves no
-     * trace — with the rule, what the rule saw, and the offer to withdraw the authorisation.
-     */
     private fun reportChatApproval(request: CanUseToolRequest, decision: SensitiveGuard.Decision) {
         val rule = decision.rule ?: return
         val what = decision.detail?.let { " — it $it" }.orEmpty()
@@ -165,8 +146,6 @@ class PermissionBroker(
             }
 
             SensitiveGuard.Verdict.ALLOW -> {
-                // No action offered from here: whether this was the guard being off or a whitelist entry is
-                // decided in settings, and so is what the user could do about it.
                 decision.rule?.let {
                     onSensitiveBypassed(
                         GuardBypass(
@@ -289,30 +268,14 @@ class PermissionBroker(
     companion object {
         private const val MAX_SUMMARY_CHARS = 2000
 
-        /** Why a watched command ran with no card: the user answered for it earlier, in this conversation. */
         private const val APPROVED_IN_CHAT = "you gave Allow All for this exact command in this chat"
 
-        /** What the transcript offers to do about that, as a key the page turns into a link. */
         const val REVOKE_APPROVAL = "revokeApproval"
 
-        /** And what it offers when the reason is that the guard is not running at all. */
         const val ENABLE_GUARD = "enableGuard"
 
-        /** …or that the command is on one of the whitelists, which the row can take it off again. */
         const val REMOVE_FROM_WHITELIST = "removeFromWhitelist"
 
-        /**
-         * What the model is told when a rule refuses a call: the reason, and the scope of the refusal.
-         *
-         * It used to end with *do not retry it and do not attempt another way*, and that came out worse than
-         * it read. The model generalised from one refusal to the whole session and stopped acting at all,
-         * which is not a safer outcome — it is a broken one. The sentence was advice, never a control: the
-         * guard re-judges every call, so a different approach is evaluated on its own merits either way.
-         *
-         * What replaces it says the one thing that stops the over-reading, and it is a fact rather than an
-         * instruction: this decision is about this call. It still does not say where the off switch is —
-         * see docs/SECURITY-GUARD.md on why a possibly-hijacked model is not told which lever to ask for.
-         */
         const val SENSITIVE_DENIED: String =
             "Denied by the IDE's security guard: this call touches credentials, a dangerous command, or " +
                 "territory it must not. This applies to this call only."

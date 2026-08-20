@@ -6,13 +6,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * How the three whitelists are written down and read back.
- *
- * What the guard does with them is [dev.lain.claudejb.permission.WhitelistScopeTest]'s job; this is only
- * about the storage keeping its shape — including the direction it fails in, which is always "fails to widen
- * a permission" rather than "guesses one".
- */
 class GuardWhitelistsTest {
 
     @Test

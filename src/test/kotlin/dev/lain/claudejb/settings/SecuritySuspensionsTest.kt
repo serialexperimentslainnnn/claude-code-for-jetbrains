@@ -147,12 +147,6 @@ class SecuritySuspensionsTest {
     }
 }
 
-/**
- * The per-chat, in-memory half of "this command may run" — answering *Always allow this command* on a card.
- *
- * What these pin is the boundary against the other half: nothing here reaches another chat, and nothing here
- * is written down. The durable answer is the whitelist, and [GuardWhitelistsTest] owns that side.
- */
 class GuardCommandApprovalsTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC

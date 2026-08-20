@@ -11,16 +11,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.jetbrains.annotations.TestOnly
 
-/**
- * The agent and background-task tree of this project's sessions.
- *
- * Kept in the IDE's safe under this project's scope. It used to be one shared plaintext file under
- * `~/.claude` holding every project on the machine; [SharedPluginFiles] is what takes this project's share
- * of it and eventually removes the file.
- *
- * The primary constructor takes the identity rather than the window so the index can be exercised without an
- * IDE around it; the platform uses the [Project] one.
- */
 @Service(Service.Level.PROJECT)
 class PluginAgentIndex internal constructor(
     private val scope: SettingsScope,

@@ -8,13 +8,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Putting the guard's rows back into a restored conversation.
- *
- * The rows exist nowhere in the binary's transcript — a refusal is a failed tool result with no rule name
- * in it, a bypass is nothing at all — so everything here is about the stitch between that file and the
- * alert log.
- */
 class GuardRestoreTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC

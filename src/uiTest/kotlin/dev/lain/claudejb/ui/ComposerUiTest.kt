@@ -5,20 +5,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.awt.event.KeyEvent
 
-/**
- * The composer's keyboard contract, driven with a **real keyboard** against the real browser.
- *
- * Two things are under test here and only one of them is about keys:
- *
- *  1. **Keystrokes reach the page at all.** That is not a given, and it was broken for a whole release: a new
- *     tab was unusable because the `Content` declared no `preferredFocusedComponent` and because CEF keeps its
- *     own focus flag, which a freshly loaded page starts with cleared (see `JcefHost.markWebReady` and the
- *     4.3.1 notes). A jsdom test cannot see any of that; this one types through the OS and reads the value
- *     back out of the DOM.
- *  2. **Enter sends and Shift+Enter does not** (`app-composer.js` `wireInput`). The page clears the textarea
- *     itself on send, so the assertion holds whether or not a `claude` process is running — which matters,
- *     because this suite cannot count on one (see [UiTestBase]).
- */
 class ComposerUiTest : UiTestBase() {
 
     @Test
@@ -52,11 +38,6 @@ class ComposerUiTest : UiTestBase() {
         assertTrue(draft.contains("second line"), "the second line was lost: '$draft'")
     }
 
-    /**
-     * Empties the composer before typing, so a leftover draft from an earlier test cannot make an assertion
-     * pass. Done in the page rather than with Ctrl+A/Delete: this is setup, and it must not depend on the
-     * very key handling the test is about to exercise.
-     */
     private fun clearComposer() {
         waitForWeb("the composer to be built", composerExists())
         js(

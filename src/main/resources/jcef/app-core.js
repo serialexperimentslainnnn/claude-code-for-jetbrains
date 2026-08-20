@@ -174,9 +174,6 @@
     menu.style.top = Math.round(top) + 'px';
   };
 
-  // How long the guard — one rule, or the whole thing — stands down for. ONE list in the whole page, and it
-  // is a contract: SecuritySuspensionsTest reads this array out of this file and asserts it matches
-  // SecuritySuspensions.Duration token for token, in order. Adding one means both files in the same commit.
   CC.GUARD_DURATIONS = [
     { token: '5m', label: '5 minutes' },
     { token: '15m', label: '15 minutes' },
@@ -187,9 +184,6 @@
     { token: 'forever', label: 'Forever' },
   ];
 
-  // The "for how long?" popup, shared by the Disable-rule link on a block and the shield in the composer.
-  // Lives on document.body while open and goes back to its owner when closed, so a transcript clear cannot
-  // take a floating menu down with it. Returns { toggle, close, isOpen }.
   CC.durationMenu = function (opts) {
     var anchor = opts.anchor;
     var home = opts.home;

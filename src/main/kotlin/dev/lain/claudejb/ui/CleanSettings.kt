@@ -8,26 +8,12 @@ import dev.lain.claudejb.settings.GuardAlertLog
 import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.settings.SecuritySuspensions
 
-/**
- * The two "put it back how it was" buttons, and the one thing they have in common: a question first.
- *
- * They differ in reach and each says so in its own words. Neither touches a credential — the sign-in, the
- * provider API keys and the Git host tokens are not configuration — and neither reaches another project,
- * because since 5.6 a project's settings are its own.
- */
 internal object CleanSettings {
 
     const val PLUGIN_TITLE = "Restore Plugin to default state"
 
     const val GUARD_TITLE = "Restore Sensitive Guard settings to default"
 
-    /**
-     * Everything the plugin stores for this project, back to a fresh install.
-     *
-     * Four keychain entries now, not one: the settings document, the guard's alert log, the open-chat list
-     * and the agent index all hang off the same scope. Wiping only the first would leave the button
-     * promising more than it does.
-     */
     fun restorePlugin(project: Project): Boolean {
         val body = "Put this project's Claude Code settings back to a fresh install?\n\n" +
             "This clears the model, permission mode, executable paths, environment, MCP servers and every " +
@@ -46,7 +32,6 @@ internal object CleanSettings {
         return true
     }
 
-    /** Only what the guard owns; every other setting on the plugin's page is left alone. */
     fun restoreGuard(project: Project): Boolean {
         val body = "Put the Sensitive Guard back to its default configuration?\n\n" +
             "Every rule returns to Enforcing, Allow All is switched off, and the extra credential globs, " +
@@ -56,8 +41,6 @@ internal object CleanSettings {
         val settings = ClaudeSettings.getInstance(project)
         settings.update { state ->
             val defaults = ClaudeSettings.State()
-            // guardOn rather than three assignments: it is the one place that knows Allow All has an
-            // in-memory store as well as two persisted ones, and forgetting that store is how a switch lies.
             SecuritySuspensions.guardOn(state)
             state.guardMode = defaults.guardMode
             state.disabledSecurityRules = defaults.disabledSecurityRules
@@ -68,8 +51,6 @@ internal object CleanSettings {
             state.securityRuleWhitelists = defaults.securityRuleWhitelists
             state.sensitiveExtraGlobs = defaults.sensitiveExtraGlobs
         }
-        // The until-the-IDE-closes suspensions live in memory and no document write can reach them; leaving
-        // them behind would mean a rule still Permissive on a page that says every rule is Enforcing.
         SecurityRule.entries.forEach { SecuritySuspensions.releaseSessionScoped(it) }
         repaint()
         return true

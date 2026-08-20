@@ -7,22 +7,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * **What the guard's alert log is allowed to contain, and why it is the opposite of the rule next door.**
- *
- * `AgentIndexPrivacyTest` says the persisted form carries the tree and never the content. This one says the
- * persisted form carries the content, the command verbatim included. Both are right, and since 6.0 the
- * difference is no longer where they live — both are encrypted entries in the OS keychain, beside the
- * credentials the plugin already keeps there. It is what each is for: an index of who spawned whom has
- * never needed the content, and a log that cannot say what was attempted is not a log.
- *
- * The reason to record the command at all is that a security log which cannot say what was attempted can be
- * counted but not audited, and auditing is the entire point of keeping one.
- *
- * So this test exists to make that a decision somebody took rather than an oversight, and to make the next
- * person argue with it deliberately: **if this log ever moves out of the safe, it must stop carrying
- * commands on the same day.**
- */
 class GuardAlertLogPrivacyTest {
 
     private companion object {

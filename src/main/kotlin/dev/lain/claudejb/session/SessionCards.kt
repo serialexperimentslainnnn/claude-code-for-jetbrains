@@ -53,9 +53,6 @@ class SessionCards(
             request.toolUseId?.let { session.diffs.updateSnapshotInput(it, effectiveInput) }
         }
         write(ControlProtocol.permissionAllow(requestId, effectiveInput))
-        // A guard alert answered Yes is a rule that matched and a call that ran, which is the same fact the
-        // two bypasses report — so it reports it the same way, naming the rule and saying what let it past.
-        // An ordinary permission card is not that, and stays an ordinary line.
         val guard = request.guard
         if (guard == null) {
             session.systemNotice("Approved ${request.headline}")

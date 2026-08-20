@@ -25,8 +25,6 @@ object JcefTranscriptPayload {
         e.messageText?.let { put("message", it) }
         e.blockedRule?.let { rule ->
             put("blockedRule", rule)
-            // Whether adding this command to a whitelist warns first. The page needs it up front, because the
-            // dialog is a host dialog and the link must not promise a silent add it is not going to make.
             put("blockedRuleWarns", SecurityRule.from(rule)?.whitelistable == false)
         }
         e.bypassedRule?.let { put("bypassedRule", it) }

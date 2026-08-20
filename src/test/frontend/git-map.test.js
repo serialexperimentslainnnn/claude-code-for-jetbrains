@@ -239,10 +239,6 @@ describe('git commit graph', () => {
   it('stretches the graph to the row instead of letting the viewBox size it', () => {
     const graph = /\.git-graph\s*\{[^}]*\}/.exec(readCss())[0];
 
-    // An <svg> is a replaced element. With width/height auto, `inset: 0` leaves the aspect ratio of
-    // the viewBox to decide, which is a flat 100px however tall the row is — so every row taller
-    // than that (uncommitted changes with its files, a commit with several ref tags) drew an edge
-    // that stopped short of the next dot, and the dot itself drifted off the junction.
     expect(graph).toMatch(/width:\s*100%/);
     expect(graph).toMatch(/height:\s*100%/);
   });

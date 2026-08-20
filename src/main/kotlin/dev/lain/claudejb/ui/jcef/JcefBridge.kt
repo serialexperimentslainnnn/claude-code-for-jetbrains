@@ -25,7 +25,6 @@ object JcefBridge {
 
         sealed interface Settings : Msg
 
-        /** Everything the page can say about the Sensitive Guard, so the router dispatches it as one family. */
         sealed interface Guard : Settings
 
         sealed interface RequestCard : Msg

@@ -6,14 +6,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The three reaches a whitelist can have, and the one guarantee that outranks all of them: **the user can
- * always whitelist a command**.
- *
- * That last one is a table over the whole catalogue rather than a handful of examples, because the failure
- * it guards against is a rule shipping unliftable by accident — and the cost of that is not a security
- * property, it is a false positive the user cannot get past on work they asked for.
- */
 class WhitelistScopeTest {
 
     private fun bash(cmd: String) = buildJsonObject { put("command", cmd) }
@@ -112,7 +104,6 @@ class WhitelistScopeTest {
         )
     }
 
-    /** What each fixture actually trips, asked of the guard rather than assumed. */
     private fun firedRules(): Map<String, SecurityRule?> =
         TRIPWIRE.associateWith { SensitiveGuard.evaluate(bash(it), policy()).rule }
 
@@ -140,15 +131,6 @@ class WhitelistScopeTest {
         )
     }
 
-    /**
-     * The coverage of the table above, written down so it cannot quietly shrink.
-     *
-     * It is not every rule there is, and it says which are missing and why: a rule reached through a path
-     * argument, a URL or a script on disk is not reachable from a bare `command` string, and the walls of
-     * the severity ordering mean some commands are attributed to an earlier rule than the one that inspired
-     * the fixture. Those are covered by their own family tests; what is pinned here is that none of the
-     * rules a command CAN reach is unliftable.
-     */
     @Test
     fun `the table reaches the rules it claims to`() {
         assertEquals(
@@ -159,14 +141,6 @@ class WhitelistScopeTest {
     }
 
     private companion object {
-        /**
-         * Commands that a bare `command` string can get the guard to refuse.
-         *
-         * Which rule each one lands on is asked of the guard rather than declared here, because the severity
-         * ordering decides that and a fixture written against the wrong rule would be a test asserting
-         * something impossible — the mistake the fuzzer's KDoc says to fix in the generator, never in
-         * the rule.
-         */
         val TRIPWIRE = listOf(
             "cat /home/tester/.ssh/id_rsa",
             "aws configure get aws_secret_access_key",

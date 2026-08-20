@@ -12,22 +12,6 @@ import dev.lain.claudejb.settings.SecuritySuspensions
 import javax.swing.JButton
 import javax.swing.JComboBox
 
-/**
- * The guard's rules, one **mode** each, and the three lists of commands that are allowed past them.
- *
- * Granular on two axes on purpose: a **category** can be moved to one mode in a single gesture, and every
- * individual **rule** inside it still has its own — the group is only a way to navigate the catalogue, and
- * the narrow thing is what people actually need to change. The same shape governs the whitelists: one
- * global, one per category, one per rule, asked narrowest-first by the guard.
- *
- * Every category is a collapsible group rather than one card behind a dropdown. A dropdown hides how many
- * there are and makes finding the rule that just fired a hunt; nine folded headers say what exists and open
- * where you look.
- *
- * Enforcing and Permissive are the same two words the guard as a whole uses, and they mean the same thing at
- * both levels: refuse the match, or put it to the user as a card. Neither is a silent allow — the only two
- * of those are *Allow All* and a whitelisted command.
- */
 internal class SettingsSecuritySection(private val settings: ClaudeSettings) : SettingsSection {
 
     private val modes: Map<SecurityRule, JComboBox<GuardMode>> =
@@ -128,13 +112,6 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
             whitelist.changed(s),
         )
 
-    /**
-     * Ends every timed and session suspension at once.
-     *
-     * Deliberately its own gesture rather than something a rule's mode combo does on the way past: a
-     * suspension the user set and is watching count down must not end because this page was opened and OK
-     * pressed without touching anything.
-     */
     private fun cancelSuspensions() {
         if (shownSuspended.isEmpty()) return
         settings.update { state ->

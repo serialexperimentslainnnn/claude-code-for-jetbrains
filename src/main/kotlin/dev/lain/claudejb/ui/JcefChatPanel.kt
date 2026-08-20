@@ -228,12 +228,6 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
             livePanels.forEach { it.pushSettingsMenu() }
         }
 
-        /**
-         * Repaints every chat's own state — what the shield in the composer is drawn from.
-         *
-         * The guard is one switch for the whole IDE, so a tab that kept painting the old one would be
-         * telling the user something untrue about what is protecting them right now.
-         */
         fun pushStateToAll() {
             livePanels.forEach { it.pushMetaState() }
         }

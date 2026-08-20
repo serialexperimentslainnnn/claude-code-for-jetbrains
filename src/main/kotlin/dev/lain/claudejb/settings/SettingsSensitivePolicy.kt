@@ -11,28 +11,12 @@ fun ClaudeSettings.sensitiveGlobs(): List<String> {
     return CredentialPaths.SENSITIVE_GLOBS + extra
 }
 
-/**
- * The guard's answer for one tool call, with **Allow All** applied on top of it.
- *
- * Allow All is applied here rather than inside the guard, and that placement is the point: `SensitiveGuard`
- * keeps having exactly one behaviour, and the thing that overrides it is a switch in the user's own UI.
- *
- * The evaluation still runs while Allow All is on, and that is deliberate: the call is permitted either way,
- * but knowing WHICH rule it would have tripped is what lets the transcript say so instead of staying silent.
- * A hit becomes an ALLOW that still carries its rule and a reason — the shape the whitelist lift already
- * uses — and the two are told apart by the reason, because they are two different bypasses.
- *
- * The audit of the user's own environment script goes through [sensitivePolicy] directly and is therefore
- * NOT covered: it judges a file the user configured, before the process starts.
- */
 fun ClaudeSettings.sensitiveDecision(
     input: JsonObject,
     projectRoot: String?,
 ): SensitiveGuard.Decision {
     val decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
     if (decision.verdict == SensitiveGuard.Verdict.ALLOW || !guardSuspended()) return decision
-    // Which rule, what it saw, and why it ran anyway — in that order, because a warning that names only the
-    // switch leaves the reader guessing at the thing the switch let past.
     val what = decision.detail?.let { " — it $it" }.orEmpty()
     return SensitiveGuard.Decision(
         SensitiveGuard.Verdict.ALLOW,
@@ -42,11 +26,9 @@ fun ClaudeSettings.sensitiveDecision(
     )
 }
 
-/** True while the shield is down — the **Allow All** bypass. */
 fun ClaudeSettings.guardSuspended(): Boolean =
     SecuritySuspensions.guardSuspended(state, System.currentTimeMillis())
 
-/** The guard's own mode, which every Enforcing rule defers to. */
 fun ClaudeSettings.guardMode(): GuardMode = GuardMode.from(state.guardMode) ?: GuardMode.DEFAULT
 
 fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
@@ -73,13 +55,6 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
     )
 }
 
-/**
- * Every rule currently running in **Permissive** mode.
- *
- * Four sources, unioned: the guard's own mode — which puts the whole catalogue in Permissive when the user
- * sets it there — plus the rules set to Permissive one by one, the ones on a timed suspension, and the ones
- * suspended until the IDE closes.
- */
 internal fun ClaudeSettings.permissiveRules(): Set<SecurityRule> {
     if (guardMode() == GuardMode.PERMISSIVE) return SecurityRule.entries.toSet()
     val perRule = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }

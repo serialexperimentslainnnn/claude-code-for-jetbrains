@@ -9,13 +9,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * The index reading its own older shapes.
- *
- * It is fed through the safe now rather than through a file under `~/.claude` — the payload and the shapes
- * it has to survive are the same, only the drawer changed. Getting *out of* that file is
- * [SharedPluginFiles]'s job, and `SessionHistoryHeadlessTest` is where that trip is covered.
- */
 class PluginAgentIndexMigrationTest {
 
     private val scope = SettingsScope("agent-index-under-test")

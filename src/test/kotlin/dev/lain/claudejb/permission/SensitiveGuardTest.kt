@@ -459,8 +459,6 @@ class SensitiveGuardTest {
 
     @Test
     fun `reason() always names where to change the rule, whether enforced or downgraded`() {
-        // The exact page, not merely the word "Settings": the whole value of the sentence is that the user
-        // can act on it, and a path that no longer resolves sends them looking for a screen that is not there.
         val page = "Settings ▸ Claude Code Security"
         assertTrue(SensitiveGuard.evaluate(read("/home/bob/x"), policy).reason!!.contains(page))
         val relaxed = policy.copy(permissiveRules = setOf(SecurityRule.OTHER_USER_HOME))

@@ -15,11 +15,6 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.table.AbstractTableModel
 
-/**
- * How far a whitelisted command reaches — the thing the user picks, in the words they already read elsewhere.
- *
- * Stored as three separate fields because the guard asks them narrowest-first, but that is a storage detail.
- */
 internal sealed interface WhitelistScope {
 
     val label: String
@@ -37,31 +32,14 @@ internal sealed interface WhitelistScope {
     }
 }
 
-/**
- * The commands allowed past the guard: pick a scope, see and edit that scope's list.
- *
- * The scope is **two** dropdowns above the list — category, then rule within it — each carrying its own
- * *All*. One flat list of every category and every rule interleaved was thirty-odd entries deep and made
- * "which of these is a category and which is a rule" something you had to read the prefix to know; two
- * combos make it something the shape of the control tells you. The three reaches map exactly:
- *
- * - *All rules* → the global list.
- * - a category, rule left at *All in this category* → that category's list.
- * - a category and a rule → that rule's list.
- *
- * It opens on the global list, which is the one most people want and the only one that needs no
- * explanation.
- */
 internal class WhitelistTable {
 
     private val entries = linkedMapOf<WhitelistScope, MutableList<String>>()
 
     private var current: WhitelistScope = WhitelistScope.Everywhere
 
-    /** Rebuilding the rule combo fires its own listener; this stops that being read as a scope change. */
     private var syncing = false
 
-    /** AbstractTableModel keeps its fire* methods protected, so the visible half is declared here. */
     private inner class CommandsModel : AbstractTableModel() {
         override fun getRowCount() = commandsFor(current).size
         override fun getColumnCount() = 1
@@ -86,7 +64,6 @@ internal class WhitelistTable {
         emptyText.text = "Nothing is whitelisted for every rule"
     }
 
-    /** `null` is *All rules*: the global list, which is not any one category's. */
     private val categoryCombo = JComboBox(
         (listOf(null) + SecurityCategory.entries).toTypedArray(),
     ).apply {
@@ -94,7 +71,6 @@ internal class WhitelistTable {
         addActionListener { onCategoryChosen() }
     }
 
-    /** `null` is *All in this category*, or *All rules* again when no category is chosen. */
     private val ruleCombo = JComboBox<SecurityRule?>().apply {
         renderer = labelRenderer { (it as? SecurityRule)?.label ?: allLabel() }
         addActionListener { if (!syncing) onScopeChanged() }
@@ -135,7 +111,6 @@ internal class WhitelistTable {
         onScopeChanged()
     }
 
-    /** The rules on offer are the chosen category's, and none at all when the scope is every rule. */
     private fun rebuildRules() {
         syncing = true
         try {
@@ -184,7 +159,6 @@ internal class WhitelistTable {
         }
     }
 
-    /** A half-typed cell counts: OK gets pressed with the caret still in the field more often than not. */
     private fun stopEditing() {
         if (table.isEditing) table.cellEditor?.stopCellEditing()
     }

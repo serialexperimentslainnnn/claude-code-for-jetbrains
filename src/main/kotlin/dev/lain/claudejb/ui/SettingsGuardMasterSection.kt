@@ -10,13 +10,6 @@ import java.text.DateFormat
 import java.util.Date
 import javax.swing.JComboBox
 
-/**
- * What the guard does, as **one** choice of three rather than a mode and a switch beside it.
- *
- * It was two controls, and the second was a checkbox nobody could read the meaning of. They are still two
- * different behaviours — Permissive asks, Allow All does not — but that is a difference between two values
- * of one question, not between two questions.
- */
 internal class SettingsGuardMasterSection : SettingsSection {
 
     private val mode = JComboBox(GuardMode.entries.toTypedArray()).apply {
@@ -63,8 +56,6 @@ internal class SettingsGuardMasterSection : SettingsSection {
             s.guardMode = chosen.wire
             return
         }
-        // Only when it was not Allow All a moment ago. Re-applying an untouched page must not restart the
-        // clock on a suspension the user set an hour ago and has been watching count down.
         if (shownAllowAll) return
         val span = duration.selectedItem as? SecuritySuspensions.Duration ?: SecuritySuspensions.Duration.FOREVER
         SecuritySuspensions.guardOff(s, span, System.currentTimeMillis())

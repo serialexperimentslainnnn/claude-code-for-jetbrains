@@ -15,16 +15,6 @@ import dev.lain.claudejb.settings.SettingsTransfer
 import java.nio.file.Path
 import javax.swing.JButton
 
-/**
- * Taking this project's configuration somewhere else, and bringing somebody else's here.
- *
- * Three buttons rather than anything automatic. The two file ones are the portable route — another machine,
- * a colleague, a backup — and the third is the one that will actually get used: the same project already
- * configured in another IDE on this box.
- *
- * It owns no setting, so [reset], [apply] and [changedFields] have nothing to do: each button acts when it
- * is pressed, and tells the page to redraw when it changed something underneath it.
- */
 internal class SettingsTransferSection(
     private val project: Project,
     private val onChanged: () -> Unit,
@@ -64,7 +54,6 @@ internal class SettingsTransferSection(
             "Write this project's plugin configuration to a file",
             SettingsTransfer.EXTENSION,
         )
-        // The Path overload, named explicitly: the VirtualFile one takes the same shape of null.
         val target = FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
             .save(null as Path?, SettingsTransfer.FILE_NAME) ?: return
@@ -86,8 +75,6 @@ internal class SettingsTransferSection(
         }
         if (!confirm(IMPORT_TITLE, IMPORT_BODY, "Import")) return
         val settings = ClaudeSettings.getInstance(project)
-        // Withheld from the file by construction, so an import must leave whatever is already here alone
-        // rather than blanking it with the default the decode produced.
         incoming.envVars = settings.state.envVars
         settings.replaceState(incoming)
         settings.save()

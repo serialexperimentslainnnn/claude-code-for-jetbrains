@@ -23,14 +23,6 @@ data class EntryDTO(
     val messageText: String? = null,
     val inFlight: Boolean = false,
     val failed: Boolean = false,
-    /**
-     * The guard's own rows, which the binary's transcript knows nothing about.
-     *
-     * They are put back from the alert log rather than read out of the file: a refusal is recorded there as
-     * an ordinary failed tool result with no rule name anywhere in it, and a bypass is recorded as nothing
-     * at all, because the call ran. This DTO is the only thing that survives the file→UI journey, so
-     * without these three fields there is nowhere for the rows to travel.
-     */
     val blockedRule: String? = null,
     val bypassedRule: String? = null,
     val bypassAction: String? = null,

@@ -7,12 +7,6 @@ import dev.lain.claudejb.settings.GuardAlertLog
 import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.settings.SettingsScope
 
-/**
- * The guard's alert log: what it keeps, where it keeps it, and what it throws away.
- *
- * The privacy question is settled differently here than for `PluginAgentIndex`, and deliberately — see
- * `GuardAlertLogPrivacyTest`, which states the contract this one only exercises.
- */
 class GuardAlertLogHeadlessTest : BasePlatformTestCase() {
 
     private val scope = SettingsScope("log-under-test")

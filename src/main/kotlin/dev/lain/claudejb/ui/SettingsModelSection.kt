@@ -72,7 +72,6 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         rebuildModelCombo()
         ensureModelListener()
         panel.group("Model") {
-            // The combo is editable and a model id can be long, so this one gets the width.
             row("Model:") { cell(modelCombo).align(AlignX.FILL) }
             row("Effort:") { cell(effortCombo) }
             row("Permission mode:") { cell(modeCombo) }

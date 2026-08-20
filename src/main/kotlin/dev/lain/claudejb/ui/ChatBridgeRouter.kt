@@ -94,12 +94,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
     }
 
-    /**
-     * Withdraws the *Allow All* the user gave this command earlier in this chat.
-     *
-     * Offered from the warning row rather than only from the chat menu, because the row is where the user
-     * finds out the authorisation is still standing — usually by seeing it act.
-     */
     private fun onGuardRevokeApproval(m: JcefBridge.Msg.GuardRevokeApproval) {
         val rule = SecurityRule.from(m.rule)
         if (rule == null || m.command.isBlank()) {
@@ -125,8 +119,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             if (m.on) settings.alwaysAllow.remember(tool) else settings.alwaysAllow.forget(tool)
             return true
         }
-        // A session approval belongs to this chat and to nothing else, so it is revoked here rather than
-        // through the settings document — there is no document entry to remove.
         JcefSettingsMenu.sessionApproval(m.key)?.let { (rule, command) ->
             if (!m.on) session.guardApprovals.revoke(rule, command)
             return true
@@ -237,13 +229,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         session.systemNotice(notice)
     }
 
-    /**
-     * Adds the blocked command to the whitelist of **the rule that blocked it**, never to the global one.
-     *
-     * The global list is edited on the Settings page, in the cold, because "this command is fine everywhere"
-     * is a wider claim than a block in front of you can justify. Matching is on the guard's own canonical
-     * form, so `t""erraform  destroy` does not land next to `terraform destroy` as a second entry.
-     */
     private fun onGuardWhitelist(m: JcefBridge.Msg.GuardWhitelist) {
         val rule = SecurityRule.from(m.rule)
         val command = m.command.trim()
@@ -270,14 +255,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         session.systemNotice("`$command` is whitelisted for ${rule.label}. Every other rule still judges it.")
     }
 
-    /**
-     * Takes a command back off whichever whitelist is letting it through.
-     *
-     * Which list is worked out here rather than carried on the message, and in the guard's own precedence
-     * order — the rule's list, then its category's, then the global one — so the row removes exactly the
-     * entry that acted. Matching is on the canonical form, or an entry written normally would survive being
-     * removed from a warning about a spelling meant to evade it.
-     */
     private fun onGuardRemoveWhitelist(m: JcefBridge.Msg.GuardRemoveWhitelist) {
         val rule = SecurityRule.from(m.rule)
         if (rule == null || m.command.isBlank()) {

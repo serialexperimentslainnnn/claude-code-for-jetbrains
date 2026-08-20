@@ -87,14 +87,6 @@ class AgentIndexPrivacyTest {
         assertTrue(PluginAgentIndex.decode("{not json").isEmpty())
     }
 
-    /**
-     * Where it lives, now that it is not a file.
-     *
-     * It was a plaintext JSON under the user's home, which is why the test above exists at all: a tree of
-     * ids is safe to leave lying around and its content is not. It is an encrypted keychain entry now, one
-     * per IDE installation per project, so the reason for the rule is weaker — but the rule stays, because
-     * an index has never needed the content and the day it starts carrying some should be a decision.
-     */
     @Test
     fun `the index lives in the IDE's safe, and nothing writes it to a file`() {
         assertTrue(SettingsScope("abc123").agentIndexName.startsWith(SecretStore.AGENT_INDEX + "@"))

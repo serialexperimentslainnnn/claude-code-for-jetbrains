@@ -54,7 +54,6 @@ internal object GitGateway {
         limit: Int,
         scope: GitLogScope = GitLogScope.CURRENT_BRANCH,
     ): List<GitCommitInfo> {
-        // detekt's `SpreadOperator` has the mechanism right and the conclusion wrong here, so the suppression
         @Suppress("SpreadOperator")
         val commits = GitHistoryUtils.history(project, root, *revisionsOf(scope), "--topo-order", "-n", limit.toString())
         return commits.map { commit -> toInfo(commit, root.path) }

@@ -251,9 +251,6 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             "maxTurns", "maxBudgetUsd", "fallbackModel", "addDirs", "betas",
         )
 
-        // Everything the guard owns moved to Settings ▸ Claude Code Security in 5.6, and this page must not
-        // write it any more — a page that rewrites a field it no longer shows is how a setting gets reset by
-        // somebody pressing OK on an unrelated screen.
         val NOT_ON_THE_FORM = setOf(
             "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs", "executionTrusted",
             "guardEnabled", "guardDisabledUntil", "guardMode",

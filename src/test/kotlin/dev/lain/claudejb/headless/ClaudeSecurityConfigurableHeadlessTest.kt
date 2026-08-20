@@ -12,14 +12,6 @@ import dev.lain.claudejb.ui.ClaudeSecurityConfigurable
 import dev.lain.claudejb.ui.SettingsSecuritySection
 import javax.swing.JComboBox
 
-/**
- * Settings ▸ **Claude Code Security**, driven the way the dialog drives it.
- *
- * The page it mirrors has had this test since 5.5; this one did not exist while the guard page was the part
- * changing every day, which is exactly backwards. The contract that matters is the last one here: every
- * field of the settings document is either **this page's** or **deliberately not**, and a field nobody has
- * classified fails the build rather than being quietly rewritten by whoever presses OK.
- */
 class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
 
     private val scope get() = ClaudeSettings.getInstance(project).scope
@@ -202,9 +194,6 @@ class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
             "securityRuleWhitelists",
         )
 
-        // Everything the general page owns, plus the two stores this page reads but only writes through a
-        // button of its own: a suspension the user set must survive somebody pressing OK on the page that
-        // displays it, and execution trust is answered by a prompt, never by a form.
         val NOT_ON_THE_PAGE = setOf(
             "model", "effort", "permissionMode", "thinkingTokens", "includePartialMessages",
             "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",

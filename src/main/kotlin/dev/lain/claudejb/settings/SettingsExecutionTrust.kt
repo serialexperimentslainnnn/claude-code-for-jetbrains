@@ -11,14 +11,6 @@ private val LENIENT_JSON = Json {
     isLenient = true
 }
 
-/**
- * Whether the user has said this project's source script and stdio MCP servers may run.
- *
- * Kept in the settings document like every other setting, which means the IDE's PasswordSafe. It used to be
- * a `PropertiesComponent` flag in `.idea/workspace.xml` — a security answer in a plaintext file inside the
- * repository, which is the one place this plugin's configuration is not allowed to be. Nobody who answered
- * the prompt before 5.6 is remembered, so the prompt appears once more and the answer lands in the safe.
- */
 fun ClaudeSettings.isExecutionTrusted(): Boolean = state.executionTrusted
 
 fun ClaudeSettings.setExecutionTrusted(trusted: Boolean) {

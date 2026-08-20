@@ -5,12 +5,6 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Which document a window writes to, pinned on the pure half.
- *
- * The property that matters is separation in both directions — two projects in one IDE, and one project in
- * two IDEs — because getting either wrong is silent: the user simply finds a setting they never made.
- */
 class SettingsScopeTest {
 
     private val ide = "/home/u/.config/JetBrains/IntelliJIdea2026.1"

@@ -9,12 +9,6 @@ import dev.lain.claudejb.settings.SecretStore
 import java.nio.file.Files
 import java.nio.file.Path
 
-/**
- * The open-chat list, in the safe rather than in a shared file under `~/.claude`.
- *
- * The last case is the one that matters on upgrade: what the old file held for **this** project has to come
- * across, and the file has to be gone afterwards rather than left as a second, staler copy.
- */
 class SessionHistoryHeadlessTest : BasePlatformTestCase() {
 
     private lateinit var tempHome: Path

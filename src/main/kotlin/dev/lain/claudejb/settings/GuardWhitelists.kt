@@ -3,24 +3,8 @@ package dev.lain.claudejb.settings
 import dev.lain.claudejb.permission.SecurityCategory
 import dev.lain.claudejb.permission.SecurityRule
 
-/**
- * The three lists of commands the user has decided may run, and how they are written down.
- *
- * They differ only in **reach**, and the guard asks them narrowest-first — the rule that actually fired,
- * then that rule's category, then the global list — so a verdict can always be explained by pointing at one
- * entry rather than at "it is whitelisted somewhere".
- *
- * - **Global** (`securityCommandWhitelist`): one command per line, `#` comments a line. Lifts any rule.
- * - **Per category** (`securityCategoryWhitelists`): `CATEGORY=command`, one per line.
- * - **Per rule** (`securityRuleWhitelists`): `RULE=command`, one per line. What the *Whitelist Command* link
- *   on a block writes, because the rule that stopped the call is the narrowest true statement available.
- *
- * An unresolvable key is dropped rather than guessed, which can only ever fail to WIDEN a permission — the
- * same direction of failure the disabled-rule CSV chose, and for the same reason.
- */
 object GuardWhitelists {
 
-    /** The global list: every non-blank, non-comment line. */
     fun commands(text: String): List<String> =
         text.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
 
@@ -29,7 +13,6 @@ object GuardWhitelists {
     fun byCategory(text: String): Map<SecurityCategory, Set<String>> =
         keyed(text) { name -> SecurityCategory.entries.firstOrNull { it.name == name } }
 
-    /** [text] with `key=command` appended, or [text] unchanged when that pair is already in it. */
     fun withEntry(text: String, key: String, command: String): String {
         val wanted = command.trim()
         if (wanted.isEmpty()) return text
@@ -38,17 +21,9 @@ object GuardWhitelists {
         return if (text.isBlank()) line else text.trimEnd() + "\n" + line
     }
 
-    /**
-     * True when [text] has an entry under [key] whose command [same] recognises — `key == null` is the
-     * global list, whose lines carry no key at all.
-     *
-     * [same] rather than string equality because a whitelist is matched in the guard's canonical form: the
-     * entry the user typed and the command that ran can be different spellings of one thing.
-     */
     fun holds(text: String, key: String?, same: (String) -> Boolean): Boolean =
         entries(text).any { matches(it, key, same) }
 
-    /** [text] with those entries removed. */
     fun without(text: String, key: String?, same: (String) -> Boolean): String =
         entries(text).filterNot { matches(it, key, same) }.joinToString("\n")
 

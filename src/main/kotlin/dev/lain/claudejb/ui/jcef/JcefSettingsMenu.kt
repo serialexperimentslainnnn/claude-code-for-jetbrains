@@ -97,10 +97,6 @@ internal object JcefSettingsMenu {
         val now = System.currentTimeMillis()
         val suspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
             SecuritySuspensions.sessionSuspended()
-        // Its own group, emitted whole before Security starts: Security is a group of checkboxes and this is
-        // a choice of one, and a group the page draws in two pieces is a group it draws twice. Allow All is
-        // one of the three rather than a switch beside them — the same shape the settings page uses, because
-        // a checkbox next to a mode combo says nothing about which of the two is in force.
         val mode = if (SecuritySuspensions.guardSuspended(s, now)) {
             GuardMode.ALLOW_ALL
         } else {
@@ -117,12 +113,6 @@ internal object JcefSettingsMenu {
         }
     }
 
-    /**
-     * The commands answered with *Always allow this command* on a card **in this chat**.
-     *
-     * They live here rather than on the Settings page because that is where their scope is: this
-     * conversation, until the IDE closes. Switching one off revokes it; there is nothing stored to delete.
-     */
     private fun JsonArrayBuilder.sessionApprovalRows(approvals: Map<SecurityRule, Set<String>>) {
         approvals.forEach { (rule, commands) ->
             commands.forEach { command ->
@@ -131,7 +121,6 @@ internal object JcefSettingsMenu {
         }
     }
 
-    /** The rule and command behind an `approval:<RULE>:<command>` key, or null when [key] is not one. */
     fun sessionApproval(key: String): Pair<SecurityRule, String>? {
         if (!key.startsWith("$APPROVAL:")) return null
         val rest = key.removePrefix("$APPROVAL:")
@@ -198,9 +187,6 @@ internal object JcefSettingsMenu {
         on: Boolean,
         models: List<String>,
     ): Boolean? = when (prefix) {
-        // Allow All from here is Forever: a menu has nowhere to ask "for how long?", and the shield in the
-        // composer is the door that does. Choosing either of the other two ends a timed one that is running,
-        // or the menu would keep claiming a mode that is not the one in force.
         GUARD_MODE -> select(GuardMode.from(value) != null, on) {
             val chosen = GuardMode.from(value) ?: GuardMode.DEFAULT
             if (chosen == GuardMode.ALLOW_ALL) {

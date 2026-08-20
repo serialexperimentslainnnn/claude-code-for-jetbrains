@@ -51,8 +51,6 @@
     );
   }
 
-  // The shield's state is the HOST's, never the page's: it is a setting, not a view preference like
-  // auto-scroll, and every chat in the IDE has to agree about whether anything is being judged.
   function applyGuard() {
     if (!guardBtnRef) return;
     if (guardOn) guardBtnRef.classList.add('active');
@@ -168,8 +166,6 @@
     var barRight = h('div', { class: 'bar-right' }, guardBtn, followBtn, vibeBtn, sendBtn);
     var bar = h('div', { class: 'composer-bar' }, barLeft, barRight);
 
-    // Switching it back ON is one click — nothing to ask. Switching it OFF opens the same seven-choice menu
-    // a blocked rule offers, because "off" without a horizon is how a guard stays off for months.
     var guardMenu = CC.durationMenu({
       anchor: guardBtn,
       home: barRight,
@@ -226,8 +222,6 @@
         items: function () {
           var list = [];
           for (var n = 0; n < barLeft.children.length; n++) list.push(barLeft.children[n]);
-          // The shield is deliberately absent: it is the one control that says whether anything is
-          // protecting the machine right now, and a narrow window must not be able to hide it behind a ⋮.
           return list.concat([followBtn, vibeBtn]);
         },
         reserved: function () {

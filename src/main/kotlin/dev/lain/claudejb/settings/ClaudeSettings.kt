@@ -68,22 +68,10 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var sensitiveExtraGlobs: String = ""
 
-        /**
-         * The guard's own mode. [GuardMode.ALLOW_ALL] here is the *Forever* end of the shield; the two
-         * timed ends live in [guardDisabledUntil] and in memory, which is why turning it back on has to
-         * clear all three.
-         */
         @JvmField var guardMode: String = GuardMode.DEFAULT.wire
 
         @JvmField var guardDisabledUntil: Long = 0
 
-        /**
-         * The rules running in **Permissive** mode, as a CSV of ids.
-         *
-         * The field keeps its old name because it is persisted and every installation already carries it;
-         * what it stores has not changed either — the set the user moved off Enforcing. Only the word for it
-         * did.
-         */
         @JvmField var disabledSecurityRules: String = ""
 
         @JvmField var securityRuleSuspensions: String = ""
@@ -180,20 +168,8 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     val strictMcpConfig: Boolean get() = state.strictMcpConfig
 
-    /**
-     * Which stored document this service reads and writes — one per IDE installation per project.
-     *
-     * Lazy rather than eager because the service is constructed while the project is still opening, and
-     * `basePath` is what the identity is derived from.
-     */
     val scope: SettingsScope by lazy { SettingsScope.of(project) }
 
-    /**
-     * Whether the user signed out — **global**, not per project, because a credential is.
-     *
-     * Kept in its own PasswordSafe entry rather than in the document for exactly that reason: a window that
-     * disagreed would launch the binary expecting a credential the safe no longer holds.
-     */
     var signedOut: Boolean
         get() = runCatching { SecretStore.get(SecretStore.SIGNED_OUT) }.getOrNull().toBoolean()
         set(value) = runCatching {
@@ -219,12 +195,6 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     fun save() = SettingsStore.save(scope, state)
 
-    /**
-     * *Clean Settings* — this project's configuration back to a fresh install's, in this IDE only.
-     *
-     * Credentials are not configuration and are not touched: the sign-in, the provider keys and the Git host
-     * tokens survive, and so does every other project.
-     */
     fun wipe(): Boolean {
         val cleared = SettingsStore.wipe(scope)
         if (cleared) replace(State())

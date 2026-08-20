@@ -47,7 +47,6 @@ object DestructiveCommands {
             .flatMap { setOf(GuardPaths.expandEnv(it, home, env), CommandRules.deobfuscate(it, home, env)) }
             .firstNotNullOfOrNull { candidate -> firstVector(candidate) }
 
-    /** The first vector [candidate] trips, or null — kept separate so [hit] stays a flat pipeline (detekt nesting). */
     private fun firstVector(candidate: String): Hit? =
         VECTORS.firstNotNullOfOrNull { (rule, pattern) ->
             pattern.find(candidate)?.let { Hit(rule, it.value.take(MATCH_EXCERPT_CHARS)) }

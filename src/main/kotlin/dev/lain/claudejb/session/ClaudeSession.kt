@@ -82,14 +82,6 @@ class ClaudeSession(
     private val rollback = RollbackManager(project, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
     internal val controlClient = SessionControlClient(write = ::write)
 
-    /**
-     * Changing a LIVE session's options — `session.settings.changeModel(…)`, `…changePermissionMode(…)`.
-     *
-     * Seven verbs that were members here. Internal visibility on a PROPERTY costs nothing against the size of
-     * this class's API (detekt counts functions, and rightly: a property is a thing you read, a function is a
-     * thing that can act on a running session), which is what makes moving the verbs out an actual reduction
-     * rather than a rename.
-     */
     val settings = SessionLiveSettings(
         session = this,
         project = project,
@@ -352,7 +344,6 @@ class ClaudeSession(
 
     val checkpointingEnabled: Boolean get() = ClaudeSettings.getInstance(project).enableFileCheckpointing
 
-    /** Whether the Sensitive Guard is judging tool calls right now — what the composer's shield is drawn from. */
     val guardEnforced: Boolean get() = !ClaudeSettings.getInstance(project).guardSuspended()
 
     private val poll = PollSchedule(
@@ -380,12 +371,6 @@ class ClaudeSession(
     var initialized: Boolean = false
         private set
 
-    /**
-     * The commands pre-approved from a guard alert **in this chat**, for as long as this chat lives.
-     *
-     * One store per session on purpose: an approval given under one conversation's card says nothing about
-     * another's, and none of it is written down. The durable answer is the whitelist in Settings.
-     */
     val guardApprovals = GuardCommandApprovals()
 
     private val broker by lazy {
@@ -424,9 +409,6 @@ class ClaudeSession(
                 fireState()
             },
             onSensitiveBypassed = { bypass ->
-                // The broker knows about its own route; the other two are settings facts, so what the row
-                // offers to undo is decided here — put the guard back on, or take the command off the list
-                // it is on. Which list is worked out at removal time, in the guard's own precedence order.
                 val offer = bypass.action ?: if (ClaudeSettings.getInstance(project).guardSuspended()) {
                     PermissionBroker.ENABLE_GUARD
                 } else {
@@ -834,13 +816,6 @@ class ClaudeSession(
         fireState()
     }
 
-    /**
-     * Writes one guard decision into the alert log.
-     *
-     * Every route the guard can take ends here as well as in the transcript, and for two reasons: it is the
-     * audit trail, and it is the only place a restored conversation can learn that a rule ever matched — the
-     * binary's own file records a refusal as an ordinary failed tool result and a bypass as nothing at all.
-     */
     private fun recordAlert(
         verdict: String,
         rule: SecurityRule?,
@@ -869,7 +844,6 @@ class ClaudeSession(
     }
 
     private fun presentPermission(request: PendingPermission) = edt {
-        // A card shown is an alert raised, whatever the user then answers — the answer is its own entry.
         request.guard?.let {
             recordAlert(
                 GuardAlert.ASKED,
@@ -1407,13 +1381,6 @@ class ClaudeSession(
 
     internal fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
 
-    /**
-     * A watched call that ran, and the reason it was allowed to — as a warning rather than as a grey line.
-     *
-     * Every route past a rule ends here, so the transcript answers the same question the same way whichever
-     * one was taken: which rule matched, and what let it through. A call nobody stopped is ordinary work and
-     * gets none of this.
-     */
     internal fun guardNotice(
         toolName: String,
         reason: String,

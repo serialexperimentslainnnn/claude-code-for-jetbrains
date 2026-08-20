@@ -15,17 +15,6 @@ import dev.lain.claudejb.settings.SettingsScope
 import dev.lain.claudejb.settings.SettingsTransfer
 import javax.swing.JComponent
 
-/**
- * *Migrate from another IDE…* — copy this machine's other JetBrains IDEs' Claude Code configuration here.
- *
- * The case it is for is the ordinary one: the same project open in IntelliJ and in PyCharm, configured once.
- * JetBrains' *Import Settings* copies configuration directories and never touches the keychain, which is
- * where all of this lives, so without a gesture like this one a freshly imported IDE starts empty.
- *
- * Direction is one-way, into the IDE you are sitting in. The reverse is the same code with the scopes
- * swapped and can be added if it is ever wanted; configuring IDE B from IDE A is the rare case and is not
- * assumed.
- */
 internal class MigrateFromIdeDialog(private val project: Project) : DialogWrapper(project) {
 
     private val installations = OtherIdeConfigs.others()
@@ -41,7 +30,6 @@ internal class MigrateFromIdeDialog(private val project: Project) : DialogWrappe
         JBCheckBox(part.label, part != SettingsTransfer.Part.ALERT_LOG)
     }
 
-    /** How many projects actually received something, so the caller can say so rather than guess. */
     var migrated: Int = 0
         private set
 
@@ -63,15 +51,6 @@ internal class MigrateFromIdeDialog(private val project: Project) : DialogWrappe
         row { comment(NOTE, MAX_LINE_LENGTH_WORD_WRAP) }
     }
 
-    /**
-     * Only the projects that IDE actually has settings for, and all of them ticked.
-     *
-     * Everything it has ever opened would offer copies that do nothing, so the list is filtered by probing
-     * the source scope first — and everything that survives that filter is worth taking, so nothing is left
-     * for the user to tick one at a time. The list has to come from the other IDE's recent projects because
-     * **the PasswordSafe cannot be enumerated**: a scope id can be computed from a configuration path and a
-     * project path and then probed, but there is no way to ask which entries exist.
-     */
     private fun reloadProjects() {
         val installation = selected() ?: return
         val candidates = (

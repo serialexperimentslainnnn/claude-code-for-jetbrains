@@ -18,11 +18,6 @@ object SensitiveGuard {
         val pathResolver: ((String) -> String?)? = null,
         val envValues: Map<String, String> = emptyMap(),
         val fileReader: ((String) -> String?)? = null,
-        /**
-         * The rules running in **Permissive** mode: detection still happens, and a hit becomes a card
-         * instead of a refusal. Every rule not in here is **Enforcing**, which is the default for all of
-         * them — an empty set is the original hard lock exactly.
-         */
         val permissiveRules: Set<SecurityRule> = emptySet(),
         val httpProxy: String? = null,
         val httpsProxy: String? = null,
@@ -39,19 +34,11 @@ object SensitiveGuard {
         val verdict: Verdict,
         val reason: String?,
         val rule: SecurityRule? = null,
-        /**
-         * What the rule actually saw, as its own verb phrase and the excerpt that tripped it — no settings
-         * path, no verdict, no advice. [reason] is that dressed for one audience; anything that has to
-         * explain the same match to a different one needs the bare sentence rather than a substring of it.
-         */
         val detail: String? = null,
     )
 
     fun evaluate(input: JsonObject, policy: Policy): Decision {
         val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
-        // An ALLOW that came from a whitelist carries the rule and the list that lifted it, unlike the ALLOW
-        // above: the difference between "nothing matched" and "something matched and you permitted it" is
-        // what lets the transcript warn about the second one instead of staying silent.
         liftedByWhitelist(input, hit, policy)?.let { list ->
             return Decision(Verdict.ALLOW, "${hit.text} — allowed by the $list", hit.rule, hit.text)
         }
@@ -61,19 +48,6 @@ object SensitiveGuard {
     private fun verdictFor(hit: Hit, policy: Policy): Verdict =
         if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
 
-    /**
-     * Whether the user has already said this exact command may run.
-     *
-     * Asked **narrowest first** — the rule that fired, then that rule's category, then the global list — so
-     * the permission can be attributed to one entry rather than to "somewhere". Every command the call
-     * issues has to be covered: authorising `terraform destroy` does not authorise
-     * `terraform destroy && rm -rf /`, which is a different string.
-     *
-     * There is no rule this cannot lift, deliberately. A false positive the user cannot get past stops work
-     * the user asked for, and deciding which of their own commands they are allowed to permit is not this
-     * code's call — [SecurityRule.whitelistable] survives only as the flag that decides whether adding one
-     * from a block warns first.
-     */
     private fun liftedByWhitelist(input: JsonObject, hit: Hit, policy: Policy): String? {
         val issued = ToolInputScanner.commandCandidates(input).map { canonicalCommand(it, policy) }
         if (issued.isEmpty() || issued.any { it.isEmpty() }) return null
@@ -116,7 +90,6 @@ object SensitiveGuard {
         val projRoot = policy.projectRoot?.let { GuardPaths.fold(GuardPaths.normalize(it, policy.home)) }
         val outsideProject = paths.filter { projRoot == null || !GuardPaths.under(GuardPaths.fold(it), projRoot) }
 
-        // in one function is neither reviewable nor within detekt's limits — and the order across them is exactly
         return placeRules(paths, outsideProject, policy)
             ?: actionRules(input, policy, depth)
             ?: weakRules(input, outsideProject, policy, depth)
@@ -154,28 +127,6 @@ object SensitiveGuard {
         }
     }
 
-    /**
-     * The families recognised by the SHAPE OF A COMMAND rather than by a path — asked in severity order, first
-     * hit wins the wording.
-     *
-     * Split out of [actionRules] rather than inlined there, and the split is not only detekt's return-count
-     * budget: this is the list that grows. Every new command family is one more entry here and one more file
-     * beside this one, which is the package's own rule — a rule is a file, never a branch in the verdict — and
-     * keeping them together is what lets the ordering be READ as an ordering instead of reconstructed from a
-     * chain of early returns interleaved with the opaque rules and the recursion bound.
-     *
-     * The order, and why each step is where it is:
-     *  1. a **blocked destination** — reads as strongly as a credential dump and more specifically than "a
-     *     dangerous command": a call that is both `curl --upload-file` AND aimed at a paste site is best
-     *     described by the site;
-     *  2. a **secret-dumping command** — the actual secret leaving;
-     *  3. a **version-control safeguard being skipped** — a door left open, which is weaker than one already
-     *     walked through;
-     *  4. a **destructive operation** — not confidentiality at all, but "this is about to delete your production
-     *     database" outranks every remaining claim about a command's shape;
-     *  5. **code execution / persistence** — someone else's code, now or after the session;
-     *  6. a **proxy bypass** — the narrowest of the set, worth saying only when nothing worse is true.
-     */
     private fun commandFamilies(input: JsonObject, policy: Policy): Hit? {
         val families: List<() -> Hit?> = listOf(
             {

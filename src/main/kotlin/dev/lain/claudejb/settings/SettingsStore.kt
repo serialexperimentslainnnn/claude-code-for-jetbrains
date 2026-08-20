@@ -13,16 +13,6 @@ import java.nio.file.Paths
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Where the plugin's settings live: **the IDE's PasswordSafe**, as one JSON document per [SettingsScope] —
- * that is, one per IDE installation per project.
- *
- * Reading walks four places and stops at the first that answers, which is what makes an upgrade invisible:
- * this scope's own document, then the single global document every version up to 5.5 shared, then the
- * `settings.json` file 4.x kept under `~/.claude`, then nothing. The global document is **read and never
- * removed**: it is the seed every project opened from now on inherits, so deleting it would silently empty
- * the next project the user opens. Only the file is consumed, exactly as before.
- */
 internal object SettingsStore {
 
     private val log = logger<SettingsStore>()
@@ -34,12 +24,6 @@ internal object SettingsStore {
         coerceInputValues = true
     }
 
-    /**
-     * Which scopes could not be read this run, and must therefore not be written.
-     *
-     * Per scope rather than one flag for the whole plugin: a keyring hiccup while one project is opening
-     * would otherwise refuse every other project's saves for the rest of the session.
-     */
     private val readFailed = ConcurrentHashMap<String, Boolean>()
 
     @Synchronized
@@ -134,27 +118,12 @@ internal object SettingsStore {
     @Synchronized
     fun loadOrNull(scope: SettingsScope): ClaudeSettings.State? = load(scope).takeUnless { failed(scope) }
 
-    /**
-     * Puts one scope back to a fresh install's configuration.
-     *
-     * Writes a defaults document rather than removing the entry, and that is the difference between "reset"
-     * and "reset until the next restart": an absent entry falls back to the shared pre-5.6 document, so
-     * deleting would hand the project back the very settings the user just asked to be rid of.
-     *
-     * Scoped to this IDE and this project. It touches no credential and no other project.
-     */
     @Synchronized
     fun wipe(scope: SettingsScope): Boolean {
         readFailed[scope.id] = false
         return save(scope, ClaudeSettings.State())
     }
 
-    /**
-     * Adopts this project's `.idea/claude-code.xml` into [scope], once.
-     *
-     * Refused when the scope already has a document **or** when the shared 5.x one does: both are newer than
-     * a file the 3.x releases wrote, and the read chain would have preferred them anyway.
-     */
     @Synchronized
     fun migrateFrom(scope: SettingsScope, legacy: ClaudeSettings.State): Boolean {
         if (exists(scope) || inheritedExists()) return false
@@ -180,10 +149,6 @@ internal object SettingsStore {
     fun exists(scope: SettingsScope): Boolean =
         runCatching { SecretStore.get(scope.secretName) != null }.getOrDefault(false)
 
-    /**
-     * Whether the read chain has anything to answer [scope] with — its own document, or the shared one it
-     * would inherit. What makes the legacy project file safe to remove.
-     */
     fun storedAnywhere(scope: SettingsScope): Boolean = exists(scope) || inheritedExists()
 
     private fun inheritedExists(): Boolean =
@@ -205,13 +170,6 @@ internal object SettingsStore {
             .also { LegacySecurityToggles.adopt(it) }
             .also { adoptSignedOut(o) }
 
-    /**
-     * Lifts a pre-5.6 `signedOut` out of the document and into its own global slot, once.
-     *
-     * It has to leave the document because the document is now per project, and being signed out is not:
-     * a sign-out in one window that another window disagreed with would send that window to the binary with
-     * a credential the safe no longer holds.
-     */
     private fun adoptSignedOut(o: JsonObject) {
         if (runCatching { SecretStore.get(SecretStore.SIGNED_OUT) }.getOrNull() != null) return
         val wasSignedOut = runCatching { o[LEGACY_SIGNED_OUT]?.jsonPrimitive?.booleanOrNull }.getOrNull() ?: return

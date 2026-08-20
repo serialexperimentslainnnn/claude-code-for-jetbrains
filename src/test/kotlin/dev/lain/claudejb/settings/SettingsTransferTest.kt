@@ -9,13 +9,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.lang.reflect.Modifier
 
-/**
- * Export, import, and copying one scope onto another.
- *
- * The load-bearing test is the first one. Everything else here can be re-derived by reading the code; that
- * one is a tripwire for a change nobody will connect to this file — somebody adds a field that holds a
- * secret, and the export starts writing it into a JSON in the user's Downloads folder.
- */
 class SettingsTransferTest {
 
     private lateinit var safe: MutableMap<String, String>
@@ -36,11 +29,6 @@ class SettingsTransferTest {
         .filterNot { it.name.startsWith("$") }
         .map { it.name }
 
-    /**
-     * Only `String` fields, and that is the whole heuristic rather than a loophole in it: a secret is text.
-     * `thinkingTokens` is an `Int` and `securityBlockCredentials` is a `Boolean`, and neither can hold one
-     * however much their names read like they could.
-     */
     @Test
     fun `no field that could carry a secret is written to an exported file`() {
         val suspicious = ClaudeSettings.State::class.java.declaredFields
@@ -174,7 +162,6 @@ class SettingsTransferTest {
     }
 
     private companion object {
-        /** What a field name looks like when it holds something that must not leave the machine. */
         val SECRET_WORDS = listOf("env", "key", "token", "secret", "password", "credential")
     }
 }

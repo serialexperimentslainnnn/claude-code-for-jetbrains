@@ -6,14 +6,6 @@ import dev.lain.claudejb.settings.SecretStore
 import dev.lain.claudejb.settings.SettingsScope
 import dev.lain.claudejb.settings.SettingsStore
 
-/**
- * The settings persist into the IDE's PasswordSafe — the OS credential store — and nowhere else, and each
- * IDE-installation-and-project pair gets **its own document**.
- *
- * The second half is what these pin hardest, because it is the part an upgrade can get silently wrong:
- * a scope with nothing of its own inherits the single document every version up to 5.5 shared, that
- * document is never consumed, and two scopes never see each other's writes.
- */
 class SettingsStoreHeadlessTest : BasePlatformTestCase() {
 
     private val scope = SettingsScope("scope-under-test")

@@ -9,15 +9,6 @@ import com.intellij.openapi.project.Project
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.settings.SecretStore
 
-/**
- * The one-time nudge to leave a Marketplace review.
- *
- * Its counter is the last thing the plugin kept outside the safe — it was an application-level
- * `PropertiesComponent` entry, which is a plaintext XML file in the IDE's config directory. Nothing
- * about it is secret, but "everything the plugin stores is in the keychain" is only a rule anyone can check
- * if there is no exception to it. Global rather than per project: a user is asked once, not once per
- * repository.
- */
 object ReviewPrompt {
 
     const val TURNS_BEFORE_ASK = 25
@@ -51,7 +42,6 @@ object ReviewPrompt {
         show(project)
     }
 
-    /** The 5.x counter, read once so a user who already said no is not asked again after upgrading. */
     private fun fromProperties(): String? {
         val props = PropertiesComponent.getInstance()
         if (props.getBoolean(ASKED_KEY, false)) return ASKED

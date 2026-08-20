@@ -96,9 +96,6 @@
     return { el: node, bodyNode: body, kind: isError ? 'text' : 'md' };
   }
 
-  // What each kind of standing bypass offers to do about itself. A row with no entry here — a card the user
-  // answered once, a whitelist entry that belongs on its own settings page — offers nothing, because there
-  // is either nothing left standing or nothing this row should be deleting.
   var BYPASS_ACTIONS = {
     enableGuard: {
       label: 'Enable Sensitive Guard',
@@ -108,8 +105,6 @@
     removeFromWhitelist: { label: 'Remove from whitelist', message: { type: 'guardRemoveWhitelist' } },
   };
 
-  // A call a rule matched and that ran anyway. A warning rather than a block: nothing was stopped, and the
-  // point of the row is that the user can see WHICH rule went unenforced, why, and undo the reason.
   function buildBypassNotice(entry) {
     var node = el('div', { class: 'notice guard-bypass' });
     var body = el('div', { class: 'body' });
@@ -171,8 +166,6 @@
     actions.appendChild(link);
     actions.appendChild(menu.menu);
 
-    // Only when the call carried a command. Whitelisting is about an exact command string, so a block with
-    // nothing to match on — a bare path read, say — must not offer a link that would silently do nothing.
     if (command) {
       actions.appendChild(
         el('button', {

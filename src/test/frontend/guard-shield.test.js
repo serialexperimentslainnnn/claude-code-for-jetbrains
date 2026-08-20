@@ -104,6 +104,4 @@ describe('the shield says what is protecting the machine, and can stand it down'
     expect(document.querySelector('.guard-disable-menu').hasAttribute('hidden')).toBe(true);
   });
 
-  // That it never collapses into the ⋮ overflow is pinned where the overflow is: composer-overflow.test.js
-  // asserts the collected labels exactly, so adding the shield to items() fails there rather than here.
 });

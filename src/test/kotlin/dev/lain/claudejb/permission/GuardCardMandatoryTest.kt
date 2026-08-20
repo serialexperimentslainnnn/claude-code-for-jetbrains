@@ -36,8 +36,6 @@ class GuardCardMandatoryTest {
         mode: String = "default",
         alwaysAllowedTools: Set<String> = emptySet(),
         approvedCommands: Set<Pair<SecurityRule, String>> = emptySet(),
-        // Null is the "nothing matched" decision the guard really returns for ordinary work, and it is a
-        // different thing from an ALLOW that carries a rule because something lifted it.
         hit: SecurityRule? = rule,
     ): Observation {
         val obs = Observation()
