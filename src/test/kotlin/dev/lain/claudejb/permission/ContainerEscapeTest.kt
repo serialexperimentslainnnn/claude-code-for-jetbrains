@@ -37,6 +37,19 @@ class ContainerEscapeTest {
             "docker run -v /var/run/docker.sock:/var/run/docker.sock img",
             "kubectl run x --overrides '{\"spec\":{\"hostPID\":true}}'",
             "kubectl run p --overrides '{\"spec\":{\"securityContext\":{\"privileged\":true}}}'",
+            "docker run --cap-add=SYS_ADMIN alpine",
+            "docker run --cap-add SYS_PTRACE img",
+            "docker run --security-opt seccomp=unconfined img",
+            "docker run --security-opt apparmor=unconfined img",
+            "docker run --pid=host img",
+            "docker run --network=host img",
+            "docker run --ipc=host img",
+            "docker run --userns=host img",
+            "docker run -v /proc:/host/proc img",
+            "docker run -v /sys:/host/sys img",
+            "kubectl run x --overrides '{\"spec\":{\"hostNetwork\":true}}'",
+            "kubectl run x --overrides '{\"spec\":{\"volumes\":[{\"hostPath\":{\"path\":\"/\"}}]}}'",
+            "echo 0 > /sys/fs/cgroup/x/release_agent",
         ).forEach {
             assertEquals(Verdict.DENY, v(bash(it)), it)
             assertEquals(SecurityRule.CONTAINER_ESCAPE, rule(bash(it)), it)

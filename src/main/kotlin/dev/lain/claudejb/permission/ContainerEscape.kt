@@ -17,6 +17,14 @@ object ContainerEscape {
         re("""(?:-v|--volume|--mount)\b[^|;&]*docker\.sock"""),
         re("""\bprivileged"?\s*:\s*"?true\b"""),
         re("""\bhostPID"?\s*:\s*"?true\b"""),
+        re("""--cap-add[=\s]+(ALL|SYS_ADMIN|SYS_PTRACE|DAC_READ_SEARCH|SYS_MODULE)\b"""),
+        re("""--security-opt[=\s]+(seccomp|apparmor)=unconfined\b"""),
+        re("""--(pid|network|net|ipc)[=\s]+host\b"""),
+        re("""--(userns|cgroupns)[=\s]+host\b"""),
+        re("""(?:-v|--volume)[=\s]+/(proc|sys|dev|var/run|run):"""),
+        re("""\bhost(Network|IPC)"?\s*:\s*"?true\b"""),
+        re("""\bhostPath"?\s*:"""),
+        re("""\brelease_agent\b"""),
     )
 
     internal fun hit(input: JsonObject, home: String? = null, env: Map<String, String> = emptyMap()): String? =
