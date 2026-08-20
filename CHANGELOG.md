@@ -62,6 +62,11 @@ of its own starts from the ones you already had.
   Nothing shows it yet — it is the groundwork for a later feature, and it is what makes the next item work.
 
 ### Security
+- **Privilege escalation is refused.** `sudo`, `su`, `doas`, `pkexec`, `runuser`, `setpriv`, `run0` and the
+  desktop wrappers; `osascript` asking for administrator privileges; `runas`, `Start-Process -Verb RunAs`,
+  `psexec` and `wsl -u root`. Every other rule is scoped to what your account may already do; root is not.
+  Matched at command position in a payload that **executes**, so reading or writing a file that documents
+  `sudo apt update` trips nothing. Whitelistable, per command, for whoever needs one.
 - **The "outside the project" rule now sees paths inside shell commands.** It only ever read them from a
   tool's own location argument, so `Read /home/you/notes.txt` was refused while `cat ~/notes.txt` was not —
   and the shell is where the work happens. The documentation had promised both since 5.x.

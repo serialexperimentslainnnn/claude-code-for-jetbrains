@@ -202,6 +202,25 @@ unknown node fails closed, because it is missing from a list of two rather than 
 ones. Everything else is still refused — `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/fd/<n>`, a tty — and
 the comparison is on the resolved spelling, so `/dev/null/../sda` is judged as the disk it actually names.
 
+### Becoming somebody else
+
+`sudo`, `su`, `doas`, `pkexec`, `runuser`, `setpriv`, `run0` and the desktop wrappers; `osascript` asking
+for administrator privileges on macOS; `runas`, `Start-Process -Verb RunAs`, `psexec` and `wsl -u root` on
+Windows. Refused by default, and whitelistable for whoever genuinely needs one.
+
+The reason it is its own rule rather than a case of any other: **every other rule here is scoped to what
+your account may already do.** Root is not in that scope. It reaches any file on the machine, including the
+ones the other rules were protecting, and a mistake made there is not recoverable by the person who
+approved it.
+
+It is matched at **command position only, and only in a payload that executes** — a shell command, a
+PowerShell script, an `argv`. Reading a file that documents `sudo apt update`, writing that line into a
+README, or grepping for it does not trip anything: this is a rule about running, not about the word.
+
+A machine where `sudo` is cheap — passwordless, or behind a hardware token the owner taps — is a property
+of that machine and not a reason to relax the default. Whoever wants it files the exact command in the
+whitelist, which is a decision with a record rather than a rule left off.
+
 ### Where data goes
 
 | Rule | Stops |

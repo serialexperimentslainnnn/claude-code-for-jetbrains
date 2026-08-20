@@ -114,6 +114,19 @@ enum class SecurityRule(
             "a disk directly, or opening a network connection disguised as a file.",
     ),
 
+    PRIVILEGE_ESCALATION(
+        SecurityCategory.SYSTEM_INTEGRITY,
+        "Block running as another user or as root",
+        "sudo, su, doas, pkexec, runuser, sudoedit and the desktop wrappers on Linux and macOS; osascript " +
+            "asking for administrator privileges; runas, Start-Process -Verb RunAs and psexec on Windows; " +
+            "wsl -u root",
+        "You can't run this with elevated privileges.",
+        "Every other rule here is scoped to what this account may already do. Root is outside that scope: it " +
+            "reaches any file on the machine, and a mistake made there is not recoverable by the user who " +
+            "approved it.",
+        whitelistable = true,
+    ),
+
     PROXY_BYPASS(
         SecurityCategory.NETWORK_EGRESS,
         "Block egress that bypasses the proxy",

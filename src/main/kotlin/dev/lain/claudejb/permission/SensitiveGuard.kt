@@ -203,6 +203,10 @@ object SensitiveGuard {
                     ?.let { Hit(it.rule, "makes this machine run code from elsewhere: ${it.text}") }
             },
             {
+                PrivilegeEscalation.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
+            },
+            {
                 ProxyRules.proxyHit(input, policy)
                     ?.let { Hit(SecurityRule.PROXY_BYPASS, "routes around the proxy you declared: $it") }
             },
