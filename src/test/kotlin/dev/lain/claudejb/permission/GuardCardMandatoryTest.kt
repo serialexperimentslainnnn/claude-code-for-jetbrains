@@ -16,6 +16,7 @@ class GuardCardMandatoryTest {
         var respond: String? = null
         var presented: PendingPermission? = null
         var denied: Denial? = null
+        var bypassed: Denial? = null
 
         val autoApproved: Boolean get() = respond != null && presented == null
         val manualCard: Boolean get() = presented != null
@@ -42,6 +43,9 @@ class GuardCardMandatoryTest {
         mode: String = "default",
         alwaysAllowedTools: Set<String> = emptySet(),
         approvedCommands: Set<Pair<SecurityRule, String>> = emptySet(),
+        // Null is the "nothing matched" decision the guard really returns for ordinary work, and it is a
+        // different thing from an ALLOW that carries a rule because something lifted it.
+        hit: SecurityRule? = rule,
     ): Observation {
         val obs = Observation()
         val broker = PermissionBroker(
@@ -52,8 +56,11 @@ class GuardCardMandatoryTest {
             onAutoReviewed = { _, _, _ -> },
             isRemembered = { tool, _ -> tool in alwaysAllowedTools },
             projectRoot = null,
-            sensitiveDecision = { SensitiveGuard.Decision(verdict, "runs a destructive command", rule) },
+            sensitiveDecision = {
+                SensitiveGuard.Decision(verdict, hit?.let { "runs a destructive command" }, hit)
+            },
             onSensitiveDenied = { tool, reason, r, command -> obs.denied = Denial(tool, reason, r, command) },
+            onSensitiveBypassed = { tool, reason, r -> obs.bypassed = Denial(tool, reason, r, null) },
             isGuardCommandApproved = { r, command ->
                 approvedCommands.any { it.first == r && it.second == command }
             },
@@ -101,6 +108,47 @@ class GuardCardMandatoryTest {
         )
 
         assertTrue(obs.autoApproved, "an explicit per-command answer is the one thing that may skip the card")
+    }
+
+    @Test
+    fun `a command that skips the card still says so, and says why`() {
+        val obs = run(
+            SensitiveGuard.Verdict.ASK,
+            bashReq("terraform destroy"),
+            approvedCommands = setOf(rule to "terraform destroy"),
+        )
+
+        assertNotNull(
+            obs.bypassed,
+            "this is the only route past a rule with no card at all — silent here means invisible",
+        )
+        assertEquals(rule, obs.bypassed?.rule, "the row has to name the rule that went unenforced")
+        assertTrue(
+            obs.bypassed?.reason.orEmpty().contains("in this chat"),
+            "the three bypasses are told apart by their reason, so it must say which one this was",
+        )
+    }
+
+    @Test
+    fun `a card that is shown is not a bypass`() {
+        val obs = run(SensitiveGuard.Verdict.ASK, bashReq("terraform destroy"))
+
+        assertTrue(obs.manualCard)
+        assertNull(obs.bypassed, "a question put to the user is not something that went past them")
+    }
+
+    @Test
+    fun `an ordinary call nothing objected to says nothing`() {
+        val obs = run(SensitiveGuard.Verdict.ALLOW, bashReq("git status"), hit = null)
+
+        assertNull(obs.bypassed, "narrating ordinary work as a bypass would make the warning meaningless")
+    }
+
+    @Test
+    fun `an ALLOW that still carries a rule is a bypass, and is reported as one`() {
+        val obs = run(SensitiveGuard.Verdict.ALLOW, bashReq("terraform destroy"))
+
+        assertEquals(rule, obs.bypassed?.rule, "something matched and ran: that is exactly what to warn about")
     }
 
     @Test

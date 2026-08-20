@@ -108,6 +108,11 @@ class PermissionBroker(
                 } == true
                 if (!forceAsk() && approved) {
                     autoAllow(requestId, request, reviewable)
+                    // The one route past a rule that shows no card at all. Without this it is also the one
+                    // route that leaves no trace, which would make it the quietest of the three bypasses.
+                    decision.rule?.let {
+                        onSensitiveBypassed(request.toolName, "${it.label} matched, and $APPROVED_IN_CHAT", it)
+                    }
                 } else {
                     present(presentable(requestId, request, reviewable, decision))
                 }
@@ -225,6 +230,9 @@ class PermissionBroker(
 
     companion object {
         private const val MAX_SUMMARY_CHARS = 2000
+
+        /** Why a watched command ran with no card: the user answered for it earlier, in this conversation. */
+        private const val APPROVED_IN_CHAT = "you approved this command in this chat"
 
         const val SENSITIVE_DENIED: String =
             "Denied by the IDE: this call touches credentials, a dangerous command, or territory it must not. " +

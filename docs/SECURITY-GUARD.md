@@ -343,12 +343,22 @@ The whitelist is the one that lasts: **this project, this IDE, until the entry i
 
 ### When a bypass acts, it says so
 
-Both bypasses are silent to *Claude* and loud to *you*. A call that matched a rule and ran anyway leaves a
-**warning row** in the transcript naming the rule and which of the two let it through — Allow All, or which
-whitelist. Nothing was stopped, so it is not the red block row; the point is that a bypass in force is
-visible in the conversation it affected rather than only on a settings page nobody has open.
+Every route past a rule is silent to *Claude* and loud to *you*. A call that matched a rule and ran anyway
+leaves a **warning row** in the transcript naming the rule and what let it through:
 
-Ordinary work that matched nothing says nothing. The row appears only where there was something to say.
+| The row says | Because |
+|---|---|
+| …and Allow All is on | the shield is down |
+| …allowed by the whitelist for *X* | the command is on one of the three lists, and it says which |
+| …and you approved this command in this chat | *Always allow* was answered earlier in this conversation |
+| …and you accepted it | you answered the card just now |
+
+Nothing was stopped in any of them, so none is the red block row. The point is that a rule going unenforced
+is visible in the conversation it affected, and distinguishable — an approval you gave five minutes ago and
+a shield you left down last week are not the same event, and the transcript should not describe them with
+the same sentence.
+
+Ordinary work that matched nothing says nothing. The row appears only where a rule really did match.
 
 ---
 

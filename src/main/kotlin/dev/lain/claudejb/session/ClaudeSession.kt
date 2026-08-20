@@ -17,6 +17,7 @@ import dev.lain.claudejb.diff.EditSnapshot
 import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.process.ClaudeProcess
@@ -412,13 +413,7 @@ class ClaudeSession(
                 fireState()
             },
             onSensitiveBypassed = { toolName, reason, rule ->
-                edt {
-                    transcript.add(
-                        Speaker.SYSTEM,
-                        "Allowed $toolName: ${reason ?: "${rule.label} matched, and a bypass is in force"}.",
-                        bypassedRule = rule.name,
-                    )
-                }
+                guardNotice(toolName, reason ?: "${rule.label} matched, and a bypass is in force", rule)
             },
         )
     }
@@ -1325,6 +1320,17 @@ class ClaudeSession(
     }
 
     internal fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
+
+    /**
+     * A watched call that ran, and the reason it was allowed to — as a warning rather than as a grey line.
+     *
+     * Every route past a rule ends here, so the transcript answers the same question the same way whichever
+     * one was taken: which rule matched, and what let it through. A call nobody stopped is ordinary work and
+     * gets none of this.
+     */
+    internal fun guardNotice(toolName: String, reason: String, rule: SecurityRule) = edt {
+        transcript.add(Speaker.SYSTEM, "Allowed $toolName: $reason.", bypassedRule = rule.name)
+    }
 
     fun scanAgents() = agentScanner.scan()
 

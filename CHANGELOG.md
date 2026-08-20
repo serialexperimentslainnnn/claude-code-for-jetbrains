@@ -41,10 +41,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   than from the click, so every open chat agrees, and the shield is unlit whenever it is on. The same switch
   is on the settings page. It does not reach the audit of your own environment script, which happens before
   the session starts.
-- **A bypass says so in the transcript.** When a call matches a rule and runs anyway — because Allow All is
-  on, or because the command is whitelisted — a **warning row** names the rule and which of the two let it
-  through. The guard keeps evaluating while Allow All is on for exactly this reason. Ordinary work that
-  matched nothing says nothing.
+- **Every route past a rule says so in the transcript, and says which one it was.** When a call matches a
+  rule and runs anyway, a **warning row** names the rule and what let it through: Allow All, which of the
+  three whitelists, an *Always allow* answered earlier in this chat, or the card you just accepted. The
+  guard keeps evaluating while Allow All is on for exactly this reason. The per-chat approval mattered most
+  — it is the only route that shows no card at all, so before this it was also the only one that left no
+  trace. Ordinary work that matched nothing says nothing.
 - **Settings ▸ Claude Code Security is its own entry** in the settings tree, and every block now names that
   path. It gained the controls the old section did not have: the guard's own mode, Allow All with its expiry
   and an *Enforce now* button, a mode combo per rule with *All Enforcing* / *All Permissive* per category,
