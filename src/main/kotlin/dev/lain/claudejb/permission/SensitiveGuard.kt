@@ -162,6 +162,10 @@ object SensitiveGuard {
                     ?.let { Hit(SecurityRule.RESOURCE_HIJACKING, "runs a cryptocurrency miner: $it") }
             },
             {
+                InhibitRecovery.hit(input, policy.home, policy.envValues)
+                    ?.let { Hit(SecurityRule.INHIBIT_RECOVERY, "destroys the means to recover the system: $it") }
+            },
+            {
                 PrivilegeEscalation.hit(input, policy.home, policy.envValues)
                     ?.let { Hit(SecurityRule.PRIVILEGE_ESCALATION, "runs with elevated privileges: $it") }
             },

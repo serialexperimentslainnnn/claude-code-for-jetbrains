@@ -210,6 +210,19 @@ enum class SecurityRule(
         whitelistable = true,
     ),
 
+    INHIBIT_RECOVERY(
+        SecurityCategory.DESTRUCTIVE_OPERATION,
+        "Block inhibiting system recovery",
+        "destroying the means to recover — wbadmin delete, bcdedit recoveryenabled no, vssadmin resize " +
+            "shadowstorage, WMI shadow-copy deletion, diskshadow, Disable-ComputerRestore, and macOS " +
+            "tmutil disable",
+        "You can't disable or destroy the system's recovery.",
+        "Deleting backups and shadow copies or turning recovery off removes the only way back from a " +
+            "destructive change — it is the step ransomware takes before it encrypts, and nothing in " +
+            "development needs it.",
+        whitelistable = true,
+    ),
+
     PACKAGE_INSTALL_HOOK(
         SecurityCategory.CODE_EXECUTION,
         "Block package installs that run install hooks",
