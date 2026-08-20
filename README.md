@@ -1,6 +1,6 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-5.5.0-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-6.0.0-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.3.1%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Claude%20Code%20Native-2A2A2A)](https://plugins.jetbrains.com/plugin/31965-claude-code-native)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -156,11 +156,20 @@ Windows), or the IDE's own encrypted file.
   no OAuth client and calls no token endpoint itself.
 - **Log out** clears only what the plugin holds. Your terminal `claude` login is left alone.
 
-Your **settings** live in the same safe, as one document shared by every project. Before 5.5.0 they sat
-in `.idea/claude-code.xml` — per project, in the clear, and committable, environment block included.
-Existing settings are adopted automatically on first run, and the old file is removed only once the
-safe has confirmed it holds the copy. Settings being global now has one consequence worth knowing: if
-several projects each carry their own `claude-code.xml`, the first one adopted becomes the global set.
+Your **settings** live in the same safe, as **one document per IDE installation, per project**. Two
+repositories can disagree about the model, the permission mode or a security rule, and two IDEs on one
+checkout keep their own. What stays global is what a credential is: the sign-in, the account, the
+per-provider API keys and the Git host tokens.
+
+Nothing is lost on upgrade. Before 5.5.0 settings sat in `.idea/claude-code.xml` — per project, in the
+clear, and committable, environment block included; between 5.5.0 and 6.0.0 they were one global
+document. Both are read as a seed, so a project with no settings of its own starts from what you
+already had, and only diverges once you change something in it. The old project file is removed only
+after the safe confirms it holds the copy; the global document is never removed, because it is what
+every project opened from now on inherits.
+
+Moving between IDEs is a gesture rather than magic: **Settings ▸ Claude Code ▸ Transfer** exports and
+imports a file, and migrates straight from another JetBrains IDE on the same machine.
 
 ## User guide
 
@@ -405,9 +414,9 @@ unless you pick an action that asks it something.
 | Model · permission mode · effort · thinking | top Opus tier · Ask each time · high · adaptive on | The launch defaults for every new chat |
 | **claude executable path** | auto-detect | A non-standard install, or a GUI IDE that does not inherit your `PATH` |
 | **Provider** | Anthropic | DeepSeek's Anthropic-compatible endpoint. Each provider's key is stored separately in the safe; an `sk-ant-` key is rejected in a third-party slot so your subscription can never leak to another endpoint |
-| **Security** (five switches) | all on | See [Security](#security) |
+| **Sensitive Guard** | every rule Enforcing | Its own page since 6.0.0 — **Settings ▸ Claude Code Security**: a mode for the guard as a whole, a mode per rule grouped by category, the three whitelists, and the extra credential globs and blocked domains. See [Security](#security) |
 | **Restore open chats on startup** | on | Start with a single empty chat instead |
-| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; revocable here. Like every setting since 5.5.0, this list is shared by every project |
+| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; revocable here. This one list stays shared by every project — most settings are per project since 6.0.0, but a remembered tool approval is about the tool, not the repository. The Sensitive Guard still decides first: nothing here bypasses it |
 | **Environment variables**, **Source script** | empty | Seed the binary's environment. The source script is *executed* at session start, so it — and any custom `stdio` MCP server — is gated behind a per-project trust prompt the first time |
 | **Reduce motion** | off | Flatten the chat's animations |
 | **Advanced launch** | flags omitted | `--max-turns`, `--max-budget-usd`, `--fallback-model`, extra `--add-dir` roots, beta flags, strict MCP config |
@@ -525,7 +534,7 @@ wrapper is included.
 
 ```bash
 JAVA_HOME=/path/to/a/jdk-21 ./gradlew buildPlugin
-# → build/distributions/claude-code-native-5.5.0.zip
+# → build/distributions/claude-code-native-6.0.0.zip
 ```
 
 Install it with **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.
