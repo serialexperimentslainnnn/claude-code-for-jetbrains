@@ -80,6 +80,7 @@
 *.pyc
 **/__pycache__/
 *.log
+claude-code-native-testing/
 
 # ==========================================================================================
 # SECRETS AND KEY MATERIAL — LAST, and it must stay last.
