@@ -56,6 +56,9 @@ of its own starts from the ones you already had.
 - ***Always allow this command* on a guard alert no longer persists.** It was written to the settings
   document, so one conversation answered for every other one, for ever. It is per chat and in memory now,
   revocable from that chat's ⚙ menu.
+- **The branch graph no longer breaks between rows.** Any row taller than 100px — uncommitted changes with
+  its file list, a commit carrying several ref tags — had its line stop short of the next commit, and its
+  dot sat off the junction.
 
 ## [5.5.0] — 2026-08-19
 

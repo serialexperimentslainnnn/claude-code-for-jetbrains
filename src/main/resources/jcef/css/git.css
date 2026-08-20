@@ -158,9 +158,16 @@
   flex: 0 0 auto;
   min-height: 26px;
 }
+/* An <svg> is a replaced element: with width/height auto, `inset: 0` does NOT stretch it — the
+   height falls out of the viewBox aspect ratio, which pins it at 100px whatever the row is. Any row
+   taller than that (uncommitted changes with its file list, a commit carrying several ref tags) had
+   its edge stop short, and the dot — placed at 50% of the real gutter — drifted off the junction.
+   The explicit 100% is what makes preserveAspectRatio="none" map the row, so keep both. */
 .git-graph {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: visible;
 }
 .git-edge {
