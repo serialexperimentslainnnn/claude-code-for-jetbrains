@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [6.0.0] — 2026-08-20
+
+**Your settings stop being shared.** Every project, in every IDE, gets its own configuration. Nothing is
+lost: the first time you open a project it starts from the settings you already had, and only diverges once
+you change something in it. The sign-in is not affected — it was never a per-project thing and still is not.
 
 ### Changed
 - **Settings are per IDE installation and per project again, and the login is not.** Since 4.x the plugin
@@ -28,10 +32,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.idea/workspace.xml`. It is a security answer, and this plugin's configuration does not live in plaintext
   inside the repository. The answer given before this release is not carried over, so the prompt appears
   once more.
-- **The guard's rules have a *mode*, not a checkbox.** *Enforcing* refuses a match; *Permissive* puts it to
-  you as a card, every time. Same two words for one rule and for the guard as a whole, and the same meaning
-  at both levels — the stored value and the behaviour are unchanged, and Enforcing is still the default for
-  everything.
+- **The guard asks one question — what happens when a rule matches — and it has three answers.**
+  *Enforcing* refuses, *Permissive* puts it to you as a card every time, *Allow All* lets it run. Every
+  individual rule takes the first two and is Enforcing by default; the guard as a whole takes all three.
+  Allow All was briefly a checkbox beside the mode, which said nothing about which of the two was in force —
+  it is one of the three values now, on both surfaces.
+- **Settings ▸ Claude Code and Settings ▸ Claude Code Security sit at the top of the settings tree**, not
+  filed under *Other Settings*.
+- **The whitelist is a list of entries with a dropdown**, not three text boxes, and one of them no longer
+  asks for a `RULE_ID=command` format whose left-hand side was written down nowhere the user could read it.
+  Each row picks how far it reaches — *All rules*, one category, or one rule — from a menu of the same names
+  the rest of the page uses.
 
 ### Added
 - **A shield in the chat's button row, left of auto-scroll, and *Allow All*.** Clicking it while the guard
