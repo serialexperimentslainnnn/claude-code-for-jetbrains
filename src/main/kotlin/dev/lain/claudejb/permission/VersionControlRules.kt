@@ -14,15 +14,23 @@ object VersionControlRules {
         SecurityRule.VCS_PROTECTION_BYPASS to
             re("""\bgit\b[^|;&\n]*\b(add|stage)\b[^|;&\n]*\s-(f|-force)(?=\s|$|[;&|])"""),
         SecurityRule.VCS_PROTECTION_BYPASS to
-            re("""\bgit\b[^|;&\n]*\b(commit|push)\b[^|;&\n]*\s--no-verify(?=\s|$|[;&|])"""),
+            re("""\bgit\b[^|;&\n]*\b(commit|push|merge)\b[^|;&\n]*\s--no-verify(?=\s|$|[;&|])"""),
         SecurityRule.VCS_PROTECTION_BYPASS to
             re("""\bgit\b[^|;&\n]*\bcommit\b[^|;&\n]*\s-n(?=\s|$|[;&|])"""),
         SecurityRule.VCS_PROTECTION_BYPASS to
             re("""\bgit\b[^|;&\n]*\b(commit|tag)\b[^|;&\n]*--no-gpg-sign(?=\s|$|[;&|])"""),
         SecurityRule.VCS_PROTECTION_BYPASS to
-            re("""\bgit\b[^|;&\n]*-c\s+commit\.gpgsign=false\b"""),
+            re("""\bgit\b[^|;&\n]*-c\s+(commit|tag)\.gpgsign=(false|0|no|off)\b"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bgit\b[^|;&\n]*-c\s+gpg\.program="""),
         SecurityRule.VCS_PROTECTION_BYPASS to
             re("""\bgit\b[^|;&\n]*-c\s+core\.hooksPath="""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bGIT_CONFIG_KEY_\d+=(core\.hooksPath|commit\.gpgsign|tag\.gpgsign)\b"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bSKIP=\S+\s+git\s+commit\b"""),
+        SecurityRule.VCS_PROTECTION_BYPASS to
+            re("""\bPRE_COMMIT_ALLOW_NO_CONFIG="""),
         SecurityRule.VCS_PROTECTION_BYPASS to
             re("""\bHUSKY=0\b"""),
     )

@@ -30,11 +30,18 @@ class VersionControlRulesTest {
             "git stage --force dist/bundle.js",
             "git commit --no-verify -m wip",
             "git push --no-verify origin main",
+            "git merge --no-verify feature",
             "git commit -n -m wip",
             "git commit --no-gpg-sign -m x",
             "git tag --no-gpg-sign v1",
             "git -c commit.gpgsign=false commit -m x",
+            "git -c commit.gpgsign=no commit -m x",
+            "git -c tag.gpgsign=off tag v1",
+            "git -c gpg.program=echo commit -m x",
             "git -c core.hooksPath=/dev/null commit -m x",
+            "GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=nohooks git commit -m x",
+            "SKIP=flake8 git commit -m x",
+            "PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit -m x",
             "HUSKY=0 git commit -m x",
         ).forEach {
             assertEquals(Verdict.DENY, v(bash(it)), it)
@@ -52,6 +59,9 @@ class VersionControlRulesTest {
             "git add -A",
             "git commit -a -m x",
             "git commit -m x",
+            "git merge feature",
+            "git -c commit.gpgsign=true commit -m x",
+            "git -c user.name=me commit -m x",
         ).forEach { assertNotEquals(SecurityRule.VCS_PROTECTION_BYPASS, rule(bash(it)), it) }
     }
 }
