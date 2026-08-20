@@ -38,22 +38,29 @@ object SecuritySuspensions {
         sessionScoped += rule
     }
 
-    /** Opens the whole guard for [duration], writing to whichever of the three stores that duration needs. */
+    /** Puts the guard into Allow All for [duration], writing to whichever store that duration needs. */
     fun guardOff(state: ClaudeSettings.State, duration: Duration, now: Long) = when (duration) {
-        Duration.FOREVER -> state.guardEnabled = false
+        Duration.FOREVER -> state.guardMode = GuardMode.ALLOW_ALL.wire
         Duration.UNTIL_IDE_CLOSES -> guardOffForSession = true
         else -> state.guardDisabledUntil = now + (duration.millis ?: 0)
     }
 
-    /** Enforces the guard again, and clears **all three** stores — otherwise one of them silently outlives it. */
+    /**
+     * Takes the guard back out of Allow All, clearing **all three** stores.
+     *
+     * A timed Allow All over a Permissive guard leaves the mode alone, so it returns to Permissive on its
+     * own; only the *Forever* end has to pick something, and it picks the default.
+     */
     fun guardOn(state: ClaudeSettings.State) {
-        state.guardEnabled = true
+        if (GuardMode.from(state.guardMode) == GuardMode.ALLOW_ALL) state.guardMode = GuardMode.DEFAULT.wire
         state.guardDisabledUntil = 0
         guardOffForSession = false
     }
 
     fun guardSuspended(state: ClaudeSettings.State, now: Long): Boolean =
-        !state.guardEnabled || guardOffForSession || state.guardDisabledUntil > now
+        GuardMode.from(state.guardMode) == GuardMode.ALLOW_ALL ||
+            guardOffForSession ||
+            state.guardDisabledUntil > now
 
     /** When the timed suspension runs out, or null when nothing timed is open. */
     fun guardSuspendedUntil(state: ClaudeSettings.State, now: Long): Long? =

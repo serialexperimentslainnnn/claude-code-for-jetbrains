@@ -39,13 +39,7 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
 
     private var shownSuspended: Set<SecurityRule> = emptySet()
 
-    private val globalWhitelistArea = area(WHITELIST_ROWS, "One full command per line — lifts any rule")
-
-    private val categoryWhitelistAreas: Map<SecurityCategory, JBTextArea> =
-        SecurityCategory.entries.associateWith { area(WHITELIST_ROWS, "One full command per line") }
-
-    private val ruleWhitelistAreas: Map<SecurityCategory, JBTextArea> =
-        SecurityCategory.entries.associateWith { area(WHITELIST_ROWS, "RULE_ID=full command, one per line") }
+    private val whitelist = WhitelistTable()
 
     private val extraDomainsArea = area(
         EXTRA_DOMAIN_ROWS,
@@ -81,11 +75,11 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         .addComponent(categoryCards)
         .addComponent(cancelSuspensionsButton)
         .addSeparator()
-        .addComponent(sectionLabel("Whitelisted everywhere (applies to every rule)"))
-        .addComponent(wrap(globalWhitelistArea))
+        .addComponent(sectionLabel("Whitelist — commands that run without a card, whatever mode their rule is in"))
+        .addComponent(whitelist.component)
         .addComponent(whitelistNote())
         .addSeparator()
-        .addComponent(sectionLabel("Extra credential globs"))
+        .addComponent(sectionLabel("Extra credential globs — files to treat as credentials, beyond the built-in list"))
         .addComponent(wrap(extraGlobsArea))
         .addComponent(securityWarningLabel())
 
@@ -94,13 +88,9 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         card.add(rowOf(bulkButton(category, GuardMode.ENFORCING), bulkButton(category, GuardMode.PERMISSIVE)))
         SecurityRule.of(category).forEach { rule -> card.add(ruleRow(rule)) }
         if (category == SecurityCategory.NETWORK_EGRESS) {
-            card.add(sectionLabel("Extra blocked domains"))
+            card.add(sectionLabel("Extra blocked domains — added to the built-in list, never replacing it"))
             card.add(wrap(extraDomainsArea))
         }
-        card.add(sectionLabel("Whitelisted for all of ${category.label}"))
-        categoryWhitelistAreas[category]?.let { card.add(wrap(it)) }
-        card.add(sectionLabel("Whitelisted for one rule of ${category.label}"))
-        ruleWhitelistAreas[category]?.let { card.add(wrap(it)) }
         return card
     }
 
@@ -134,34 +124,18 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         unknownPermissive = stored.filter { SecurityRule.from(it) == null }
         extraDomainsArea.text = s.securityExtraBlockedDomains
         extraGlobsArea.text = s.sensitiveExtraGlobs
-        globalWhitelistArea.text = s.securityCommandWhitelist
-        resetWhitelists(s)
+        whitelist.reset(s)
         cancelSuspensionsButton.text = "End ${shownSuspended.size} temporary suspension(s)"
         cancelSuspensionsButton.isEnabled = shownSuspended.isNotEmpty()
         if (categoryCombo.selectedItem == null) categoryCombo.selectedItem = SecurityCategory.entries.first()
         showSelectedCategory()
     }
 
-    private fun resetWhitelists(s: ClaudeSettings.State) {
-        val byCategory = GuardWhitelists.byCategory(s.securityCategoryWhitelists)
-        categoryWhitelistAreas.forEach { (category, box) ->
-            box.text = byCategory[category].orEmpty().joinToString("\n")
-        }
-        val byRule = GuardWhitelists.byRule(s.securityRuleWhitelists)
-        ruleWhitelistAreas.forEach { (category, box) ->
-            box.text = SecurityRule.of(category)
-                .flatMap { rule -> byRule[rule].orEmpty().map { "${rule.name}=$it" } }
-                .joinToString("\n")
-        }
-    }
-
     override fun apply(s: ClaudeSettings.State) {
         s.disabledSecurityRules = permissiveCsv()
         s.securityExtraBlockedDomains = extraDomainsArea.text
         s.sensitiveExtraGlobs = extraGlobsArea.text
-        s.securityCommandWhitelist = globalWhitelistArea.text
-        s.securityCategoryWhitelists = categoryWhitelistCsv()
-        s.securityRuleWhitelists = ruleWhitelistCsv()
+        whitelist.apply(s)
     }
 
     override fun changedFields(s: ClaudeSettings.State): List<Boolean> =
@@ -169,9 +143,7 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
             permissiveCsv() != s.disabledSecurityRules,
             extraDomainsArea.text != s.securityExtraBlockedDomains,
             extraGlobsArea.text != s.sensitiveExtraGlobs,
-            globalWhitelistArea.text != s.securityCommandWhitelist,
-            categoryWhitelistCsv() != s.securityCategoryWhitelists,
-            ruleWhitelistCsv() != s.securityRuleWhitelists,
+            whitelist.changed(s),
         )
 
     /**
@@ -195,16 +167,6 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         cancelSuspensionsButton.isEnabled = false
     }
 
-    private fun categoryWhitelistCsv(): String =
-        categoryWhitelistAreas.entries.flatMap { (category, box) ->
-            GuardWhitelists.commands(box.text).map { "${category.name}=$it" }
-        }.joinToString("\n")
-
-    private fun ruleWhitelistCsv(): String =
-        ruleWhitelistAreas.values.flatMap { GuardWhitelists.commands(it.text) }
-            .filter { SecurityRule.from(it.substringBefore('=', "").trim()) != null }
-            .joinToString("\n")
-
     private fun permissiveCsv(): String {
         val off = SecurityRule.entries.filter { modes[it]?.selectedItem == GuardMode.PERMISSIVE }.map { it.name }
         return SecurityRule.canonicalCsv(off + unknownPermissive)
@@ -225,14 +187,13 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
     }
 
     private fun whitelistNote() = noteLabel(
-        "A whitelisted command runs with <b>no card and no block</b>, whatever mode its rule is in. The three " +
-            "lists differ only in reach, and the guard asks the narrowest first: the rule that fired, then " +
-            "that rule's category, then this one. Matching is on the <b>whole command</b>, de-obfuscated on " +
-            "both sides — <code>terraform destroy</code> does not authorise " +
-            "<code>terraform destroy &amp;&amp; rm -rf /</code>, and <code>t\"\"erraform destroy</code> cannot " +
-            "sneak past an entry written normally. <b>Any rule can be whitelisted</b>, credential and " +
-            "foreign-path rules included: an unliftable rule that fires on legitimate work leaves no way to " +
-            "finish it, and which commands are permitted is your decision.",
+        "Pick how far each command reaches: <b>All rules</b>, one <b>category</b>, or one <b>rule</b>. The " +
+            "guard checks the narrowest first, so a permission can always be traced to one row. Matching is " +
+            "on the <b>whole command</b> — <code>terraform destroy</code> does not authorise " +
+            "<code>terraform destroy &amp;&amp; rm -rf /</code> — and both sides are de-obfuscated first, so " +
+            "an entry written normally still covers a spelling meant to slip past it. <b>Any rule can be " +
+            "whitelisted</b>, credential and foreign-path rules included: an unliftable rule that fires on " +
+            "legitimate work leaves no way to finish it.",
     )
 
     private fun securityWarningLabel() = noteLabel(

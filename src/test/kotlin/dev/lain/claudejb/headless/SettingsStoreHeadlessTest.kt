@@ -133,7 +133,11 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
         assertEquals("opus[1m]", fresh.model)
         assertEquals("default", fresh.permissionMode)
         assertEquals("high", fresh.effort)
-        assertTrue("a fresh install is protected, with nothing to switch on", fresh.guardEnabled)
+        assertEquals(
+            "a fresh install is protected, with nothing to switch on",
+            "enforcing",
+            fresh.guardMode,
+        )
         assertEquals(0L, fresh.guardDisabledUntil)
     }
 

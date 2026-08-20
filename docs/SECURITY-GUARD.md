@@ -18,27 +18,26 @@ variable that turned out empty. Nobody has to be malicious for those to ruin a w
 
 ---
 
-## Two words, and two axes
+## One question: what happens when a rule matches
 
-Everything below is described with the same two words at every level.
+There are three answers, and they are the whole vocabulary of this document.
 
-- **Enforcing** — a match is refused. Claude is told what it cannot do and why.
-- **Permissive** — a match becomes a card. You answer it, every time. Detection still runs; nothing is
-  allowed silently.
+| Mode | What a match does |
+|---|---|
+| **Enforcing** | Refused. Claude is told what it cannot do and why. |
+| **Permissive** | Put to you as a card, every time. Detection still runs; nothing is allowed silently. |
+| **Allow All** | Runs — no card, no block. The transcript records which rule went unenforced. |
 
-They apply to **one rule** and to **the guard as a whole**, and they mean the same thing at both. Every rule
-is Enforcing by default, and so is the guard. Setting one rule to Permissive changes that rule; setting the
-guard to Permissive puts the whole catalogue there whatever the individual rules say.
+The question is asked at two levels and answered with the same words. **Every individual rule** is Enforcing
+or Permissive, and Enforcing by default. **The guard as a whole** takes all three: Permissive puts the entire
+catalogue there whatever the rules say, and Allow All is the only setting that stops the guard deciding
+anything at all.
 
-That is one axis. The other is **Allow All**, and it is not the same thing: it decides whether the guard
-judges anything at all. It lives on a **shield in the chat's own button row** and on
-**Settings ▸ Claude Code Security**, and it is **off out of the box**.
-
-While Allow All is on, a matching call runs with no card and no block. The guard still evaluates — that is
-what lets the transcript say **which** rule went unenforced each time, as a warning row rather than as
-nothing at all — but it stops nothing. Switching it on asks *for how long*: the same seven choices a blocked
-rule offers, five of which expire on their own. Switching it back off is one click. The shield is lit while
-the guard is deciding and unlit while Allow All is on, in every open chat.
+Allow All lives on a **shield in the chat's own button row** and on **Settings ▸ Claude Code Security**, and
+choosing it asks *for how long*: seven choices, five of which end on their own. The guard keeps evaluating
+while it is on — that is what lets the transcript name the rule each time instead of saying nothing — but it
+stops nothing. The shield is lit while the guard is deciding and unlit while Allow All is on, in every open
+chat, and switching back is one click.
 
 One thing Allow All does **not** reach: the check that reads your own environment script before sourcing it.
 That is not a call the model made, and it happens before there is anything to watch.

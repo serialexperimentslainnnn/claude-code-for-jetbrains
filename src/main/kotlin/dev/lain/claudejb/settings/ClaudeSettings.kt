@@ -68,11 +68,14 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var sensitiveExtraGlobs: String = ""
 
-        @JvmField var guardEnabled: Boolean = true
+        /**
+         * The guard's own mode. [GuardMode.ALLOW_ALL] here is the *Forever* end of the shield; the two
+         * timed ends live in [guardDisabledUntil] and in memory, which is why turning it back on has to
+         * clear all three.
+         */
+        @JvmField var guardMode: String = GuardMode.DEFAULT.wire
 
         @JvmField var guardDisabledUntil: Long = 0
-
-        @JvmField var guardMode: String = GuardMode.DEFAULT.wire
 
         /**
          * The rules running in **Permissive** mode, as a CSV of ids.

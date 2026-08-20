@@ -98,12 +98,17 @@ internal object JcefSettingsMenu {
         val suspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
             SecuritySuspensions.sessionSuspended()
         // Its own group, emitted whole before Security starts: Security is a group of checkboxes and this is
-        // a choice of one, and a group the page draws in two pieces is a group it draws twice.
-        val mode = GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT
+        // a choice of one, and a group the page draws in two pieces is a group it draws twice. Allow All is
+        // one of the three rather than a switch beside them — the same shape the settings page uses, because
+        // a checkbox next to a mode combo says nothing about which of the two is in force.
+        val mode = if (SecuritySuspensions.guardSuspended(s, now)) {
+            GuardMode.ALLOW_ALL
+        } else {
+            GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT
+        }
         GuardMode.entries.forEach { m ->
             entry("$GUARD_MODE:${m.wire}", "Guard mode", m.label, m == mode, radio = true)
         }
-        entry(GUARD, "Security", "Sensitive Guard", !SecuritySuspensions.guardSuspended(s, now))
         SecurityCategory.entries.forEach { category ->
             SecurityRule.of(category).forEach { rule ->
                 val enforced = rule.name !in disabled && rule !in suspended
@@ -172,15 +177,6 @@ internal object JcefSettingsMenu {
     }
 
     private val FLAG_SETTERS: Map<String, (ClaudeSettings.State, Boolean) -> Unit> = mapOf(
-        // Off from this menu is Forever, because a menu checkbox has nowhere to ask "for how long?".
-        // The shield in the composer is the door that asks; this one is the honest blunt instrument.
-        GUARD to { s, on ->
-            if (on) {
-                SecuritySuspensions.guardOn(s)
-            } else {
-                SecuritySuspensions.guardOff(s, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis())
-            }
-        },
         "restoreChats" to { s, on -> s.restoreOpenChatsOnStartup = on },
         "reduceMotion" to { s, on -> s.reduceMotion = on },
         "checkpointing" to { s, on -> s.enableFileCheckpointing = on },
@@ -202,10 +198,25 @@ internal object JcefSettingsMenu {
         on: Boolean,
         models: List<String>,
     ): Boolean? = when (prefix) {
-        GUARD_MODE -> select(GuardMode.from(value) != null, on) { state.guardMode = value }
+        // Allow All from here is Forever: a menu has nowhere to ask "for how long?", and the shield in the
+        // composer is the door that does. Choosing either of the other two ends a timed one that is running,
+        // or the menu would keep claiming a mode that is not the one in force.
+        GUARD_MODE -> select(GuardMode.from(value) != null, on) {
+            val chosen = GuardMode.from(value) ?: GuardMode.DEFAULT
+            if (chosen == GuardMode.ALLOW_ALL) {
+                SecuritySuspensions.guardOff(state, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis())
+            } else {
+                SecuritySuspensions.guardOn(state)
+                state.guardMode = chosen.wire
+            }
+        }
+
         MODEL -> select(value in models, on) { state.model = value }
+
         EFFORT -> select(EffortLevel.from(value) != null, on) { state.effort = value }
+
         MODE -> select(PermissionMode.from(value) != null, on) { state.permissionMode = value }
+
         else -> null
     }
 
@@ -272,7 +283,6 @@ internal object JcefSettingsMenu {
     )
 
     private const val APPROVAL = "approval"
-    private const val GUARD = "guard"
     private const val GUARD_MODE = "guardmode"
     private const val MODEL = "model"
     private const val EFFORT = "effort"

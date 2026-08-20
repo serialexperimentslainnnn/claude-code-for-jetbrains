@@ -53,7 +53,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
         assertTrue(settings.state.restoreOpenChatsOnStartup)
         assertEquals("", settings.state.disabledSecurityRules)
         assertEquals("", settings.state.securityExtraBlockedDomains)
-        assertTrue("the Sensitive Guard is on out of the box", settings.state.guardEnabled)
+        assertEquals("the Sensitive Guard enforces out of the box", GuardMode.ENFORCING.wire, settings.state.guardMode)
         assertFalse("and nothing is suspending it", settings.guardSuspended())
     }
 

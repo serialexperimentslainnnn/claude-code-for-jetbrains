@@ -177,18 +177,22 @@
 
         <notificationGroup id="Claude Code" displayType="BALLOON"/>
 
+        <!-- groupId="root" puts these at the top level of the settings tree. Without it the platform files a
+             configurable under "Other Settings", which is where a plugin nobody is looking for belongs; this
+             one is opened on purpose, and the security page is opened while something is being blocked. -->
         <projectConfigurable
                 instance="dev.lain.claudejb.ui.ClaudeSettingsConfigurable"
                 id="dev.lain.claudejb.settings"
+                groupId="root"
                 displayName="Claude Code"
                 nonDefaultProject="false"/>
 
-        <!-- The guard gets its own entry rather than a section of the page above: it is what people come
-             looking for while something is being blocked, and every control on it decides what may reach
-             the machine. SensitiveGuard.SETTINGS_PATH names this page in every block it writes. -->
+        <!-- Its own root entry rather than a child of the page above: every control on it decides what may
+             reach the machine, and SensitiveGuard.SETTINGS_PATH sends the user straight here from a block. -->
         <projectConfigurable
                 instance="dev.lain.claudejb.ui.ClaudeSecurityConfigurable"
                 id="dev.lain.claudejb.settings.security"
+                groupId="root"
                 displayName="Claude Code Security"
                 nonDefaultProject="false"/>
     </extensions>

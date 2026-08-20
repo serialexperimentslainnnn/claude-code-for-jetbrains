@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui.jcef
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.SecuritySuspensions
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
@@ -270,23 +271,41 @@ class JcefSettingsMenuTest {
     }
 
     @Test
-    fun `the master switch is a row of its own, above the rules and on by default`() {
-        val rows = menu().filter { it.str("group") == "Security" }
+    fun `the guard's own mode is one choice of three, and Enforcing by default`() {
+        val rows = menu().filter { it.str("group") == "Guard mode" }
 
-        assertEquals("guard", rows.first().str("key"), "the switch that governs the rest belongs above them")
-        assertEquals("Sensitive Guard", rows.first().str("label"))
-        assertTrue(rows.first().bool("on"), "a default configuration is a protected one")
+        assertEquals(listOf("Enforcing", "Permissive", "Allow All"), rows.map { it.str("label") })
+        assertTrue(rows.all { it.str("type") == "radio" }, "three ways to answer one question, not three switches")
+        assertEquals("Enforcing", rows.single { it.bool("on") }.str("label"))
     }
 
     @Test
-    fun `switching the master row off is Forever, because a checkbox cannot ask for how long`() {
+    fun `choosing Allow All here is Forever, because a menu cannot ask for how long`() {
         val state = ClaudeSettings.State()
 
-        assertTrue(write(state, "guard", false))
-        assertFalse(state.guardEnabled)
-        assertEquals(0L, state.guardDisabledUntil, "a menu checkbox must not invent a deadline")
+        assertTrue(write(state, "guardmode:allowAll", true))
+        assertEquals("allowAll", state.guardMode)
+        assertEquals(0L, state.guardDisabledUntil, "a menu must not invent a deadline")
+    }
 
-        assertTrue(write(state, "guard", true))
-        assertTrue(state.guardEnabled)
+    @Test
+    fun `choosing Enforcing ends an Allow All that is still running`() {
+        val state = ClaudeSettings.State()
+        SecuritySuspensions.guardOff(state, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis())
+
+        assertTrue(write(state, "guardmode:enforcing", true))
+
+        assertFalse(
+            SecuritySuspensions.guardSuspended(state, System.currentTimeMillis()),
+            "a menu saying Enforcing over a live Allow All is a menu telling the user something untrue",
+        )
+    }
+
+    @Test
+    fun `a mode nobody offers is refused and writes nothing`() {
+        val state = ClaudeSettings.State()
+
+        assertFalse(write(state, "guardmode:whatever", true))
+        assertEquals("enforcing", state.guardMode)
     }
 }
