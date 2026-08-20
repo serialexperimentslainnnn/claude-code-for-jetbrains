@@ -34,6 +34,8 @@ class InhibitRecoveryTest {
             "Get-WmiObject Win32_Shadowcopy | ForEach-Object { \$_.Delete() }",
             "Disable-ComputerRestore -Drive C:",
             "tmutil disable",
+            "reagentc /disable",
+            "vim-cmd vmsvc/snapshot.removeall 12",
         ).forEach {
             assertEquals(Verdict.DENY, v(bash(it)), it)
             assertEquals(SecurityRule.INHIBIT_RECOVERY, rule(bash(it)), it)

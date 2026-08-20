@@ -20,6 +20,8 @@ object InhibitRecovery {
         re("""\bDisable-ComputerRestore\b"""),
         re("""\bschtasks(\.exe)?\b${SEG}SystemRestore$SEG\bdisable\b"""),
         re("""\btmutil\s+disable\b"""),
+        re("""\breagentc(\.exe)?\b$SEG\bdisable\b"""),
+        re("""\bvim-cmd\b${SEG}snapshot\.removeall\b"""),
     )
 
     internal fun hit(input: JsonObject, home: String? = null, env: Map<String, String> = emptyMap()): String? =
