@@ -94,15 +94,18 @@ object CommandRules {
 
     private const val MAX_BRACE_EXPANSIONS = 32
 
-    private val BRACE_TOKEN = Regex("""\S*\{[^{}\s]*,[^{}\s]*\}\S*""")
+    private val BRACE_GROUP = Regex("""\{([^{}\s]*,[^{}\s]*)\}""")
+
+    private val WHITESPACE = Regex("""\s+""")
 
     private fun expandBraces(command: String): List<String> {
         val out = LinkedHashSet<String>()
-        for (token in BRACE_TOKEN.findAll(command).map { it.value }) {
+        for (token in command.split(WHITESPACE)) {
+            if (token.isEmpty() || !BRACE_GROUP.containsMatchIn(token)) continue
             var forms = listOf(token)
             while (forms.size <= MAX_BRACE_EXPANSIONS) {
                 val next = forms.flatMap { form ->
-                    val group = Regex("""\{([^{}\s]*,[^{}\s]*)\}""").find(form) ?: return@flatMap listOf(form)
+                    val group = BRACE_GROUP.find(form) ?: return@flatMap listOf(form)
                     group.groupValues[1].split(',').map { form.replaceRange(group.range, it) }
                 }
                 if (next == forms) break

@@ -35,20 +35,31 @@ object ToolInputScanner {
         }
     }
 
-    private val URLISH = Regex("""^[a-z][a-z0-9+.\-]*://""", RegexOption.IGNORE_CASE)
+    private val URLISH = Regex("""^[a-z][a-z0-9+.\-]*+://""", RegexOption.IGNORE_CASE)
 
-    private val URL_IN_TEXT = Regex("""[a-z][a-z0-9+.\-]*://[^\s"'`<>()\[\]{}|\\^]+""", RegexOption.IGNORE_CASE)
+    private val URL_IN_TEXT = Regex("""[a-z][a-z0-9+.\-]*+://[^\s"'`<>()\[\]{}|\\^]+""", RegexOption.IGNORE_CASE)
 
     private const val MAX_PATH_LEN = 512
 
     private const val MAX_FOLD_LEN = 64 * 1024
 
+    private const val MAX_COMMAND_LEN = 8 * 1024
+
+    private fun windowed(command: String): List<String> =
+        if (command.length <= MAX_COMMAND_LEN) {
+            listOf(command)
+        } else {
+            listOf(command.take(MAX_COMMAND_LEN), command.takeLast(MAX_COMMAND_LEN))
+        }
+
     fun pathCandidates(input: JsonObject, home: String?, env: Map<String, String> = emptyMap()): List<String> {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
             if (COMMAND_KEY.matches(key)) {
-                val sources = setOf(value, CommandRules.deobfuscate(value, home, env))
-                sources.forEach { src -> commandTokens(src).forEach { tok -> bothSpellings(tok, home, env, out) } }
+                windowed(value).forEach { win ->
+                    val sources = setOf(win, CommandRules.deobfuscate(win, home, env))
+                    sources.forEach { src -> commandTokens(src).forEach { tok -> bothSpellings(tok, home, env, out) } }
+                }
             } else {
                 bothSpellings(value, home, env, out)
             }
@@ -71,11 +82,13 @@ object ToolInputScanner {
             if (PATTERN_KEY.matches(key)) return@walkStrings
             if (CONTENT_KEY.matches(key) && BLOCK_COMMENT_ONLY.matches(value.trim())) return@walkStrings
             if (COMMAND_KEY.matches(key)) {
-                val sources = setOf(value, CommandRules.deobfuscate(value, home, env))
-                sources.forEach { src ->
-                    val parsed = commandPaths(src)
-                    val scope = if (parsed.bindings.isEmpty()) env else env + parsed.bindings
-                    parsed.tokens.forEach { tok -> bothSpellings(tok, home, scope, out) }
+                windowed(value).forEach { win ->
+                    val sources = setOf(win, CommandRules.deobfuscate(win, home, env))
+                    sources.forEach { src ->
+                        val parsed = commandPaths(src)
+                        val scope = if (parsed.bindings.isEmpty()) env else env + parsed.bindings
+                        parsed.tokens.forEach { tok -> bothSpellings(tok, home, scope, out) }
+                    }
                 }
             } else {
                 bothSpellings(value, home, env, out)
@@ -102,7 +115,7 @@ object ToolInputScanner {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
             if (CONTENT_KEY.matches(key)) return@walkStrings
-            if (value.length > MAX_FOLD_LEN) return@walkStrings
+            if (value.length > MAX_FOLD_LEN || "://" !in value) return@walkStrings
             URL_IN_TEXT.findAll(value).forEach { out += it.value }
         }
         return out.toList()
@@ -231,15 +244,19 @@ object ToolInputScanner {
             return
         }
         when (value) {
-            is JsonPrimitive -> if (value.isString) out.add(value.content)
+            is JsonPrimitive -> if (value.isString) addWindows(value.content, out)
 
             is JsonArray -> {
                 val joined = value.filterIsInstance<JsonPrimitive>().filter { it.isString }
                     .joinToString(" ") { it.content }
-                if (joined.isNotBlank()) out.add(joined)
+                if (joined.isNotBlank()) addWindows(joined, out)
             }
 
             else -> descend(value)
         }
+    }
+
+    private fun addWindows(command: String, out: MutableList<String>) {
+        out.addAll(windowed(command))
     }
 }
