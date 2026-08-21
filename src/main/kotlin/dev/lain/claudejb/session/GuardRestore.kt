@@ -10,7 +10,11 @@ object GuardRestore {
         val rows = alerts.mapNotNull(::rowFor)
         if (rows.isEmpty()) return dtos
 
-        val byAnchor = rows.filter { it.first != null }.groupBy({ it.first }, { it.second })
+        val parentOfAnchor = dtos.mapNotNull { dto -> dto.toolUseId?.let { it to dto.parentToolUseId } }.toMap()
+        val anchored = rows.map { (anchor, row) ->
+            anchor to row.copy(parentToolUseId = anchor?.let { parentOfAnchor[it] })
+        }
+        val byAnchor = anchored.filter { it.first != null }.groupBy({ it.first }, { it.second })
         val placed = mutableSetOf<String>()
         val out = mutableListOf<EntryDTO>()
         for (dto in dtos) {
@@ -19,7 +23,7 @@ object GuardRestore {
             if (!placed.add(anchor)) continue
             byAnchor[anchor]?.let(out::addAll)
         }
-        out.addAll(rows.filter { it.first == null || it.first !in placed }.map { it.second })
+        out.addAll(anchored.filter { it.first == null || it.first !in placed }.map { it.second })
         return out
     }
 

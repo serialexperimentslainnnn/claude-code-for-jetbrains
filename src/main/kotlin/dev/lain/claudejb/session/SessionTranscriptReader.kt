@@ -120,25 +120,35 @@ object SessionTranscriptReader {
         val content = (obj["message"] as? JsonObject)?.get("content") ?: return
         val isMeta = obj["isMeta"]?.jsonPrimitive?.booleanOrNull == true
         val isCompactSummary = obj["isCompactSummary"]?.jsonPrimitive?.booleanOrNull == true
+        val parent = parentToolUseOf(obj)
         when (content) {
-            is JsonPrimitive -> content.contentOrNull?.let { addUserText(it, isMeta, isCompactSummary, out) }
+            is JsonPrimitive -> content.contentOrNull?.let { addUserText(it, isMeta, isCompactSummary, parent, out) }
 
             is JsonArray -> content.mapNotNull { it as? JsonObject }
-                .forEach { parseUserBlock(it, isMeta, isCompactSummary, out) }
+                .forEach { parseUserBlock(it, isMeta, isCompactSummary, parent, out) }
 
             else -> Unit
         }
     }
 
-    private fun addUserText(text: String, isMeta: Boolean, isCompactSummary: Boolean, out: MutableList<EntryDTO>) {
+    private fun parentToolUseOf(obj: JsonObject): String? =
+        obj["parent_tool_use_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    private fun addUserText(
+        text: String,
+        isMeta: Boolean,
+        isCompactSummary: Boolean,
+        parent: String?,
+        out: MutableList<EntryDTO>,
+    ) {
         if (isCompactSummary) {
-            out += EntryDTO("SYSTEM", "Conversation compacted.")
+            out += EntryDTO("SYSTEM", "Conversation compacted.", parentToolUseId = parent)
             return
         }
         when (val kind = SyntheticUserText.classify(text, isMeta)) {
-            is SyntheticUserText.Kind.Prompt -> out += EntryDTO("USER", kind.text)
-            is SyntheticUserText.Kind.Command -> out += EntryDTO("USER", kind.text)
-            is SyntheticUserText.Kind.SystemNote -> out += EntryDTO("SYSTEM", kind.text)
+            is SyntheticUserText.Kind.Prompt -> out += EntryDTO("USER", kind.text, parentToolUseId = parent)
+            is SyntheticUserText.Kind.Command -> out += EntryDTO("USER", kind.text, parentToolUseId = parent)
+            is SyntheticUserText.Kind.SystemNote -> out += EntryDTO("SYSTEM", kind.text, parentToolUseId = parent)
             SyntheticUserText.Kind.Hidden -> Unit
         }
     }
@@ -147,32 +157,40 @@ object SessionTranscriptReader {
         block: JsonObject,
         isMeta: Boolean,
         isCompactSummary: Boolean,
+        parent: String?,
         out: MutableList<EntryDTO>,
     ) {
         when (block["type"]?.jsonPrimitive?.contentOrNull) {
-            "text" -> block.text()?.let { addUserText(it, isMeta, isCompactSummary, out) }
+            "text" -> block.text()?.let { addUserText(it, isMeta, isCompactSummary, parent, out) }
 
             "tool_result" -> {
                 val text = toolResultText(block["content"])
                 if (text.isBlank()) return
                 val id = block["tool_use_id"]?.jsonPrimitive?.contentOrNull
                 val isError = block["is_error"]?.jsonPrimitive?.booleanOrNull == true
-                out += EntryDTO("TOOL_OUTPUT", text, meta = if (isError) "error" else null, toolUseId = id)
+                out += EntryDTO(
+                    "TOOL_OUTPUT",
+                    text,
+                    meta = if (isError) "error" else null,
+                    toolUseId = id,
+                    parentToolUseId = parent,
+                )
             }
         }
     }
 
     private fun parseAssistant(obj: JsonObject, out: MutableList<EntryDTO>, projectRoot: String?) {
         val content = (obj["message"] as? JsonObject)?.get("content") as? JsonArray ?: return
+        val parent = parentToolUseOf(obj)
         for (el in content) {
             val block = el as? JsonObject ?: continue
             when (block["type"]?.jsonPrimitive?.contentOrNull) {
-                "text" -> block.text()?.let { out += EntryDTO("ASSISTANT", it) }
+                "text" -> block.text()?.let { out += EntryDTO("ASSISTANT", it, parentToolUseId = parent) }
 
                 "thinking" ->
                     block["thinking"]?.jsonPrimitive?.contentOrNull
                         ?.takeIf { it.isNotBlank() }
-                        ?.let { out += EntryDTO("THINKING", it) }
+                        ?.let { out += EntryDTO("THINKING", it, parentToolUseId = parent) }
 
                 "tool_use" -> {
                     val name = block["name"]?.jsonPrimitive?.contentOrNull ?: continue
@@ -183,6 +201,7 @@ object SessionTranscriptReader {
                         ToolNaming.formatToolUse(name, input, projectRoot),
                         meta = name,
                         toolUseId = id,
+                        parentToolUseId = parent,
                         filePath = ToolNaming.toolFilePath(name, input, projectRoot),
                         commandText = ToolInputScanner.commandText(input),
                         messageText = ToolInputScanner.messageText(input),
