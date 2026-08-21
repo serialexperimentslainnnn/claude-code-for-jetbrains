@@ -3,18 +3,18 @@
 **Settings stop being shared between projects.** One settings document per project, per IDE
 installation: two repositories can disagree about the model, the permission mode or a security rule,
 and two IDEs on the same checkout keep their own. Nothing is lost on upgrade — a project with no
-settings of its own starts from the ones you already had. Your login stays global, and **signing out
-no longer wipes your configuration** along with your credentials.
+settings of its own starts from the ones you already had. Your login stays global, and signing out no
+longer wipes your configuration along with your credentials.
 
-**The guard gets a mode.** *Enforcing* refuses, *Permissive* asks on a card every time, *Allow All*
-lets the call run — and the choice is available per rule as well as for the guard as a whole. Rules
-are Enforcing by default and stay that way unless you say otherwise.
+**The guard gets a mode.** Enforcing refuses, Permissive asks on a card every time, Allow All lets
+the call run — and the choice is available per rule as well as for the guard as a whole. Rules are
+Enforcing by default and stay that way unless you say otherwise.
 
 **Settings ▸ Claude Code Security is its own page.** The mode of every rule, grouped by category and
-foldable, with *All Enforcing* and *All Permissive* per group; temporary suspensions shown and
-endable; extra credential paths and extra blocked domains; and the whitelist. **Any rule can be
-whitelisted now**, credential and foreign-path rules included — those ask for confirmation first.
-Whitelists work at three reaches: every rule, one category, or a single rule.
+foldable, with All Enforcing and All Permissive per group; temporary suspensions shown and endable;
+extra credential paths and extra blocked domains; and the whitelist. Any rule can be whitelisted now,
+credential and foreign-path rules included — those ask for confirmation first. Whitelists work at
+three reaches: every rule, one category, or a single rule.
 
 **A shield in the chat's button row** switches the guard to Allow All for a duration you pick, and
 back with one click. It is unlit whenever the guard is not deciding, so it never implies a protection
@@ -34,20 +34,22 @@ belonged to.
 **Privilege escalation is refused.** `sudo`, `su`, `doas`, `pkexec` and their family, `runas`,
 `Start-Process -Verb RunAs`, `psexec`, `wsl -u root`. Every other rule is scoped to what your account
 may already do; root is not. It matches at command position in a payload that executes, so a file
-documenting `sudo apt update` trips nothing. **And "outside the project" now sees paths inside shell
-commands** — `cat ~/notes.txt` was slipping past a rule that only ever read a tool's own location
-argument.
+documenting `sudo apt update` trips nothing.
 
-**Take your configuration with you.** *Export settings…* and *Import settings…* use one JSON file;
-*Migrate from another IDE…* copies straight from another JetBrains IDE on this machine — you pick the
+**"Outside the project" now sees paths inside shell commands.** It only ever read them from a tool's
+own location argument, so `cat ~/notes.txt` was slipping past a rule that `Read /home/you/notes.txt`
+would have stopped — and the shell is where the work happens.
+
+**Take your configuration with you.** Export settings… and Import settings… use one JSON file;
+Migrate from another IDE… copies straight from another JetBrains IDE on this machine — you pick the
 IDE, the projects, and whether you want the general settings, the guard's, or its alert history. An
 exported file never carries your environment variables, because that is where an API key ends up and
 a file leaves the machine. A permission mode that would weaken security is refused on the way in.
 
 **Both settings pages were rebuilt to fit the window**, in titled groups instead of one column of
-forty rows, with every note re-wrapping as you resize. And *Restore Plugin to default state* now
-clears all four of this project's entries — settings, guard log, open-chat list and agent index —
-which is what it always claimed to do.
+forty rows, with every note re-wrapping as you resize. And Restore Plugin to default state now clears
+all four of this project's entries — settings, guard log, open-chat list and agent index — which is
+what it always claimed to do.
 
 ## v5.5.0 — 2026-08-19
 
