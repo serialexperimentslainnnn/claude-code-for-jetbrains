@@ -46,7 +46,7 @@
     var g = gitOf(git);
     if (!g) return null;
     var repo = repoOf(g);
-    if (!repo.present) return viewHead(noRepoCard(g));
+    if (!repo.present) return viewHead(noRepoCard(g), git);
 
     var id = h(
       'div',
@@ -55,7 +55,7 @@
       branchChip(g, repo),
       h('span', { class: 'git-sha', text: text(repo.head, '—') })
     );
-    return viewHead(card('Repository', [id], true, 'git-head'));
+    return viewHead(card('Repository', [id], true, 'git-head'), git);
   }
 
   function branchChip(g, repo) {
@@ -80,21 +80,46 @@
     });
   }
 
-  function viewHead(cardEl) {
-    return h('div', { class: 'git-viewhead' }, viewTabs('overview'), cardEl);
+  function viewHead(cardEl, git) {
+    var current = typeof D.gitSubView === 'function' ? D.gitSubView() : 'overview';
+    return h('div', { class: 'git-viewhead' }, viewTabs(current, git), cardEl);
   }
 
-  function viewTabs(current) {
+  function viewTabs(current, git) {
     return h(
       'div',
       { class: 'git-viewtabs', attrs: { role: 'group', 'aria-label': 'Git view' } },
-      viewTab('Overview', current !== 'chat', function () {
+      viewTab('Overview', current === 'overview', function () {
         if (typeof D.setGitSubView === 'function') D.setGitSubView('overview');
+      }),
+      viewTab(mergeWord(git), current === 'merges', function () {
+        if (typeof D.setGitSubView === 'function') D.setGitSubView('merges');
+      }),
+      viewTab('Pipelines', current === 'pipelines', function () {
+        if (typeof D.setGitSubView === 'function') D.setGitSubView('pipelines');
       }),
       viewTab('Chat', current === 'chat', function () {
         if (typeof D.setGitSubView === 'function') D.setGitSubView('chat');
       })
     );
+  }
+
+  function forgeOf(git) {
+    var g = gitOf(git);
+    return (g && g.forge) || {};
+  }
+
+  function mergeWord(git) {
+    return forgeOf(git).provider === 'gitlab' ? 'Merge requests' : 'Pull requests';
+  }
+
+  function forgeNote(git, emptyText) {
+    var forge = forgeOf(git);
+    if (!forge.configured) {
+      return 'No forge token for this remote. Add one in Settings ▸ Claude Code ▸ Git forge.';
+    }
+    if (!forge.answered) return 'The forge did not answer. Nothing is being shown rather than a guess.';
+    return emptyText;
   }
 
   function viewTab(label, current, onPick) {
@@ -603,26 +628,28 @@
     return card('Branch', rows, false, 'git-topology');
   }
 
-  function buildGitForgeCard(git) {
+  function buildGitMergesCard(git) {
     var g = gitOf(git);
     if (!g || !repoOf(g).present) return null;
-    var hasPulls = Object.prototype.hasOwnProperty.call(g, 'pullRequests');
-    var run = g.lastRun;
-    if (!hasPulls && !run) return null;
 
-    var body = [];
-    if (run) body.push(runRow(run));
-    if (hasPulls) {
-      var pulls = list(g.pullRequests);
-      if (!pulls.length) {
-        body.push(h('div', { class: 'git-note', text: 'No open pull requests for this branch.' }));
-      } else {
-        pulls.forEach(function (pull) {
-          body.push(pullRow(pull));
-        });
-      }
-    }
-    return card('This branch elsewhere', body, false, 'git-forge');
+    var pulls = list(g.pullRequests);
+    var body = pulls.length
+      ? pulls.map(pullRow)
+      : [h('div', { class: 'git-note', text: forgeNote(git, 'Nothing open for this branch.') })];
+
+    return card(mergeWord(git), body, false, 'git-merges');
+  }
+
+  function buildGitPipelinesCard(git) {
+    var g = gitOf(git);
+    if (!g || !repoOf(g).present) return null;
+
+    var runs = list(g.runs);
+    var body = runs.length
+      ? runs.map(runRow)
+      : [h('div', { class: 'git-note', text: forgeNote(git, 'No pipeline has run for this branch.') })];
+
+    return card('Pipelines', body, false, 'git-pipelines');
   }
 
   function runRow(run) {
@@ -654,5 +681,6 @@
   D.buildGitActionsCard = buildGitActionsCard;
   D.buildGitHistoryCard = buildGitHistoryCard;
   D.buildGitTopologyCard = buildGitTopologyCard;
-  D.buildGitForgeCard = buildGitForgeCard;
+  D.buildGitMergesCard = buildGitMergesCard;
+  D.buildGitPipelinesCard = buildGitPipelinesCard;
 })();

@@ -45,6 +45,7 @@ object JcefGitData {
         val runs: List<ForgeRun>? = null,
         val lastRun: ForgeRun? = null,
         val forgeConfigured: Boolean = false,
+        val forgeProvider: String? = null,
     )
 
     fun gitJson(snapshot: Snapshot?): JsonObject? {
@@ -90,6 +91,7 @@ object JcefGitData {
     private fun forgeStateJson(snapshot: Snapshot): JsonObject = buildJsonObject {
         put("configured", snapshot.forgeConfigured)
         put("answered", snapshot.pullRequests != null || snapshot.runs != null)
+        put("provider", snapshot.forgeProvider)
     }
 
     private fun runJson(run: ForgeRun): JsonObject = buildJsonObject {

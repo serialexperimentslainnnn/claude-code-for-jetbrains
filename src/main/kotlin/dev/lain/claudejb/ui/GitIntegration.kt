@@ -123,6 +123,7 @@ internal class GitIntegration(private val project: Project) {
             runs = runs,
             lastRun = runs?.firstOrNull(),
             forgeConfigured = forge != null,
+            forgeProvider = forge?.provider?.name?.lowercase(),
         )
     }
 
