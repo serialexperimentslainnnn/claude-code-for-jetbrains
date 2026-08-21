@@ -233,14 +233,6 @@
     );
   }
 
-  function restoreSearchFocus(caret) {
-    var next = document.querySelector('.guard-search');
-    if (!next) return;
-    next.focus();
-    if (caret == null || typeof next.setSelectionRange !== 'function') return;
-    next.setSelectionRange(caret, caret);
-  }
-
   function searchBox() {
     var input = h('input', {
       class: 'guard-search',
@@ -251,12 +243,9 @@
       },
       on: {
         input: function (ev) {
-          var el = ev.currentTarget;
-          var caret = el.selectionStart;
-          queryRaw = String(el.value || '');
+          queryRaw = String(ev.currentTarget.value || '');
           query = queryRaw.trim().toLowerCase();
           if (typeof D.repaintGuard === 'function') D.repaintGuard();
-          restoreSearchFocus(caret);
         },
       },
     });
@@ -370,11 +359,16 @@
     return !!query || !!pickedCategories || !!pickedRules;
   }
 
+  function buildFiltersCard() {
+    if (!catalog().length) return null;
+    return card('Filter', filterStrip(), true, 'guard-filters');
+  }
+
   function buildEntriesCard() {
     var id = currentTab();
     var rows = visibleEntries(id);
     var shown = rows.slice(0, MAX_ROWS);
-    var body = [tabStrip(), filterStrip()];
+    var body = [tabStrip()];
 
     if (!shown.length) {
       body.push(
@@ -420,7 +414,7 @@
         ),
       ];
     }
-    return [buildStateCard(), buildEntriesCard()];
+    return [buildStateCard(), buildFiltersCard(), buildEntriesCard()];
   };
 
   D.guardTab = function () {

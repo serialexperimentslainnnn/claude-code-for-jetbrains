@@ -46,9 +46,10 @@
       var minutes = Number(option.minutes);
       if (!isFinite(minutes)) return;
       var text = option.label != null ? String(option.label) : String(minutes);
-      select.appendChild(h('option', { text: text, attrs: { value: String(minutes) } }));
+      var attrs = { value: String(minutes) };
+      if (current != null && minutes === current) attrs.selected = 'selected';
+      select.appendChild(h('option', { text: text, attrs: attrs }));
     });
-    if (current != null) select.value = String(current);
 
     return h(
       'div',

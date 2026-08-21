@@ -39,11 +39,7 @@
 
   function optionalButton(btn, view, has) {
     if (!btn) return;
-    btn.hidden = !has;
-    if (!has && currentView === view) {
-      currentView = defaultView();
-      markActiveButton();
-    }
+    btn.hidden = !has && currentView !== view;
   }
 
   function defaultView() {
@@ -67,33 +63,51 @@
       applyGitSub();
       return;
     }
-    var offset = panel.scrollTop;
-    while (inner.firstChild) inner.removeChild(inner.firstChild);
-
     var s = lastSession || {};
     var view = VIEWS[currentView] || VIEWS.session;
-    var cards = view.cards(s);
+    var cards = view.cards(s).filter(Boolean);
 
-    var any = false;
-    for (var i = 0; i < cards.length; i++) {
-      if (cards[i]) {
-        inner.appendChild(cards[i]);
-        any = true;
-      }
-    }
-
-    if (!any) {
-      inner.appendChild(
+    if (!cards.length) {
+      cards = [
         h(
           'div',
-          { class: 'dash-card dash-empty' },
+          { class: 'dash-card dash-empty', attrs: { 'data-card': 'empty' } },
           h('div', { class: 'dash-title', text: view.title }),
           h('div', { class: 'stat-row' }, h('span', { class: 'stat-label', text: view.empty }))
-        )
-      );
+        ),
+      ];
     }
+
+    reconcile(inner, cards);
     applyGitSub();
-    panel.scrollTop = offset;
+  }
+
+  function keyOf(node) {
+    return node && node.getAttribute ? node.getAttribute('data-card') : null;
+  }
+
+  function reconcile(container, cards) {
+    var existing = Object.create(null);
+    var i;
+    for (i = 0; i < container.children.length; i++) {
+      var key = keyOf(container.children[i]);
+      if (key != null) existing[key] = container.children[i];
+    }
+
+    var ordered = [];
+    for (i = 0; i < cards.length; i++) {
+      var next = cards[i];
+      var previous = existing[keyOf(next)];
+      ordered.push(previous && previous.outerHTML === next.outerHTML ? previous : next);
+    }
+
+    for (i = container.children.length - 1; i >= 0; i--) {
+      if (ordered.indexOf(container.children[i]) < 0) container.removeChild(container.children[i]);
+    }
+
+    for (i = 0; i < ordered.length; i++) {
+      if (container.children[i] !== ordered[i]) container.insertBefore(ordered[i], container.children[i] || null);
+    }
   }
 
   function syncGuardVisibility() {
