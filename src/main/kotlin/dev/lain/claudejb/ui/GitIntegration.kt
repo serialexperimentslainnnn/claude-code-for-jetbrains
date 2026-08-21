@@ -129,6 +129,12 @@ internal class GitIntegration(private val project: Project) {
             lastRun = runs?.firstOrNull(),
             forgeConfigured = forge != null,
             forgeProvider = forge?.provider?.name?.lowercase(),
+            forgeAccess = forge?.let { repo ->
+                when (val answer = ForgeService.access(repo)) {
+                    is ForgeAnswer.Known -> answer.value
+                    is ForgeAnswer.Silent -> null
+                }
+            },
         )
     }
 

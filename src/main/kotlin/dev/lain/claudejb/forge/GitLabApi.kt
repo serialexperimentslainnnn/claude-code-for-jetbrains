@@ -11,6 +11,12 @@ internal object GitLabApi : ForgeApi {
 
     private const val PIPELINE_LIMIT = 20
 
+    private const val GUEST = 10
+
+    private const val DEVELOPER = 30
+
+    private const val MAINTAINER = 40
+
     private val IN_FLIGHT = setOf(
         "created",
         "waiting_for_resource",
@@ -45,6 +51,32 @@ internal object GitLabApi : ForgeApi {
 
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GlMergeRequest.serializer())) { mrs -> mrs.map { it.toModel() } }
+
+    override fun access(repo: ForgeRepo, token: String): ForgeRequest =
+        ForgeRequest(URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}"), headers(token))
+
+    override fun parseAccess(body: String): ForgeAnswer<ForgeAccessLevel> =
+        decodeForge(body, GlProject.serializer()) { project ->
+            levelOf(
+                maxOf(
+                    project.permissions?.projectAccess?.accessLevel ?: 0,
+                    project.permissions?.groupAccess?.accessLevel ?: 0,
+                ),
+            )
+        }
+
+    override fun viewer(repo: ForgeRepo, token: String): ForgeRequest =
+        ForgeRequest(URI.create("${base(repo.host)}/user"), headers(token))
+
+    override fun parseViewer(body: String): ForgeAnswer<String?> =
+        decodeForge(body, GlUser.serializer()) { it.username.ifBlank { null } }
+
+    private fun levelOf(accessLevel: Int): ForgeAccessLevel = when {
+        accessLevel >= MAINTAINER -> ForgeAccessLevel.ADMIN
+        accessLevel >= DEVELOPER -> ForgeAccessLevel.WRITE
+        accessLevel >= GUEST -> ForgeAccessLevel.READ
+        else -> ForgeAccessLevel.NONE
+    }
 
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         pipelineAction(repo, runId, "retry", token)
@@ -111,6 +143,18 @@ private data class GlMergeRequest(
 
 @Serializable
 private data class GlUser(val username: String = "")
+
+@Serializable
+private data class GlProject(val permissions: GlPermissions? = null)
+
+@Serializable
+private data class GlPermissions(
+    @SerialName("project_access") val projectAccess: GlAccess? = null,
+    @SerialName("group_access") val groupAccess: GlAccess? = null,
+)
+
+@Serializable
+private data class GlAccess(@SerialName("access_level") val accessLevel: Int = 0)
 
 @Serializable
 private data class GlPipeline(

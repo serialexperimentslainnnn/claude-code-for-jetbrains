@@ -45,6 +45,30 @@ internal object GitHubApi : ForgeApi {
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GhPull.serializer())) { pulls -> pulls.map { it.toModel() } }
 
+    override fun access(repo: ForgeRepo, token: String): ForgeRequest =
+        ForgeRequest(
+            URI.create("${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}"),
+            headers(token),
+        )
+
+    override fun parseAccess(body: String): ForgeAnswer<ForgeAccessLevel> =
+        decodeForge(body, GhRepo.serializer()) { repo ->
+            val rights = repo.permissions
+            when {
+                rights == null -> ForgeAccessLevel.READ
+                rights.admin || rights.maintain -> ForgeAccessLevel.ADMIN
+                rights.push -> ForgeAccessLevel.WRITE
+                rights.pull || rights.triage -> ForgeAccessLevel.READ
+                else -> ForgeAccessLevel.NONE
+            }
+        }
+
+    override fun viewer(repo: ForgeRepo, token: String): ForgeRequest =
+        ForgeRequest(URI.create("${base(repo.host)}/user"), headers(token))
+
+    override fun parseViewer(body: String): ForgeAnswer<String?> =
+        decodeForge(body, GhUser.serializer()) { it.login.ifBlank { null } }
+
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         runAction(repo, runId, "rerun", token)
 
@@ -117,6 +141,18 @@ private data class GhPull(
 
 @Serializable
 private data class GhUser(val login: String = "")
+
+@Serializable
+private data class GhRepo(val permissions: GhPermissions? = null)
+
+@Serializable
+private data class GhPermissions(
+    val admin: Boolean = false,
+    val maintain: Boolean = false,
+    val push: Boolean = false,
+    val triage: Boolean = false,
+    val pull: Boolean = false,
+)
 
 @Serializable
 private data class GhRef(val ref: String = "")

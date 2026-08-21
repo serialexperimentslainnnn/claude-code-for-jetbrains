@@ -1,5 +1,6 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.forge.ForgeAccess
 import dev.lain.claudejb.forge.ForgePullRequest
 import dev.lain.claudejb.forge.ForgeRun
 import dev.lain.claudejb.git.GitBranchTopology
@@ -7,6 +8,8 @@ import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitRefInfo
 import dev.lain.claudejb.session.AgentStatus
 import dev.lain.claudejb.ui.GitActionCatalog
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
@@ -46,6 +49,7 @@ object JcefGitData {
         val lastRun: ForgeRun? = null,
         val forgeConfigured: Boolean = false,
         val forgeProvider: String? = null,
+        val forgeAccess: ForgeAccess? = null,
     )
 
     fun gitJson(snapshot: Snapshot?): JsonObject? {
@@ -93,6 +97,20 @@ object JcefGitData {
         put("configured", snapshot.forgeConfigured)
         put("answered", snapshot.pullRequests != null || snapshot.runs != null)
         put("provider", snapshot.forgeProvider)
+        put("access", accessJson(snapshot.forgeAccess))
+    }
+
+    private fun accessJson(access: ForgeAccess?): JsonElement {
+        if (access == null) return JsonNull
+        return buildJsonObject {
+            put("level", access.level.wire)
+            put("login", access.login)
+            put("canComment", access.canComment)
+            put("canApprove", access.canApprove)
+            put("canRunPipelines", access.canRunPipelines)
+            put("canMerge", access.canMerge)
+            put("canOpen", access.canOpen)
+        }
     }
 
     private fun runJson(run: ForgeRun): JsonObject = buildJsonObject {

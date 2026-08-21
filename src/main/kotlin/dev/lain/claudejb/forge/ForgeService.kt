@@ -23,6 +23,36 @@ object ForgeService {
         }
     }
 
+    fun access(repo: ForgeRepo): ForgeAnswer<ForgeAccess> {
+        val api = apiFor(repo.provider)
+        val ask = { r: ForgeRepo, _: String, token: String -> api.access(r, token) }
+        val level = when (val body = fetch(repo, "", ask, requireBranch = false)) {
+            is ForgeAnswer.Silent -> return body
+            is ForgeAnswer.Known -> api.parseAccess(body.value)
+        }
+        return when (level) {
+            is ForgeAnswer.Silent -> level
+            is ForgeAnswer.Known -> ForgeAnswer.Known(ForgeAccess(level.value, viewer(repo, api)))
+        }
+    }
+
+    private fun viewer(repo: ForgeRepo, api: ForgeApi): String? {
+        viewers[repo.host]?.let { return it.orNull() }
+        val ask = { r: ForgeRepo, _: String, token: String -> api.viewer(r, token) }
+        val name = when (val body = fetch(repo, "", ask, requireBranch = false)) {
+            is ForgeAnswer.Silent -> null
+            is ForgeAnswer.Known -> (api.parseViewer(body.value) as? ForgeAnswer.Known)?.value
+        }
+        viewers[repo.host] = Viewer(name)
+        return name
+    }
+
+    private class Viewer(val name: String?) {
+        fun orNull(): String? = name
+    }
+
+    private val viewers = java.util.concurrent.ConcurrentHashMap<String, Viewer>()
+
     fun retryRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
         act(repo) { r, token -> apiFor(r.provider).retryRun(r, runId, token) }
 

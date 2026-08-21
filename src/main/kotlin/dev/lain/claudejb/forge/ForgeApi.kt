@@ -26,6 +26,14 @@ internal interface ForgeApi {
 
     fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>>
 
+    fun access(repo: ForgeRepo, token: String): ForgeRequest
+
+    fun parseAccess(body: String): ForgeAnswer<ForgeAccessLevel>
+
+    fun viewer(repo: ForgeRepo, token: String): ForgeRequest
+
+    fun parseViewer(body: String): ForgeAnswer<String?>
+
     fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
 
     fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
