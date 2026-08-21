@@ -29,8 +29,10 @@ internal class SettingsForgeSection(private val history: () -> GitHistoryService
 
         else ->
             "Stored in the IDE's password safe under <code>$h</code>, never in a project file. It reads this " +
-                "branch's open pull requests and its last CI run, which the Git view then shows; without it " +
-                "those two cards are simply absent. Clear the field to remove the token."
+                "branch's open merge or pull requests and its pipeline runs, which the Git view shows in a tab " +
+                "each; without it those tabs say so rather than stay empty. Read-only access is enough: on " +
+                "GitHub a fine-grained token with Pull requests and Actions set to read, on GitLab the " +
+                "<code>read_api</code> scope. Clear the field to remove the token."
     }
 
     override fun reset(s: ClaudeSettings.State) {

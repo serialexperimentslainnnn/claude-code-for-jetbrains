@@ -12,7 +12,7 @@ import java.io.File
 @Service(Service.Level.PROJECT)
 internal class VulnService(private val project: Project) {
 
-    var scanner: VulnScanner? = null
+    var scanner: VulnScanner? = OsvScanner()
 
     @Volatile
     private var components: List<VulnComponent> = emptyList()
