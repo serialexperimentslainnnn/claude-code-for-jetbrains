@@ -9,6 +9,7 @@
 
   var inventory = null;
   var expanded = {};
+  var pickedTiers = [];
 
   function text(v) {
     return v === null || v === undefined ? '' : String(v);
@@ -221,20 +222,53 @@
     });
   }
 
+  function toggleTier(tier) {
+    var at = pickedTiers.indexOf(tier);
+    if (at >= 0) pickedTiers.splice(at, 1);
+    else pickedTiers.push(tier);
+    if (typeof D.repaint === 'function') D.repaint();
+  }
+
+  function showsTier(tier) {
+    return !pickedTiers.length || pickedTiers.indexOf(tier) >= 0;
+  }
+
   function countsRow(counts) {
     if (!Array.isArray(counts) || !counts.length) return null;
     var chips = [];
     for (var i = 0; i < counts.length; i++) {
       var c = counts[i] || {};
-      chips.push(
-        h('span', {
-          class: 'vuln-tier',
-          dataset: { tier: text(c.tier) },
-          text: text(c.label) + ' · ' + num(c.count),
-        })
-      );
+      chips.push(tierButton(text(c.tier), text(c.label), num(c.count)));
     }
-    return h('div', { class: 'vuln-counts' }, chips);
+    return h(
+      'div',
+      { class: 'vuln-counts', attrs: { role: 'group', 'aria-label': 'Filter findings by severity' } },
+      chips
+    );
+  }
+
+  function tierButton(tier, label, count) {
+    var on = pickedTiers.indexOf(tier) >= 0;
+    return h('button', {
+      class: 'vuln-tier vuln-tier-filter' + (on ? ' picked' : ''),
+      dataset: { tier: tier },
+      attrs: { type: 'button', 'aria-pressed': on ? 'true' : 'false' },
+      text: label + ' · ' + count,
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          toggleTier(tier);
+        },
+      },
+    });
+  }
+
+  function planButton(shown) {
+    if (!shown.length) return null;
+    return button('Plan with Claude to solve everything', 'btn primary', function () {
+      send({ type: 'vulnPlan', tiers: pickedTiers.slice() });
+      if (typeof D.leaveDashboard === 'function') D.leaveDashboard();
+    });
   }
 
   function referenceList(f) {
@@ -317,9 +351,14 @@
         true
       );
     }
-    var body = [countsRow(r.counts)];
-    for (var i = 0; i < list.length; i++) body.push(findingRow(list[i]));
-    if (num(r.total) > num(r.shown)) {
+    var shown = list.filter(function (f) {
+      return showsTier(text(f.tier));
+    });
+    var body = [countsRow(r.counts), planButton(shown)];
+    for (var i = 0; i < shown.length; i++) body.push(findingRow(shown[i]));
+    if (!shown.length) {
+      body.push(h('div', { class: 'vuln-note', text: 'No finding matches the severities you picked.' }));
+    } else if (num(r.total) > num(r.shown)) {
       body.push(
         h('div', {
           class: 'vuln-note',

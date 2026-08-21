@@ -477,6 +477,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             JcefBridge.Msg.VulnCancel -> vuln().cancel { panel.pushSession() }
             JcefBridge.Msg.VulnInventoryRequest -> onVulnInventory(vuln())
             is JcefBridge.Msg.VulnFix -> onVulnFix(vuln(), m.findingId)
+            is JcefBridge.Msg.VulnPlan -> onVulnPlan(vuln(), m.tiers)
             else -> return false
         }
         return true
@@ -496,6 +497,21 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val text = VulnPromptedActions.updatePrompt(finding)
         if (text == null) {
             logger.warn("Refusing to prompt for '$findingId': the advisory or the manifest carries unquotable text")
+            return
+        }
+        session.send(text)
+    }
+
+    private fun onVulnPlan(service: VulnService, tiers: List<String>) {
+        val report = service.snapshot().report
+        if (report == null) {
+            logger.warn("The security view asked to plan without a report to plan from")
+            return
+        }
+        val wanted = report.ordered().filter { tiers.isEmpty() || it.tier.wire in tiers }
+        val text = VulnPromptedActions.planPrompt(wanted)
+        if (text == null) {
+            logger.warn("Refusing to plan: every finding carries text this build will not quote")
             return
         }
         session.send(text)

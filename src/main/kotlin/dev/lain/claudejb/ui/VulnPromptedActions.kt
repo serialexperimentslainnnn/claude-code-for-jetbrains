@@ -21,24 +21,65 @@ internal object VulnPromptedActions {
         fixed: List<String>,
     ): String {
         val target = if (fixed.isEmpty()) {
-            "No patched version is published in the advisory, so find out whether one exists and tell me " +
-                "what it is before you change anything."
+            "The advisory publishes no patched version, so establish whether one exists before planning " +
+                "anything."
         } else {
             "The advisory names these patched versions: " + fixed.joinToString(", ") { "`$it`" } +
-                ". Pick the lowest one that is at or above `$version` and pin exactly that."
+                ". The lowest one at or above `$version` is the candidate, unless what you find below " +
+                "argues for a different one."
         }
-        return "Update the dependency `$name` in `$manifest`. This project resolves it at version `$version`, " +
-            "which advisory `$advisory` reports as affected.\n\n$target"
+        return "Move the dependency `$name` off version `$version` in `$manifest`, which advisory " +
+            "`$advisory` reports as affected.\n\n$target"
     }
 
     private fun prohibitions(name: String, manifest: String): String =
-        "Change `$manifest` and the lockfile that belongs to it, and nothing else. Only the entry for " +
-            "`$name`: do not upgrade, downgrade, add or remove any other dependency, and do not edit any " +
-            "other manifest in this repository. Do not touch source files, build scripts or CI " +
-            "configuration to make the new version fit. Do not commit, tag, push or publish anything. If " +
-            "the update cannot be made without changing something outside `$manifest`, stop and tell me " +
-            "what it would take instead of doing it. When you are done, tell me the exact version you " +
-            "pinned and nothing about what the advisory says."
+        "Work out what the change costs before you make it. What changed in `$name` between the two " +
+            "versions, breaking changes included; what in this project actually uses it, directly or " +
+            "through another dependency; and what would have to be adjusted for the new version to hold. " +
+            "Look this up on the web rather than recalling it: releases, advisories and deprecations move, " +
+            "and what you remember about this package may predate the version you are moving to. Say what " +
+            "you found, cite where you found it, and what you propose, then carry it out.\n\n" +
+            "`$manifest` and its lockfile are the target. Anything you touch beyond them is part of making " +
+            "the new version work, so name it and say why. If the update cannot be made safely at all, say " +
+            "that instead of forcing it. Do not commit, tag, push or publish anything, and run whatever " +
+            "tests this project has before you call it done."
+
+    fun planPrompt(findings: List<VulnFinding>): String? {
+        val lines = findings.mapNotNull(::line).distinct()
+        if (lines.isEmpty()) return null
+        val listed = lines.take(MAX_LISTED_FINDINGS)
+        val omitted = lines.size - listed.size
+        val tail = if (omitted > 0) "\n\nThere are $omitted more the view did not fit; ask for them if the " +
+            "plan needs them." else ""
+        return "These dependencies of this project are reported as affected:\n\n" +
+            listed.joinToString("\n") { "- $it" } + tail + "\n\n" + planInstructions()
+    }
+
+    private fun line(finding: VulnFinding): String? {
+        val name = token(finding.component.name, NAME_ALLOWED) ?: return null
+        val version = token(finding.component.version, VERSION_ALLOWED) ?: return null
+        val manifest = path(finding.component.manifest) ?: return null
+        val advisory = token(finding.id, ADVISORY_ALLOWED) ?: return null
+        val fixed = finding.fixedVersions.mapNotNull { token(it, VERSION_ALLOWED) }.take(MAX_LISTED_VERSIONS)
+        val patched = if (fixed.isEmpty()) "no patched version published" else "patched in " +
+            fixed.joinToString(", ") { "`$it`" }
+        return "`$name` `$version` in `$manifest` — `$advisory`, $patched"
+    }
+
+    private fun planInstructions(): String =
+        "Plan how to clear all of them, and do not start by editing anything.\n\n" +
+            "Check every one against current information on the web instead of recalling it. Release notes, " +
+            "advisories, patched versions and deprecations all move, and a plan built on what you remember " +
+            "will be wrong in exactly the places that cost the most. Cite what you relied on.\n\n" +
+            "Work out first what each move actually costs: what changed between the version in use and the " +
+            "candidate, breaking changes included; what in this project uses each one, directly or through " +
+            "another dependency; which of these updates pull the same transitive dependency and could " +
+            "settle on one version instead of fighting each other; and which ones need a source, build or " +
+            "CI change to hold, which is a cost to state rather than a step to hide.\n\n" +
+            "Then give me the order you would do them in and why, calling out any that are risky enough to " +
+            "be worth doing alone, and any that cannot be done at all yet. Once I have agreed to the plan, " +
+            "carry it out, running whatever tests this project has as you go. Do not commit, tag, push or " +
+            "publish anything."
 
     private fun token(raw: String, allowed: Regex): String? =
         raw.trim().takeIf { it.isNotEmpty() && it.length <= MAX_TOKEN_LENGTH && allowed.matches(it) }
@@ -51,6 +92,8 @@ internal object VulnPromptedActions {
     private const val MAX_PATH_LENGTH = 400
 
     private const val MAX_LISTED_VERSIONS = 8
+
+    private const val MAX_LISTED_FINDINGS = 40
 
     private val NAME_ALLOWED = Regex("""[A-Za-z0-9._@/+-]+""")
 

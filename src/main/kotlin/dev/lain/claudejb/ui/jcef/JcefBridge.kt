@@ -143,6 +143,8 @@ object JcefBridge {
 
         data class VulnFix(val findingId: String) : SessionControl
 
+        data class VulnPlan(val tiers: List<String>) : SessionControl
+
         data class RevealAgent(val agentId: String, val toolUseId: String, val chatId: String = "") :
             SessionControl
 
@@ -176,6 +178,8 @@ object JcefBridge {
         fun int(key: String, fallback: Int): Int = (obj[key] as? JsonPrimitive)?.intOrNull ?: fallback
         fun long(key: String, fallback: Long): Long = (obj[key] as? JsonPrimitive)?.longOrNull ?: fallback
         fun json(key: String): JsonObject? = obj[key] as? JsonObject
+        fun strings(key: String): List<String> =
+            (obj[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
     }
 
     fun jsString(s: String): String = JsonPrimitive(s).toString()
@@ -317,6 +321,7 @@ object JcefBridge {
         "vulnCancel" -> Msg.VulnCancel
         "vulnInventory" -> Msg.VulnInventoryRequest
         "vulnFix" -> Msg.VulnFix(f.text("findingId"))
+        "vulnPlan" -> Msg.VulnPlan(f.strings("tiers"))
         else -> null
     }
 
