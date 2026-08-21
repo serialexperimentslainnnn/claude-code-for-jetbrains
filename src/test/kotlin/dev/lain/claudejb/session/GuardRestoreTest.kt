@@ -71,6 +71,18 @@ class GuardRestoreTest {
     }
 
     @Test
+    fun `an alert older than everything restored is left to the guard log, never piled at the end`() {
+        val out = GuardRestore.reinstate(
+            listOf(stampedRow("tu_1", at = 500), stampedRow("tu_2", at = 600)),
+            listOf(stampedAlert(at = 10), stampedAlert(at = 550)),
+        )
+
+        assertEquals(3, out.size, "the guard log keeps more than the transcript does: the excess is not a tail dump")
+        assertEquals(rule.name, out[1].blockedRule, "the one inside the window still lands where it happened")
+        assertNull(out.last().blockedRule)
+    }
+
+    @Test
     fun `a conversation with no alerts comes back exactly as it went in`() {
         val dtos = listOf(toolRow("tu_1"), toolRow("tu_2"))
 

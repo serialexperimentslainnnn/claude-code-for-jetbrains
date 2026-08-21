@@ -20,10 +20,10 @@ object GuardRestore {
         val earliest = dtos.mapNotNull { it.atMillis }.minOrNull() ?: return weave(dtos, byAnchor, emptyList())
         val loose = anchored
             .filter { it.anchor == null || it.anchor !in parentOfAnchor.keys }
+            .filter { it.at >= earliest }
             .sortedBy { it.at }
-        val (inWindow, older) = loose.partition { it.at >= earliest }
 
-        return weave(dtos, byAnchor, inWindow) + older.map { it.entry }
+        return weave(dtos, byAnchor, loose)
     }
 
     private fun weave(
