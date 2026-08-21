@@ -3,6 +3,8 @@ package dev.lain.claudejb.forge
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.net.URI
 
 internal object GitLabApi : ForgeApi {
@@ -78,6 +80,46 @@ internal object GitLabApi : ForgeApi {
         else -> ForgeAccessLevel.NONE
     }
 
+    override fun approve(repo: ForgeRepo, number: Long, token: String): ForgeRequest =
+        ForgeRequest(mergeRequestUri(repo, number, "/approve"), headers(token), method = "POST")
+
+    override fun unapprove(repo: ForgeRepo, number: Long, token: String): ForgeRequest =
+        ForgeRequest(mergeRequestUri(repo, number, "/unapprove"), headers(token), method = "POST")
+
+    override fun merge(repo: ForgeRepo, number: Long, token: String): ForgeRequest =
+        ForgeRequest(mergeRequestUri(repo, number, "/merge"), headers(token), method = "PUT")
+
+    override fun comment(repo: ForgeRepo, number: Long, text: String, token: String): ForgeRequest =
+        ForgeRequest(
+            mergeRequestUri(repo, number, "/notes"),
+            jsonHeaders(token),
+            method = "POST",
+            body = buildJsonObject { put("body", text) }.toString(),
+        )
+
+    override fun openPullRequest(
+        repo: ForgeRepo,
+        source: String,
+        target: String,
+        title: String,
+        token: String,
+    ): ForgeRequest = ForgeRequest(
+        URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}/merge_requests"),
+        jsonHeaders(token),
+        method = "POST",
+        body = buildJsonObject {
+            put("source_branch", source)
+            put("target_branch", target)
+            put("title", title)
+        }.toString(),
+    )
+
+    private fun mergeRequestUri(repo: ForgeRepo, number: Long, suffix: String): URI =
+        URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}/merge_requests/$number$suffix")
+
+    private fun jsonHeaders(token: String): Map<String, String> =
+        headers(token) + ("Content-Type" to "application/json")
+
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         pipelineAction(repo, runId, "retry", token)
 
@@ -108,6 +150,7 @@ internal object GitLabApi : ForgeApi {
         draft = draft,
         author = author?.username?.ifBlank { null },
         sourceBranch = sourceBranch?.ifBlank { null },
+        targetBranch = targetBranch?.ifBlank { null },
     )
 
     private fun GlPipeline.toModel(): ForgeRun? {
@@ -139,6 +182,7 @@ private data class GlMergeRequest(
     val draft: Boolean = false,
     val author: GlUser? = null,
     @SerialName("source_branch") val sourceBranch: String? = null,
+    @SerialName("target_branch") val targetBranch: String? = null,
 )
 
 @Serializable

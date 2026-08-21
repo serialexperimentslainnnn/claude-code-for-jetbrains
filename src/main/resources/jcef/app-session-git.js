@@ -113,6 +113,24 @@
     return forgeOf(git).provider === 'gitlab' ? 'Merge requests' : 'Pull requests';
   }
 
+  function accessOf(git) {
+    return forgeOf(git).access || {};
+  }
+
+  function forgeButton(label, extraClass, payload) {
+    return h('button', {
+      class: 'git-link ' + extraClass,
+      attrs: { type: 'button' },
+      text: label,
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          send(payload);
+        },
+      },
+    });
+  }
+
   function forgeNote(git, emptyText) {
     var forge = forgeOf(git);
     if (!forge.configured) {
@@ -672,7 +690,7 @@
     var body = [scopeStrip(current)];
     if (shown.length) {
       shown.forEach(function (pull) {
-        body.push(pullRow(pull, current));
+        body.push(pullRow(pull, current, git));
       });
     } else if (pulls.length) {
       body.push(h('div', { class: 'git-note', text: 'Nothing open for ' + current + '.' }));
@@ -689,36 +707,90 @@
 
     var runs = list(g.runs);
     var body = runs.length
-      ? runs.map(runRow)
+      ? runs.map(function (run) {
+          return runRow(run, git);
+        })
       : [h('div', { class: 'git-note', text: forgeNote(git, 'No pipeline has run for this branch.') })];
 
     return card('Pipelines', body, false, 'git-pipelines');
   }
 
-  function runRow(run) {
+  function runRow(run, git) {
     var status = text(run.status, 'running');
-    return h(
-      'div',
-      { class: 'git-forge-row' },
+    var parts = [
       h('span', { class: 'git-dot ' + status, attrs: { title: status } }),
       h('span', { class: 'git-forge-label', text: text(run.name, 'Last run') }),
-      linkTo('Open', text(run.url, ''), 'git-forge-open')
-    );
+    ];
+    if (accessOf(git).canRunPipelines && run.id != null) {
+      if (status === 'running') {
+        parts.push(
+          forgeButton('Cancel', 'git-forge-act danger', {
+            type: 'forgeAction',
+            action: 'cancelRun',
+            number: run.id,
+          })
+        );
+      } else {
+        parts.push(
+          forgeButton('Run again', 'git-forge-act', {
+            type: 'forgeAction',
+            action: 'retryRun',
+            number: run.id,
+          })
+        );
+      }
+    }
+    parts.push(linkTo('Open', text(run.url, ''), 'git-forge-open'));
+    return h('div', { class: 'git-forge-row' }, parts);
   }
 
-  function pullRow(pull, current) {
+  function pullActions(pull, git) {
+    var access = accessOf(git);
+    var number = pull.number;
+    if (number == null) return [];
+    var mine = access.login && text(pull.author, '') === text(access.login, '');
+    var out = [];
+    if (access.canApprove && !(forgeOf(git).provider !== 'gitlab' && mine)) {
+      out.push(forgeButton('Approve', 'git-forge-act', { type: 'forgeAction', action: 'approve', number: number }));
+      if (forgeOf(git).canUnapprove) {
+        out.push(
+          forgeButton('Unapprove', 'git-forge-act', {
+            type: 'forgeAction',
+            action: 'unapprove',
+            number: number,
+          })
+        );
+      }
+    }
+    if (access.canMerge && !pull.draft) {
+      out.push(
+        forgeButton('Merge', 'git-forge-act danger', {
+          type: 'forgeAction',
+          action: 'merge',
+          number: number,
+          title: text(pull.title, ''),
+          target: text(pull.targetBranch, ''),
+        })
+      );
+    }
+    return out;
+  }
+
+  function pullRow(pull, current, git) {
     var number = pull.number == null ? '' : '#' + pull.number;
     var branch = text(pull.sourceBranch, '');
     var mine = !!branch && branch === current;
-    return h(
-      'div',
-      { class: 'git-forge-row' + (mine ? ' here' : '') },
+    var parts = [
       h('span', { class: 'git-forge-num', text: number }),
       h('span', { class: 'git-forge-label', text: text(pull.title, '(no title)') }),
       branch ? h('span', { class: 'git-forge-branch', attrs: { title: branch }, text: branch }) : null,
       pull.draft ? h('span', { class: 'git-forge-draft', text: 'draft' }) : null,
-      linkTo('Open', text(pull.url, ''), 'git-forge-open')
-    );
+    ];
+    pullActions(pull, git).forEach(function (button) {
+      parts.push(button);
+    });
+    parts.push(linkTo('Open', text(pull.url, ''), 'git-forge-open'));
+    return h('div', { class: 'git-forge-row' + (mine ? ' here' : '') }, parts);
   }
 
   D.gitViewTabs = viewTabs;

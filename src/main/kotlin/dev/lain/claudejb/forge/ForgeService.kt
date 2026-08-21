@@ -53,20 +53,43 @@ object ForgeService {
 
     private val viewers = java.util.concurrent.ConcurrentHashMap<String, Viewer>()
 
+    fun approve(repo: ForgeRepo, number: Long): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).approve(r, number, token) }
+
+    fun unapprove(repo: ForgeRepo, number: Long): ForgeOutcome {
+        val api = apiFor(repo.provider)
+        return actOrNull(repo) { r, token -> api.unapprove(r, number, token) }
+            ?: ForgeOutcome.Refused(ForgeRefusal.UNSUPPORTED)
+    }
+
+    fun merge(repo: ForgeRepo, number: Long): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).merge(r, number, token) }
+
+    fun comment(repo: ForgeRepo, number: Long, text: String): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).comment(r, number, text, token) }
+
+    fun openPullRequest(repo: ForgeRepo, source: String, target: String, title: String): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).openPullRequest(r, source, target, title, token) }
+
+    fun canUnapprove(repo: ForgeRepo): Boolean = apiFor(repo.provider).unapprove(repo, 1, "probe") != null
+
     fun retryRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
         act(repo) { r, token -> apiFor(r.provider).retryRun(r, runId, token) }
 
     fun cancelRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
         act(repo) { r, token -> apiFor(r.provider).cancelRun(r, runId, token) }
 
-    private fun act(repo: ForgeRepo, build: (ForgeRepo, String) -> ForgeRequest): ForgeOutcome {
+    private fun act(repo: ForgeRepo, build: (ForgeRepo, String) -> ForgeRequest): ForgeOutcome =
+        actOrNull(repo) { r, token -> build(r, token) } ?: ForgeOutcome.Refused(ForgeRefusal.UNSUPPORTED)
+
+    private fun actOrNull(repo: ForgeRepo, build: (ForgeRepo, String) -> ForgeRequest?): ForgeOutcome? {
         if (ApplicationManager.getApplication()?.isDispatchThread == true) {
             LOG.warn("A forge action was asked for on the EDT; refusing it. Move the call to a pooled thread.")
             return ForgeOutcome.Refused(ForgeRefusal.ON_EDT)
         }
         if (!isUsableHost(repo.host)) return ForgeOutcome.Refused(ForgeRefusal.UNREACHABLE)
         val token = ForgeTokens.get(repo.host) ?: return ForgeOutcome.Refused(ForgeRefusal.NO_TOKEN)
-        return ForgeHttp.act(build(repo, token))
+        return ForgeHttp.act(build(repo, token) ?: return null)
     }
 
     private fun fetch(

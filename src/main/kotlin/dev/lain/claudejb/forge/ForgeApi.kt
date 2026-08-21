@@ -34,6 +34,16 @@ internal interface ForgeApi {
 
     fun parseViewer(body: String): ForgeAnswer<String?>
 
+    fun approve(repo: ForgeRepo, number: Long, token: String): ForgeRequest
+
+    fun unapprove(repo: ForgeRepo, number: Long, token: String): ForgeRequest?
+
+    fun merge(repo: ForgeRepo, number: Long, token: String): ForgeRequest
+
+    fun comment(repo: ForgeRepo, number: Long, text: String, token: String): ForgeRequest
+
+    fun openPullRequest(repo: ForgeRepo, source: String, target: String, title: String, token: String): ForgeRequest
+
     fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
 
     fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest

@@ -22,6 +22,7 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.context.EditorContextProvider
 import dev.lain.claudejb.forge.ForgeAnswer
+import dev.lain.claudejb.forge.ForgeOutcome
 import dev.lain.claudejb.forge.ForgeProbe
 import dev.lain.claudejb.forge.ForgeProvider
 import dev.lain.claudejb.forge.ForgeRepo
@@ -129,6 +130,7 @@ internal class GitIntegration(private val project: Project) {
             lastRun = runs?.firstOrNull(),
             forgeConfigured = forge != null,
             forgeProvider = forge?.provider?.name?.lowercase(),
+            forgeCanUnapprove = forge?.let { ForgeService.canUnapprove(it) } ?: false,
             forgeAccess = forge?.let { repo ->
                 when (val answer = ForgeService.access(repo)) {
                     is ForgeAnswer.Known -> answer.value
@@ -160,6 +162,37 @@ internal class GitIntegration(private val project: Project) {
             is ForgeAnswer.Silent -> null
         }
     }
+
+    fun act(request: ForgeActionRequest, notice: (String) -> Unit, onChanged: () -> Unit) {
+        val repo = forgeRepo(history()) ?: return notice("There is no forge for this project's remote.")
+        if (!request.confirmed(project)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val outcome = dispatch(repo, request)
+            edt {
+                notice(said(request, outcome))
+                onChanged()
+            }
+        }
+    }
+
+    private fun dispatch(repo: ForgeRepo, request: ForgeActionRequest): ForgeOutcome = when (request) {
+        is ForgeActionRequest.Approve -> ForgeService.approve(repo, request.number)
+        is ForgeActionRequest.Unapprove -> ForgeService.unapprove(repo, request.number)
+        is ForgeActionRequest.Merge -> ForgeService.merge(repo, request.number)
+        is ForgeActionRequest.Comment -> ForgeService.comment(repo, request.number, request.text)
+        is ForgeActionRequest.Open -> ForgeService.openPullRequest(repo, request.source, request.target, request.title)
+        is ForgeActionRequest.RetryRun -> ForgeService.retryRun(repo, request.runId)
+        is ForgeActionRequest.CancelRun -> ForgeService.cancelRun(repo, request.runId)
+    }
+
+    private fun said(request: ForgeActionRequest, outcome: ForgeOutcome): String = when (outcome) {
+        is ForgeOutcome.Done -> request.done
+        is ForgeOutcome.Refused -> "${request.attempted} ${outcome.reason.note}"
+    }
+
+    private fun history(): GitHistoryService = project.service<GitHistoryService>()
+
+    fun currentBranch(): String? = history().currentBranch()
 
     private fun relativeChangedFile(root: String, changes: List<String>, absolutePath: String?): String? {
         val absolute = absolutePath ?: return null

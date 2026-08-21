@@ -50,6 +50,7 @@ object JcefGitData {
         val forgeConfigured: Boolean = false,
         val forgeProvider: String? = null,
         val forgeAccess: ForgeAccess? = null,
+        val forgeCanUnapprove: Boolean = false,
     )
 
     fun gitJson(snapshot: Snapshot?): JsonObject? {
@@ -89,6 +90,7 @@ object JcefGitData {
                 put("draft", pull.draft)
                 put("author", pull.author)
                 put("sourceBranch", pull.sourceBranch)
+                put("targetBranch", pull.targetBranch)
             }
         }
     }
@@ -98,6 +100,7 @@ object JcefGitData {
         put("answered", snapshot.pullRequests != null || snapshot.runs != null)
         put("provider", snapshot.forgeProvider)
         put("access", accessJson(snapshot.forgeAccess))
+        put("canUnapprove", snapshot.forgeCanUnapprove)
     }
 
     private fun accessJson(access: ForgeAccess?): JsonElement {

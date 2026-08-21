@@ -3,6 +3,8 @@ package dev.lain.claudejb.forge
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.net.URI
 
 internal object GitHubApi : ForgeApi {
@@ -69,6 +71,51 @@ internal object GitHubApi : ForgeApi {
     override fun parseViewer(body: String): ForgeAnswer<String?> =
         decodeForge(body, GhUser.serializer()) { it.login.ifBlank { null } }
 
+    override fun approve(repo: ForgeRepo, number: Long, token: String): ForgeRequest = ForgeRequest(
+        pullUri(repo, number, "/reviews"),
+        jsonHeaders(token),
+        method = "POST",
+        body = buildJsonObject { put("event", "APPROVE") }.toString(),
+    )
+
+    override fun unapprove(repo: ForgeRepo, number: Long, token: String): ForgeRequest? = null
+
+    override fun merge(repo: ForgeRepo, number: Long, token: String): ForgeRequest =
+        ForgeRequest(pullUri(repo, number, "/merge"), headers(token), method = "PUT")
+
+    override fun comment(repo: ForgeRepo, number: Long, text: String, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${repoBase(repo)}/issues/$number/comments"),
+        jsonHeaders(token),
+        method = "POST",
+        body = buildJsonObject { put("body", text) }.toString(),
+    )
+
+    override fun openPullRequest(
+        repo: ForgeRepo,
+        source: String,
+        target: String,
+        title: String,
+        token: String,
+    ): ForgeRequest = ForgeRequest(
+        URI.create("${repoBase(repo)}/pulls"),
+        jsonHeaders(token),
+        method = "POST",
+        body = buildJsonObject {
+            put("head", source)
+            put("base", target)
+            put("title", title)
+        }.toString(),
+    )
+
+    private fun repoBase(repo: ForgeRepo): String =
+        "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}"
+
+    private fun pullUri(repo: ForgeRepo, number: Long, suffix: String): URI =
+        URI.create("${repoBase(repo)}/pulls/$number$suffix")
+
+    private fun jsonHeaders(token: String): Map<String, String> =
+        headers(token) + ("Content-Type" to "application/json")
+
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         runAction(repo, runId, "rerun", token)
 
@@ -105,6 +152,7 @@ internal object GitHubApi : ForgeApi {
         draft = draft,
         author = user?.login?.ifBlank { null },
         sourceBranch = head?.ref?.ifBlank { null },
+        targetBranch = base?.ref?.ifBlank { null },
     )
 
     private fun GhRun.toModel(): ForgeRun? {
@@ -137,6 +185,7 @@ private data class GhPull(
     val draft: Boolean = false,
     val user: GhUser? = null,
     val head: GhRef? = null,
+    val base: GhRef? = null,
 )
 
 @Serializable

@@ -170,6 +170,35 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         if (GitActionCatalog.byId(m.id)?.kind == GitActionCatalog.Kind.PROMPT) panel.gitChat.show()
     }
 
+    private fun onForgeAction(m: JcefBridge.Msg.ForgeAction) {
+        val request = forgeRequest(m)
+        if (request == null) {
+            logger.warn("The Git view asked for a forge action this build does not offer: ${m.action}")
+            return
+        }
+        val notice: (String) -> Unit = { panel.gitChat.session().systemNotice(it) }
+        GitIntegration.getInstance(panel.project).act(request, notice) { panel.pushGit() }
+    }
+
+    private fun forgeRequest(m: JcefBridge.Msg.ForgeAction): ForgeActionRequest? = when (m.action) {
+        "approve" -> ForgeActionRequest.Approve(m.number)
+        "unapprove" -> ForgeActionRequest.Unapprove(m.number)
+        "merge" -> ForgeActionRequest.Merge(m.number, m.title, m.target.ifBlank { null })
+        "comment" -> m.text.trim().takeIf { it.isNotEmpty() }?.let { ForgeActionRequest.Comment(m.number, it) }
+        "open" -> openRequest(m)
+        "retryRun" -> ForgeActionRequest.RetryRun(m.number)
+        "cancelRun" -> ForgeActionRequest.CancelRun(m.number)
+        else -> null
+    }
+
+    private fun openRequest(m: JcefBridge.Msg.ForgeAction): ForgeActionRequest? {
+        val source = GitIntegration.getInstance(panel.project).currentBranch()?.takeIf { it.isNotBlank() }
+        val target = m.target.trim().takeIf { it.isNotEmpty() }
+        val title = m.title.trim().takeIf { it.isNotEmpty() }
+        if (source == null || target == null || title == null) return null
+        return ForgeActionRequest.Open(source, target, title)
+    }
+
     private fun onSetWorkloadWindow(minutes: Int) {
         if (minutes !in WorkloadWindow.WINDOW_MINUTES) {
             logger.warn("Workloads view asked for a window this build does not offer: $minutes")
@@ -450,6 +479,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.SetWorkloadWindow -> onSetWorkloadWindow(m.minutes)
 
         is JcefBridge.Msg.GitAction -> onGitAction(m)
+
+        is JcefBridge.Msg.ForgeAction -> onForgeAction(m)
 
         JcefBridge.Msg.NewChat -> ClaudeToolWindowFactory.newChat(panel.project)
 

@@ -8,6 +8,7 @@ data class ForgePullRequest(
     val draft: Boolean,
     val author: String?,
     val sourceBranch: String?,
+    val targetBranch: String? = null,
 )
 
 enum class ForgeAccessLevel(val wire: String) {

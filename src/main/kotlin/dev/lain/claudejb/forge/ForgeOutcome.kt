@@ -32,4 +32,6 @@ enum class ForgeRefusal(val note: String) {
     REFUSED("The forge refused the request and did not say why in a way this build understands."),
 
     ON_EDT("The action was asked for on the UI thread and refused."),
+
+    UNSUPPORTED("This forge has no equivalent of that, so nothing was sent."),
 }

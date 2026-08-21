@@ -125,6 +125,14 @@ object JcefBridge {
 
         data class GitAction(val id: String, val hash: String = "") : SessionControl
 
+        data class ForgeAction(
+            val action: String,
+            val number: Long = 0,
+            val text: String = "",
+            val target: String = "",
+            val title: String = "",
+        ) : SessionControl
+
         object NewChat : SessionControl
 
         object CloseThisChat : SessionControl
@@ -327,6 +335,13 @@ object JcefBridge {
 
     private fun parseGitControls(type: String, f: Fields): Msg? = when (type) {
         "gitAction" -> Msg.GitAction(f.text("id"), f.text("hash"))
+        "forgeAction" -> Msg.ForgeAction(
+            f.text("action"),
+            f.long("number", 0),
+            f.text("text"),
+            f.text("target"),
+            f.text("title"),
+        )
         "openGitView" -> Msg.OpenGitView
         "newChat" -> Msg.NewChat
         "closeThisChat" -> Msg.CloseThisChat
