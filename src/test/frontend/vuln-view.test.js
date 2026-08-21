@@ -55,7 +55,7 @@ function finding(over) {
 function report(findings, over) {
   return Object.assign(
     {
-      asOfMillis: 1700000000000,
+      asOfMillis: Date.now() - 3600 * 1000,
       ageMillis: 3600000,
       endpoint: ENDPOINT,
       queried: 412,
