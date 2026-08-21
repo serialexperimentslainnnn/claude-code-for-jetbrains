@@ -95,8 +95,8 @@ class JcefGitDataTest {
             forgeConfigured = true,
             forgeProvider = "gitlab",
             runs = listOf(
-                ForgeRun(name = "Second", status = ForgeRunStatus.RUNNING, url = "https://h/2", finishedAtIso = null),
-                ForgeRun(name = "First", status = ForgeRunStatus.FAILED, url = "https://h/1", finishedAtIso = "x"),
+                ForgeRun(2, "Second", ForgeRunStatus.RUNNING, "https://h/2", null),
+                ForgeRun(1, "First", ForgeRunStatus.FAILED, "https://h/1", "x"),
             ),
         )
 

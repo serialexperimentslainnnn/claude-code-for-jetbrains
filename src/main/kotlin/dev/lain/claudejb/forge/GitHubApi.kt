@@ -45,6 +45,21 @@ internal object GitHubApi : ForgeApi {
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GhPull.serializer())) { pulls -> pulls.map { it.toModel() } }
 
+    override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
+        runAction(repo, runId, "rerun", token)
+
+    override fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
+        runAction(repo, runId, "cancel", token)
+
+    private fun runAction(repo: ForgeRepo, runId: Long, verb: String, token: String) = ForgeRequest(
+        URI.create(
+            "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}" +
+                "/actions/runs/$runId/$verb",
+        ),
+        headers(token),
+        method = "POST",
+    )
+
     override fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>> =
         decodeForge(body, GhRuns.serializer()) { runs -> runs.workflowRuns.mapNotNull { it.toModel() } }
 
@@ -71,6 +86,7 @@ internal object GitHubApi : ForgeApi {
     private fun GhRun.toModel(): ForgeRun? {
         val state = statusOf(status, conclusion) ?: return null
         return ForgeRun(
+            id = id,
             name = name?.ifBlank { null },
             status = state,
             url = htmlUrl,
@@ -112,6 +128,7 @@ private data class GhRuns(
 
 @Serializable
 private data class GhRun(
+    val id: Long = 0,
     val name: String? = null,
     val status: String? = null,
     val conclusion: String? = null,

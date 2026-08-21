@@ -96,6 +96,7 @@ object JcefGitData {
     }
 
     private fun runJson(run: ForgeRun): JsonObject = buildJsonObject {
+        put("id", run.id)
         put("name", run.name)
         put("status", run.status.wire)
         put("url", run.url)

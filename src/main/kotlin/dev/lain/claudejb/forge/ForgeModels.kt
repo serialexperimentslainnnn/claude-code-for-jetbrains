@@ -22,6 +22,7 @@ enum class ForgeRunStatus(val wire: String) {
 }
 
 data class ForgeRun(
+    val id: Long,
     val name: String?,
     val status: ForgeRunStatus,
     val url: String,

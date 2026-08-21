@@ -46,6 +46,18 @@ internal object GitLabApi : ForgeApi {
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GlMergeRequest.serializer())) { mrs -> mrs.map { it.toModel() } }
 
+    override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
+        pipelineAction(repo, runId, "retry", token)
+
+    override fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
+        pipelineAction(repo, runId, "cancel", token)
+
+    private fun pipelineAction(repo: ForgeRepo, runId: Long, verb: String, token: String) = ForgeRequest(
+        URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}/pipelines/$runId/$verb"),
+        headers(token),
+        method = "POST",
+    )
+
     override fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>> =
         decodeForge(body, ListSerializer(GlPipeline.serializer())) { page -> page.mapNotNull { it.toModel() } }
 
@@ -69,6 +81,7 @@ internal object GitLabApi : ForgeApi {
     private fun GlPipeline.toModel(): ForgeRun? {
         val state = statusOf(status) ?: return null
         return ForgeRun(
+            id = id,
             name = name?.ifBlank { null },
             status = state,
             url = webUrl,
@@ -101,6 +114,7 @@ private data class GlUser(val username: String = "")
 
 @Serializable
 private data class GlPipeline(
+    val id: Long = 0,
     val name: String? = null,
     val status: String? = null,
     @SerialName("web_url") val webUrl: String = "",

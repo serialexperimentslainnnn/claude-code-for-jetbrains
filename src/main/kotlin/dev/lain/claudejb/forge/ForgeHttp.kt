@@ -50,13 +50,8 @@ internal object ForgeHttp {
         if (!request.uri.scheme.equals("https", ignoreCase = true)) {
             return ForgeAnswer.Silent(ForgeSilence.UNSUPPORTED_HOST)
         }
-        val built = HttpRequest.newBuilder(request.uri)
-            .GET()
-            .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
-        request.headers.forEach { (name, value) -> built.header(name, value) }
-
         return try {
-            val response = client.send(built.build(), HttpResponse.BodyHandlers.ofInputStream())
+            val response = client.send(built(request), HttpResponse.BodyHandlers.ofInputStream())
             response.body().use { body -> bodyOrSilence(response.statusCode(), response.headers(), body) }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -67,6 +62,35 @@ internal object ForgeHttp {
         }
     }
 
+    fun act(request: ForgeRequest): ForgeOutcome {
+        if (!request.uri.scheme.equals("https", ignoreCase = true)) {
+            return ForgeOutcome.Refused(ForgeRefusal.UNREACHABLE)
+        }
+        return try {
+            val response = client.send(built(request), HttpResponse.BodyHandlers.discarding())
+            refusalFor(response.statusCode(), response.headers())
+                ?.let { ForgeOutcome.Refused(it) }
+                ?: ForgeOutcome.Done
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            ForgeOutcome.Refused(ForgeRefusal.UNREACHABLE)
+        } catch (e: IOException) {
+            LOG.warn("A forge action on ${request.uri.host} could not be sent", e)
+            ForgeOutcome.Refused(ForgeRefusal.UNREACHABLE)
+        }
+    }
+
+    private fun built(request: ForgeRequest): HttpRequest {
+        val payload = request.body
+            ?.let { HttpRequest.BodyPublishers.ofString(it, StandardCharsets.UTF_8) }
+            ?: HttpRequest.BodyPublishers.noBody()
+        val built = HttpRequest.newBuilder(request.uri)
+            .method(request.method, payload)
+            .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+        request.headers.forEach { (name, value) -> built.header(name, value) }
+        return built.build()
+    }
+
     fun silenceFor(status: Int, headers: HttpHeaders): ForgeSilence? = when {
         status in HTTP_OK_MIN..HTTP_OK_MAX -> null
         status == HTTP_UNAUTHORIZED -> ForgeSilence.UNAUTHORIZED
@@ -75,6 +99,25 @@ internal object ForgeHttp {
         status == HTTP_FORBIDDEN || status == HTTP_NOT_FOUND -> ForgeSilence.NOT_VISIBLE
         else -> ForgeSilence.UNREACHABLE
     }
+
+    fun refusalFor(status: Int, headers: HttpHeaders): ForgeRefusal? = when {
+        status in HTTP_OK_MIN..HTTP_OK_MAX -> null
+        status == HTTP_UNAUTHORIZED -> ForgeRefusal.TOKEN_TOO_NARROW
+        status == HTTP_TOO_MANY_REQUESTS -> ForgeRefusal.RATE_LIMITED
+        status == HTTP_FORBIDDEN && quotaExhausted(headers) -> ForgeRefusal.RATE_LIMITED
+        status == HTTP_FORBIDDEN -> ForgeRefusal.NO_PERMISSION
+        status == HTTP_NOT_FOUND -> ForgeRefusal.NO_PERMISSION
+        status == HTTP_METHOD_NOT_ALLOWED -> ForgeRefusal.NOT_MERGEABLE
+        status == HTTP_NOT_ACCEPTABLE -> ForgeRefusal.CONFLICTED
+        status == HTTP_CONFLICT -> ForgeRefusal.STALE
+        status == HTTP_UNPROCESSABLE -> ForgeRefusal.SELF_APPROVAL
+        else -> ForgeRefusal.REFUSED
+    }
+
+    private const val HTTP_METHOD_NOT_ALLOWED = 405
+    private const val HTTP_NOT_ACCEPTABLE = 406
+    private const val HTTP_CONFLICT = 409
+    private const val HTTP_UNPROCESSABLE = 422
 
     private fun quotaExhausted(headers: HttpHeaders): Boolean =
         exhaustedBy(headers, GITHUB_REMAINING) ?: exhaustedBy(headers, GITLAB_REMAINING) ?: false

@@ -23,6 +23,22 @@ object ForgeService {
         }
     }
 
+    fun retryRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).retryRun(r, runId, token) }
+
+    fun cancelRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
+        act(repo) { r, token -> apiFor(r.provider).cancelRun(r, runId, token) }
+
+    private fun act(repo: ForgeRepo, build: (ForgeRepo, String) -> ForgeRequest): ForgeOutcome {
+        if (ApplicationManager.getApplication()?.isDispatchThread == true) {
+            LOG.warn("A forge action was asked for on the EDT; refusing it. Move the call to a pooled thread.")
+            return ForgeOutcome.Refused(ForgeRefusal.ON_EDT)
+        }
+        if (!isUsableHost(repo.host)) return ForgeOutcome.Refused(ForgeRefusal.UNREACHABLE)
+        val token = ForgeTokens.get(repo.host) ?: return ForgeOutcome.Refused(ForgeRefusal.NO_TOKEN)
+        return ForgeHttp.act(build(repo, token))
+    }
+
     private fun fetch(
         repo: ForgeRepo,
         branch: String,

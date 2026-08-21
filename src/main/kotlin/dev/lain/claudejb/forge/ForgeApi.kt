@@ -6,7 +6,12 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-internal class ForgeRequest(val uri: URI, val headers: Map<String, String>) {
+internal class ForgeRequest(
+    val uri: URI,
+    val headers: Map<String, String>,
+    val method: String = "GET",
+    val body: String? = null,
+) {
 
     override fun toString(): String = "ForgeRequest(uri=$uri)"
 }
@@ -20,6 +25,10 @@ internal interface ForgeApi {
     fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>>
 
     fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>>
+
+    fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
+
+    fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
 }
 
 internal fun apiFor(provider: ForgeProvider): ForgeApi = when (provider) {
