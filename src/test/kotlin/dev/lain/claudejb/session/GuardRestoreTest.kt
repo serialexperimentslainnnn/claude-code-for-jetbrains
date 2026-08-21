@@ -83,6 +83,29 @@ class GuardRestoreTest {
     }
 
     @Test
+    fun `an alert an agent earned is left to the agent's own transcript`() {
+        val dtos = listOf(
+            toolRow("tu_task"),
+            EntryDTO(speaker = "TOOL", text = "Bash", toolUseId = "tu_inside", parentToolUseId = "tu_task"),
+        )
+        val alerts = listOf(alert(GuardAlert.DENIED, toolUseId = "tu_inside"))
+
+        assertTrue(GuardRestore.raisedInThisChat(dtos, alerts).isEmpty(), "the agent's tab is where it belongs")
+        assertEquals(dtos, GuardRestore.reinstate(dtos, GuardRestore.raisedInThisChat(dtos, alerts)))
+    }
+
+    @Test
+    fun `an alert this chat earned itself is still its own`() {
+        val dtos = listOf(
+            toolRow("tu_1"),
+            EntryDTO(speaker = "TOOL", text = "Bash", toolUseId = "tu_inside", parentToolUseId = "tu_1"),
+        )
+        val alerts = listOf(alert(GuardAlert.DENIED, toolUseId = "tu_1"))
+
+        assertEquals(alerts, GuardRestore.raisedInThisChat(dtos, alerts), "a call with no parent is the chat's own")
+    }
+
+    @Test
     fun `a conversation with no alerts comes back exactly as it went in`() {
         val dtos = listOf(toolRow("tu_1"), toolRow("tu_2"))
 

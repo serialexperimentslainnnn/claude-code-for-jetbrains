@@ -880,7 +880,7 @@ class ClaudeSession(
         currentUserMessageId = null
         val saved = GuardAlertLog.forSession(ClaudeSettings.getInstance(project).scope, savedSessionId)
         guardAlerts.addAll(saved)
-        val withGuard = GuardRestore.reinstate(dtos, saved)
+        val withGuard = GuardRestore.reinstate(dtos, GuardRestore.raisedInThisChat(dtos, saved))
         edt {
             transcript.clear()
             for (dto in withGuard) {
