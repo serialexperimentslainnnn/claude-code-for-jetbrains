@@ -111,8 +111,8 @@
     node.appendChild(body);
 
     var action = BYPASS_ACTIONS[entry.bypassAction];
+    var actions = el('div', { class: 'guard-block-actions' });
     if (action) {
-      var actions = el('div', { class: 'guard-block-actions' });
       actions.appendChild(
         el('button', {
           class: 'guard-whitelist-link',
@@ -130,8 +130,9 @@
           },
         })
       );
-      node.appendChild(actions);
     }
+    actions.appendChild(guardLogButton());
+    node.appendChild(actions);
     return { el: node, bodyNode: body, kind: 'md' };
   }
 
@@ -183,8 +184,25 @@
       );
     }
 
+    actions.appendChild(guardLogButton());
+
     node.appendChild(actions);
     return { el: node, bodyNode: body, kind: 'md' };
+  }
+
+  function guardLogButton() {
+    return el('button', {
+      class: 'guard-log-link',
+      text: 'Open the guard log',
+      attrs: { type: 'button' },
+      on: {
+        click: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof cc.openGuardView === 'function') cc.openGuardView();
+        },
+      },
+    });
   }
 
   function buildToolOutputStandalone() {

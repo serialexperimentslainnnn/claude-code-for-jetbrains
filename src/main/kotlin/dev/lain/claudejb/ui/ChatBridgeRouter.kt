@@ -92,6 +92,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GuardRevokeApproval -> onGuardRevokeApproval(m)
         is JcefBridge.Msg.GuardRemoveWhitelist -> onGuardRemoveWhitelist(m)
         is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
+        JcefBridge.Msg.GuardLog -> panel.pushGuard()
+        is JcefBridge.Msg.GuardExplain -> panel.guard.explain(m.id)
     }
 
     private fun onGuardRevokeApproval(m: JcefBridge.Msg.GuardRevokeApproval) {
@@ -498,6 +500,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             feed.requestVersion()
             panel.agentTabs.render()
             panel.pushGit()
+            panel.pushGuard()
             panel.transcript.fullResync()
         }
 

@@ -373,6 +373,8 @@ class ClaudeSession(
 
     val guardApprovals = GuardCommandApprovals()
 
+    val guardLog = GuardLogTally()
+
     private val broker by lazy {
         PermissionBroker(
             permissionMode = { permissionMode },
@@ -827,7 +829,7 @@ class ClaudeSession(
         detail: String? = null,
     ) {
         val matched = rule ?: return
-        GuardAlertLog.record(
+        val submitted = GuardAlertLog.record(
             ClaudeSettings.getInstance(project).scope,
             GuardAlert(
                 at = System.currentTimeMillis(),
@@ -842,6 +844,7 @@ class ClaudeSession(
                 command = command,
             ),
         )
+        guardLog.submitted(submitted != null)
     }
 
     private fun presentPermission(request: PendingPermission) = edt {

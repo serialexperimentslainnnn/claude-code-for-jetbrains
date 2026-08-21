@@ -60,6 +60,7 @@
 
   function render() {
     if (!panel || !inner) return;
+    syncGuardVisibility();
     if (gitChatOpen()) {
       applyGitSub();
       return;
@@ -92,6 +93,14 @@
     applyGitSub();
     panel.scrollTop = offset;
   }
+
+  function syncGuardVisibility() {
+    if (typeof D.guardVisible === 'function') D.guardVisible(shown && currentView === 'guard');
+  }
+
+  D.repaintGuard = function () {
+    if (built && shown && currentView === 'guard') render();
+  };
 
   function gitChatOpen() {
     return currentView === 'git' && gitSub === 'chat';
@@ -150,6 +159,13 @@
       empty: 'No plan for this session.',
       cards: function (s) {
         return [D.buildPlanCard(s.plan)];
+      },
+    },
+    guard: {
+      title: 'Guard',
+      empty: 'The guard has judged nothing in this chat yet.',
+      cards: function () {
+        return typeof D.buildGuardCards === 'function' ? D.buildGuardCards() : [];
       },
     },
     git: {
@@ -267,6 +283,7 @@
       chatBtn,
       toggleBtn,
       viewButton('Workloads', 'workloads'),
+      viewButton('Guard', 'guard'),
       gitBtn,
       planBtn
     );
@@ -295,6 +312,7 @@
       CC.coverTranscript('dashboard', false);
       currentView = defaultView();
     }
+    syncGuardVisibility();
     markActiveButton();
   }
 
@@ -348,6 +366,15 @@
     gitOpened = false;
     ensureBuilt();
     renderIfShown();
+  };
+
+  cc.openGuardView = function () {
+    ensureBuilt();
+    if (!built) return;
+    currentView = 'guard';
+    shown = true;
+    render();
+    applyVisibility();
   };
 
   cc.openDashboard = function () {

@@ -55,6 +55,8 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     internal val gitChat = GitChatFeed(this, host::exec)
 
+    internal val guard = GuardFeed(this)
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -161,6 +163,13 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     internal fun pushGit() = GitIntegration.getInstance(project).refresh(::pushSession)
 
+    internal fun pushGuard() = guard.push()
+
+    fun openGuardView() {
+        pushGuard()
+        host.exec("window.cc.openGuardView && window.cc.openGuardView()")
+    }
+
     internal fun pushSession() {
         val json = JcefSessionData.sessionJson(
             session,
@@ -192,8 +201,6 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     fun focusTarget(): javax.swing.JComponent? = host.inputComponent()
 
     fun focusInput() = host.requestFocus()
-
-    fun showCommandPalette() = host.exec("window.cc.openPalette && window.cc.openPalette()")
 
     fun mentionCurrentFile() = tray.addCurrentFile()
 

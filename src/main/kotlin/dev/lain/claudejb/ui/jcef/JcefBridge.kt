@@ -71,6 +71,10 @@ object JcefBridge {
 
         data class GuardAllowAlways(val id: String, val scope: String = "") : Guard
 
+        object GuardLog : Guard
+
+        data class GuardExplain(val id: String) : Guard
+
         object SettingsRefresh : Settings
 
         object OpenSettings : Settings
@@ -210,6 +214,8 @@ object JcefBridge {
         "guardRevokeApproval" -> Msg.GuardRevokeApproval(f.text("rule"), f.text("command"))
         "guardRemoveWhitelist" -> Msg.GuardRemoveWhitelist(f.text("rule"), f.text("command"))
         "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
+        "guardLog" -> Msg.GuardLog
+        "guardExplain" -> Msg.GuardExplain(f.text("id"))
         else -> null
     }
 

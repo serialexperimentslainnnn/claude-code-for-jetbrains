@@ -113,6 +113,7 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         DefaultActionGroup().apply {
             add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(tabs)?.openDashboard() })
             add(simple("Agents") { activePanel(tabs)?.let { InfoDialogs.showAgents(project, it.session) } })
+            add(simple("Security Guard Log (Blocked · Allowed · Whitelisted · Disabled)") { showGuardView(project) })
             add(SessionDiffAction(project, tabs))
             add(simple("Binary Version…") { activePanel(tabs)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
             add(simple("Effective Settings…") { activePanel(tabs)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
@@ -161,6 +162,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
         fun newChat(project: Project) {
             tabsPanel(project)?.commands?.newChat()
+        }
+
+        fun showGuardView(project: Project) {
+            activePanel(project)?.openGuardView()
         }
 
         fun showGitView(project: Project) {

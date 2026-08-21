@@ -392,6 +392,7 @@ class JcefHost(
             "app-session-workloads.js",
             "app-session-git.js",
             "app-session-gitchat.js",
+            "app-session-guard.js",
             "app-session.js",
             "app-tabs-base.js",
             "app-tabs-guard.js",
@@ -442,6 +443,7 @@ class JcefHost(
             "permissions.css",
             "dashboard.css",
             "git.css",
+            "guard.css",
             "boot.css",
             "tabs.css",
         )
