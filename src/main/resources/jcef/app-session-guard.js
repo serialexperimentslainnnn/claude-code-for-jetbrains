@@ -196,41 +196,66 @@
 
   var ALL = '__all__';
 
-  function pickedFrom(select) {
-    var chosen = [];
-    var all = false;
-    Array.prototype.forEach.call(select.options, function (opt) {
-      if (!opt.selected) return;
-      if (opt.value === ALL) all = true;
-      else chosen.push(opt.value);
-    });
-    return all || !chosen.length ? null : chosen;
+  var DASHBOARD_ID = 'cc-dashboard';
+
+  function toggled(picked, value) {
+    if (value === ALL) return null;
+    var next = (picked || []).slice();
+    var at = next.indexOf(value);
+    if (at >= 0) next.splice(at, 1);
+    else next.push(value);
+    return next.length ? next : null;
   }
 
-  function multiSelect(label, options, picked, onPick) {
-    var select = h('select', {
-      class: 'guard-filter-select',
-      attrs: { multiple: 'multiple', size: '4', 'aria-label': label },
-      on: {
-        change: function (ev) {
-          onPick(pickedFrom(ev.currentTarget));
-        },
-      },
+  function multiSelect(label, options, pickedOf, onPick) {
+    var core = D.core();
+    if (!core || typeof core.pickMenu !== 'function') return null;
+
+    var trigger = h('button', {
+      class: 'guard-filter-trigger',
+      attrs: { type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
+      text: label,
     });
-    var allOption = h('option', { attrs: { value: ALL }, text: 'All' });
-    if (!picked) allOption.selected = true;
-    select.appendChild(allOption);
-    options.forEach(function (opt) {
-      var node = h('option', { attrs: { value: opt.id }, text: opt.label });
-      if (picked && picked.indexOf(opt.id) >= 0) node.selected = true;
-      select.appendChild(node);
-    });
-    return h(
-      'label',
+    var wrapper = h(
+      'div',
       { class: 'guard-filter' },
       h('span', { class: 'guard-filter-label', text: label }),
-      select
+      trigger
     );
+
+    var items = [{ value: ALL, label: 'All' }].concat(
+      options.map(function (opt) {
+        return { value: opt.id, label: opt.label };
+      })
+    );
+
+    var menu = core.pickMenu({
+      anchor: trigger,
+      home: wrapper,
+      label: label,
+      checkable: true,
+      menuClass: 'guard-disable-menu guard-filter-menu',
+      itemClass: 'guard-disable-option',
+      items: items,
+      checkedOf: function (value) {
+        var picked = pickedOf();
+        return value === ALL ? !picked : !!picked && picked.indexOf(value) >= 0;
+      },
+      onPick: function (value) {
+        onPick(toggled(pickedOf(), value));
+      },
+      watch: function () {
+        return document.getElementById(DASHBOARD_ID);
+      },
+    });
+    menu.sync();
+
+    trigger.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      menu.toggle();
+    });
+
+    return wrapper;
   }
 
   function searchBox() {
@@ -266,15 +291,28 @@
       'div',
       { class: 'guard-filters', attrs: { role: 'group', 'aria-label': 'Filter the guard log' } },
       searchBox(),
-      multiSelect('Category', categories, pickedCategories, function (picked) {
-        pickedCategories = picked;
-        pickedRules = null;
-        if (typeof D.repaintGuard === 'function') D.repaintGuard();
-      }),
-      multiSelect('Rule', rulesOfCategories(pickedCategories), pickedRules, function (picked) {
-        pickedRules = picked;
-        if (typeof D.repaintGuard === 'function') D.repaintGuard();
-      })
+      multiSelect(
+        'Category',
+        categories,
+        function () {
+          return pickedCategories;
+        },
+        function (picked) {
+          pickedCategories = picked;
+          if (typeof D.repaintGuard === 'function') D.repaintGuard();
+        }
+      ),
+      multiSelect(
+        'Rule',
+        rulesOfCategories(null),
+        function () {
+          return pickedRules;
+        },
+        function (picked) {
+          pickedRules = picked;
+          if (typeof D.repaintGuard === 'function') D.repaintGuard();
+        }
+      )
     );
   }
 

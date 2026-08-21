@@ -185,15 +185,29 @@
   ];
 
   CC.durationMenu = function (opts) {
+    return CC.pickMenu({
+      anchor: opts.anchor,
+      home: opts.home,
+      label: opts.label || 'Disable for',
+      watch: opts.watch,
+      items: CC.GUARD_DURATIONS.map(function (d) {
+        return { value: d.token, label: d.label };
+      }),
+      onPick: opts.onPick,
+    });
+  };
+
+  CC.pickMenu = function (opts) {
     var anchor = opts.anchor;
     var home = opts.home;
+    var checkable = !!opts.checkable;
     var options = [];
     var isOpen = false;
     var menu = document.createElement('div');
-    menu.className = 'guard-disable-menu';
+    menu.className = opts.menuClass || 'guard-disable-menu';
     menu.setAttribute('role', 'menu');
     menu.setAttribute('hidden', 'hidden');
-    menu.setAttribute('aria-label', opts.label || 'Disable for');
+    menu.setAttribute('aria-label', opts.label || 'Menu');
 
     function focusOption(at) {
       var target = options[(at + options.length) % options.length];
@@ -251,26 +265,40 @@
       focusOption(at < 0 ? (step > 0 ? 0 : options.length - 1) : at + step);
     });
 
-    CC.GUARD_DURATIONS.forEach(function (d) {
+    (opts.items || []).forEach(function (item) {
       var option = document.createElement('button');
-      option.className = 'guard-disable-option';
+      option.className = opts.itemClass || 'guard-disable-option';
       option.type = 'button';
-      option.setAttribute('role', 'menuitem');
-      option.textContent = d.label;
+      option.setAttribute('role', checkable ? 'menuitemcheckbox' : 'menuitem');
+      option.textContent = item.label;
+      if (checkable) option.setAttribute('aria-checked', item.checked ? 'true' : 'false');
       option.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        opts.onPick(d.token);
-        setOpen(false);
-        anchor.focus();
+        opts.onPick(item.value);
+        if (!checkable) {
+          setOpen(false);
+          anchor.focus();
+          return;
+        }
+        sync();
       });
       options.push(option);
       menu.appendChild(option);
     });
 
+    function sync() {
+      if (!checkable || typeof opts.checkedOf !== 'function') return;
+      options.forEach(function (option, index) {
+        var item = opts.items[index];
+        option.setAttribute('aria-checked', opts.checkedOf(item.value) ? 'true' : 'false');
+      });
+    }
+
     home.appendChild(menu);
     return {
       menu: menu,
+      sync: sync,
       toggle: function () {
         setOpen(!isOpen);
       },
