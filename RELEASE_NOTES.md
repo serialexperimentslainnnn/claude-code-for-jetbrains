@@ -1,10 +1,15 @@
-## v6.0.0 — 2026-08-20
+## v5.7.0 — 2026-08-21
 
-**Settings stop being shared between projects.** One settings document per project, per IDE
-installation: two repositories can disagree about the model, the permission mode or a security rule,
-and two IDEs on the same checkout keep their own. Nothing is lost on upgrade — a project with no
-settings of its own starts from the ones you already had. Your login stays global, and signing out no
-longer wipes your configuration along with your credentials.
+**The Sensitive Guard stops being invisible.** It keeps a log of every alert it raises — in the IDE's
+safe, per project — and there is now a Guard view in the chat's view row to read it: what matched,
+what the rule saw, the verdict, and what let the call through if anything did. Free-text search,
+multi-select filters by category and by rule, and a Whitelist button on any entry. How long entries
+are kept is a setting.
+
+**Guard rows survive reopening a chat.** They are the plugin's own rows and the binary's transcript
+has no record of them, so they are rebuilt from that log and anchored back to the call they judged.
+An alert a subagent earned is drawn in that agent's transcript, where the call happened, and not in
+the main one.
 
 **The guard gets a mode.** Enforcing refuses, Permissive asks on a card every time, Allow All lets
 the call run — and the choice is available per rule as well as for the guard as a whole. Rules are
@@ -20,25 +25,28 @@ three reaches: every rule, one category, or a single rule.
 back with one click. It is unlit whenever the guard is not deciding, so it never implies a protection
 that is not running.
 
-**When a rule matched and the call ran anyway, you get a row that says so** — which rule, what it
-saw, and what let it through — carrying the undo for whatever is still in force. A refusal no longer
-tells Claude to stop trying: it names the rule and says the decision is about that one call, because
-the old wording made the model generalise from a single block and give up for the rest of the
-session.
+**The detection rules see more than they did.** Privilege escalation is refused — `sudo`, `su`,
+`doas`, `pkexec` and their family, `runas`, `Start-Process -Verb RunAs`, `psexec`, `wsl -u root` —
+matched only where the payload executes, so a file documenting `sudo apt update` trips nothing.
+"Outside the project" now reads paths inside shell commands, not just a tool's own location argument,
+so `cat ~/notes.txt` no longer slips past a rule that `Read /home/you/notes.txt` would have stopped.
+Hex and reversed payloads are decoded before they are judged. Destructive orchestration covers
+OpenShift alongside `kubectl`, and recovery inhibition covers VSS and APFS snapshots.
 
-**The guard keeps a log of every alert it raises**, in the IDE's safe, per project, capped at the
-most recent 500. And guard rows now survive reopening a chat: they are the plugin's own rows, absent
-from the binary's transcript, so they are rebuilt from that log and anchored back to the call they
-belonged to.
+**A row that says so when a rule matched and the call ran anyway** — which rule, what it saw, and
+what let it through — carrying the undo for whatever is still in force. A refusal names the rule and
+says the decision is about that one call: the old wording made Claude generalise from a single block
+and give up for the rest of the session.
 
-**Privilege escalation is refused.** `sudo`, `su`, `doas`, `pkexec` and their family, `runas`,
-`Start-Process -Verb RunAs`, `psexec`, `wsl -u root`. Every other rule is scoped to what your account
-may already do; root is not. It matches at command position in a payload that executes, so a file
-documenting `sudo apt update` trips nothing.
+**Know what your dependencies are carrying.** A Vulnerabilities view checks the project's manifests
+against a public advisory database for known CVEs, filters by severity, and hands the findings to
+Claude to plan how to solve them — reading your code and checking current advisories first, rather
+than proposing a version bump on its own.
 
-**"Outside the project" now sees paths inside shell commands.** It only ever read them from a tool's
-own location argument, so `cat ~/notes.txt` was slipping past a rule that `Read /home/you/notes.txt`
-would have stopped — and the shell is where the work happens.
+**The Git view links out to the IDE's own.** The plugin's second client is gone: Overview opens the
+IDE's Pull Requests and Merge Requests windows, which already do that job better. And every view now
+redraws in place, so a filter, a scroll position or an open card survives the transcript refreshing
+underneath it.
 
 **Take your configuration with you.** Export settings… and Import settings… use one JSON file;
 Migrate from another IDE… copies straight from another JetBrains IDE on this machine — you pick the
@@ -47,9 +55,10 @@ exported file never carries your environment variables, because that is where an
 a file leaves the machine. A permission mode that would weaken security is refused on the way in.
 
 **Both settings pages were rebuilt to fit the window**, in titled groups instead of one column of
-forty rows, with every note re-wrapping as you resize. And Restore Plugin to default state now clears
-all four of this project's entries — settings, guard log, open-chat list and agent index — which is
-what it always claimed to do.
+forty rows, with every note re-wrapping as you resize. Settings are now per project and per IDE
+installation, so two repositories can disagree about the model, the permission mode or a security
+rule; nothing is lost on upgrade, your login stays global, and signing out no longer wipes your
+configuration along with your credentials.
 
 ## v5.5.0 — 2026-08-19
 

@@ -4,97 +4,68 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-08-20
+## [5.7.0] — 2026-08-21
 
-**Settings are no longer shared between projects.** Nothing is lost on upgrade: a project with no settings
-of its own starts from the ones you already had.
-
-### Changed
-- **One settings document per IDE installation, per project.** Two repositories can disagree about the
-  model, the permission mode or a security rule; two IDEs on one checkout keep their own.
-- **The login stays global**: sign-in, account, provider API keys, Git host tokens. `signedOut` moved out of
-  the settings document into its own keychain entry.
-- **Signing out no longer wipes your settings.** It cleared the configuration along with the credentials.
-- **Trust-on-open for a source script or stdio MCP server is stored in the keychain**, not in
-  `.idea/workspace.xml`. The previous answer is not carried over, so the prompt appears once more.
-- **The guard has a mode: Enforcing, Permissive or Allow All.** Enforcing refuses, Permissive asks on a card
-  every time, Allow All lets the call run. Rules take the first two and are Enforcing by default; the guard
-  as a whole takes all three.
-- **Both settings pages rebuilt, and they now fit the window.** Titled groups instead of one column of forty
-  rows, with Tools, MCP and Advanced folded away; every note is a comment under its own field and re-wraps as
-  you resize. Nothing scrolls sideways and nothing runs off the right edge any more.
-- **The security page shows all nine rule categories at once**, each a group you can fold, instead of one
-  category at a time behind a dropdown.
-- **Everything the plugin stores is now in the IDE's safe.** The open-chat list, the agent index and the
-  review-prompt counter were the last things it kept in the clear. The two files under
-  `~/.claude/ide/claude-code-native/` were shared by every IDE on the machine: each installation takes the
-  projects it knows, leaves the rest for whoever owns them, and the file is deleted once empty. A project
-  open in two IDEs has one entry, so the first to migrate takes it — the other restores its most recent
-  session once and then writes its own.
-- ***Restore Plugin to default state* now clears all four of this project's entries** — settings, guard alert
-  log, open-chat list and agent index. It cleared only the settings, which made its wording untrue.
+**The guard is now something you can see, tune and audit**, instead of a set of rules that only spoke up to
+refuse something.
 
 ### Added
+- **A Guard view in the chat's view row.** Every alert raised in this project: what matched, what the rule
+  saw, the verdict, and what let the call through if anything did. Free-text search, multi-select filters by
+  category and by rule, and a *Whitelist* button on any entry. Retention is configurable; capped at 500.
+- **The guard keeps its alerts in the IDE's password safe, per project** — which is what makes the view
+  above possible, and what puts the guard's rows back when you reopen a chat. Each row returns anchored to
+  the call it judged, and an alert raised inside an agent is drawn in that agent's transcript, not the main
+  one. An *Allow All* given on a card comes back without its undo link: that approval died with the IDE.
 - **A shield in the chat's button row**, left of auto-scroll: switches the guard to Allow All for a chosen
   duration, and back with one click. Unlit whenever the guard is not deciding.
-- **Settings ▸ Claude Code Security**, its own page: the guard's mode, a mode per rule with *All Enforcing*
-  / *All Permissive* per category, temporary suspensions shown and endable, extra credential globs, extra
-  blocked domains, and the whitelist.
-- **A warning row whenever a rule matched and the call ran anyway.** It names the rule, what the rule saw,
-  and what let it through, and carries **Enable Sensitive Guard** or **Disable this authorization** when
-  there is something still in force to undo.
-- **Whitelists at three reaches** — all rules, one category, one rule — edited as a list, with a category
-  dropdown and a rule dropdown under it, each carrying its own *All*. **Any rule can be whitelisted**,
-  credential and foreign-path rules included; those ask for confirmation first.
-- **Export, import and migrate.** *Export settings…* and *Import settings…* write and read one JSON file you
-  choose; *Migrate from another IDE…* copies straight from another JetBrains IDE on this machine — pick the
-  IDE, the projects, and whether you want the general settings, the guard's, or its alert history.
-  An exported file **never carries your environment variables**, because that is where an API key ends up
-  and a file leaves the machine; a keychain-to-keychain migration does carry them, because it does not.
-  A permission mode that would weaken security is refused on the way in, by either route.
+- **Settings ▸ Claude Code Security**, its own page: the guard's mode, a mode per rule with *All Enforcing* /
+  *All Permissive* per category, live suspensions you can end, extra credential globs, extra blocked domains,
+  and the whitelist at three reaches — all rules, one category, one rule. Any rule can be whitelisted;
+  credential and foreign-path rules ask for confirmation first.
+- **A warning row whenever a rule matched and the call ran anyway.** It names the rule, what it saw and what
+  let it through, and carries the link that undoes it — including **Remove from whitelist**, which takes the
+  command off whichever of the three lists is letting it through, narrowest first.
 - **A *Whitelist Command* link on a guard block**, beside *Disable rule*. Files the exact command under the
   rule that refused it, and will not add a duplicate.
-- **Restore buttons**: *Restore Plugin to default state* and *Restore Sensitive Guard settings to default*.
-  Both ask first, both are scoped to this project, and neither signs you out.
+- **A Vulnerabilities view.** Checks your project's dependencies against a public advisory database
+  (OSV.dev) for known CVEs, filters by severity, and hands the findings to Claude to plan how to solve
+  them — reading your code and checking current advisories first, not just bumping a version.
+- **Export, import and migrate settings**, including straight from another JetBrains IDE on this machine. An
+  exported file never carries your environment variables; a keychain-to-keychain migration does, because it
+  never leaves the machine. A permission mode that would weaken security is refused on the way in.
 
-- **The guard keeps a log of every alert it raises**, in the IDE's password safe, per project: what matched,
-  what it saw, the verdict, and what let the call through if anything did. Capped at the most recent 500.
-  Nothing shows it yet — it is the groundwork for a later feature, and it is what makes the next item work.
+### Changed
+- **Both settings pages rebuilt, and they now fit the window.** Titled groups instead of one column of forty
+  rows, with Tools, MCP and Advanced folded away; every note sits under its own field and re-wraps as you
+  resize. Nothing runs off the right edge any more.
+- **The guard has a mode: Enforcing, Permissive or Allow All.** Enforcing refuses, Permissive asks on a card
+  every time, Allow All lets the call run. Rules take the first two and are Enforcing by default.
+- **Settings are per project, per IDE installation.** Two repositories can disagree about the model, the
+  permission mode or a security rule. The login stays global, and signing out no longer wipes your settings.
+- ***Always allow this command* on a guard alert is per chat, and in memory.** It was written to the settings
+  document, so one conversation answered for every other one, for ever. Revocable from that chat's ⚙ menu.
+- **Every view redraws in place instead of from scratch**, so a filter, a scroll position or an open card
+  survives the transcript refreshing underneath it, and an agent's transcript no longer flickers as it runs.
+- **The branch graph draws to the full height of its row.** An `<svg>` is a replaced element, so a tall row —
+  uncommitted changes with its file list, a commit carrying several ref tags — had its edge stop short of
+  the next commit and its dot sat below the junction.
 
 ### Security
-- **Privilege escalation is refused.** `sudo`, `su`, `doas`, `pkexec`, `runuser`, `setpriv`, `run0` and the
-  desktop wrappers; `osascript` asking for administrator privileges; `runas`, `Start-Process -Verb RunAs`,
-  `psexec` and `wsl -u root`. Every other rule is scoped to what your account may already do; root is not.
-  Matched at command position in a payload that **executes**, so reading or writing a file that documents
-  `sudo apt update` trips nothing. Whitelistable, per command, for whoever needs one.
-- **The "outside the project" rule now sees paths inside shell commands.** It only ever read them from a
-  tool's own location argument, so `Read /home/you/notes.txt` was refused while `cat ~/notes.txt` was not —
-  and the shell is where the work happens. The documentation had promised both since 5.x.
-- **Declaring a path in a variable is not reaching it, but expanding it is.**
-  `JAVA_HOME=~/.jdks/jbr-21 ./gradlew check` passes; `OUT=/home/you/other; cat $OUT/log` does not.
+- **Privilege escalation is refused**: `sudo`, `su`, `doas`, `pkexec`, `runuser`, `setpriv`, `run0`, the
+  desktop wrappers, `osascript` asking for administrator privileges, `runas`,
+  `Start-Process -Verb RunAs`, `psexec`, `wsl -u root`. Matched only where the payload **executes**, so a
+  file that documents `sudo apt update` trips nothing. Whitelistable per command.
+- **The "outside the project" rule now sees paths inside shell commands.** It only ever read a tool's own
+  location argument, so `Read /home/you/notes.txt` was refused while `cat ~/notes.txt` was not — and the
+  shell is where the work happens.
+- **Obfuscated payloads are decoded before they are judged** — hex and reversed strings.
+- **Destructive orchestration covers OpenShift**: `oc delete project` alongside the `kubectl` equivalents.
+- **Recovery inhibition covers VSS and APFS snapshots.**
 - **A variable that decides which code runs is never an innocent declaration.** `PATH`, `LD_PRELOAD`,
-  `BASH_ENV`, `GIT_SSH_COMMAND` and their family are checked wherever they are set, so
-  `PATH=/somewhere/evil:$PATH git status` is refused.
+  `BASH_ENV`, `GIT_SSH_COMMAND` and their family are checked wherever they are set. Declaring a path is not
+  reaching it; expanding it is.
 - **System binaries and inert devices are not reaches**: `/usr/bin/git status` and `2>/dev/null` still run.
-  A real device is still refused, by the rule that owns it.
-
-### Fixed
-- **Guard rows survive restoring a session.** Reopening a chat brought the block and bypass rows back as
-  ordinary tool calls: they are the plugin's own rows and the binary's transcript has no record of them —
-  a refusal is a failed tool result with no rule name in it, and an allowed call looks like any other. They
-  are now rebuilt from the alert log and anchored back to the call they belonged to. An *Allow All* given on
-  a card comes back without its undo link, because that approval lived in memory and died with the IDE.
-- **A whitelisted bypass can be undone from the warning row**, with **Remove from whitelist** — it takes the
-  command off whichever of the three lists is letting it through, narrowest first.
-- **A block no longer tells Claude to stop trying.** The refusal ended with *do not retry it and do not
-  attempt another way*, and the model generalised from one block to the whole session and stopped working.
-  It now says which rule refused, why, and that the decision is about that call only.
-- ***Always allow this command* on a guard alert no longer persists.** It was written to the settings
-  document, so one conversation answered for every other one, for ever. It is per chat and in memory now,
-  revocable from that chat's ⚙ menu.
-- **The branch graph no longer breaks between rows.** Any row taller than 100px — uncommitted changes with
-  its file list, a commit carrying several ref tags — had its line stop short of the next commit, and its
-  dot sat off the junction.
 
 ## [5.5.0] — 2026-08-19
 
