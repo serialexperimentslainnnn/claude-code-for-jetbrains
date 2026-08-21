@@ -133,3 +133,8 @@ secrets.yaml
 !/docs/trust-chain.asc
 PROJECTMAP.md
 **/PROJECTMAP.md
+
+# Anchored, because this holds whole checkouts: an assistant working in isolated worktrees puts them
+# under .claude/worktrees/, and an unanchored pattern would also hide a real directory of that name
+# somewhere in the tree. Committing it would commit a copy of the repository into the repository.
+/.claude/
