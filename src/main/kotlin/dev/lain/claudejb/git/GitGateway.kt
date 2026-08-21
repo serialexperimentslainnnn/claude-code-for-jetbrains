@@ -1,5 +1,6 @@
 package dev.lain.claudejb.git
 
+import com.intellij.dvcs.repo.Repository
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.VcsException
@@ -12,7 +13,6 @@ import git4idea.repo.GitBranchTrackInfo
 import git4idea.repo.GitRemote
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
-import com.intellij.dvcs.repo.Repository
 import git4idea.repo.GitRepositoryManager
 
 internal object GitGateway {

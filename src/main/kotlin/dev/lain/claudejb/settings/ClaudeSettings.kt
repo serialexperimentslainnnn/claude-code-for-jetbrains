@@ -74,7 +74,7 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var guardDisabledUntil: Long = 0
 
-        @JvmField var guardLogRetentionDays: Int = 30
+        @JvmField var guardLogRetentionDays: Int = DEFAULT_GUARD_LOG_RETENTION_DAYS
 
         @JvmField var disabledSecurityRules: String = ""
 
@@ -250,6 +250,8 @@ class ClaudeSettings(internal val project: Project? = null) {
     fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean = toolName in alwaysAllow
 
     companion object {
+        const val DEFAULT_GUARD_LOG_RETENTION_DAYS = 30
+
         private const val FAKE_CLAUDE_PROP = "claudejb.fakeClaude"
 
         private val writes = AppExecutorUtil.createBoundedApplicationPoolExecutor("Claude Code settings", 1)

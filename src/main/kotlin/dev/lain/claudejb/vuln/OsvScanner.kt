@@ -34,8 +34,12 @@ internal class OsvScanner : VulnScanner {
             )
         }
 
+        return hydrate(affected.take(MAX_HYDRATED), listener, inventory.size)
+    }
+
+    private fun hydrate(components: List<VulnComponent>, listener: ScanListener, queried: Int): ScanAnswer {
         val findings = ArrayList<VulnFinding>()
-        for (component in affected.take(MAX_HYDRATED)) {
+        for (component in components) {
             if (listener.cancelled()) return ScanAnswer.Silent(ScanSilence.CANCELLED)
             val body = when (val answer = OsvHttp.post(URI.create(QUERY_ENDPOINT), queryBody(component))) {
                 is OsvAnswer.Silent -> return ScanAnswer.Silent(answer.reason)
@@ -43,11 +47,10 @@ internal class OsvScanner : VulnScanner {
             }
             findings += OsvReplies.findings(body, component) ?: return ScanAnswer.Silent(ScanSilence.MALFORMED)
         }
-
         return ScanAnswer.Known(
             VulnReport(
                 findings = findings,
-                queried = inventory.size,
+                queried = queried,
                 asOfMillis = System.currentTimeMillis(),
                 endpoint = VulnDisclosure.ENDPOINT,
             ),

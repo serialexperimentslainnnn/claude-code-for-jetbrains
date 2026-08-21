@@ -55,8 +55,12 @@ internal object VulnPromptedActions {
         if (lines.isEmpty()) return null
         val listed = lines.take(MAX_LISTED_FINDINGS)
         val omitted = lines.size - listed.size
-        val tail = if (omitted > 0) "\n\nThere are $omitted more the view did not fit; ask for them if the " +
-            "plan needs them." else ""
+        val tail = if (omitted > 0) {
+            "\n\nThere are $omitted more the view did not fit; ask for them if the " +
+                "plan needs them."
+        } else {
+            ""
+        }
         return "These dependencies of this project are reported as affected:\n\n" +
             listed.joinToString("\n") { "- $it" } + tail + "\n\n" + planInstructions()
     }
@@ -67,8 +71,12 @@ internal object VulnPromptedActions {
         val manifest = path(finding.component.manifest) ?: return null
         val advisory = token(finding.id, ADVISORY_ALLOWED) ?: return null
         val fixed = finding.fixedVersions.mapNotNull { token(it, VERSION_ALLOWED) }.take(MAX_LISTED_VERSIONS)
-        val patched = if (fixed.isEmpty()) "no patched version published" else "patched in " +
-            fixed.joinToString(", ") { "`$it`" }
+        val patched = if (fixed.isEmpty()) {
+            "no patched version published"
+        } else {
+            "patched in " +
+                fixed.joinToString(", ") { "`$it`" }
+        }
         return "`$name` `$version` in `$manifest` — `$advisory`, $patched"
     }
 
