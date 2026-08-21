@@ -95,6 +95,16 @@ class GuardRestoreTest {
     }
 
     @Test
+    fun `an alert the guard marked as an agent's never comes back to this chat`() {
+        val alerts = listOf(alert(GuardAlert.DENIED, toolUseId = "tu_gone").copy(inAgent = true))
+
+        assertTrue(
+            GuardRestore.raisedInThisChat(listOf(toolRow("tu_1")), alerts).isEmpty(),
+            "the guard knew whose call it was when it fired; nothing here has to guess it back",
+        )
+    }
+
+    @Test
     fun `an alert this chat earned itself is still its own`() {
         val dtos = listOf(
             toolRow("tu_1"),

@@ -405,16 +405,17 @@ class ClaudeSession(
                         )
                     }
                     fireAttention(AttentionReason.GUARD_BLOCKED, landing)
+                    recordAlert(
+                        GuardAlert.DENIED,
+                        denial.rule,
+                        denial.toolName,
+                        command = denial.command,
+                        toolUseId = denial.toolUseId,
+                        detail = denial.detail,
+                        inAgent = landing != AttentionLanding.Chat,
+                    )
+                    fireState()
                 }
-                recordAlert(
-                    GuardAlert.DENIED,
-                    denial.rule,
-                    denial.toolName,
-                    command = denial.command,
-                    toolUseId = denial.toolUseId,
-                    detail = denial.detail,
-                )
-                fireState()
             },
             onSensitiveBypassed = { bypass ->
                 val offer = bypass.action ?: if (ClaudeSettings.getInstance(project).guardSuspended()) {
@@ -430,15 +431,18 @@ class ClaudeSession(
                     bypass.command,
                     bypass.toolUseId,
                 )
-                recordAlert(
-                    GuardAlert.ALLOWED,
-                    bypass.rule,
-                    bypass.toolName,
-                    via = offer,
-                    command = bypass.command,
-                    toolUseId = bypass.toolUseId,
-                    detail = bypass.detail,
-                )
+                edt {
+                    recordAlert(
+                        GuardAlert.ALLOWED,
+                        bypass.rule,
+                        bypass.toolName,
+                        via = offer,
+                        command = bypass.command,
+                        toolUseId = bypass.toolUseId,
+                        detail = bypass.detail,
+                        inAgent = guardLandingOf(bypass.toolUseId) != AttentionLanding.Chat,
+                    )
+                }
             },
         )
     }
@@ -833,6 +837,7 @@ class ClaudeSession(
         command: String? = null,
         toolUseId: String? = null,
         detail: String? = null,
+        inAgent: Boolean = false,
     ) {
         val matched = rule ?: return
         val settings = ClaudeSettings.getInstance(project)
@@ -847,6 +852,7 @@ class ClaudeSession(
             tool = toolName,
             detail = detail,
             command = command,
+            inAgent = inAgent,
         )
         guardAlerts += alert
         val submitted = GuardAlertLog.record(settings.scope, alert, retentionDays = settings.state.guardLogRetentionDays)

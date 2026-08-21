@@ -17,6 +17,7 @@ data class GuardAlert(
     val tool: String? = null,
     val detail: String? = null,
     val command: String? = null,
+    val inAgent: Boolean = false,
 ) {
     companion object {
         const val DENIED = "DENIED"

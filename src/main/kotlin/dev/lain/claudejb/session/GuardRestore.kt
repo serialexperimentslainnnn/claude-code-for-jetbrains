@@ -8,8 +8,7 @@ object GuardRestore {
 
     fun raisedInThisChat(dtos: List<EntryDTO>, alerts: List<GuardAlert>): List<GuardAlert> {
         val nested = dtos.filter { it.parentToolUseId != null }.mapNotNullTo(HashSet()) { it.toolUseId }
-        if (nested.isEmpty()) return alerts
-        return alerts.filterNot { it.toolUseId in nested }
+        return alerts.filterNot { it.inAgent || it.toolUseId in nested }
     }
 
     fun reinstate(dtos: List<EntryDTO>, alerts: List<GuardAlert>): List<EntryDTO> {
