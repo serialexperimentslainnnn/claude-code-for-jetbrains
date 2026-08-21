@@ -1,7 +1,7 @@
 package dev.lain.claudejb.vuln
 
 import com.intellij.openapi.diagnostic.logger
-import dev.lain.claudejb.forge.ForgeHttp
+import dev.lain.claudejb.util.PluginIdentity
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -53,7 +53,7 @@ internal object OsvHttp {
         if (!uri.scheme.equals("https", ignoreCase = true)) return OsvAnswer.Silent(ScanSilence.REFUSED)
         val request = builder
             .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
-            .header("User-Agent", ForgeHttp.USER_AGENT)
+            .header("User-Agent", PluginIdentity.USER_AGENT)
             .header("Accept", "application/json")
             .build()
 
