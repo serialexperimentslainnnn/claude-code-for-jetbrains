@@ -629,6 +629,13 @@ kover {
                 // must run against a real platform (PluginId is a Kotlin class since 2025.2, so the naive call
                 // dies with NoSuchFieldError below 252) — which is also why a unit test cannot exercise it.
                 classes("dev.lain.claudejb.util.*")
+                // The vulnerability view's two platform-bound halves, excluded on the same grounds as
+                // `process.*` and `ui.*` above and NOT as a blanket on the package: `OsvHttp` is a java.net.http
+                // wrapper whose every branch needs a live socket, and `VulnService` is a project `@Service` that
+                // needs a Project, the pooled thread and the EDT. `OsvScanner` is deliberately NOT excluded —
+                // it talks to OsvHttp through a plain call and its gap is real debt, so it stays gated and
+                // visible rather than being defined out of the measurement.
+                classes("dev.lain.claudejb.vuln.OsvHttp*", "dev.lain.claudejb.vuln.VulnService*")
             }
         }
         verify {
