@@ -193,7 +193,7 @@ describe('the Guard view', () => {
   it('offers to ask Claude about a blocked entry, and sends the id the host gave it', () => {
     openView('guard');
     win.cc.guard(PAYLOAD());
-    const ask = entries()[0].querySelector('.guard-ask');
+    const ask = entries()[0].querySelector('.guard-ask:not(.guard-whitelist)');
     expect(ask.tagName).toBe('BUTTON');
     ask.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
 
@@ -204,7 +204,7 @@ describe('the Guard view', () => {
     openView('guard');
     win.cc.guard(PAYLOAD());
     tabs()[1].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-    expect(entries()[0].querySelector('.guard-ask')).toBeNull();
+    expect(entries()[0].querySelector('.guard-ask:not(.guard-whitelist)')).toBeNull();
   });
 
   it('paints the verdict word the host sent and derives none of its own', () => {
