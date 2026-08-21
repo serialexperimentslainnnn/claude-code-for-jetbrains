@@ -13,6 +13,8 @@ internal object GitHubApi : ForgeApi {
 
     private const val PULL_REQUEST_LIMIT = 20
 
+    private const val RUN_LIMIT = 20
+
     private val IN_FLIGHT = setOf("queued", "in_progress", "waiting", "requested", "pending")
 
     private val NOT_FAILING = setOf("success", "neutral")
@@ -30,11 +32,11 @@ internal object GitHubApi : ForgeApi {
             headers(token),
         )
 
-    override fun latestRun(repo: ForgeRepo, branch: String, token: String): ForgeRequest =
+    override fun runs(repo: ForgeRepo, branch: String, token: String): ForgeRequest =
         ForgeRequest(
             URI.create(
                 "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}/actions/runs" +
-                    "?branch=${queryValue(branch)}&per_page=1",
+                    "?branch=${queryValue(branch)}&per_page=$RUN_LIMIT",
             ),
             headers(token),
         )
@@ -42,8 +44,8 @@ internal object GitHubApi : ForgeApi {
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GhPull.serializer())) { pulls -> pulls.map { it.toModel() } }
 
-    override fun parseLatestRun(body: String): ForgeAnswer<ForgeRun?> =
-        decodeForge(body, GhRuns.serializer()) { runs -> runs.workflowRuns.firstOrNull()?.toModel() }
+    override fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>> =
+        decodeForge(body, GhRuns.serializer()) { runs -> runs.workflowRuns.mapNotNull { it.toModel() } }
 
     private fun base(host: String): String =
         if (host.equals(DOT_COM, ignoreCase = true)) "https://api.github.com" else "https://$host/api/v3"

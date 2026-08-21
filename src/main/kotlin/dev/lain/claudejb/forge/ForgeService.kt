@@ -15,11 +15,11 @@ object ForgeService {
         }
     }
 
-    fun lastRun(repo: ForgeRepo, branch: String): ForgeAnswer<ForgeRun?> {
+    fun runs(repo: ForgeRepo, branch: String): ForgeAnswer<List<ForgeRun>> {
         val api = apiFor(repo.provider)
-        return when (val body = fetch(repo, branch, api::latestRun)) {
+        return when (val body = fetch(repo, branch, api::runs)) {
             is ForgeAnswer.Silent -> body
-            is ForgeAnswer.Known -> api.parseLatestRun(body.value)
+            is ForgeAnswer.Known -> api.parseRuns(body.value)
         }
     }
 

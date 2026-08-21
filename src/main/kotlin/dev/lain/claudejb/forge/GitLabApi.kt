@@ -9,6 +9,8 @@ internal object GitLabApi : ForgeApi {
 
     private const val MERGE_REQUEST_LIMIT = 20
 
+    private const val PIPELINE_LIMIT = 20
+
     private val IN_FLIGHT = setOf(
         "created",
         "waiting_for_resource",
@@ -31,11 +33,11 @@ internal object GitLabApi : ForgeApi {
             headers(token),
         )
 
-    override fun latestRun(repo: ForgeRepo, branch: String, token: String): ForgeRequest =
+    override fun runs(repo: ForgeRepo, branch: String, token: String): ForgeRequest =
         ForgeRequest(
             URI.create(
                 "${base(repo.host)}/projects/${pathSegment(repo.path)}/pipelines" +
-                    "?ref=${queryValue(branch)}&per_page=1",
+                    "?ref=${queryValue(branch)}&per_page=$PIPELINE_LIMIT",
             ),
             headers(token),
         )
@@ -43,8 +45,8 @@ internal object GitLabApi : ForgeApi {
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GlMergeRequest.serializer())) { mrs -> mrs.map { it.toModel() } }
 
-    override fun parseLatestRun(body: String): ForgeAnswer<ForgeRun?> =
-        decodeForge(body, ListSerializer(GlPipeline.serializer())) { page -> page.firstOrNull()?.toModel() }
+    override fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>> =
+        decodeForge(body, ListSerializer(GlPipeline.serializer())) { page -> page.mapNotNull { it.toModel() } }
 
     private fun base(host: String): String = "https://$host/api/v4"
 

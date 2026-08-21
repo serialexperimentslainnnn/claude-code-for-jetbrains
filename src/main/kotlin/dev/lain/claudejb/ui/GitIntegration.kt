@@ -104,6 +104,7 @@ internal class GitIntegration(private val project: Project) {
         val changes = history.workingTreeChanges()
         val branch = history.currentBranch()
         val forge = forgeRepo(history)
+        val runs = forge.drawable(branch) { repo, on -> ForgeService.runs(repo, on) }
         return JcefGitData.Snapshot(
             available = true,
             repo = JcefGitData.Repo(
@@ -119,7 +120,9 @@ internal class GitIntegration(private val project: Project) {
             actionStates = states.toMap(),
             topology = history.branchTopology(),
             pullRequests = forge.drawable(branch) { repo, on -> ForgeService.openPullRequests(repo, on) },
-            lastRun = forge.drawable(branch) { repo, on -> ForgeService.lastRun(repo, on) },
+            runs = runs,
+            lastRun = runs?.firstOrNull(),
+            forgeConfigured = forge != null,
         )
     }
 

@@ -27,9 +27,9 @@ class ForgeSecrecyTest {
     fun `no URL this package builds carries the token`() {
         val urls = listOf(
             GitHubApi.pullRequests(github, "main", token).uri,
-            GitHubApi.latestRun(github, "main", token).uri,
+            GitHubApi.runs(github, "main", token).uri,
             GitLabApi.pullRequests(gitlab, "main", token).uri,
-            GitLabApi.latestRun(gitlab, "main", token).uri,
+            GitLabApi.runs(gitlab, "main", token).uri,
         )
 
         urls.forEach { uri -> assertFalse(token in uri.toString()) { "token in the URL: $uri" } }

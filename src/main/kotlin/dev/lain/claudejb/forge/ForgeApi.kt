@@ -15,11 +15,11 @@ internal interface ForgeApi {
 
     fun pullRequests(repo: ForgeRepo, branch: String, token: String): ForgeRequest
 
-    fun latestRun(repo: ForgeRepo, branch: String, token: String): ForgeRequest
+    fun runs(repo: ForgeRepo, branch: String, token: String): ForgeRequest
 
     fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>>
 
-    fun parseLatestRun(body: String): ForgeAnswer<ForgeRun?>
+    fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>>
 }
 
 internal fun apiFor(provider: ForgeProvider): ForgeApi = when (provider) {

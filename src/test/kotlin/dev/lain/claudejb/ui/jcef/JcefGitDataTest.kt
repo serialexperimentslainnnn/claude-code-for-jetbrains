@@ -1,5 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
+import dev.lain.claudejb.forge.ForgeRun
+import dev.lain.claudejb.forge.ForgeRunStatus
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitRefInfo
 import dev.lain.claudejb.git.GitRefKind
@@ -64,6 +66,33 @@ class JcefGitDataTest {
 
     private fun noRepo() = JcefGitData.Snapshot(available = true, repo = JcefGitData.Repo(present = false))
 
+    @Test
+    fun `an unconfigured forge says so instead of leaving the tabs to guess`() {
+        val forge = JcefGitData.gitJson(populated(), nowMillis = 0L)!!["forge"]!!.jsonObject
+
+        assertFalse(forge["configured"]!!.jsonPrimitive.boolean)
+        assertFalse(forge["answered"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test
+    fun `a configured forge that answered carries every run, not just the newest`() {
+        val snapshot = populated().copy(
+            forgeConfigured = true,
+            runs = listOf(
+                ForgeRun(name = "Second", status = ForgeRunStatus.RUNNING, url = "https://h/2", finishedAtIso = null),
+                ForgeRun(name = "First", status = ForgeRunStatus.FAILED, url = "https://h/1", finishedAtIso = "x"),
+            ),
+        )
+
+        val git = JcefGitData.gitJson(snapshot, nowMillis = 0L)!!
+        val forge = git["forge"]!!.jsonObject
+
+        assertTrue(forge["configured"]!!.jsonPrimitive.boolean)
+        assertTrue(forge["answered"]!!.jsonPrimitive.boolean)
+        assertEquals(2, git["runs"]!!.jsonArray.size)
+        assertEquals("Second", git["runs"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
     private fun idsOf(git: JsonObject): List<String> =
         git["actions"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content }
 
@@ -72,7 +101,10 @@ class JcefGitDataTest {
         val git = JcefGitData.gitJson(populated(), nowMillis = 1_500_000L)!!
 
         assertEquals(
-            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
+            setOf(
+                "available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology",
+                "forge",
+            ),
             git.keys,
         )
         assertTrue(git["available"]!!.jsonPrimitive.boolean)
@@ -196,7 +228,10 @@ class JcefGitDataTest {
         assertTrue(git["changes"]!!.jsonArray.isEmpty())
         assertTrue(git["commits"]!!.jsonArray.isEmpty())
         assertEquals(
-            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
+            setOf(
+                "available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology",
+                "forge",
+            ),
             git.keys,
         )
     }

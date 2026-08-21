@@ -18,10 +18,10 @@ class GitHubApiTest {
     }
 
     @Test
-    fun `the runs URL asks for one page of one, newest first by the API's own default`() {
+    fun `the runs URL asks for a page of runs, newest first by the API's own default`() {
         assertEquals(
-            "https://api.github.com/repos/acme/widget/actions/runs?branch=feature%2Fx&per_page=1",
-            GitHubApi.latestRun(repo, "feature/x", "t").uri.toString(),
+            "https://api.github.com/repos/acme/widget/actions/runs?branch=feature%2Fx&per_page=20",
+            GitHubApi.runs(repo, "feature/x", "t").uri.toString(),
         )
     }
 
@@ -29,7 +29,7 @@ class GitHubApiTest {
     fun `an enterprise host goes through its own api v3 base`() {
         val ghe = repo.copy(host = "github.acme.example")
         assertTrue(
-            GitHubApi.latestRun(ghe, "main", "t").uri.toString()
+            GitHubApi.runs(ghe, "main", "t").uri.toString()
                 .startsWith("https://github.acme.example/api/v3/repos/acme/widget/"),
         )
     }
@@ -113,20 +113,20 @@ class GitHubApiTest {
     @Test
     fun `no runs at all is a real answer, distinct from a silence`() {
         assertEquals(
-            ForgeAnswer.Known(null),
-            GitHubApi.parseLatestRun("""{"total_count": 0, "workflow_runs": []}"""),
+            ForgeAnswer.Known(emptyList<ForgeRun>()),
+            GitHubApi.parseRuns("""{"total_count": 0, "workflow_runs": []}"""),
         )
     }
 
     @Test
     fun `the run reply is an envelope, not a bare array`() {
-        assertEquals(ForgeAnswer.Silent(ForgeSilence.MALFORMED), GitHubApi.parseLatestRun("""[{"id": 1}]"""))
+        assertEquals(ForgeAnswer.Silent(ForgeSilence.MALFORMED), GitHubApi.parseRuns("""[{"id": 1}]"""))
     }
 
     private fun runFrom(status: String, conclusion: String?): ForgeRun? {
         val conclusionField = conclusion?.let { """"$it"""" } ?: "null"
         return known(
-            GitHubApi.parseLatestRun(
+            GitHubApi.parseRuns(
                 """
                 {"total_count": 7, "workflow_runs": [
                   {"id": 900, "name": "CI", "status": "$status", "conclusion": $conclusionField,
@@ -136,7 +136,7 @@ class GitHubApiTest {
                 ]}
                 """.trimIndent(),
             ),
-        )
+        ).firstOrNull()
     }
 
     private companion object {

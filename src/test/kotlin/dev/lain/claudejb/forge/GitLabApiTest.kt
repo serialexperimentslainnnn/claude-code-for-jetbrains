@@ -19,10 +19,10 @@ class GitLabApiTest {
     }
 
     @Test
-    fun `the pipelines URL asks for one page of one on the branch`() {
+    fun `the pipelines URL asks for a page of runs on the branch`() {
         assertEquals(
-            "https://gitlab.com/api/v4/projects/platform%2Fbackend%2Fsvc/pipelines?ref=main&per_page=1",
-            GitLabApi.latestRun(repo, "main", "t").uri.toString(),
+            "https://gitlab.com/api/v4/projects/platform%2Fbackend%2Fsvc/pipelines?ref=main&per_page=20",
+            GitLabApi.runs(repo, "main", "t").uri.toString(),
         )
     }
 
@@ -30,7 +30,7 @@ class GitLabApiTest {
     fun `a self-managed host is the same v4 base under a different name`() {
         val onPrem = repo.copy(host = "git.acme.example")
         assertTrue(
-            GitLabApi.latestRun(onPrem, "main", "t").uri.toString()
+            GitLabApi.runs(onPrem, "main", "t").uri.toString()
                 .startsWith("https://git.acme.example/api/v4/projects/"),
         )
     }
@@ -38,7 +38,7 @@ class GitLabApiTest {
     @Test
     fun `every GitLab request names the client, as the GitHub ones already did`() {
         assertEquals(ForgeHttp.USER_AGENT, GitLabApi.pullRequests(repo, "main", "t").headers["User-Agent"])
-        assertEquals(ForgeHttp.USER_AGENT, GitLabApi.latestRun(repo, "main", "t").headers["User-Agent"])
+        assertEquals(ForgeHttp.USER_AGENT, GitLabApi.runs(repo, "main", "t").headers["User-Agent"])
     }
 
     @Test
@@ -104,11 +104,30 @@ class GitLabApiTest {
 
     @Test
     fun `no pipeline at all is a real answer, distinct from a silence`() {
-        assertEquals(ForgeAnswer.Known(null), GitLabApi.parseLatestRun("[]"))
+        assertEquals(ForgeAnswer.Known(emptyList<ForgeRun>()), GitLabApi.parseRuns("[]"))
+    }
+
+    @Test
+    fun `a page of pipelines keeps every run it can place, newest first`() {
+        val runs = known(
+            GitLabApi.parseRuns(
+                """
+                [{"status": "running", "name": "Second", "web_url": "https://gitlab.com/p/-/pipelines/501",
+                  "updated_at": "2026-08-17T10:00:00.000Z"},
+                 {"status": "hibernating", "name": "Unknown", "web_url": "https://gitlab.com/p/-/pipelines/499"},
+                 {"status": "failed", "name": "First", "web_url": "https://gitlab.com/p/-/pipelines/498",
+                  "updated_at": "2026-08-17T08:00:00.000Z"}]
+                """.trimIndent(),
+            ),
+        )
+
+        assertEquals(2, runs.size)
+        assertEquals("Second", runs[0].name)
+        assertEquals(ForgeRunStatus.FAILED, runs[1].status)
     }
 
     private fun pipelineFrom(status: String): ForgeRun? = known(
-        GitLabApi.parseLatestRun(
+        GitLabApi.parseRuns(
             """
             [{"id": 500, "iid": 12, "project_id": 3, "sha": "cf73e32", "ref": "feature/x",
               "status": "$status", "source": "push", "name": "Build pipeline",
@@ -116,7 +135,7 @@ class GitLabApiTest {
               "created_at": "2026-08-17T09:20:00.000Z", "updated_at": "2026-08-17T09:31:02.000Z"}]
             """.trimIndent(),
         ),
-    )
+    ).firstOrNull()
 
     private companion object {
 

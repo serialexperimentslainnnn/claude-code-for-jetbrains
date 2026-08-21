@@ -28,13 +28,13 @@ class ForgeServiceTest {
             ForgeAnswer.Silent(ForgeSilence.NO_TOKEN),
             ForgeService.openPullRequests(github, "main"),
         )
-        assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_TOKEN), ForgeService.lastRun(github, "main"))
+        assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_TOKEN), ForgeService.runs(github, "main"))
     }
 
     @Test
     fun `a detached head has no branch to ask about`() {
         assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_BRANCH), ForgeService.openPullRequests(github, ""))
-        assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_BRANCH), ForgeService.lastRun(github, "   "))
+        assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_BRANCH), ForgeService.runs(github, "   "))
     }
 
     @Test
@@ -66,7 +66,7 @@ class ForgeServiceTest {
     fun `the host gate runs before the token gate, which is what keeps a bad host off the network`() {
         assertEquals(
             ForgeAnswer.Silent(ForgeSilence.UNSUPPORTED_HOST),
-            ForgeService.lastRun(github.copy(host = "not a host"), "main"),
+            ForgeService.runs(github.copy(host = "not a host"), "main"),
         )
     }
 }

@@ -42,7 +42,9 @@ object JcefGitData {
         val actionStates: Map<String, ActionState> = emptyMap(),
         val topology: GitBranchTopology = GitBranchTopology.NONE,
         val pullRequests: List<ForgePullRequest>? = null,
+        val runs: List<ForgeRun>? = null,
         val lastRun: ForgeRun? = null,
+        val forgeConfigured: Boolean = false,
     )
 
     fun gitJson(snapshot: Snapshot?, nowMillis: Long = System.currentTimeMillis()): JsonObject? {
@@ -58,7 +60,9 @@ object JcefGitData {
             put("commitActions", commitActionsJson())
             put("topology", topologyJson(snapshot.topology))
             snapshot.pullRequests?.let { put("pullRequests", pullRequestsJson(it)) }
+            snapshot.runs?.let { put("runs", buildJsonArray { it.forEach { run -> add(runJson(run)) } }) }
             snapshot.lastRun?.let { put("lastRun", runJson(it)) }
+            put("forge", forgeStateJson(snapshot))
         }
     }
 
@@ -81,6 +85,11 @@ object JcefGitData {
                 put("author", pull.author)
             }
         }
+    }
+
+    private fun forgeStateJson(snapshot: Snapshot): JsonObject = buildJsonObject {
+        put("configured", snapshot.forgeConfigured)
+        put("answered", snapshot.pullRequests != null || snapshot.runs != null)
     }
 
     private fun runJson(run: ForgeRun): JsonObject = buildJsonObject {
