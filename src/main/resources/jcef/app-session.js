@@ -198,7 +198,7 @@
       },
     },
     security: {
-      title: 'Security',
+      title: 'Vulnerabilities',
       empty: 'No dependency manifest this build can read was found in this project.',
       cards: function (s) {
         return typeof D.buildVulnCards === 'function' ? D.buildVulnCards(s.vuln) : [];
@@ -300,7 +300,7 @@
     planBtn.hidden = true;
     gitBtn = viewButton('Git', 'git');
     gitBtn.hidden = true;
-    vulnBtn = viewButton('Security', 'security');
+    vulnBtn = viewButton('Vulnerabilities', 'security');
     vulnBtn.hidden = true;
     var stack = h(
       'div',

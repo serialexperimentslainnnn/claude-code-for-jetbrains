@@ -13,7 +13,7 @@ class GitActionCatalogTest {
     @Test
     fun `the catalogue is exactly these actions, in this order`() {
         assertEquals(
-            listOf("init", "commit", "revertFile") + COMMIT_IDS + IDE_IDS,
+            listOf("init", "commit", "revertFile") + COMMIT_IDS + HOST_IDS + IDE_IDS,
             GitActionCatalog.ACTIONS.map { it.id },
             "an id is what the page sends back — renaming one silently unwires its button",
         )
@@ -48,6 +48,18 @@ class GitActionCatalogTest {
         assertTrue("resolveConflicts" !in bare, "no conflicts, no button to resolve them")
         assertTrue("pushUnpushed" !in bare, "nothing ahead of the remote, nothing to push")
         assertTrue("unstashDrop" !in bare, "an empty stash offers nothing to bring back")
+    }
+
+    @Test
+    fun `the shortcuts into the IDE are answered by the host, not by an action id`() {
+        HOST_IDS.forEach { id ->
+            val action = GitActionCatalog.byId(id)
+
+            assertNotNull(action, "$id is expected in the catalogue")
+            assertEquals(Kind.HOST, action!!.kind, "$id opens a window of the IDE's, it does not invoke an action")
+            assertNull(action.ideActionId, "an id here would have to exist in every IDE this ships to")
+            assertEquals(GitActionCatalog.Requires.REPO, action.requires)
+        }
     }
 
     @Test
@@ -249,7 +261,7 @@ class GitActionCatalogTest {
     }
 
     private fun ideFor(vararg on: String): List<String> =
-        IDE_IDS.filter { id -> CONDITIONAL_IDE_IDS[id]?.let { it in on } ?: true }
+        HOST_IDS + IDE_IDS.filter { id -> CONDITIONAL_IDE_IDS[id]?.let { it in on } ?: true }
 
     private fun applicable(hasRepo: Boolean, hasChanges: Boolean, hasChangedFile: Boolean): List<String> =
         GitActionCatalog.applicable(
@@ -263,6 +275,8 @@ class GitActionCatalogTest {
 
     private companion object {
         val COMMIT_IDS = listOf("commitDiff", "commitCopyHash", "commitRevertToBranch", "commitRevert")
+
+        val HOST_IDS = listOf("forgeView", "gitLog")
 
         val IDE_IDS = listOf(
             "branches",

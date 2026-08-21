@@ -28,6 +28,7 @@ import dev.lain.claudejb.forge.ForgeProvider
 import dev.lain.claudejb.forge.ForgeRepo
 import dev.lain.claudejb.forge.ForgeService
 import dev.lain.claudejb.forge.ForgeTokens
+import dev.lain.claudejb.git.ForgeViewNavigator
 import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitHistoryService
@@ -256,6 +257,10 @@ internal class GitIntegration(private val project: Project) {
 
             COMMIT_DIFF -> GitLogNavigator.showCommit(project, hash)
 
+            FORGE_VIEW -> ForgeViewNavigator.open(project)
+
+            GIT_LOG -> GitLogNavigator.showLog(project)
+
             else -> {
                 LOG.warn("No host action is wired for Git action '${action.id}'")
                 false
@@ -351,6 +356,8 @@ internal class GitIntegration(private val project: Project) {
 
         const val COMMIT_DIFF = "commitDiff"
         const val COMMIT_COPY_HASH = "commitCopyHash"
+        const val FORGE_VIEW = "forgeView"
+        const val GIT_LOG = "gitLog"
         const val COMMIT_REVERT_TO_BRANCH = "commitRevertToBranch"
         const val COMMIT_REVERT = "commitRevert"
 
