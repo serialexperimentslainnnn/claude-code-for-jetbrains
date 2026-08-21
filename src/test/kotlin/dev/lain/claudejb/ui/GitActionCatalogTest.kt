@@ -20,34 +20,21 @@ class GitActionCatalogTest {
     }
 
     @Test
-    fun `an action that runs without the IDE asking first carries its own warning`() {
-        val silent = GitActionCatalog.ACTIONS.filter { it.warning != null }.map { it.id }
-
-        assertEquals(
-            listOf("rollback", "resetHead"),
-            silent,
-            "these two throw work away without a dialogue of the IDE's own to stop them",
-        )
-    }
-
-    @Test
     fun `a conditional entry names the state it needs, so it cannot be offered on a whim`() {
         fun requires(id: String) = GitActionCatalog.byId(id)?.requires
 
-        assertEquals(GitActionCatalog.Requires.CONFLICTS, requires("resolveConflicts"))
-        assertEquals(GitActionCatalog.Requires.UNPUSHED, requires("pushUnpushed"))
-        assertEquals(GitActionCatalog.Requires.STASHED, requires("unstashDrop"))
-        assertEquals(GitActionCatalog.Requires.CHANGES, requires("rollback"))
-        assertEquals(GitActionCatalog.Requires.CHANGED_FILE, requires("annotate"))
+        assertEquals(GitActionCatalog.Requires.CHANGES, requires("commit"))
+        assertEquals(GitActionCatalog.Requires.CHANGED_FILE, requires("revertFile"))
+        assertEquals(GitActionCatalog.Requires.NO_REPO, requires("init"))
     }
 
     @Test
     fun `nothing conditional is offered on a repository that reports none of it`() {
         val bare = GitActionCatalog.applicable(GitActionCatalog.RepoState(hasRepo = true)).map { it.id }
 
-        assertTrue("resolveConflicts" !in bare, "no conflicts, no button to resolve them")
-        assertTrue("pushUnpushed" !in bare, "nothing ahead of the remote, nothing to push")
-        assertTrue("unstashDrop" !in bare, "an empty stash offers nothing to bring back")
+        assertTrue("commit" !in bare, "no changes, nothing to commit")
+        assertTrue("revertFile" !in bare, "no changed file open, nothing to revert")
+        assertTrue("init" !in bare, "the repository already exists")
     }
 
     @Test
@@ -92,7 +79,7 @@ class GitActionCatalogTest {
     @Test
     fun `the IDE entries fall into the blocks the submenu draws dividers between`() {
         assertEquals(
-            listOf("pull", "merge", "stash", "commitDialog"),
+            listOf("pull", "merge"),
             GitActionCatalog.ideActions().filter { it.startsBlock }.map { it.id },
             "the first entry never opens a block, or the submenu would start with a divider",
         )
@@ -145,13 +132,15 @@ class GitActionCatalogTest {
     }
 
     @Test
-    fun `the two reads are answered by the host and the two writes by the agent`() {
+    fun `the two reads are answered by the host and every write by the agent`() {
         assertEquals(
             mapOf(
                 "commitDiff" to Kind.HOST,
                 "commitCopyHash" to Kind.HOST,
                 "commitRevertToBranch" to Kind.PROMPT,
                 "commitRevert" to Kind.PROMPT,
+                "commitBranch" to Kind.PROMPT,
+                "commitTag" to Kind.PROMPT,
             ),
             GitActionCatalog.commitActions().associate { it.id to it.kind },
             "a write that stopped being PROMPT would stop arriving as an approval card",
@@ -269,68 +258,39 @@ class GitActionCatalogTest {
                 hasRepo = hasRepo,
                 hasChanges = hasChanges,
                 hasChangedFile = hasChangedFile,
-                hasStash = hasRepo,
             ),
         ).map { it.id }
 
     private companion object {
-        val COMMIT_IDS = listOf("commitDiff", "commitCopyHash", "commitRevertToBranch", "commitRevert")
+        val COMMIT_IDS = listOf(
+            "commitDiff",
+            "commitCopyHash",
+            "commitRevertToBranch",
+            "commitRevert",
+            "commitBranch",
+            "commitTag",
+        )
 
         val HOST_IDS = listOf("forgeView", "gitLog")
 
         val IDE_IDS = listOf(
             "branches",
-            "newBranch",
             "pull",
             "fetch",
             "push",
             "merge",
             "rebase",
-            "stash",
-            "unstash",
-            "commitDialog",
-            "resolveConflicts",
-            "rollback",
-            "unstashDrop",
-            "compareWithBranch",
-            "tag",
-            "resetHead",
-            "remotes",
-            "pushUnpushed",
-            "fileHistory",
-            "annotate",
         )
 
-        val CONDITIONAL_IDE_IDS = mapOf(
-            "resolveConflicts" to "conflicts",
-            "rollback" to "changes",
-            "unstashDrop" to "stash",
-            "pushUnpushed" to "unpushed",
-            "fileHistory" to "file",
-            "annotate" to "file",
-        )
+        val CONDITIONAL_IDE_IDS = emptyMap<String, String>()
 
         val IDE_IDS_TO_ACTIONS = mapOf(
             "branches" to "Git.Branches",
-            "newBranch" to "Git.CreateNewBranch",
             "pull" to "Git.Pull",
             "fetch" to "Git.Fetch",
             "push" to "Vcs.Push",
             "merge" to "Git.Merge",
             "rebase" to "Git.Rebase",
-            "stash" to "Git.Stash",
-            "unstash" to "Git.Unstash",
-            "commitDialog" to "CheckinProject",
-            "resolveConflicts" to "Git.ResolveConflicts",
-            "rollback" to "ChangesView.Revert",
-            "unstashDrop" to "Git.Unstash",
-            "compareWithBranch" to "Git.CompareWithBranch",
-            "tag" to "Git.Tag",
-            "resetHead" to "Git.Reset",
-            "remotes" to "Git.Configure.Remotes",
-            "pushUnpushed" to "Vcs.Push",
-            "fileHistory" to "Vcs.ShowTabbedFileHistory",
-            "annotate" to "Annotate",
         )
     }
 }

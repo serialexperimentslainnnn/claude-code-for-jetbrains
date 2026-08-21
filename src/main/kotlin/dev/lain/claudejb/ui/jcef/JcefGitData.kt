@@ -1,7 +1,5 @@
 package dev.lain.claudejb.ui.jcef
 
-import dev.lain.claudejb.forge.ForgePullRequest
-import dev.lain.claudejb.forge.ForgeRun
 import dev.lain.claudejb.git.GitBranchTopology
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitRefInfo
@@ -42,10 +40,6 @@ object JcefGitData {
         val conflicted: Boolean = false,
         val actionStates: Map<String, ActionState> = emptyMap(),
         val topology: GitBranchTopology = GitBranchTopology.NONE,
-        val pullRequests: List<ForgePullRequest>? = null,
-        val runs: List<ForgeRun>? = null,
-        val lastRun: ForgeRun? = null,
-        val forgeConfigured: Boolean = false,
     )
 
     fun gitJson(snapshot: Snapshot?): JsonObject? {
@@ -60,10 +54,6 @@ object JcefGitData {
             put("actions", actionsJson(snapshot))
             put("commitActions", commitActionsJson())
             put("topology", topologyJson(snapshot.topology))
-            snapshot.pullRequests?.let { put("pullRequests", pullRequestsJson(it)) }
-            snapshot.runs?.let { put("runs", buildJsonArray { it.forEach { run -> add(runJson(run)) } }) }
-            snapshot.lastRun?.let { put("lastRun", runJson(it)) }
-            put("forge", forgeStateJson(snapshot))
         }
     }
 
@@ -73,31 +63,6 @@ object JcefGitData {
         put("ahead", topology.ahead)
         put("behind", topology.behind)
         put("mergeBase", topology.mergeBase)
-    }
-
-    private fun pullRequestsJson(pulls: List<ForgePullRequest>) = buildJsonArray {
-        pulls.forEach { pull ->
-            addJsonObject {
-                put("number", pull.number)
-                put("title", pull.title)
-                put("url", pull.url)
-                put("state", pull.state)
-                put("draft", pull.draft)
-                put("author", pull.author)
-            }
-        }
-    }
-
-    private fun forgeStateJson(snapshot: Snapshot): JsonObject = buildJsonObject {
-        put("configured", snapshot.forgeConfigured)
-        put("answered", snapshot.pullRequests != null || snapshot.runs != null)
-    }
-
-    private fun runJson(run: ForgeRun): JsonObject = buildJsonObject {
-        put("name", run.name)
-        put("status", run.status.wire)
-        put("url", run.url)
-        put("finishedAt", run.finishedAtIso)
     }
 
     private fun repoJson(repo: Repo): JsonObject = buildJsonObject {
@@ -149,9 +114,6 @@ object JcefGitData {
                 hasRepo = snapshot.repo.present,
                 hasChanges = snapshot.changes.isNotEmpty(),
                 hasChangedFile = snapshot.changedFileOpen,
-                hasConflicts = snapshot.conflicted,
-                hasUnpushed = (snapshot.topology.ahead ?: 0) > 0,
-                hasStash = snapshot.repo.present,
             ),
         )
         applicable.forEach { action ->

@@ -104,35 +104,6 @@
   overflow-wrap: anywhere;
 }
 
-.git-status {
-  flex: 0 0 auto;
-  padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--dim) 70%, var(--text) 30%);
-  border-radius: var(--radius-pill);
-  background: var(--surface2);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  line-height: 1.6;
-  text-transform: lowercase;
-}
-.git-status.running {
-  border-color: color-mix(in srgb, var(--info) 75%, var(--text) 15%);
-  color: var(--info);
-}
-.git-status.completed {
-  border-color: color-mix(in srgb, var(--success) 75%, var(--text) 15%);
-  color: var(--success);
-}
-.git-status.failed {
-  border-color: color-mix(in srgb, var(--danger) 75%, var(--text) 15%);
-  color: var(--danger);
-}
-.git-status.other {
-  border-color: color-mix(in srgb, var(--dim) 70%, var(--text) 30%);
-  color: var(--dim);
-}
-
 .git-rail {
   display: flex;
   flex-direction: column;

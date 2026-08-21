@@ -191,7 +191,6 @@
         return [
           D.buildGitHeadCard(s.git),
           D.buildGitTopologyCard(s.git),
-          D.buildGitForgeCard(s.git),
           D.buildGitActionsCard(s.git),
           D.buildGitHistoryCard(s.git),
         ];
@@ -305,13 +304,13 @@
     var stack = h(
       'div',
       { class: 'dash-toggles' },
+      planBtn,
       chatBtn,
-      toggleBtn,
       viewButton('Workloads', 'workloads'),
-      viewButton('Guard', 'guard'),
       gitBtn,
+      viewButton('Guard', 'guard'),
       vulnBtn,
-      planBtn
+      toggleBtn
     );
     toggles = stack;
     mountToggles();

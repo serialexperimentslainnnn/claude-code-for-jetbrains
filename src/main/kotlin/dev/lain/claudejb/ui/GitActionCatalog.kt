@@ -14,21 +14,12 @@ internal object GitActionCatalog {
         CHANGED_FILE,
 
         COMMIT,
-
-        CONFLICTS,
-
-        UNPUSHED,
-
-        STASHED,
     }
 
     data class RepoState(
         val hasRepo: Boolean,
         val hasChanges: Boolean = false,
         val hasChangedFile: Boolean = false,
-        val hasConflicts: Boolean = false,
-        val hasUnpushed: Boolean = false,
-        val hasStash: Boolean = false,
     )
 
     data class GitAction(
@@ -40,7 +31,6 @@ internal object GitActionCatalog {
         val ideActionId: String? = null,
         val group: String,
         val startsBlock: Boolean = false,
-        val warning: String? = null,
     ) {
 
         val takesCommit: Boolean get() = requires == Requires.COMMIT
@@ -85,6 +75,18 @@ internal object GitActionCatalog {
             "Ask Claude to record a new commit undoing this one, keeping the history",
             Kind.PROMPT,
         ),
+        commitAction(
+            "commitBranch",
+            "Create branch from this commit",
+            "Ask Claude to start a branch at this commit — the branch you are on does not move",
+            Kind.PROMPT,
+        ),
+        commitAction(
+            "commitTag",
+            "Create tag from this commit",
+            "Ask Claude to put a tag on this commit",
+            Kind.PROMPT,
+        ),
         GitAction(
             id = "forgeView",
             label = "Requests",
@@ -102,81 +104,11 @@ internal object GitActionCatalog {
             group = "Repository",
         ),
         ideAction("branches", "Branches", "Switch, create or compare branches", "Git.Branches"),
-        ideAction("newBranch", "New branch", "Create a branch from here", "Git.CreateNewBranch"),
         ideAction("pull", "Pull", "Pull from the remote", "Git.Pull", startsBlock = true),
         ideAction("fetch", "Fetch", "Fetch from the remote", "Git.Fetch"),
         ideAction("push", "Push", "Push to the remote", "Vcs.Push"),
         ideAction("merge", "Merge", "Merge a branch into this one", "Git.Merge", startsBlock = true),
         ideAction("rebase", "Rebase", "Rebase this branch", "Git.Rebase"),
-        ideAction("stash", "Stash", "Put the current changes aside", "Git.Stash", startsBlock = true),
-        ideAction("unstash", "Unstash", "Bring stashed changes back", "Git.Unstash"),
-        ideAction("commitDialog", "Commit dialog", "The IDE's own commit dialog", "CheckinProject", startsBlock = true),
-        ideAction(
-            "resolveConflicts",
-            "Resolve conflicts",
-            "Open the merge tool on the conflicting files",
-            "Git.ResolveConflicts",
-            requires = Requires.CONFLICTS,
-            group = "Repository",
-        ),
-        ideAction(
-            "rollback",
-            "Roll back changes",
-            "Throw away the changes in the working tree",
-            "ChangesView.Revert",
-            requires = Requires.CHANGES,
-            group = "Repository",
-            warning = "This throws away the changes you have not committed.",
-        ),
-        ideAction(
-            "unstashDrop",
-            "Stashes",
-            "Look at the stash, apply one or drop it",
-            "Git.Unstash",
-            requires = Requires.STASHED,
-            group = "Repository",
-        ),
-        ideAction(
-            "compareWithBranch",
-            "Compare with branch",
-            "Diff this branch against another",
-            "Git.CompareWithBranch",
-            group = "Branch",
-        ),
-        ideAction("tag", "Tag", "Put a tag on the current commit", "Git.Tag", group = "Branch"),
-        ideAction(
-            "resetHead",
-            "Reset",
-            "Move this branch to another commit",
-            "Git.Reset",
-            group = "Branch",
-            warning = "This moves the branch and can drop commits along with anything not committed.",
-        ),
-        ideAction("remotes", "Remotes", "Add, rename or remove a remote", "Git.Configure.Remotes", group = "Branch"),
-        ideAction(
-            "pushUnpushed",
-            "Push",
-            "Push what this branch has that the remote does not",
-            "Vcs.Push",
-            requires = Requires.UNPUSHED,
-            group = "Branch",
-        ),
-        ideAction(
-            "fileHistory",
-            "File history",
-            "Show the history of the file in the editor",
-            "Vcs.ShowTabbedFileHistory",
-            requires = Requires.CHANGED_FILE,
-            group = "File",
-        ),
-        ideAction(
-            "annotate",
-            "Blame",
-            "Show who last touched each line of the file in the editor",
-            "Annotate",
-            requires = Requires.CHANGED_FILE,
-            group = "File",
-        ),
     )
 
     fun byId(id: String): GitAction? = ACTIONS.firstOrNull { it.id == id }
@@ -192,9 +124,6 @@ internal object GitActionCatalog {
                 Requires.REPO -> state.hasRepo
                 Requires.CHANGES -> state.hasRepo && state.hasChanges
                 Requires.CHANGED_FILE -> state.hasRepo && state.hasChangedFile
-                Requires.CONFLICTS -> state.hasRepo && state.hasConflicts
-                Requires.UNPUSHED -> state.hasRepo && state.hasUnpushed
-                Requires.STASHED -> state.hasRepo && state.hasStash
                 Requires.COMMIT -> false
             }
         }
@@ -220,7 +149,6 @@ internal object GitActionCatalog {
         startsBlock: Boolean = false,
         requires: Requires = Requires.REPO,
         group: String = "IDE actions",
-        warning: String? = null,
     ) = GitAction(
         id = id,
         label = label,
@@ -230,9 +158,7 @@ internal object GitActionCatalog {
         ideActionId = actionId,
         group = group,
         startsBlock = startsBlock,
-        warning = warning,
     )
-
 
     private const val MIN_HASH_LENGTH = 4
 

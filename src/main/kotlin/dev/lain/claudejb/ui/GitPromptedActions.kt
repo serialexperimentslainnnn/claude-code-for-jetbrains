@@ -64,7 +64,34 @@ internal object GitPromptedActions {
             "the way back; do not resolve the conflict yourself and do not take one side wholesale."
     }
 
+    fun createBranchFromCommitPrompt(hash: String): String? {
+        if (!GitActionCatalog.isCommitHash(hash)) return null
+        val branch = branchFromCommitName(hash)
+        return "Create a branch called `$branch` at commit `$hash`, without switching to it: " +
+            "`git branch $branch $hash`.\n\n" +
+            "Stay on the branch I am on now. Do not check out or switch to anything, do not run `git reset`, " +
+            "do not rebase, amend, merge or cherry-pick, do not force anything, do not push, and do not " +
+            "create, rename or delete any branch other than `$branch`. Do not touch my uncommitted changes. " +
+            "If `$branch` already exists, stop and tell me; do not reuse it and do not overwrite it. Tell me " +
+            "the branch name when it exists."
+    }
+
+    fun createTagFromCommitPrompt(hash: String): String? {
+        if (!GitActionCatalog.isCommitHash(hash)) return null
+        return "I want a tag on commit `$hash`.\n\n" +
+            "First ask me what to call it and wait for my answer — do not invent a name, and do not derive " +
+            "one from the hash or the commit message. Once I give you the name, create the tag on that " +
+            "commit and nothing else.\n\n" +
+            "This repository signs its tags, so let the configured signing key do its work: do not pass " +
+            "`--no-gpg-sign` and do not override the signing configuration to get around a prompt. If " +
+            "signing fails, stop and tell me rather than retrying — repeated failures lock the key. Do not " +
+            "push the tag, do not move or delete an existing tag, and do not create, switch or delete any " +
+            "branch. If a tag of that name already exists, stop and tell me."
+    }
+
     private fun revertBranchName(hash: String): String = "revert-to-${GitCommitInfo.shortHash(hash)}"
+
+    private fun branchFromCommitName(hash: String): String = "from-${GitCommitInfo.shortHash(hash)}"
 
     private fun oneLine(path: String): String = path.map { if (isRenderable(it)) it else ' ' }.joinToString("")
 

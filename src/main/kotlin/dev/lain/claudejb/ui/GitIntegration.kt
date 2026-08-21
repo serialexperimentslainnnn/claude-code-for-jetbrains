@@ -22,12 +22,6 @@ import com.intellij.openapi.vcs.VcsDirectoryMapping
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.context.EditorContextProvider
-import dev.lain.claudejb.forge.ForgeAnswer
-import dev.lain.claudejb.forge.ForgeProbe
-import dev.lain.claudejb.forge.ForgeProvider
-import dev.lain.claudejb.forge.ForgeRepo
-import dev.lain.claudejb.forge.ForgeService
-import dev.lain.claudejb.forge.ForgeTokens
 import dev.lain.claudejb.git.ForgeViewNavigator
 import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.git.GitCommitInfo
@@ -105,8 +99,6 @@ internal class GitIntegration(private val project: Project) {
         }
         val changes = history.workingTreeChanges()
         val branch = history.currentBranch()
-        val forge = forgeRepo(history)
-        val runs = forge.drawable(branch) { repo, on -> ForgeService.runs(repo, on) }
         return JcefGitData.Snapshot(
             available = true,
             repo = JcefGitData.Repo(
@@ -122,34 +114,7 @@ internal class GitIntegration(private val project: Project) {
             conflicted = history.hasConflicts(),
             actionStates = states.toMap(),
             topology = history.branchTopology(),
-            pullRequests = forge.drawable(branch) { repo, on -> ForgeService.openPullRequests(repo, on) },
-            runs = runs,
-            lastRun = runs?.firstOrNull(),
-            forgeConfigured = forge != null,
         )
-    }
-
-    private fun forgeRepo(history: GitHistoryService): ForgeRepo? {
-        val remote = history.primaryRemote() ?: return null
-        val host = remote.host ?: return null
-        val owner = remote.owner ?: return null
-        val name = remote.repo ?: return null
-        val token = ForgeTokens.get(host) ?: return null
-        val provider = when (remote.provider) {
-            GitRemoteProvider.GITHUB -> ForgeProvider.GITHUB
-            GitRemoteProvider.GITLAB -> ForgeProvider.GITLAB
-            GitRemoteProvider.OTHER -> ForgeProbe.detect(host, token) ?: return null
-        }
-        return ForgeRepo(provider, host, owner, name)
-    }
-
-    private fun <T> ForgeRepo?.drawable(branch: String?, ask: (ForgeRepo, String) -> ForgeAnswer<T>): T? {
-        val repo = this ?: return null
-        val on = branch?.takeIf { it.isNotBlank() } ?: return null
-        return when (val answer = ask(repo, on)) {
-            is ForgeAnswer.Known -> answer.value
-            is ForgeAnswer.Silent -> null
-        }
     }
 
     private fun relativeChangedFile(root: String, changes: List<String>, absolutePath: String?): String? {
@@ -241,6 +206,10 @@ internal class GitIntegration(private val project: Project) {
 
             COMMIT_REVERT -> GitPromptedActions.revertCommitPrompt(hash)
 
+            COMMIT_BRANCH -> GitPromptedActions.createBranchFromCommitPrompt(hash)
+
+            COMMIT_TAG -> GitPromptedActions.createTagFromCommitPrompt(hash)
+
             else -> {
                 LOG.warn("No prompt is wired for Git action '${action.id}'")
                 null
@@ -325,7 +294,6 @@ internal class GitIntegration(private val project: Project) {
             settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
             return
         }
-        if (!IdeActionPrompt.confirmed(project, action)) return
         val result = ActionUtil.performAction(target, event)
         settle(action.id, stateOf(result), onChanged)
     }
@@ -360,6 +328,8 @@ internal class GitIntegration(private val project: Project) {
         const val GIT_LOG = "gitLog"
         const val COMMIT_REVERT_TO_BRANCH = "commitRevertToBranch"
         const val COMMIT_REVERT = "commitRevert"
+        const val COMMIT_BRANCH = "commitBranch"
+        const val COMMIT_TAG = "commitTag"
 
         private const val GIT_VCS_NAME = "Git"
 

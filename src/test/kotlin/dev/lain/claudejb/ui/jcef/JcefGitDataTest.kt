@@ -1,7 +1,5 @@
 package dev.lain.claudejb.ui.jcef
 
-import dev.lain.claudejb.forge.ForgeRun
-import dev.lain.claudejb.forge.ForgeRunStatus
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitRefInfo
 import dev.lain.claudejb.git.GitRefKind
@@ -82,30 +80,13 @@ class JcefGitDataTest {
     }
 
     @Test
-    fun `an unconfigured forge says so instead of leaving the tabs to guess`() {
-        val forge = JcefGitData.gitJson(populated())!!["forge"]!!.jsonObject
+    fun `the payload names no forge at all — the plugin no longer queries GitHub or GitLab`() {
+        val git = JcefGitData.gitJson(populated())!!
 
-        assertFalse(forge["configured"]!!.jsonPrimitive.boolean)
-        assertFalse(forge["answered"]!!.jsonPrimitive.boolean)
-    }
-
-    @Test
-    fun `a configured forge that answered carries every run, not just the newest`() {
-        val snapshot = populated().copy(
-            forgeConfigured = true,
-            runs = listOf(
-                ForgeRun(name = "Second", status = ForgeRunStatus.RUNNING, url = "https://h/2", finishedAtIso = null),
-                ForgeRun(name = "First", status = ForgeRunStatus.FAILED, url = "https://h/1", finishedAtIso = "x"),
-            ),
-        )
-
-        val git = JcefGitData.gitJson(snapshot)!!
-        val forge = git["forge"]!!.jsonObject
-
-        assertTrue(forge["configured"]!!.jsonPrimitive.boolean)
-        assertTrue(forge["answered"]!!.jsonPrimitive.boolean)
-        assertEquals(2, git["runs"]!!.jsonArray.size)
-        assertEquals("Second", git["runs"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
+        assertNull(git["forge"])
+        assertNull(git["pullRequests"])
+        assertNull(git["runs"])
+        assertNull(git["lastRun"])
     }
 
     private fun idsOf(git: JsonObject): List<String> =
@@ -116,10 +97,7 @@ class JcefGitDataTest {
         val git = JcefGitData.gitJson(populated())!!
 
         assertEquals(
-            setOf(
-                "available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology",
-                "forge",
-            ),
+            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
             git.keys,
         )
         assertTrue(git["available"]!!.jsonPrimitive.boolean)
@@ -244,10 +222,7 @@ class JcefGitDataTest {
         assertTrue(git["changes"]!!.jsonArray.isEmpty())
         assertTrue(git["commits"]!!.jsonArray.isEmpty())
         assertEquals(
-            setOf(
-                "available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology",
-                "forge",
-            ),
+            setOf("available", "repo", "changes", "commits", "refs", "actions", "commitActions", "topology"),
             git.keys,
         )
     }
@@ -258,7 +233,7 @@ class JcefGitDataTest {
         val git = JcefGitData.gitJson(snapshot)!!
 
         val expected = GitActionCatalog.applicable(
-            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true, hasStash = true),
+            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true),
         ).map { it.id }
         assertEquals(expected, idsOf(git))
     }
@@ -278,8 +253,7 @@ class JcefGitDataTest {
         assertFalse(ids.contains("init"))
         assertFalse(ids.contains("commit"))
         assertFalse(ids.contains("revertFile"))
-        assertTrue(ids.containsAll(listOf("branches", "newBranch", "pull", "fetch", "push", "merge", "rebase", "stash", "unstash")))
-        assertTrue(ids.contains("commitDialog"))
+        assertTrue(ids.containsAll(listOf("branches", "pull", "fetch", "push", "merge", "rebase")))
     }
 
     @Test
@@ -294,7 +268,7 @@ class JcefGitDataTest {
         val byId = git["actions"]!!.jsonArray.associate { it.jsonObject["id"]!!.jsonPrimitive.content to it.jsonObject }
 
         GitActionCatalog.applicable(
-            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true, hasStash = true),
+            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true),
         ).forEach { action ->
             val emitted = byId[action.id]!!
             assertEquals(setOf("id", "label", "hint", "kind", "group", "status"), emitted.keys)

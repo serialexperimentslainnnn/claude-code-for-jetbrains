@@ -17,7 +17,6 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
 
     private val modelSection = SettingsModelSection { session }
     private val providerSection = SettingsProviderSection(settings)
-    private val forgeSection = SettingsForgeSection { if (project.isDisposed) null else project.service<GitHistoryService>() }
     private val executableSection = SettingsExecutableSection()
     private val toolsSection = SettingsToolsSection(settings)
     private val mcpSection = SettingsMcpSection()
@@ -27,7 +26,6 @@ class ClaudeSettingsConfigurable(private val project: Project) : Configurable {
     private val sections: List<SettingsSection> = listOf(
         modelSection,
         providerSection,
-        forgeSection,
         executableSection,
         toolsSection,
         mcpSection,
