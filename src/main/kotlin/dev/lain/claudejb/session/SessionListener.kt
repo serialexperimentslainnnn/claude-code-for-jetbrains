@@ -1,6 +1,6 @@
 package dev.lain.claudejb.session
 
-enum class AttentionReason { PERMISSION, TURN_DONE, ERROR }
+enum class AttentionReason { PERMISSION, TURN_DONE, ERROR, GUARD_BLOCKED }
 
 interface SessionListener {
     fun onStateChanged() {}

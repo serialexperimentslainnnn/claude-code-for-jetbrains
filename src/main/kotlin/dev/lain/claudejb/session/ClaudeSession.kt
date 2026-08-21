@@ -397,6 +397,7 @@ class ClaudeSession(
                         commandText = denial.command?.takeIf { it.isNotBlank() },
                         blockedRule = denial.rule?.name,
                     )
+                    fireAttention(AttentionReason.GUARD_BLOCKED)
                 }
                 recordAlert(
                     GuardAlert.DENIED,

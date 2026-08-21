@@ -68,8 +68,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun onSessionAttention(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, reason: AttentionReason) {
         val tw = resolveToolWindow(project)
         val tab = tabs.tabFor(session) ?: return
-        val onScreen = tw != null && tw.isVisible && tabs.selected === tab
-        if (onScreen) return
+        val tabOnScreen = tw != null && tw.isVisible && tabs.selected === tab
+        if (tabOnScreen && showsWhereItLanded(tab, reason)) return
 
         tabs.badge(tab, true)
 
@@ -81,13 +81,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             AttentionReason.PERMISSION -> "Claude needs your approval in \"${session.title}\"."
             AttentionReason.TURN_DONE -> "Claude finished responding in \"${session.title}\"."
             AttentionReason.ERROR -> "Claude hit an error in \"${session.title}\"."
+            AttentionReason.GUARD_BLOCKED -> "The guard blocked a tool call in \"${session.title}\"."
         }
         NotificationGroupManager.getInstance().getNotificationGroup("Claude Code")
-            .createNotification(
-                "Claude Code",
-                text,
-                if (reason == AttentionReason.ERROR) NotificationType.ERROR else NotificationType.INFORMATION,
-            )
+            .createNotification("Claude Code", text, notificationTypeFor(reason))
             .addAction(
                 NotificationAction.createSimpleExpiring("Open") {
                     tabs.tabFor(session)?.let { tabs.select(it) }
@@ -95,6 +92,16 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 },
             )
             .notify(project)
+    }
+
+    private fun showsWhereItLanded(tab: ChatTabsPanel.ChatTab, reason: AttentionReason): Boolean =
+        reason != AttentionReason.GUARD_BLOCKED ||
+            (tab.component as? JcefChatPanel)?.transcript?.showsChat != false
+
+    private fun notificationTypeFor(reason: AttentionReason): NotificationType = when (reason) {
+        AttentionReason.ERROR -> NotificationType.ERROR
+        AttentionReason.GUARD_BLOCKED -> NotificationType.WARNING
+        else -> NotificationType.INFORMATION
     }
 
     private fun resolveToolWindow(project: Project): ToolWindow? =

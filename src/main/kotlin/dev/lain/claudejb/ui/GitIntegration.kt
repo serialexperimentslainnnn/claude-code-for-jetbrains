@@ -272,7 +272,8 @@ internal class GitIntegration(private val project: Project) {
         }
 
         override fun onAttention(reason: AttentionReason) {
-            if (reason == AttentionReason.PERMISSION || !started) return
+            if (!started) return
+            if (reason != AttentionReason.TURN_DONE && reason != AttentionReason.ERROR) return
             session.removeListener(this)
             val state = if (reason == AttentionReason.ERROR) {
                 JcefGitData.ActionState.FAILED

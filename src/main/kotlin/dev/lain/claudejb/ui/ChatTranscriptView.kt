@@ -29,6 +29,8 @@ internal class ChatTranscriptView(
 
     val showsTask: Boolean get() = shown is Shown.Task
 
+    val showsChat: Boolean get() = shown is Shown.Chat
+
     fun showTranscript(agentId: String?) {
         show(agentId?.let { Shown.Agent(it) } ?: Shown.Chat)
     }
