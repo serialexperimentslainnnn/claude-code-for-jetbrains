@@ -74,6 +74,8 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var guardDisabledUntil: Long = 0
 
+        @JvmField var guardLogRetentionDays: Int = 30
+
         @JvmField var disabledSecurityRules: String = ""
 
         @JvmField var securityRuleSuspensions: String = ""

@@ -39,15 +39,25 @@ object GuardAlertLog {
         encodeDefaults = false
     }
 
-    fun record(scope: SettingsScope, alert: GuardAlert): Future<*>? {
+    const val KEEP_UNTIL_FULL = 0
+
+    fun record(scope: SettingsScope, alert: GuardAlert, retentionDays: Int = KEEP_UNTIL_FULL): Future<*>? {
         if (SecretStore.inert()) return null
         return writes.submit {
             runCatching {
-                val kept = (read(scope) + alert).takeLast(MAX_ENTRIES)
+                val kept = retained(read(scope) + alert, retentionDays, alert.at).takeLast(MAX_ENTRIES)
                 SecretStore.set(scope.guardLogName, JSON.encodeToString(ListSerializer, kept))
             }.onFailure { log.warn("could not record a guard alert", it) }
         }
     }
+
+    internal fun retained(alerts: List<GuardAlert>, retentionDays: Int, nowMillis: Long): List<GuardAlert> {
+        if (retentionDays <= KEEP_UNTIL_FULL) return alerts
+        val oldest = nowMillis - retentionDays.toLong() * MILLIS_PER_DAY
+        return alerts.filter { it.at >= oldest }
+    }
+
+    private const val MILLIS_PER_DAY = 24L * 60 * 60 * 1000
 
     fun forSession(scope: SettingsScope, sessionId: String): List<GuardAlert> =
         read(scope).filter { it.sessionId == sessionId }

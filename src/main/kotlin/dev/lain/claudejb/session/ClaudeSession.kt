@@ -829,8 +829,9 @@ class ClaudeSession(
         detail: String? = null,
     ) {
         val matched = rule ?: return
+        val settings = ClaudeSettings.getInstance(project)
         val submitted = GuardAlertLog.record(
-            ClaudeSettings.getInstance(project).scope,
+            settings.scope,
             GuardAlert(
                 at = System.currentTimeMillis(),
                 rule = matched.name,
@@ -843,6 +844,7 @@ class ClaudeSession(
                 detail = detail,
                 command = command,
             ),
+            retentionDays = settings.state.guardLogRetentionDays,
         )
         guardLog.submitted(submitted != null)
     }

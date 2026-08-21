@@ -13,8 +13,9 @@ class ClaudeSecurityConfigurable(private val project: Project) : Configurable {
 
     private val masterSection = SettingsGuardMasterSection()
     private val rulesSection = SettingsSecuritySection(settings)
+    private val logSection = SettingsGuardLogSection()
 
-    private val sections: List<SettingsSection> = listOf(masterSection, rulesSection)
+    private val sections: List<SettingsSection> = listOf(masterSection, rulesSection, logSection)
 
     override fun getDisplayName(): String = "Claude Code Security"
 

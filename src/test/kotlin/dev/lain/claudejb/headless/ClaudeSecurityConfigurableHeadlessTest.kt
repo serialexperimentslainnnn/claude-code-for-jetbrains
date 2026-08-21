@@ -174,6 +174,7 @@ class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
     private fun configuredState() = ClaudeSettings.State().apply {
         guardMode = GuardMode.PERMISSIVE.wire
         guardDisabledUntil = 0
+        guardLogRetentionDays = 90
         disabledSecurityRules = SecurityRule.canonicalCsv(SecurityRule.entries.take(2).map { it.name })
         securityExtraBlockedDomains = "paste.example.com"
         sensitiveExtraGlobs = "**/secret.env"
@@ -186,6 +187,7 @@ class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
         val PAGE_OWNED = setOf(
             "guardMode",
             "guardDisabledUntil",
+            "guardLogRetentionDays",
             "disabledSecurityRules",
             "securityExtraBlockedDomains",
             "sensitiveExtraGlobs",

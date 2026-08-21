@@ -253,7 +253,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
 
         val NOT_ON_THE_FORM = setOf(
             "enableFileCheckpointing", "rewindFallback", "sensitiveExtraGlobs", "executionTrusted",
-            "guardEnabled", "guardDisabledUntil", "guardMode",
+            "guardEnabled", "guardDisabledUntil", "guardMode", "guardLogRetentionDays",
             "disabledSecurityRules", "securityExtraBlockedDomains", "securityCommandWhitelist",
             "securityCategoryWhitelists", "securityRuleWhitelists",
             "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
