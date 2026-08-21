@@ -259,7 +259,9 @@ class JcefGitDataTest {
         val snapshot = populated(changedFileOpen = true)
         val git = JcefGitData.gitJson(snapshot)!!
 
-        val expected = GitActionCatalog.applicable(hasRepo = true, hasChanges = true, hasChangedFile = true).map { it.id }
+        val expected = GitActionCatalog.applicable(
+            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true, hasStash = true),
+        ).map { it.id }
         assertEquals(expected, idsOf(git))
     }
 
@@ -293,7 +295,9 @@ class JcefGitDataTest {
         val git = JcefGitData.gitJson(populated(changedFileOpen = true))!!
         val byId = git["actions"]!!.jsonArray.associate { it.jsonObject["id"]!!.jsonPrimitive.content to it.jsonObject }
 
-        GitActionCatalog.applicable(hasRepo = true, hasChanges = true, hasChangedFile = true).forEach { action ->
+        GitActionCatalog.applicable(
+            GitActionCatalog.RepoState(hasRepo = true, hasChanges = true, hasChangedFile = true, hasStash = true),
+        ).forEach { action ->
             val emitted = byId[action.id]!!
             assertEquals(setOf("id", "label", "hint", "kind", "group", "status"), emitted.keys)
             assertEquals(action.label, emitted["label"]!!.jsonPrimitive.content)
@@ -303,7 +307,7 @@ class JcefGitDataTest {
     }
 
     @Test
-    fun `kind is lowercase on the wire and group is one of the three the contract names`() {
+    fun `kind is lowercase on the wire and group is one the contract names`() {
         val git = JcefGitData.gitJson(populated(changedFileOpen = true))!!
         val entries = git["actions"]!!.jsonArray.map { it.jsonObject }
         val byId = entries.associate { it["id"]!!.jsonPrimitive.content to it }
@@ -314,7 +318,10 @@ class JcefGitDataTest {
         assertEquals("ide", byId["branches"]!!["kind"]!!.jsonPrimitive.content)
 
         val groups = entries.map { it["group"]!!.jsonPrimitive.content }.toSet()
-        assertTrue(setOf("Repository", "Ask Claude", "IDE actions").containsAll(groups))
+        assertTrue(
+            setOf("Repository", "Ask Claude", "IDE actions", "Branch", "File").containsAll(groups),
+            "a group the view does not lay out would render an unnamed block: $groups",
+        )
     }
 
     @Test

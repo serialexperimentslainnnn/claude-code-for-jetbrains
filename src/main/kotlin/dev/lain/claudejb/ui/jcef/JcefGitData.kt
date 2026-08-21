@@ -42,6 +42,7 @@ object JcefGitData {
         val commits: List<GitCommitInfo> = emptyList(),
         val refs: List<GitRefInfo> = emptyList(),
         val changedFileOpen: Boolean = false,
+        val conflicted: Boolean = false,
         val actionStates: Map<String, ActionState> = emptyMap(),
         val topology: GitBranchTopology = GitBranchTopology.NONE,
         val pullRequests: List<ForgePullRequest>? = null,
@@ -169,9 +170,14 @@ object JcefGitData {
 
     private fun actionsJson(snapshot: Snapshot) = buildJsonArray {
         val applicable = GitActionCatalog.applicable(
-            hasRepo = snapshot.repo.present,
-            hasChanges = snapshot.changes.isNotEmpty(),
-            hasChangedFile = snapshot.changedFileOpen,
+            GitActionCatalog.RepoState(
+                hasRepo = snapshot.repo.present,
+                hasChanges = snapshot.changes.isNotEmpty(),
+                hasChangedFile = snapshot.changedFileOpen,
+                hasConflicts = snapshot.conflicted,
+                hasUnpushed = (snapshot.topology.ahead ?: 0) > 0,
+                hasStash = snapshot.repo.present,
+            ),
         )
         applicable.forEach { action ->
             addJsonObject {

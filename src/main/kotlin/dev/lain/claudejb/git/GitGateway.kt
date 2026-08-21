@@ -12,6 +12,7 @@ import git4idea.repo.GitBranchTrackInfo
 import git4idea.repo.GitRemote
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
+import com.intellij.dvcs.repo.Repository
 import git4idea.repo.GitRepositoryManager
 
 internal object GitGateway {
@@ -117,6 +118,15 @@ internal object GitGateway {
             GitRepositoryChangeListener { onChanged() },
         )
     }
+
+    fun midOperation(project: Project, root: VirtualFile): Boolean =
+        repositoryAt(project, root)?.state in RESOLVING_STATES
+
+    private val RESOLVING_STATES = setOf(
+        Repository.State.MERGING,
+        Repository.State.REBASING,
+        Repository.State.GRAFTING,
+    )
 
     private fun repositories(project: Project): List<GitRepository> = GitRepositoryManager.getInstance(project).repositories
 

@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUiKind
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.AnActionResult
 import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
@@ -118,6 +119,7 @@ internal class GitIntegration(private val project: Project) {
             commits = history.recentCommits(limit = GRAPH_COMMIT_LIMIT, scope = GitLogScope.EVERY_LINE_OF_DEVELOPMENT),
             refs = history.refs(),
             changedFileOpen = relativeChangedFile(root, changes, openFilePath) != null,
+            conflicted = history.hasConflicts(),
             actionStates = states.toMap(),
             topology = history.branchTopology(),
             pullRequests = forge?.let { repo ->
@@ -333,7 +335,11 @@ internal class GitIntegration(private val project: Project) {
     }
 
     private fun invokeIde(action: GitActionCatalog.GitAction, onChanged: () -> Unit) {
-        val actionId = action.ideActionId ?: return
+        val actionId = action.ideActionId ?: run {
+            LOG.warn("Git action '${action.id}' says it is an IDE action but names none")
+            settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
+            return
+        }
         val target = ActionManager.getInstance().getAction(actionId) ?: run {
             LOG.warn("This IDE has no action '$actionId'; the Git view's '${action.id}' button does nothing")
             settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
@@ -359,7 +365,14 @@ internal class GitIntegration(private val project: Project) {
             settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
             return
         }
-        ActionUtil.performAction(target, event)
+        if (!IdeActionPrompt.confirmed(project, action)) return
+        val result = ActionUtil.performAction(target, event)
+        settle(action.id, stateOf(result), onChanged)
+    }
+
+    private fun stateOf(result: AnActionResult): JcefGitData.ActionState = when {
+        result.isPerformed -> JcefGitData.ActionState.COMPLETED
+        else -> JcefGitData.ActionState.FAILED
     }
 
     private fun settle(id: String, state: JcefGitData.ActionState, onChanged: () -> Unit) {
