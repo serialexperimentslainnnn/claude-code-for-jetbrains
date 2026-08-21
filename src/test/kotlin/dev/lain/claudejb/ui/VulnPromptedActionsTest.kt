@@ -90,7 +90,7 @@ class VulnPromptedActionsTest {
         val prompt = VulnPromptedActions.updatePrompt(finding())!!
 
         assertTrue(prompt.contains("breaking changes included"))
-        assertTrue(prompt.contains("what in this project actually uses it"))
+        assertTrue(prompt.contains("which of those call sites touch what the new version changed"))
         assertTrue(prompt.contains("name it and say why"), "collateral is declared, not hidden")
         assertTrue(prompt.contains("Do not commit"))
     }
@@ -99,8 +99,20 @@ class VulnPromptedActionsTest {
     fun `the prompt sends Claude to the web rather than to its memory`() {
         val prompt = VulnPromptedActions.updatePrompt(finding())!!
 
-        assertTrue(prompt.contains("Look this up on the web rather than recalling it"))
+        assertTrue(prompt.contains("Look the release side up on the web rather than recalling it"))
         assertTrue(prompt.contains("cite where you found it"))
+    }
+
+    @Test
+    fun `both prompts send Claude into the project's own code, not just its manifests`() {
+        val one = VulnPromptedActions.updatePrompt(finding())!!
+        val all = VulnPromptedActions.planPrompt(listOf(finding()))!!
+
+        assertTrue(one.contains("Read this project's own code"))
+        assertTrue(one.contains("imported or called"))
+        assertTrue(one.contains("do not infer it from the manifest"))
+        assertTrue(all.contains("Read this project's own code"))
+        assertTrue(all.contains("rather than reasoning from the manifests alone"))
     }
 
     @Test

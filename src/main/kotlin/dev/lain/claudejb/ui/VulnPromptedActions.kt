@@ -34,11 +34,17 @@ internal object VulnPromptedActions {
 
     private fun prohibitions(name: String, manifest: String): String =
         "Work out what the change costs before you make it. What changed in `$name` between the two " +
-            "versions, breaking changes included; what in this project actually uses it, directly or " +
-            "through another dependency; and what would have to be adjusted for the new version to hold. " +
-            "Look this up on the web rather than recalling it: releases, advisories and deprecations move, " +
-            "and what you remember about this package may predate the version you are moving to. Say what " +
-            "you found, cite where you found it, and what you propose, then carry it out.\n\n" +
+            "versions, breaking changes included; and what would have to be adjusted for the new version " +
+            "to hold.\n\n" +
+            "Read this project's own code to answer that, do not infer it from the manifest: find every " +
+            "place `$name` is imported or called, which of those call sites touch what the new version " +
+            "changed, and whether it arrives directly or through another dependency that pins it. A " +
+            "package nothing calls costs nothing to move; one threaded through the code may cost a great " +
+            "deal, and the manifest cannot tell them apart.\n\n" +
+            "Look the release side up on the web rather than recalling it: releases, advisories and " +
+            "deprecations move, and what you remember about this package may predate the version you are " +
+            "moving to. Say what you found, cite where you found it, and what you propose, then carry it " +
+            "out.\n\n" +
             "`$manifest` and its lockfile are the target. Anything you touch beyond them is part of making " +
             "the new version work, so name it and say why. If the update cannot be made safely at all, say " +
             "that instead of forcing it. Do not commit, tag, push or publish anything, and run whatever " +
@@ -71,11 +77,17 @@ internal object VulnPromptedActions {
             "Check every one against current information on the web instead of recalling it. Release notes, " +
             "advisories, patched versions and deprecations all move, and a plan built on what you remember " +
             "will be wrong in exactly the places that cost the most. Cite what you relied on.\n\n" +
-            "Work out first what each move actually costs: what changed between the version in use and the " +
-            "candidate, breaking changes included; what in this project uses each one, directly or through " +
-            "another dependency; which of these updates pull the same transitive dependency and could " +
-            "settle on one version instead of fighting each other; and which ones need a source, build or " +
-            "CI change to hold, which is a cost to state rather than a step to hide.\n\n" +
+            "Read this project's own code before you rank anything, rather than reasoning from the " +
+            "manifests alone. For each package find where it is imported or called, and which of those " +
+            "call sites touch what the new version changes: that is what separates an update nobody will " +
+            "notice from one that rewrites a module, and no lockfile carries it. Note also which of these " +
+            "packages arrive only through another dependency, since those are moved by updating their " +
+            "parent and not by pinning them.\n\n" +
+            "Work out then what each move actually costs: what changed between the version in use and the " +
+            "candidate, breaking changes included; which of these updates pull the same transitive " +
+            "dependency and could settle on one version instead of fighting each other; and which ones " +
+            "need a source, build or CI change to hold, which is a cost to state rather than a step to " +
+            "hide.\n\n" +
             "Then give me the order you would do them in and why, calling out any that are risky enough to " +
             "be worth doing alone, and any that cannot be done at all yet. Once I have agreed to the plan, " +
             "carry it out, running whatever tests this project has as you go. Do not commit, tag, push or " +
