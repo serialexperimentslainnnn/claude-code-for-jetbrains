@@ -53,8 +53,7 @@ class JcefVulnDataTest {
     private fun report(vararg findings: VulnFinding) =
         VulnReport(findings.toList(), queried = 412, asOfMillis = 1_000L, endpoint = VulnDisclosure.ENDPOINT)
 
-    private fun json(snapshot: VulnSnapshot?, now: Long = 1_000L): JsonObject? =
-        JcefVulnData.vulnJson(snapshot, now)
+    private fun json(snapshot: VulnSnapshot?): JsonObject? = JcefVulnData.vulnJson(snapshot)
 
     private fun word(obj: JsonObject, key: String): String? =
         obj[key]?.takeIf { it != JsonNull }?.jsonPrimitive?.content
@@ -107,18 +106,24 @@ class JcefVulnDataTest {
     }
 
     @Test
-    fun `offline keeps the last result and states how old it is`() {
+    fun `offline keeps the last result and dates it absolutely, never by the clock`() {
         val finding = VulnFinding(id = "CVE-1", component = component)
         val obj = json(
             snapshot(VulnViewState.OFFLINE, report = report(finding), silence = ScanSilence.UNREACHABLE),
-            now = 61_000L,
         )!!
 
         assertEquals("offline", word(obj, "state"))
         assertEquals("stopped", word(obj, "status"))
         val result = obj["report"]!!.jsonObject
         assertEquals(1_000L, result["asOfMillis"]!!.jsonPrimitive.long)
-        assertEquals(60_000L, result["ageMillis"]!!.jsonPrimitive.long)
+        assertNull(result["ageMillis"])
+    }
+
+    @Test
+    fun `the same snapshot serialises identically twice, so an unchanged push is deduplicated`() {
+        val snapshot = snapshot(VulnViewState.OFFLINE, report = report(VulnFinding(id = "CVE-1", component = component)))
+
+        assertEquals(json(snapshot).toString(), json(snapshot).toString())
     }
 
     @Test

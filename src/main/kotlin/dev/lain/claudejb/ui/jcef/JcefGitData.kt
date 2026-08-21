@@ -47,14 +47,14 @@ object JcefGitData {
         val forgeConfigured: Boolean = false,
     )
 
-    fun gitJson(snapshot: Snapshot?, nowMillis: Long = System.currentTimeMillis()): JsonObject? {
+    fun gitJson(snapshot: Snapshot?): JsonObject? {
         if (snapshot == null) return null
         if (!snapshot.available) return buildJsonObject { put("available", false) }
         return buildJsonObject {
             put("available", true)
             put("repo", repoJson(snapshot.repo))
             put("changes", buildJsonArray { snapshot.changes.forEach { add(it) } })
-            put("commits", commitsJson(snapshot.commits, nowMillis))
+            put("commits", commitsJson(snapshot.commits))
             put("refs", refsJson(snapshot.refs))
             put("actions", actionsJson(snapshot))
             put("commitActions", commitActionsJson())
@@ -106,14 +106,14 @@ object JcefGitData {
         put("root", repo.root?.takeIf { it.isNotBlank() })
     }
 
-    private fun commitsJson(commits: List<GitCommitInfo>, nowMillis: Long) = buildJsonArray {
+    private fun commitsJson(commits: List<GitCommitInfo>) = buildJsonArray {
         commits.forEach { c ->
             addJsonObject {
                 put("hash", c.hash)
                 put("short", c.shortHash)
                 put("subject", c.subject)
                 put("author", c.authorName)
-                put("ageMillis", (nowMillis - c.authoredAtMillis).coerceAtLeast(0))
+                put("authoredAtMillis", c.authoredAtMillis)
                 put("files", c.changedPaths.size)
                 put("parents", buildJsonArray { c.parents.forEach { add(it) } })
             }

@@ -23,7 +23,7 @@ object JcefVulnData {
 
     const val MAX_INVENTORY_ROWS = 4000
 
-    fun vulnJson(snapshot: VulnSnapshot?, nowMillis: Long = System.currentTimeMillis()): JsonObject? {
+    fun vulnJson(snapshot: VulnSnapshot?): JsonObject? {
         if (snapshot == null) return null
         return buildJsonObject {
             put("available", true)
@@ -37,7 +37,7 @@ object JcefVulnData {
             put("progress", progressJson(snapshot))
             put("reason", snapshot.silence?.wire)
             put("note", snapshot.silence?.note)
-            put("report", reportJson(snapshot.report, nowMillis))
+            put("report", reportJson(snapshot.report))
         }
     }
 
@@ -88,12 +88,11 @@ object JcefVulnData {
         put("total", snapshot.total)
     }
 
-    private fun reportJson(report: VulnReport?, nowMillis: Long): JsonElement {
+    private fun reportJson(report: VulnReport?): JsonElement {
         if (report == null) return JsonNull
         val ordered = report.ordered()
         return buildJsonObject {
             put("asOfMillis", report.asOfMillis)
-            put("ageMillis", (nowMillis - report.asOfMillis).coerceAtLeast(0))
             put("endpoint", report.endpoint)
             put("queried", report.queried)
             put("total", ordered.size)

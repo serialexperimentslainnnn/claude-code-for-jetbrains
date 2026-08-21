@@ -187,7 +187,7 @@
       body.push(
         h('div', {
           class: 'vuln-asof',
-          text: 'As of ' + whenText(v.report.asOfMillis) + ' · ' + agoText(v.report.ageMillis),
+          text: 'As of ' + whenText(v.report.asOfMillis) + ' · ' + agoText(Date.now() - num(v.report.asOfMillis)),
         })
       );
     }

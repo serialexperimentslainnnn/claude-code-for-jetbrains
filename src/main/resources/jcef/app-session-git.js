@@ -417,7 +417,7 @@
     var hash = row.hash;
     var short = text(c.short, hash.slice(0, 7));
     var refs = byHash[hash] || [];
-    var meta = [text(c.author, null), ageText(c.ageMillis), fileCount(c.files)].filter(Boolean);
+    var meta = [text(c.author, null), ageSince(c.authoredAtMillis), fileCount(c.files)].filter(Boolean);
     return h(
       'li',
       { class: 'git-node git-commit', attrs: { 'data-hash': hash } },
@@ -517,6 +517,11 @@
   function fileCount(n) {
     if (typeof n !== 'number' || !isFinite(n) || n < 0) return null;
     return Math.round(n) === 1 ? '1 file' : Math.round(n) + ' files';
+  }
+
+  function ageSince(atMillis) {
+    if (typeof atMillis !== 'number' || !isFinite(atMillis) || atMillis <= 0) return null;
+    return ageText(Date.now() - atMillis);
   }
 
   function ageText(ms) {
