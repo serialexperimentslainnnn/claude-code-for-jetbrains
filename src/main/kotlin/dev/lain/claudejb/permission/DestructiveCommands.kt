@@ -25,11 +25,14 @@ object DestructiveCommands {
 
     private val ORCHESTRATION: List<Regex> = listOf(
         re(
-            """\b(kubectl|oc)\b$SEG\bdelete\b$SEG\b(namespace|ns|project|projects|pvc|persistentvolume|secret|""" +
-                """statefulset|deployment|crd|customresourcedefinition)\b""",
+            """\b(kubectl|oc)\b$SEG\bdelete\b$SEG\b(namespace|ns|project|projects|pvc|persistentvolume|pv|secret|""" +
+                """statefulset|deployment|daemonset|node|nodes|crd|customresourcedefinition|""" +
+                """clusterrole|clusterrolebinding)\b""",
         ),
         re("""\b(kubectl|oc)\b$SEG\bdelete\b$SEG(--all\b|-A\b|--all-namespaces\b)"""),
         re("""\b(kubectl|oc)\b$SEG\b(drain|cordon)\b"""),
+        re("""\boc\b$SEG\badm\b$SEG\b(drain|prune)\b"""),
+        re("""\b(kubectl|oc)\b$SEG\btaint\b$SEG\bnodes?\b$SEG:NoExecute\b"""),
         re("""\b(kubectl|oc)\b$SEG\breplace\b$SEG--force\b"""),
         re("""\b(kubectl|oc)\b$SEG\bscale\b$SEG--replicas\s*=?\s*0\b"""),
         re("""\bhelm\b$SEG\b(uninstall|delete)\b"""),
@@ -42,10 +45,20 @@ object DestructiveCommands {
     )
 
     private val CLOUD: List<Regex> = listOf(
-        re("""\baws\b$SEG\bs3\b$SEG\brb\b$SEG--force"""),
+        re("""\baws\b$SEG\bs3\b$SEG\brb\b"""),
         re("""\baws\b$SEG\bs3\b$SEG\brm\b$SEG--recursive"""),
         re("""\baws\b$SEG\b(delete|terminate|deregister|destroy)-[a-z-]+\b"""),
+        re("""\baws\b$SEG\bkms\b$SEG\b(schedule-key-deletion|disable-key|disable-key-rotation)\b"""),
+        re("""\baws\b$SEG\b(sqs\b$SEG\bpurge-queue|emr\b$SEG\bterminate-clusters|rds\b$SEG\bstop-db-instance)\b"""),
+        re("""\baws\b$SEG\b(cloudtrail\b$SEG\bstop-logging|configservice\b$SEG\bstop-configuration-recorder)\b"""),
+        re("""\baws\b$SEG\bguardduty\b$SEG\b(stop-monitoring-members|disassociate-members)\b"""),
+        re("""\baws\b$SEG\bec2\b$SEG\b(modify-image-attribute|modify-snapshot-attribute)\b"""),
+        re("""\baws\b$SEG\bec2\b$SEG\bauthorize-security-group-ingress\b$SEG\b0\.0\.0\.0/0\b"""),
+        re("""\baws\b$SEG\brds\b$SEG\bmodify-db-snapshot-attribute\b"""),
+        re("""\baws\b$SEG\bs3api\b$SEG\b(put-bucket-acl|put-object-acl|put-bucket-policy|delete-public-access-block)\b"""),
         re("""\b(gcloud|gsutil|az|doctl|flyctl|wrangler|vercel|render|railway)\b$SEG\b(delete|destroy|rm|remove)\b"""),
+        re("""\bgcloud\b$SEG\bkms\b$SEG\bkeys\b$SEG\bversions\b$SEG\bdestroy\b"""),
+        re("""\bbq\b$SEG\brm\b"""),
         re("""\bheroku\b$SEG\bapps:destroy\b"""),
         re("""\bvault\b$SEG\b(delete|destroy)\b"""),
         re("""\bop\b$SEG\bitem\s+delete\b"""),
