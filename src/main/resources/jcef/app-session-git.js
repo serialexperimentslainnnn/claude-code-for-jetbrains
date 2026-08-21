@@ -674,6 +674,20 @@
     );
   }
 
+  function describeRow(current) {
+    if (!current) return null;
+    return h(
+      'div',
+      { class: 'git-forge-row' },
+      h('span', { class: 'git-forge-label', text: 'Nothing open from this branch yet.' }),
+      forgeButton('Ask Claude to draft one', 'git-forge-act', {
+        type: 'forgeAsk',
+        ask: 'describe',
+        branch: current,
+      })
+    );
+  }
+
   function buildGitMergesCard(git) {
     var g = gitOf(git);
     if (!g || !repoOf(g).present) return null;
@@ -694,6 +708,7 @@
       });
     } else if (pulls.length) {
       body.push(h('div', { class: 'git-note', text: 'Nothing open for ' + current + '.' }));
+      body.push(describeRow(current));
     } else {
       body.push(h('div', { class: 'git-note', text: forgeNote(git, 'Nothing open in this project.') }));
     }
@@ -740,6 +755,16 @@
         );
       }
     }
+    if (status === 'failed' && run.id != null) {
+      parts.push(
+        forgeButton('Ask Claude why', 'git-forge-act', {
+          type: 'forgeAsk',
+          ask: 'diagnose',
+          number: run.id,
+          name: text(run.name, ''),
+        })
+      );
+    }
     parts.push(linkTo('Open', text(run.url, ''), 'git-forge-open'));
     return h('div', { class: 'git-forge-row' }, parts);
   }
@@ -762,6 +787,22 @@
         );
       }
     }
+    out.push(
+      forgeButton('Ask Claude to review', 'git-forge-act', {
+        type: 'forgeAsk',
+        ask: 'review',
+        number: number,
+        branch: text(pull.sourceBranch, ''),
+      })
+    );
+    out.push(
+      forgeButton('Address comments', 'git-forge-act', {
+        type: 'forgeAsk',
+        ask: 'comments',
+        number: number,
+        branch: text(pull.sourceBranch, ''),
+      })
+    );
     if (access.canMerge && !pull.draft) {
       out.push(
         forgeButton('Merge', 'git-forge-act danger', {

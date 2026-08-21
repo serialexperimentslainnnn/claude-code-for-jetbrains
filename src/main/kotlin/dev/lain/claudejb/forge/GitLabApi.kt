@@ -19,6 +19,10 @@ internal object GitLabApi : ForgeApi {
 
     private const val MAINTAINER = 40
 
+    private const val JOB_LIMIT = 50
+
+    private const val COMMENT_LIMIT = 50
+
     private val IN_FLIGHT = setOf(
         "created",
         "waiting_for_resource",
@@ -120,6 +124,31 @@ internal object GitLabApi : ForgeApi {
     private fun jsonHeaders(token: String): Map<String, String> =
         headers(token) + ("Content-Type" to "application/json")
 
+    override fun comments(repo: ForgeRepo, number: Long, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${mergeRequestUri(repo, number, "/notes")}?per_page=$COMMENT_LIMIT&sort=asc"),
+        headers(token),
+    )
+
+    override fun parseComments(body: String): ForgeAnswer<List<String>> =
+        decodeForge(body, ListSerializer(GlNote.serializer())) { notes ->
+            notes.filterNot { it.system }.mapNotNull { it.body?.trim()?.ifBlank { null } }
+        }
+
+    override fun jobs(repo: ForgeRepo, runId: Long, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}/pipelines/$runId/jobs?per_page=$JOB_LIMIT"),
+        headers(token),
+    )
+
+    override fun parseJobs(body: String): ForgeAnswer<List<ForgeJob>> =
+        decodeForge(body, ListSerializer(GlJob.serializer())) { jobs ->
+            jobs.map { ForgeJob(it.id, it.name?.ifBlank { null }, it.status == "failed") }
+        }
+
+    override fun jobLog(repo: ForgeRepo, jobId: Long, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${base(repo.host)}/projects/${pathSegment(repo.path)}/jobs/$jobId/trace"),
+        headers(token),
+    )
+
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         pipelineAction(repo, runId, "retry", token)
 
@@ -187,6 +216,12 @@ private data class GlMergeRequest(
 
 @Serializable
 private data class GlUser(val username: String = "")
+
+@Serializable
+private data class GlNote(val body: String? = null, val system: Boolean = false)
+
+@Serializable
+private data class GlJob(val id: Long = 0, val name: String? = null, val status: String? = null)
 
 @Serializable
 private data class GlProject(val permissions: GlPermissions? = null)

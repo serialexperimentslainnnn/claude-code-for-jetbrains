@@ -73,6 +73,37 @@ object ForgeService {
 
     fun canUnapprove(repo: ForgeRepo): Boolean = apiFor(repo.provider).unapprove(repo, 1, "probe") != null
 
+    fun comments(repo: ForgeRepo, number: Long): List<String> {
+        val api = apiFor(repo.provider)
+        val body = fetch(repo, "", { r, _, token -> api.comments(r, number, token) }, requireBranch = false)
+        return when (body) {
+            is ForgeAnswer.Silent -> emptyList()
+            is ForgeAnswer.Known -> (api.parseComments(body.value) as? ForgeAnswer.Known)?.value.orEmpty()
+        }
+    }
+
+    fun failedJobLog(repo: ForgeRepo, runId: Long): Pair<String?, Redacted?> {
+        val api = apiFor(repo.provider)
+        val listing = fetch(repo, "", { r, _, token -> api.jobs(r, runId, token) }, requireBranch = false)
+        val jobs = when (listing) {
+            is ForgeAnswer.Silent -> return null to null
+            is ForgeAnswer.Known -> (api.parseJobs(listing.value) as? ForgeAnswer.Known)?.value.orEmpty()
+        }
+        val job = jobs.firstOrNull { it.failed } ?: jobs.lastOrNull() ?: return null to null
+        val trace = fetch(repo, "", { r, _, token -> api.jobLog(r, job.id, token) }, requireBranch = false)
+        return when (trace) {
+            is ForgeAnswer.Silent -> job.name to null
+            is ForgeAnswer.Known -> job.name to SecretRedactor.scrub(tail(trace.value))
+        }
+    }
+
+    private fun tail(log: String): String {
+        val lines = log.lines()
+        return if (lines.size <= MAX_LOG_LINES) log else lines.takeLast(MAX_LOG_LINES).joinToString("\n")
+    }
+
+    private const val MAX_LOG_LINES = 400
+
     fun retryRun(repo: ForgeRepo, runId: Long): ForgeOutcome =
         act(repo) { r, token -> apiFor(r.provider).retryRun(r, runId, token) }
 

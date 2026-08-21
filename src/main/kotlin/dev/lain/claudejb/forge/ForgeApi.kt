@@ -44,6 +44,16 @@ internal interface ForgeApi {
 
     fun openPullRequest(repo: ForgeRepo, source: String, target: String, title: String, token: String): ForgeRequest
 
+    fun comments(repo: ForgeRepo, number: Long, token: String): ForgeRequest
+
+    fun parseComments(body: String): ForgeAnswer<List<String>>
+
+    fun jobs(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
+
+    fun parseJobs(body: String): ForgeAnswer<List<ForgeJob>>
+
+    fun jobLog(repo: ForgeRepo, jobId: Long, token: String): ForgeRequest
+
     fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
 
     fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest

@@ -199,6 +199,40 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         return ForgeActionRequest.Open(source, target, title)
     }
 
+    private fun onForgeAsk(m: JcefBridge.Msg.ForgeAsk) {
+        val branch = m.branch.ifBlank { null }
+        when (m.ask) {
+            "review" -> ForgePromptedActions.reviewPrompt(m.number, branch)?.let { ask(it) }
+            "describe" -> ForgePromptedActions.describePrompt(m.number.takeIf { it > 0 }, branch)?.let { ask(it) }
+            "diagnose" -> askAboutFailure(m)
+            "comments" -> askAboutComments(m, branch)
+            else -> logger.warn("The Git view asked Claude something this build does not offer: ${m.ask}")
+        }
+    }
+
+    private fun askAboutComments(m: JcefBridge.Msg.ForgeAsk, branch: String?) {
+        GitIntegration.getInstance(panel.project).readComments(m.number) { comments ->
+            val prompt = ForgePromptedActions.commentsPrompt(m.number, branch, comments)
+            if (prompt == null) {
+                panel.gitChat.session().systemNotice("There are no review comments on `#${m.number}` to work through.")
+                return@readComments
+            }
+            ask(prompt)
+        }
+    }
+
+    private fun askAboutFailure(m: JcefBridge.Msg.ForgeAsk) {
+        val git = GitIntegration.getInstance(panel.project)
+        git.readFailedLog(m.number) { name, log ->
+            ForgePromptedActions.failurePrompt(name ?: m.name.ifBlank { null }, log)?.let { ask(it) }
+        }
+    }
+
+    private fun ask(text: String) {
+        panel.gitChat.show()
+        panel.gitChat.session().send(text)
+    }
+
     private fun onSetWorkloadWindow(minutes: Int) {
         if (minutes !in WorkloadWindow.WINDOW_MINUTES) {
             logger.warn("Workloads view asked for a window this build does not offer: $minutes")
@@ -481,6 +515,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GitAction -> onGitAction(m)
 
         is JcefBridge.Msg.ForgeAction -> onForgeAction(m)
+
+        is JcefBridge.Msg.ForgeAsk -> onForgeAsk(m)
 
         JcefBridge.Msg.NewChat -> ClaudeToolWindowFactory.newChat(panel.project)
 

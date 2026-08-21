@@ -53,6 +53,8 @@ enum class ForgeRunStatus(val wire: String) {
     STOPPED("stopped"),
 }
 
+data class ForgeJob(val id: Long, val name: String?, val failed: Boolean)
+
 data class ForgeRun(
     val id: Long,
     val name: String?,

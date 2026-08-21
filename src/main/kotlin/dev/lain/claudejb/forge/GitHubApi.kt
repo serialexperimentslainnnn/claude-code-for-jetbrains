@@ -17,6 +17,10 @@ internal object GitHubApi : ForgeApi {
 
     private const val RUN_LIMIT = 20
 
+    private const val JOB_LIMIT = 50
+
+    private const val COMMENT_LIMIT = 50
+
     private val IN_FLIGHT = setOf("queued", "in_progress", "waiting", "requested", "pending")
 
     private val NOT_FAILING = setOf("success", "neutral")
@@ -116,6 +120,29 @@ internal object GitHubApi : ForgeApi {
     private fun jsonHeaders(token: String): Map<String, String> =
         headers(token) + ("Content-Type" to "application/json")
 
+    override fun comments(repo: ForgeRepo, number: Long, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${repoBase(repo)}/issues/$number/comments?per_page=$COMMENT_LIMIT"),
+        headers(token),
+    )
+
+    override fun parseComments(body: String): ForgeAnswer<List<String>> =
+        decodeForge(body, ListSerializer(GhComment.serializer())) { comments ->
+            comments.mapNotNull { it.body?.trim()?.ifBlank { null } }
+        }
+
+    override fun jobs(repo: ForgeRepo, runId: Long, token: String): ForgeRequest = ForgeRequest(
+        URI.create("${repoBase(repo)}/actions/runs/$runId/jobs?per_page=$JOB_LIMIT"),
+        headers(token),
+    )
+
+    override fun parseJobs(body: String): ForgeAnswer<List<ForgeJob>> =
+        decodeForge(body, GhJobs.serializer()) { reply ->
+            reply.jobs.map { ForgeJob(it.id, it.name?.ifBlank { null }, it.conclusion == "failure") }
+        }
+
+    override fun jobLog(repo: ForgeRepo, jobId: Long, token: String): ForgeRequest =
+        ForgeRequest(URI.create("${repoBase(repo)}/actions/jobs/$jobId/logs"), headers(token))
+
     override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
         runAction(repo, runId, "rerun", token)
 
@@ -190,6 +217,15 @@ private data class GhPull(
 
 @Serializable
 private data class GhUser(val login: String = "")
+
+@Serializable
+private data class GhComment(val body: String? = null)
+
+@Serializable
+private data class GhJobs(val jobs: List<GhJob> = emptyList())
+
+@Serializable
+private data class GhJob(val id: Long = 0, val name: String? = null, val conclusion: String? = null)
 
 @Serializable
 private data class GhRepo(val permissions: GhPermissions? = null)

@@ -27,6 +27,7 @@ import dev.lain.claudejb.forge.ForgeOutcome
 import dev.lain.claudejb.forge.ForgeProbe
 import dev.lain.claudejb.forge.ForgeProvider
 import dev.lain.claudejb.forge.ForgeRepo
+import dev.lain.claudejb.forge.Redacted
 import dev.lain.claudejb.forge.ForgeService
 import dev.lain.claudejb.forge.ForgeTokens
 import dev.lain.claudejb.git.GitAvailability
@@ -195,6 +196,30 @@ internal class GitIntegration(private val project: Project) {
     private fun history(): GitHistoryService = project.service<GitHistoryService>()
 
     fun currentBranch(): String? = history().currentBranch()
+
+    fun readComments(number: Long, onRead: (List<String>) -> Unit) {
+        val repo = forgeRepo(history())
+        if (repo == null) {
+            onRead(emptyList())
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val comments = ForgeService.comments(repo, number)
+            edt { onRead(comments) }
+        }
+    }
+
+    fun readFailedLog(runId: Long, onRead: (String?, Redacted?) -> Unit) {
+        val repo = forgeRepo(history())
+        if (repo == null) {
+            onRead(null, null)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val (name, log) = ForgeService.failedJobLog(repo, runId)
+            edt { onRead(name, log) }
+        }
+    }
 
     private fun relativeChangedFile(root: String, changes: List<String>, absolutePath: String?): String? {
         val absolute = absolutePath ?: return null
