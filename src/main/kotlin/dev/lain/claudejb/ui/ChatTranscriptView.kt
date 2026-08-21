@@ -25,7 +25,7 @@ internal class ChatTranscriptView(
 
     private var shown: Shown = Shown.Chat
 
-    private var lastPushed: String? = null
+    private var lastRows: List<String> = emptyList()
 
     val showsTask: Boolean get() = shown is Shown.Task
 
@@ -42,7 +42,7 @@ internal class ChatTranscriptView(
         if (shown == next) return
         shown = next
         dirty.clear()
-        lastPushed = null
+        lastRows = emptyList()
         exec("window.cc.clear && window.cc.clear()")
         when (next) {
             is Shown.Chat -> {
@@ -84,18 +84,17 @@ internal class ChatTranscriptView(
 
             else -> false
         }
-        val payload =
-            if (entries.isEmpty()) {
-                ""
-            } else {
-                JcefTranscriptPayload.agentBatchJson(entries, titles, running, expanded, ownerRunning)
-            }
-        if (payload == lastPushed) return
-        lastPushed = payload
-        exec("window.cc.clear && window.cc.clear()")
-        if (payload.isNotEmpty()) {
-            exec("window.cc.batch && window.cc.batch($payload)")
+        val rows = JcefTranscriptPayload.agentRowsJson(entries, titles, running, expanded, ownerRunning)
+        if (rows == lastRows) return
+        if (rows.size < lastRows.size) {
+            lastRows = rows
+            exec("window.cc.clear && window.cc.clear()")
+            if (rows.isNotEmpty()) exec("window.cc.batch && window.cc.batch([${rows.joinToString(",")}])")
+            return
         }
+        val changed = rows.filterIndexed { index, row -> index >= lastRows.size || lastRows[index] != row }
+        lastRows = rows
+        if (changed.isNotEmpty()) exec("window.cc.batch && window.cc.batch([${changed.joinToString(",")}])")
     }
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {
