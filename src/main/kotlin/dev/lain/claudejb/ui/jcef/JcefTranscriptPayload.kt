@@ -68,6 +68,12 @@ object JcefTranscriptPayload {
                 dto.filePath?.let { put("filePath", it) }
                 dto.commandText?.let { put("command", it) }
                 dto.messageText?.let { put("message", it) }
+                dto.blockedRule?.let { rule ->
+                    put("blockedRule", rule)
+                    put("blockedRuleWarns", SecurityRule.from(rule)?.whitelistable == false)
+                }
+                dto.bypassedRule?.let { put("bypassedRule", it) }
+                dto.bypassAction?.let { put("bypassAction", it) }
                 put("state", agentRowState(dto, running, ownerRunning))
                 if (expanded) put("open", true)
                 put("elapsed", 0)
