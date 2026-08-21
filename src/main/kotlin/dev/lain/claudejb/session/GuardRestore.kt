@@ -7,25 +7,43 @@ import dev.lain.claudejb.settings.GuardAlert
 object GuardRestore {
 
     fun reinstate(dtos: List<EntryDTO>, alerts: List<GuardAlert>): List<EntryDTO> {
-        val rows = alerts.mapNotNull(::rowFor)
+        val rows = alerts
+            .filter { it.at > 0 }
+            .mapNotNull { alert -> rowFor(alert)?.let { Row(alert.at, it.first, it.second) } }
         if (rows.isEmpty()) return dtos
 
         val parentOfAnchor = dtos.mapNotNull { dto -> dto.toolUseId?.let { it to dto.parentToolUseId } }.toMap()
-        val anchored = rows.map { (anchor, row) ->
-            anchor to row.copy(parentToolUseId = anchor?.let { parentOfAnchor[it] })
+        val anchored = rows.map { row ->
+            row.copy(entry = row.entry.copy(parentToolUseId = row.anchor?.let { parentOfAnchor[it] }))
         }
-        val byAnchor = anchored.filter { it.first != null }.groupBy({ it.first }, { it.second })
+        val byAnchor = anchored.filter { it.anchor != null }.groupBy({ it.anchor }, { it.entry })
+
         val placed = mutableSetOf<String>()
+        val datable = dtos.any { it.atMillis != null }
+        val loose = anchored
+            .filter { datable && (it.anchor == null || it.anchor !in parentOfAnchor.keys) }
+            .sortedBy { it.at }
         val out = mutableListOf<EntryDTO>()
+        var next = 0
         for (dto in dtos) {
+            val stamp = dto.atMillis
+            while (stamp != null && next < loose.size && loose[next].at <= stamp) {
+                out.add(loose[next].entry)
+                next++
+            }
             out.add(dto)
             val anchor = dto.toolUseId ?: continue
             if (!placed.add(anchor)) continue
             byAnchor[anchor]?.let(out::addAll)
         }
-        out.addAll(anchored.filter { it.first == null || it.first !in placed }.map { it.second })
+        while (next < loose.size) {
+            out.add(loose[next].entry)
+            next++
+        }
         return out
     }
+
+    private data class Row(val at: Long, val anchor: String?, val entry: EntryDTO)
 
     private fun rowFor(alert: GuardAlert): Pair<String?, EntryDTO>? {
         val rule = SecurityRule.from(alert.rule) ?: return null

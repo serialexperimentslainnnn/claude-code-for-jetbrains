@@ -32,6 +32,44 @@ class GuardRestoreTest {
         command = command,
     )
 
+    private fun stampedRow(id: String, at: Long) =
+        EntryDTO(speaker = "TOOL", text = "Bash", toolUseId = id, atMillis = at)
+
+    private fun stampedAlert(at: Long) = alert(GuardAlert.DENIED, toolUseId = "gone").copy(at = at)
+
+    @Test
+    fun `an alert whose call fell off the tail lands where it happened, not at the end`() {
+        val out = GuardRestore.reinstate(
+            listOf(stampedRow("tu_1", at = 100), stampedRow("tu_2", at = 300)),
+            listOf(stampedAlert(at = 200)),
+        )
+
+        assertEquals(3, out.size)
+        assertEquals("tu_1", out[0].toolUseId)
+        assertEquals(rule.name, out[1].blockedRule, "it belongs between the two calls it happened between")
+        assertEquals("tu_2", out[2].toolUseId)
+    }
+
+    @Test
+    fun `several homeless alerts keep the order they happened in`() {
+        val out = GuardRestore.reinstate(
+            listOf(stampedRow("tu_1", at = 100), stampedRow("tu_2", at = 400)),
+            listOf(stampedAlert(at = 300), stampedAlert(at = 200)),
+        )
+
+        assertEquals(listOf(null, rule.name, rule.name, null), out.map { it.blockedRule })
+    }
+
+    @Test
+    fun `an alert later than everything restored still comes last`() {
+        val out = GuardRestore.reinstate(
+            listOf(stampedRow("tu_1", at = 100)),
+            listOf(stampedAlert(at = 900)),
+        )
+
+        assertEquals(rule.name, out.last().blockedRule)
+    }
+
     @Test
     fun `a conversation with no alerts comes back exactly as it went in`() {
         val dtos = listOf(toolRow("tu_1"), toolRow("tu_2"))
@@ -96,21 +134,25 @@ class GuardRestoreTest {
     }
 
     @Test
-    fun `an alert whose call fell off the tail is kept, at the end`() {
+    fun `an alert with nowhere to go is left to the guard log, not dumped at the end`() {
         val out = GuardRestore.reinstate(
             listOf(toolRow("tu_9")),
             listOf(alert(GuardAlert.DENIED, toolUseId = "tu_gone")),
         )
 
-        assertEquals(2, out.size)
-        assertEquals(rule.name, out.last().blockedRule, "out of position beats not there at all")
+        assertEquals(1, out.size, "a transcript with no timestamps cannot say where this belongs")
+        assertNull(out.last().blockedRule)
     }
 
     @Test
-    fun `an alert with no anchor at all is kept too`() {
-        val out = GuardRestore.reinstate(listOf(toolRow("tu_1")), listOf(alert(GuardAlert.DENIED, toolUseId = null)))
+    fun `an alert older than this release, with no time of its own, is not restored`() {
+        val out = GuardRestore.reinstate(
+            listOf(stampedRow("tu_1", at = 100)),
+            listOf(alert(GuardAlert.DENIED, toolUseId = null).copy(at = 0)),
+        )
 
-        assertEquals(rule.name, out.last().blockedRule)
+        assertEquals(1, out.size)
+        assertNull(out.last().blockedRule)
     }
 
     @Test
