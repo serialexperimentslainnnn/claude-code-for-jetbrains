@@ -3,8 +3,6 @@ package dev.lain.claudejb.forge
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.net.URI
 
 internal object GitHubApi : ForgeApi {
@@ -16,10 +14,6 @@ internal object GitHubApi : ForgeApi {
     private const val PULL_REQUEST_LIMIT = 20
 
     private const val RUN_LIMIT = 20
-
-    private const val JOB_LIMIT = 50
-
-    private const val COMMENT_LIMIT = 50
 
     private val IN_FLIGHT = setOf("queued", "in_progress", "waiting", "requested", "pending")
 
@@ -33,8 +27,7 @@ internal object GitHubApi : ForgeApi {
         ForgeRequest(
             URI.create(
                 "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}/pulls" +
-                    "?state=open&per_page=$PULL_REQUEST_LIMIT&sort=updated&direction=desc" +
-                    if (branch.isBlank()) "" else "&head=${queryValue("${repo.owner}:$branch")}",
+                    "?state=open&per_page=$PULL_REQUEST_LIMIT&head=${queryValue("${repo.owner}:$branch")}",
             ),
             headers(token),
         )
@@ -50,113 +43,6 @@ internal object GitHubApi : ForgeApi {
 
     override fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>> =
         decodeForge(body, ListSerializer(GhPull.serializer())) { pulls -> pulls.map { it.toModel() } }
-
-    override fun access(repo: ForgeRepo, token: String): ForgeRequest =
-        ForgeRequest(
-            URI.create("${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}"),
-            headers(token),
-        )
-
-    override fun parseAccess(body: String): ForgeAnswer<ForgeAccessLevel> =
-        decodeForge(body, GhRepo.serializer()) { repo ->
-            val rights = repo.permissions
-            when {
-                rights == null -> ForgeAccessLevel.READ
-                rights.admin || rights.maintain -> ForgeAccessLevel.ADMIN
-                rights.push -> ForgeAccessLevel.WRITE
-                rights.pull || rights.triage -> ForgeAccessLevel.READ
-                else -> ForgeAccessLevel.NONE
-            }
-        }
-
-    override fun viewer(repo: ForgeRepo, token: String): ForgeRequest =
-        ForgeRequest(URI.create("${base(repo.host)}/user"), headers(token))
-
-    override fun parseViewer(body: String): ForgeAnswer<String?> =
-        decodeForge(body, GhUser.serializer()) { it.login.ifBlank { null } }
-
-    override fun approve(repo: ForgeRepo, number: Long, token: String): ForgeRequest = ForgeRequest(
-        pullUri(repo, number, "/reviews"),
-        jsonHeaders(token),
-        method = "POST",
-        body = buildJsonObject { put("event", "APPROVE") }.toString(),
-    )
-
-    override fun unapprove(repo: ForgeRepo, number: Long, token: String): ForgeRequest? = null
-
-    override fun merge(repo: ForgeRepo, number: Long, token: String): ForgeRequest =
-        ForgeRequest(pullUri(repo, number, "/merge"), headers(token), method = "PUT")
-
-    override fun comment(repo: ForgeRepo, number: Long, text: String, token: String): ForgeRequest = ForgeRequest(
-        URI.create("${repoBase(repo)}/issues/$number/comments"),
-        jsonHeaders(token),
-        method = "POST",
-        body = buildJsonObject { put("body", text) }.toString(),
-    )
-
-    override fun openPullRequest(
-        repo: ForgeRepo,
-        source: String,
-        target: String,
-        title: String,
-        token: String,
-    ): ForgeRequest = ForgeRequest(
-        URI.create("${repoBase(repo)}/pulls"),
-        jsonHeaders(token),
-        method = "POST",
-        body = buildJsonObject {
-            put("head", source)
-            put("base", target)
-            put("title", title)
-        }.toString(),
-    )
-
-    private fun repoBase(repo: ForgeRepo): String =
-        "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}"
-
-    private fun pullUri(repo: ForgeRepo, number: Long, suffix: String): URI =
-        URI.create("${repoBase(repo)}/pulls/$number$suffix")
-
-    private fun jsonHeaders(token: String): Map<String, String> =
-        headers(token) + ("Content-Type" to "application/json")
-
-    override fun comments(repo: ForgeRepo, number: Long, token: String): ForgeRequest = ForgeRequest(
-        URI.create("${repoBase(repo)}/issues/$number/comments?per_page=$COMMENT_LIMIT"),
-        headers(token),
-    )
-
-    override fun parseComments(body: String): ForgeAnswer<List<String>> =
-        decodeForge(body, ListSerializer(GhComment.serializer())) { comments ->
-            comments.mapNotNull { it.body?.trim()?.ifBlank { null } }
-        }
-
-    override fun jobs(repo: ForgeRepo, runId: Long, token: String): ForgeRequest = ForgeRequest(
-        URI.create("${repoBase(repo)}/actions/runs/$runId/jobs?per_page=$JOB_LIMIT"),
-        headers(token),
-    )
-
-    override fun parseJobs(body: String): ForgeAnswer<List<ForgeJob>> =
-        decodeForge(body, GhJobs.serializer()) { reply ->
-            reply.jobs.map { ForgeJob(it.id, it.name?.ifBlank { null }, it.conclusion == "failure") }
-        }
-
-    override fun jobLog(repo: ForgeRepo, jobId: Long, token: String): ForgeRequest =
-        ForgeRequest(URI.create("${repoBase(repo)}/actions/jobs/$jobId/logs"), headers(token))
-
-    override fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
-        runAction(repo, runId, "rerun", token)
-
-    override fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest =
-        runAction(repo, runId, "cancel", token)
-
-    private fun runAction(repo: ForgeRepo, runId: Long, verb: String, token: String) = ForgeRequest(
-        URI.create(
-            "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}" +
-                "/actions/runs/$runId/$verb",
-        ),
-        headers(token),
-        method = "POST",
-    )
 
     override fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>> =
         decodeForge(body, GhRuns.serializer()) { runs -> runs.workflowRuns.mapNotNull { it.toModel() } }
@@ -178,14 +64,11 @@ internal object GitHubApi : ForgeApi {
         state = state,
         draft = draft,
         author = user?.login?.ifBlank { null },
-        sourceBranch = head?.ref?.ifBlank { null },
-        targetBranch = base?.ref?.ifBlank { null },
     )
 
     private fun GhRun.toModel(): ForgeRun? {
         val state = statusOf(status, conclusion) ?: return null
         return ForgeRun(
-            id = id,
             name = name?.ifBlank { null },
             status = state,
             url = htmlUrl,
@@ -211,36 +94,10 @@ private data class GhPull(
     val state: String = "open",
     val draft: Boolean = false,
     val user: GhUser? = null,
-    val head: GhRef? = null,
-    val base: GhRef? = null,
 )
 
 @Serializable
 private data class GhUser(val login: String = "")
-
-@Serializable
-private data class GhComment(val body: String? = null)
-
-@Serializable
-private data class GhJobs(val jobs: List<GhJob> = emptyList())
-
-@Serializable
-private data class GhJob(val id: Long = 0, val name: String? = null, val conclusion: String? = null)
-
-@Serializable
-private data class GhRepo(val permissions: GhPermissions? = null)
-
-@Serializable
-private data class GhPermissions(
-    val admin: Boolean = false,
-    val maintain: Boolean = false,
-    val push: Boolean = false,
-    val triage: Boolean = false,
-    val pull: Boolean = false,
-)
-
-@Serializable
-private data class GhRef(val ref: String = "")
 
 @Serializable
 private data class GhRuns(
@@ -249,7 +106,6 @@ private data class GhRuns(
 
 @Serializable
 private data class GhRun(
-    val id: Long = 0,
     val name: String? = null,
     val status: String? = null,
     val conclusion: String? = null,

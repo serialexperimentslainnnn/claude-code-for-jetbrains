@@ -6,12 +6,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-internal class ForgeRequest(
-    val uri: URI,
-    val headers: Map<String, String>,
-    val method: String = "GET",
-    val body: String? = null,
-) {
+internal class ForgeRequest(val uri: URI, val headers: Map<String, String>) {
 
     override fun toString(): String = "ForgeRequest(uri=$uri)"
 }
@@ -25,38 +20,6 @@ internal interface ForgeApi {
     fun parsePullRequests(body: String): ForgeAnswer<List<ForgePullRequest>>
 
     fun parseRuns(body: String): ForgeAnswer<List<ForgeRun>>
-
-    fun access(repo: ForgeRepo, token: String): ForgeRequest
-
-    fun parseAccess(body: String): ForgeAnswer<ForgeAccessLevel>
-
-    fun viewer(repo: ForgeRepo, token: String): ForgeRequest
-
-    fun parseViewer(body: String): ForgeAnswer<String?>
-
-    fun approve(repo: ForgeRepo, number: Long, token: String): ForgeRequest
-
-    fun unapprove(repo: ForgeRepo, number: Long, token: String): ForgeRequest?
-
-    fun merge(repo: ForgeRepo, number: Long, token: String): ForgeRequest
-
-    fun comment(repo: ForgeRepo, number: Long, text: String, token: String): ForgeRequest
-
-    fun openPullRequest(repo: ForgeRepo, source: String, target: String, title: String, token: String): ForgeRequest
-
-    fun comments(repo: ForgeRepo, number: Long, token: String): ForgeRequest
-
-    fun parseComments(body: String): ForgeAnswer<List<String>>
-
-    fun jobs(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
-
-    fun parseJobs(body: String): ForgeAnswer<List<ForgeJob>>
-
-    fun jobLog(repo: ForgeRepo, jobId: Long, token: String): ForgeRequest
-
-    fun retryRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
-
-    fun cancelRun(repo: ForgeRepo, runId: Long, token: String): ForgeRequest
 }
 
 internal fun apiFor(provider: ForgeProvider): ForgeApi = when (provider) {

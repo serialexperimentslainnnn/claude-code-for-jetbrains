@@ -93,10 +93,9 @@ class JcefGitDataTest {
     fun `a configured forge that answered carries every run, not just the newest`() {
         val snapshot = populated().copy(
             forgeConfigured = true,
-            forgeProvider = "gitlab",
             runs = listOf(
-                ForgeRun(2, "Second", ForgeRunStatus.RUNNING, "https://h/2", null),
-                ForgeRun(1, "First", ForgeRunStatus.FAILED, "https://h/1", "x"),
+                ForgeRun(name = "Second", status = ForgeRunStatus.RUNNING, url = "https://h/2", finishedAtIso = null),
+                ForgeRun(name = "First", status = ForgeRunStatus.FAILED, url = "https://h/1", finishedAtIso = "x"),
             ),
         )
 
@@ -105,7 +104,6 @@ class JcefGitDataTest {
 
         assertTrue(forge["configured"]!!.jsonPrimitive.boolean)
         assertTrue(forge["answered"]!!.jsonPrimitive.boolean)
-        assertEquals("gitlab", forge["provider"]!!.jsonPrimitive.content)
         assertEquals(2, git["runs"]!!.jsonArray.size)
         assertEquals("Second", git["runs"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
     }

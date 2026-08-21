@@ -26,19 +26,15 @@ class ForgeServiceTest {
     fun `no token for the host is a silence, not an error and not a prompt`() {
         assertEquals(
             ForgeAnswer.Silent(ForgeSilence.NO_TOKEN),
-            ForgeService.openPullRequests(github),
+            ForgeService.openPullRequests(github, "main"),
         )
         assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_TOKEN), ForgeService.runs(github, "main"))
     }
 
     @Test
-    fun `a detached head still has pipelines to ask about by branch, but not merge requests`() {
+    fun `a detached head has no branch to ask about`() {
+        assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_BRANCH), ForgeService.openPullRequests(github, ""))
         assertEquals(ForgeAnswer.Silent(ForgeSilence.NO_BRANCH), ForgeService.runs(github, "   "))
-        assertEquals(
-            ForgeAnswer.Silent(ForgeSilence.NO_TOKEN),
-            ForgeService.openPullRequests(github),
-            "the open list is the project's, so no branch is needed to ask for it",
-        )
     }
 
     @Test
@@ -52,7 +48,7 @@ class ForgeServiceTest {
         ).forEach { host ->
             assertEquals(
                 ForgeAnswer.Silent(ForgeSilence.UNSUPPORTED_HOST),
-                ForgeService.openPullRequests(github.copy(host = host)),
+                ForgeService.openPullRequests(github.copy(host = host), "main"),
             ) { host }
         }
     }

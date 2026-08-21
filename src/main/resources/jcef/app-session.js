@@ -139,20 +139,13 @@
     return gitSub;
   };
 
-  var GIT_SUBVIEWS = {
-    overview: 'Git overview',
-    merges: 'Git merge requests',
-    pipelines: 'Git pipelines',
-    chat: 'Git chat',
-  };
-
   D.setGitSubView = function (view) {
-    var next = GIT_SUBVIEWS[view] ? view : 'overview';
+    var next = view === 'chat' ? 'chat' : 'overview';
     if (gitSub === next) return;
     gitSub = next;
     if (built && shown) render();
     var c = core();
-    if (c && typeof c.announce === 'function') c.announce(GIT_SUBVIEWS[next]);
+    if (c && typeof c.announce === 'function') c.announce(next === 'chat' ? 'Git chat' : 'Git overview');
   };
 
   var VIEWS = {
@@ -195,11 +188,10 @@
       title: 'Git',
       empty: 'No Git repository for this project.',
       cards: function (s) {
-        if (gitSub === 'merges') return [D.buildGitHeadCard(s.git), D.buildGitMergesCard(s.git)];
-        if (gitSub === 'pipelines') return [D.buildGitHeadCard(s.git), D.buildGitPipelinesCard(s.git)];
         return [
           D.buildGitHeadCard(s.git),
           D.buildGitTopologyCard(s.git),
+          D.buildGitForgeCard(s.git),
           D.buildGitActionsCard(s.git),
           D.buildGitHistoryCard(s.git),
         ];

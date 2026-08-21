@@ -408,57 +408,6 @@ button.git-ref:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.git-scopes {
-  display: flex;
-  gap: 4px;
-  padding-bottom: 6px;
-}
-.git-scope {
-  min-height: 22px;
-  padding: 1px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--dim);
-  cursor: pointer;
-  font-family: var(--font);
-  font-size: 11px;
-}
-.git-scope:hover,
-.git-scope:focus-visible {
-  color: var(--text);
-}
-.git-scope.active {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.git-forge-act {
-  flex: 0 0 auto;
-}
-.git-forge-act.danger {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  color: var(--danger);
-}
-.git-forge-act.danger:hover,
-.git-forge-act.danger:focus-visible {
-  border-color: var(--danger);
-}
-
-.git-forge-branch {
-  flex: 0 1 auto;
-  max-width: 30%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--dim);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-.git-forge-row.here .git-forge-branch {
-  color: var(--accent);
-}
-
 .git-forge-draft {
   flex: 0 0 auto;
   color: var(--dim);

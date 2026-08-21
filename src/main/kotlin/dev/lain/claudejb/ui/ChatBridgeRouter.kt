@@ -170,69 +170,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         if (GitActionCatalog.byId(m.id)?.kind == GitActionCatalog.Kind.PROMPT) panel.gitChat.show()
     }
 
-    private fun onForgeAction(m: JcefBridge.Msg.ForgeAction) {
-        val request = forgeRequest(m)
-        if (request == null) {
-            logger.warn("The Git view asked for a forge action this build does not offer: ${m.action}")
-            return
-        }
-        val notice: (String) -> Unit = { panel.gitChat.session().systemNotice(it) }
-        GitIntegration.getInstance(panel.project).act(request, notice) { panel.pushGit() }
-    }
-
-    private fun forgeRequest(m: JcefBridge.Msg.ForgeAction): ForgeActionRequest? = when (m.action) {
-        "approve" -> ForgeActionRequest.Approve(m.number)
-        "unapprove" -> ForgeActionRequest.Unapprove(m.number)
-        "merge" -> ForgeActionRequest.Merge(m.number, m.title, m.target.ifBlank { null })
-        "comment" -> m.text.trim().takeIf { it.isNotEmpty() }?.let { ForgeActionRequest.Comment(m.number, it) }
-        "open" -> openRequest(m)
-        "retryRun" -> ForgeActionRequest.RetryRun(m.number)
-        "cancelRun" -> ForgeActionRequest.CancelRun(m.number)
-        else -> null
-    }
-
-    private fun openRequest(m: JcefBridge.Msg.ForgeAction): ForgeActionRequest? {
-        val source = GitIntegration.getInstance(panel.project).currentBranch()?.takeIf { it.isNotBlank() }
-        val target = m.target.trim().takeIf { it.isNotEmpty() }
-        val title = m.title.trim().takeIf { it.isNotEmpty() }
-        if (source == null || target == null || title == null) return null
-        return ForgeActionRequest.Open(source, target, title)
-    }
-
-    private fun onForgeAsk(m: JcefBridge.Msg.ForgeAsk) {
-        val branch = m.branch.ifBlank { null }
-        when (m.ask) {
-            "review" -> ForgePromptedActions.reviewPrompt(m.number, branch)?.let { ask(it) }
-            "describe" -> ForgePromptedActions.describePrompt(m.number.takeIf { it > 0 }, branch)?.let { ask(it) }
-            "diagnose" -> askAboutFailure(m)
-            "comments" -> askAboutComments(m, branch)
-            else -> logger.warn("The Git view asked Claude something this build does not offer: ${m.ask}")
-        }
-    }
-
-    private fun askAboutComments(m: JcefBridge.Msg.ForgeAsk, branch: String?) {
-        GitIntegration.getInstance(panel.project).readComments(m.number) { comments ->
-            val prompt = ForgePromptedActions.commentsPrompt(m.number, branch, comments)
-            if (prompt == null) {
-                panel.gitChat.session().systemNotice("There are no review comments on `#${m.number}` to work through.")
-                return@readComments
-            }
-            ask(prompt)
-        }
-    }
-
-    private fun askAboutFailure(m: JcefBridge.Msg.ForgeAsk) {
-        val git = GitIntegration.getInstance(panel.project)
-        git.readFailedLog(m.number) { name, log ->
-            ForgePromptedActions.failurePrompt(name ?: m.name.ifBlank { null }, log)?.let { ask(it) }
-        }
-    }
-
-    private fun ask(text: String) {
-        panel.gitChat.show()
-        panel.gitChat.session().send(text)
-    }
-
     private fun onSetWorkloadWindow(minutes: Int) {
         if (minutes !in WorkloadWindow.WINDOW_MINUTES) {
             logger.warn("Workloads view asked for a window this build does not offer: $minutes")
@@ -516,10 +453,6 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.SetWorkloadWindow -> onSetWorkloadWindow(m.minutes)
 
         is JcefBridge.Msg.GitAction -> onGitAction(m)
-
-        is JcefBridge.Msg.ForgeAction -> onForgeAction(m)
-
-        is JcefBridge.Msg.ForgeAsk -> onForgeAsk(m)
 
         JcefBridge.Msg.NewChat -> ClaudeToolWindowFactory.newChat(panel.project)
 
