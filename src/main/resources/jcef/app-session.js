@@ -304,13 +304,13 @@
     var stack = h(
       'div',
       { class: 'dash-toggles' },
-      planBtn,
       chatBtn,
       viewButton('Workloads', 'workloads'),
       gitBtn,
       viewButton('Guard', 'guard'),
       vulnBtn,
-      toggleBtn
+      toggleBtn,
+      planBtn
     );
     toggles = stack;
     mountToggles();
