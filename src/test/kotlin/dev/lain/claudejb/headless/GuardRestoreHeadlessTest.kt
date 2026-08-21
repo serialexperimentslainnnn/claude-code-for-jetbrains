@@ -4,8 +4,10 @@ import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import dev.lain.claudejb.permission.PermissionBroker
 import dev.lain.claudejb.permission.SecurityRule
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EntryDTO
+import dev.lain.claudejb.ui.ChatTranscriptView
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.GuardAlert
 import dev.lain.claudejb.settings.GuardAlertLog
@@ -106,6 +108,39 @@ class GuardRestoreHeadlessTest : BasePlatformTestCase() {
         try {
             assertEquals(dtos.size, session.transcript.entries.size)
             assertTrue(session.transcript.entries.all { it.blockedRule == null && it.bypassedRule == null })
+        } finally {
+            session.dispose()
+        }
+    }
+
+    fun `test an alert raised inside an agent goes to that agent, not to the main chat`() {
+        record(GuardAlert.DENIED, "tu_inside_the_agent")
+        record(GuardAlert.DENIED, "tu_in_the_chat")
+        val session = restored(listOf(toolRow("tu_in_the_chat")))
+        try {
+            val rows = session.transcript.entries
+            assertEquals("only the call the chat itself made is reported here", 2, rows.size)
+            assertEquals(rule.name, rows[1].blockedRule)
+
+            val mine = session.guardAlertsAnchoredIn(listOf(toolRow("tu_inside_the_agent")))
+            assertEquals(1, mine.size)
+            assertEquals("tu_inside_the_agent", mine.first().toolUseId)
+        } finally {
+            session.dispose()
+        }
+    }
+
+    fun `test the tab an alert landed in is the one that counts as having shown it`() {
+        val session = ClaudeSession(project, "t")
+        try {
+            val view = ChatTranscriptView(session) { }
+            assertTrue("a fresh view is the chat", view.shows(AttentionLanding.Chat))
+
+            view.showTranscript("agent-1")
+            assertTrue(view.shows(AttentionLanding.Agent("agent-1")))
+            assertFalse("another agent's tab does not count as having shown it", view.shows(AttentionLanding.Agent("agent-2")))
+            assertFalse("the chat is no longer what is on screen", view.shows(AttentionLanding.Chat))
+            assertFalse("an alert we cannot place is never assumed to be visible", view.shows(AttentionLanding.Elsewhere))
         } finally {
             session.dispose()
         }

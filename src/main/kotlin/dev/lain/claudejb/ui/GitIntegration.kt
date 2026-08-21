@@ -29,6 +29,7 @@ import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.git.GitLogNavigator
 import dev.lain.claudejb.git.GitLogScope
 import dev.lain.claudejb.git.GitRemoteProvider
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -250,7 +251,7 @@ internal class GitIntegration(private val project: Project) {
             if (session.turnActive) started = true
         }
 
-        override fun onAttention(reason: AttentionReason) {
+        override fun onAttention(reason: AttentionReason, landing: AttentionLanding) {
             if (!started) return
             if (reason != AttentionReason.TURN_DONE && reason != AttentionReason.ERROR) return
             session.removeListener(this)

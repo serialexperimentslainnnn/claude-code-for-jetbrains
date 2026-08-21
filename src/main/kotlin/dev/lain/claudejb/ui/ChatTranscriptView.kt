@@ -1,7 +1,9 @@
 package dev.lain.claudejb.ui
 
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EntryDTO
+import dev.lain.claudejb.session.GuardRestore
 import dev.lain.claudejb.session.TranscriptEntry
 import dev.lain.claudejb.session.TranscriptModel
 import dev.lain.claudejb.ui.jcef.JcefBridge
@@ -51,7 +53,7 @@ internal class ChatTranscriptView(
                 trimNotice(emptyList(), session.transcript.trimmedCount)
             }
 
-            is Shown.Agent -> pushEntries(session.runningAgents.nodes[next.id]?.entries.orEmpty())
+            is Shown.Agent -> pushEntries(agentEntries(next.id))
 
             is Shown.Task -> {
                 exec("window.cc.revealTaskTab && window.cc.revealTaskTab(" + JcefBridge.jsString(next.id) + ")")
@@ -63,9 +65,20 @@ internal class ChatTranscriptView(
     fun refreshShown() {
         when (val current = shown) {
             is Shown.Chat -> Unit
-            is Shown.Agent -> pushEntries(session.runningAgents.nodes[current.id]?.entries.orEmpty())
+            is Shown.Agent -> pushEntries(agentEntries(current.id))
             is Shown.Task -> pushEntries(BackgroundTaskView.entries(session, current.id), expanded = true)
         }
+    }
+
+    private fun agentEntries(agentId: String): List<EntryDTO> {
+        val entries = session.runningAgents.nodes[agentId]?.entries.orEmpty()
+        return GuardRestore.reinstate(entries, session.guardAlertsAnchoredIn(entries))
+    }
+
+    fun shows(landing: AttentionLanding): Boolean = when (landing) {
+        is AttentionLanding.Chat -> showsChat
+        is AttentionLanding.Agent -> shown == Shown.Agent(landing.agentId)
+        is AttentionLanding.Elsewhere -> false
     }
 
     private fun pushEntries(entries: List<EntryDTO>, expanded: Boolean = false) {

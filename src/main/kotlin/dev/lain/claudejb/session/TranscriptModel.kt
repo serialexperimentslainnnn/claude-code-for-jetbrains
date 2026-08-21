@@ -70,6 +70,8 @@ class TranscriptModel {
     @TestOnly
     fun parentToolOf(toolUseId: String): String? = parentOf[toolUseId]
 
+    fun knowsTool(toolUseId: String): Boolean = byToolUseId.containsKey(toolUseId)
+
     fun add(
         speaker: Speaker,
         text: String,

@@ -15,6 +15,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.content.ContentFactory
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
@@ -53,7 +54,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val panel = JcefChatPanel(project, session)
         val tab = tabs.add(panel, tabTitle(session.title), session.title, panel)
         session.addListener(object : SessionListener {
-            override fun onAttention(reason: AttentionReason) = onSessionAttention(project, tabs, session, reason)
+            override fun onAttention(reason: AttentionReason, landing: AttentionLanding) =
+                onSessionAttention(project, tabs, session, reason, landing)
             override fun onTitleChanged() {
                 tabs.tabFor(session)?.let { tabs.relabel(it, tabTitle(session.title), session.title) }
             }
@@ -65,11 +67,17 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
     }
 
-    private fun onSessionAttention(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, reason: AttentionReason) {
+    private fun onSessionAttention(
+        project: Project,
+        tabs: ChatTabsPanel,
+        session: ClaudeSession,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ) {
         val tw = resolveToolWindow(project)
         val tab = tabs.tabFor(session) ?: return
         val tabOnScreen = tw != null && tw.isVisible && tabs.selected === tab
-        if (tabOnScreen && showsWhereItLanded(tab, reason)) return
+        if (tabOnScreen && showsWhereItLanded(tab, reason, landing)) return
 
         tabs.badge(tab, true)
 
@@ -94,9 +102,13 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             .notify(project)
     }
 
-    private fun showsWhereItLanded(tab: ChatTabsPanel.ChatTab, reason: AttentionReason): Boolean =
+    private fun showsWhereItLanded(
+        tab: ChatTabsPanel.ChatTab,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ): Boolean =
         reason != AttentionReason.GUARD_BLOCKED ||
-            (tab.component as? JcefChatPanel)?.transcript?.showsChat != false
+            (tab.component as? JcefChatPanel)?.transcript?.shows(landing) != false
 
     private fun notificationTypeFor(reason: AttentionReason): NotificationType = when (reason) {
         AttentionReason.ERROR -> NotificationType.ERROR

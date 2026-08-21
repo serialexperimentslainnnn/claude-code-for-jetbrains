@@ -375,6 +375,8 @@ class ClaudeSession(
 
     val guardLog = GuardLogTally()
 
+    private val guardAlerts = java.util.concurrent.CopyOnWriteArrayList<GuardAlert>()
+
     private val broker by lazy {
         PermissionBroker(
             permissionMode = { permissionMode },
@@ -391,15 +393,18 @@ class ClaudeSession(
             isGuardCommandApproved = { rule, command -> guardApprovals.isApproved(rule, command) },
             onSensitiveDenied = { denial ->
                 edt {
-                    transcript.add(
-                        Speaker.SYSTEM,
-                        denial.reason?.let { "Blocked ${denial.toolName}: it $it." }
-                            ?: "Blocked ${denial.toolName} by the sensitive-data guard. " +
-                            "See Settings ▸ Claude Code Security.",
-                        commandText = denial.command?.takeIf { it.isNotBlank() },
-                        blockedRule = denial.rule?.name,
-                    )
-                    fireAttention(AttentionReason.GUARD_BLOCKED)
+                    val landing = guardLandingOf(denial.toolUseId)
+                    if (landing == AttentionLanding.Chat) {
+                        transcript.add(
+                            Speaker.SYSTEM,
+                            denial.reason?.let { "Blocked ${denial.toolName}: it $it." }
+                                ?: "Blocked ${denial.toolName} by the sensitive-data guard. " +
+                                "See Settings ▸ Claude Code Security.",
+                            commandText = denial.command?.takeIf { it.isNotBlank() },
+                            blockedRule = denial.rule?.name,
+                        )
+                    }
+                    fireAttention(AttentionReason.GUARD_BLOCKED, landing)
                 }
                 recordAlert(
                     GuardAlert.DENIED,
@@ -423,6 +428,7 @@ class ClaudeSession(
                     bypass.rule,
                     offer,
                     bypass.command,
+                    bypass.toolUseId,
                 )
                 recordAlert(
                     GuardAlert.ALLOWED,
@@ -830,22 +836,20 @@ class ClaudeSession(
     ) {
         val matched = rule ?: return
         val settings = ClaudeSettings.getInstance(project)
-        val submitted = GuardAlertLog.record(
-            settings.scope,
-            GuardAlert(
-                at = System.currentTimeMillis(),
-                rule = matched.name,
-                category = matched.category.name,
-                verdict = verdict,
-                sessionId = sessionId,
-                toolUseId = toolUseId,
-                via = via,
-                tool = toolName,
-                detail = detail,
-                command = command,
-            ),
-            retentionDays = settings.state.guardLogRetentionDays,
+        val alert = GuardAlert(
+            at = System.currentTimeMillis(),
+            rule = matched.name,
+            category = matched.category.name,
+            verdict = verdict,
+            sessionId = sessionId,
+            toolUseId = toolUseId,
+            via = via,
+            tool = toolName,
+            detail = detail,
+            command = command,
         )
+        guardAlerts += alert
+        val submitted = GuardAlertLog.record(settings.scope, alert, retentionDays = settings.state.guardLogRetentionDays)
         guardLog.submitted(submitted != null)
     }
 
@@ -874,10 +878,9 @@ class ClaudeSession(
         agentScanner.restoreAdmitted(onTasksReplayed = ::fireState)
         toolUseTurn.clear()
         currentUserMessageId = null
-        val withGuard = GuardRestore.reinstate(
-            dtos,
-            GuardAlertLog.forSession(ClaudeSettings.getInstance(project).scope, savedSessionId),
-        )
+        val saved = GuardAlertLog.forSession(ClaudeSettings.getInstance(project).scope, savedSessionId)
+        guardAlerts.addAll(saved)
+        val withGuard = GuardRestore.reinstate(dtos, saved)
         edt {
             transcript.clear()
             for (dto in withGuard) {
@@ -1393,7 +1396,9 @@ class ClaudeSession(
         rule: SecurityRule,
         action: String? = null,
         command: String? = null,
+        toolUseId: String? = null,
     ) = edt {
+        if (guardLandingOf(toolUseId) != AttentionLanding.Chat) return@edt
         transcript.add(
             Speaker.SYSTEM,
             "Allowed $toolName: $reason.",
@@ -1401,6 +1406,19 @@ class ClaudeSession(
             bypassedRule = rule.name,
             bypassAction = action,
         )
+    }
+
+    private fun guardLandingOf(toolUseId: String?): AttentionLanding {
+        if (toolUseId == null || transcript.knowsTool(toolUseId)) return AttentionLanding.Chat
+        val owner = runningAgents.nodes.values
+            .firstOrNull { node -> node.entries.any { it.toolUseId == toolUseId } }
+        return owner?.let { AttentionLanding.Agent(it.agentId) } ?: AttentionLanding.Elsewhere
+    }
+
+    fun guardAlertsAnchoredIn(entries: List<EntryDTO>): List<GuardAlert> {
+        if (guardAlerts.isEmpty()) return emptyList()
+        val anchors = entries.mapNotNullTo(HashSet()) { it.toolUseId }
+        return guardAlerts.filter { it.toolUseId in anchors }
     }
 
     fun scanAgents() = agentScanner.scan()
@@ -1445,7 +1463,8 @@ class ClaudeSession(
     private fun fireState() = listeners.forEach { it.onStateChanged() }
     private fun fireMetadata() = listeners.forEach { it.onMetadataChanged() }
     private fun firePermissions() = listeners.forEach { it.onPermissionsChanged() }
-    private fun fireAttention(reason: AttentionReason) = listeners.forEach { it.onAttention(reason) }
+    private fun fireAttention(reason: AttentionReason, landing: AttentionLanding = AttentionLanding.Chat) =
+        listeners.forEach { it.onAttention(reason, landing) }
     private fun fireTitleChanged() = listeners.forEach { it.onTitleChanged() }
 
     private fun edt(block: () -> Unit) =
