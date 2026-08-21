@@ -27,7 +27,8 @@ internal object GitHubApi : ForgeApi {
         ForgeRequest(
             URI.create(
                 "${base(repo.host)}/repos/${pathSegment(repo.owner)}/${pathSegment(repo.name)}/pulls" +
-                    "?state=open&per_page=$PULL_REQUEST_LIMIT&head=${queryValue("${repo.owner}:$branch")}",
+                    "?state=open&per_page=$PULL_REQUEST_LIMIT&sort=updated&direction=desc" +
+                    if (branch.isBlank()) "" else "&head=${queryValue("${repo.owner}:$branch")}",
             ),
             headers(token),
         )
@@ -64,6 +65,7 @@ internal object GitHubApi : ForgeApi {
         state = state,
         draft = draft,
         author = user?.login?.ifBlank { null },
+        sourceBranch = head?.ref?.ifBlank { null },
     )
 
     private fun GhRun.toModel(): ForgeRun? {
@@ -94,10 +96,14 @@ private data class GhPull(
     val state: String = "open",
     val draft: Boolean = false,
     val user: GhUser? = null,
+    val head: GhRef? = null,
 )
 
 @Serializable
 private data class GhUser(val login: String = "")
+
+@Serializable
+private data class GhRef(val ref: String = "")
 
 @Serializable
 private data class GhRuns(

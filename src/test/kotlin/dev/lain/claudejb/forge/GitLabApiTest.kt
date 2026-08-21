@@ -1,6 +1,7 @@
 package dev.lain.claudejb.forge
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -13,9 +14,25 @@ class GitLabApiTest {
     fun `a nested group's project path is one percent-encoded segment`() {
         assertEquals(
             "https://gitlab.com/api/v4/projects/platform%2Fbackend%2Fsvc/merge_requests" +
-                "?state=opened&per_page=20&source_branch=feature%2Fx",
+                "?state=opened&per_page=20&order_by=updated_at&sort=desc&source_branch=feature%2Fx",
             GitLabApi.pullRequests(repo, "feature/x", "t").uri.toString(),
         )
+    }
+
+    @Test
+    fun `the merge request URL asks for the whole project, not one branch`() {
+        val url = GitLabApi.pullRequests(repo, "", "t").uri.toString()
+
+        assertTrue(url.contains("state=opened"))
+        assertFalse(url.contains("source_branch="), "a blank branch means every open merge request")
+    }
+
+    @Test
+    fun `a merge request says which branch it came from, so a list of many can be told apart`() {
+        val mrs = known(GitLabApi.parsePullRequests(TWO_MERGE_REQUESTS))
+
+        assertEquals("feature/x", mrs[0].sourceBranch)
+        assertNull(mrs[1].sourceBranch, "a reply without the field still parses")
     }
 
     @Test

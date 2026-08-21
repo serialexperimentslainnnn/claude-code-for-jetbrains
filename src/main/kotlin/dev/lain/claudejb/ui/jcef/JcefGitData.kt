@@ -84,6 +84,7 @@ object JcefGitData {
                 put("state", pull.state)
                 put("draft", pull.draft)
                 put("author", pull.author)
+                put("sourceBranch", pull.sourceBranch)
             }
         }
     }

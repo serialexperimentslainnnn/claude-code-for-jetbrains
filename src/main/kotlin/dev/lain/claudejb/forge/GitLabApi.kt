@@ -28,7 +28,8 @@ internal object GitLabApi : ForgeApi {
         ForgeRequest(
             URI.create(
                 "${base(repo.host)}/projects/${pathSegment(repo.path)}/merge_requests" +
-                    "?state=opened&per_page=$MERGE_REQUEST_LIMIT&source_branch=${queryValue(branch)}",
+                    "?state=opened&per_page=$MERGE_REQUEST_LIMIT&order_by=updated_at&sort=desc" +
+                    if (branch.isBlank()) "" else "&source_branch=${queryValue(branch)}",
             ),
             headers(token),
         )
@@ -62,6 +63,7 @@ internal object GitLabApi : ForgeApi {
         state = if (state == "opened") "open" else state,
         draft = draft,
         author = author?.username?.ifBlank { null },
+        sourceBranch = sourceBranch?.ifBlank { null },
     )
 
     private fun GlPipeline.toModel(): ForgeRun? {
@@ -91,6 +93,7 @@ private data class GlMergeRequest(
     val state: String = "opened",
     val draft: Boolean = false,
     val author: GlUser? = null,
+    @SerialName("source_branch") val sourceBranch: String? = null,
 )
 
 @Serializable

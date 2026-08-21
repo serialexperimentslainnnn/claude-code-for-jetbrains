@@ -1,6 +1,7 @@
 package dev.lain.claudejb.forge
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -10,9 +11,10 @@ class GitHubApiTest {
     private val repo = ForgeRepo(ForgeProvider.GITHUB, "github.com", "acme", "widget")
 
     @Test
-    fun `the pulls URL filters by open state and by owner-qualified head branch`() {
+    fun `a branch narrows the pulls URL with an owner-qualified head`() {
         assertEquals(
-            "https://api.github.com/repos/acme/widget/pulls?state=open&per_page=20&head=acme%3Afeature%2Fx",
+            "https://api.github.com/repos/acme/widget/pulls?state=open&per_page=20&sort=updated" +
+                "&direction=desc&head=acme%3Afeature%2Fx",
             GitHubApi.pullRequests(repo, "feature/x", "t").uri.toString(),
         )
     }
@@ -46,11 +48,28 @@ class GitHubApiTest {
         val pulls = known(GitHubApi.parsePullRequests(TWO_PULLS))
 
         assertEquals(
-            ForgePullRequest(42, "Add the thing", "https://github.com/acme/widget/pull/42", "open", false, "ada"),
+            ForgePullRequest(
+                42,
+                "Add the thing",
+                "https://github.com/acme/widget/pull/42",
+                "open",
+                false,
+                "ada",
+                "feature/x",
+            ),
             pulls[0],
         )
         assertTrue(pulls[1].draft)
         assertEquals("grace", pulls[1].author)
+        assertNull(pulls[1].sourceBranch, "a reply without a head still parses, it just cannot say the branch")
+    }
+
+    @Test
+    fun `the pull request URL asks for the whole project, not one branch`() {
+        val url = GitHubApi.pullRequests(repo, "", "t").uri.toString()
+
+        assertTrue(url.contains("state=open"))
+        assertFalse(url.contains("head="), "a blank branch means every open pull request")
     }
 
     @Test
@@ -144,7 +163,8 @@ class GitHubApiTest {
         val TWO_PULLS = """
             [
               {"number": 42, "title": "Add the thing", "html_url": "https://github.com/acme/widget/pull/42",
-               "state": "open", "draft": false, "user": {"login": "ada"}, "locked": false},
+               "state": "open", "draft": false, "user": {"login": "ada"}, "locked": false,
+               "head": {"ref": "feature/x", "sha": "cf73e32"}},
               {"number": 43, "title": "WIP", "html_url": "https://github.com/acme/widget/pull/43",
                "state": "open", "draft": true, "user": {"login": "grace"}}
             ]

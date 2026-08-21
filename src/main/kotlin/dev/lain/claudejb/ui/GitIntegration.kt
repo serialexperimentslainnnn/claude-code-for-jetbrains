@@ -119,7 +119,12 @@ internal class GitIntegration(private val project: Project) {
             changedFileOpen = relativeChangedFile(root, changes, openFilePath) != null,
             actionStates = states.toMap(),
             topology = history.branchTopology(),
-            pullRequests = forge.drawable(branch) { repo, on -> ForgeService.openPullRequests(repo, on) },
+            pullRequests = forge?.let { repo ->
+                when (val answer = ForgeService.openPullRequests(repo)) {
+                    is ForgeAnswer.Known -> answer.value
+                    is ForgeAnswer.Silent -> null
+                }
+            },
             runs = runs,
             lastRun = runs?.firstOrNull(),
             forgeConfigured = forge != null,

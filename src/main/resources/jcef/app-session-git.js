@@ -628,14 +628,57 @@
     return card('Branch', rows, false, 'git-topology');
   }
 
+  var mergeScope = 'all';
+
+  function scopeTab(label, scope) {
+    var active = mergeScope === scope;
+    return h('button', {
+      class: 'git-scope' + (active ? ' active' : ''),
+      attrs: { type: 'button', 'aria-pressed': active ? 'true' : 'false' },
+      text: label,
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          if (mergeScope === scope) return;
+          mergeScope = scope;
+          if (typeof D.repaint === 'function') D.repaint();
+        },
+      },
+    });
+  }
+
+  function scopeStrip(current) {
+    return h(
+      'div',
+      { class: 'git-scopes', attrs: { role: 'group', 'aria-label': 'Which branches to show' } },
+      scopeTab('All branches', 'all'),
+      scopeTab(current ? 'This branch' : 'Current branch', 'branch')
+    );
+  }
+
   function buildGitMergesCard(git) {
     var g = gitOf(git);
     if (!g || !repoOf(g).present) return null;
 
+    var current = text(repoOf(g).branch, '');
     var pulls = list(g.pullRequests);
-    var body = pulls.length
-      ? pulls.map(pullRow)
-      : [h('div', { class: 'git-note', text: forgeNote(git, 'Nothing open for this branch.') })];
+    var shown =
+      mergeScope === 'branch' && current
+        ? pulls.filter(function (p) {
+            return text(p.sourceBranch, '') === current;
+          })
+        : pulls;
+
+    var body = [scopeStrip(current)];
+    if (shown.length) {
+      shown.forEach(function (pull) {
+        body.push(pullRow(pull, current));
+      });
+    } else if (pulls.length) {
+      body.push(h('div', { class: 'git-note', text: 'Nothing open for ' + current + '.' }));
+    } else {
+      body.push(h('div', { class: 'git-note', text: forgeNote(git, 'Nothing open in this project.') }));
+    }
 
     return card(mergeWord(git), body, false, 'git-merges');
   }
@@ -663,13 +706,16 @@
     );
   }
 
-  function pullRow(pull) {
+  function pullRow(pull, current) {
     var number = pull.number == null ? '' : '#' + pull.number;
+    var branch = text(pull.sourceBranch, '');
+    var mine = !!branch && branch === current;
     return h(
       'div',
-      { class: 'git-forge-row' },
+      { class: 'git-forge-row' + (mine ? ' here' : '') },
       h('span', { class: 'git-forge-num', text: number }),
       h('span', { class: 'git-forge-label', text: text(pull.title, '(no title)') }),
+      branch ? h('span', { class: 'git-forge-branch', attrs: { title: branch }, text: branch }) : null,
       pull.draft ? h('span', { class: 'git-forge-draft', text: 'draft' }) : null,
       linkTo('Open', text(pull.url, ''), 'git-forge-open')
     );

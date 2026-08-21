@@ -7,6 +7,7 @@ data class ForgePullRequest(
     val state: String,
     val draft: Boolean,
     val author: String?,
+    val sourceBranch: String?,
 )
 
 enum class ForgeRunStatus(val wire: String) {
