@@ -1,6 +1,7 @@
 package dev.lain.claudejb.ui.jcef
 
 import dev.lain.claudejb.permission.PermissionBroker
+import dev.lain.claudejb.permission.SecurityCategory
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.settings.GuardAlert
 import kotlinx.serialization.json.JsonArray
@@ -60,7 +61,32 @@ object JcefGuardData {
             put("recording", recording)
             put("window", windowJson(newestFirst.size, recorded, dropped, max))
             put("tabs", tabsJson(newestFirst))
+            put("catalog", catalogJson())
             put("entries", entriesJson(newestFirst))
+        }
+    }
+
+    private fun catalogJson(): JsonArray = buildJsonArray {
+        SecurityCategory.entries.forEach { category ->
+            add(
+                buildJsonObject {
+                    put("id", category.name)
+                    put("label", category.label)
+                    put(
+                        "rules",
+                        buildJsonArray {
+                            SecurityRule.of(category).forEach { rule ->
+                                add(
+                                    buildJsonObject {
+                                        put("id", rule.name)
+                                        put("label", rule.label)
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
         }
     }
 
@@ -102,6 +128,7 @@ object JcefGuardData {
             put("rule", alert.rule)
             put("ruleLabel", rule?.label ?: alert.rule)
             put("category", rule?.category?.label ?: alert.category)
+            put("categoryId", rule?.category?.name ?: alert.category)
             put("explainable", tabOf(alert) == BLOCKED && rule != null)
             alert.tool?.takeIf { it.isNotBlank() }?.let { put("tool", it) }
             alert.detail?.takeIf { it.isNotBlank() }?.let { put("detail", it) }

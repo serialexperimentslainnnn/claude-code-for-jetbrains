@@ -176,6 +176,52 @@
   border-color: var(--accent);
   color: var(--text);
 }
+.guard-whitelist {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.guard-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 0;
+}
+.guard-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
+}
+.guard-filter-search {
+  flex: 1 1 180px;
+}
+.guard-filter-label {
+  color: var(--dim);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.guard-search,
+.guard-filter-select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 11.5px;
+  padding: 4px 6px;
+}
+.guard-search:focus-visible,
+.guard-filter-select:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.guard-filter-select option:checked {
+  background: var(--accent);
+  color: var(--bg);
+}
 
 .guard-log-link {
   border: none;

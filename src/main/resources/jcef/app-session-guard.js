@@ -19,6 +19,10 @@
   var payload = null;
   var tab = 'blocked';
   var open = false;
+  var queryRaw = '';
+  var query = '';
+  var pickedCategories = null;
+  var pickedRules = null;
 
   function text(value, fallback) {
     return value == null || value === '' ? fallback : String(value);
@@ -39,6 +43,43 @@
   function entriesFor(id) {
     return list(payload && payload.entries).filter(function (e) {
       return text(e.tab, '') === id;
+    });
+  }
+
+  function catalog() {
+    return list(payload && payload.catalog);
+  }
+
+  function rulesOfCategories(picked) {
+    var out = [];
+    catalog().forEach(function (c) {
+      if (picked && picked.indexOf(text(c.id, '')) < 0) return;
+      list(c.rules).forEach(function (r) {
+        out.push({ id: text(r.id, ''), label: text(r.label, text(r.id, '')) });
+      });
+    });
+    return out;
+  }
+
+  function matchesQuery(entry) {
+    if (!query) return true;
+    var hay = [entry.ruleLabel, entry.category, entry.command, entry.detail, entry.tool, entry.verdictLabel]
+      .map(function (v) {
+        return text(v, '').toLowerCase();
+      })
+      .join(' ');
+    return hay.indexOf(query) >= 0;
+  }
+
+  function matchesFilters(entry) {
+    if (pickedCategories && pickedCategories.indexOf(text(entry.categoryId, '')) < 0) return false;
+    if (pickedRules && pickedRules.indexOf(text(entry.rule, '')) < 0) return false;
+    return true;
+  }
+
+  function visibleEntries(id) {
+    return entriesFor(id).filter(function (e) {
+      return matchesQuery(e) && matchesFilters(e);
     });
   }
 
@@ -153,6 +194,101 @@
     );
   }
 
+  var ALL = '__all__';
+
+  function pickedFrom(select) {
+    var chosen = [];
+    var all = false;
+    Array.prototype.forEach.call(select.options, function (opt) {
+      if (!opt.selected) return;
+      if (opt.value === ALL) all = true;
+      else chosen.push(opt.value);
+    });
+    return all || !chosen.length ? null : chosen;
+  }
+
+  function multiSelect(label, options, picked, onPick) {
+    var select = h('select', {
+      class: 'guard-filter-select',
+      attrs: { multiple: 'multiple', size: '4', 'aria-label': label },
+      on: {
+        change: function (ev) {
+          onPick(pickedFrom(ev.currentTarget));
+        },
+      },
+    });
+    var allOption = h('option', { attrs: { value: ALL }, text: 'All' });
+    if (!picked) allOption.selected = true;
+    select.appendChild(allOption);
+    options.forEach(function (opt) {
+      var node = h('option', { attrs: { value: opt.id }, text: opt.label });
+      if (picked && picked.indexOf(opt.id) >= 0) node.selected = true;
+      select.appendChild(node);
+    });
+    return h(
+      'label',
+      { class: 'guard-filter' },
+      h('span', { class: 'guard-filter-label', text: label }),
+      select
+    );
+  }
+
+  function restoreSearchFocus(caret) {
+    var next = document.querySelector('.guard-search');
+    if (!next) return;
+    next.focus();
+    if (caret == null || typeof next.setSelectionRange !== 'function') return;
+    next.setSelectionRange(caret, caret);
+  }
+
+  function searchBox() {
+    var input = h('input', {
+      class: 'guard-search',
+      attrs: {
+        type: 'search',
+        placeholder: 'rule, command, tool…',
+        'aria-label': 'Search the guard log',
+      },
+      on: {
+        input: function (ev) {
+          var el = ev.currentTarget;
+          var caret = el.selectionStart;
+          queryRaw = String(el.value || '');
+          query = queryRaw.trim().toLowerCase();
+          if (typeof D.repaintGuard === 'function') D.repaintGuard();
+          restoreSearchFocus(caret);
+        },
+      },
+    });
+    input.value = queryRaw;
+    return h(
+      'label',
+      { class: 'guard-filter guard-filter-search' },
+      h('span', { class: 'guard-filter-label', text: 'Search' }),
+      input
+    );
+  }
+
+  function filterStrip() {
+    var categories = catalog().map(function (c) {
+      return { id: text(c.id, ''), label: text(c.label, text(c.id, '')) };
+    });
+    return h(
+      'div',
+      { class: 'guard-filters', attrs: { role: 'group', 'aria-label': 'Filter the guard log' } },
+      searchBox(),
+      multiSelect('Category', categories, pickedCategories, function (picked) {
+        pickedCategories = picked;
+        pickedRules = null;
+        if (typeof D.repaintGuard === 'function') D.repaintGuard();
+      }),
+      multiSelect('Rule', rulesOfCategories(pickedCategories), pickedRules, function (picked) {
+        pickedRules = picked;
+        if (typeof D.repaintGuard === 'function') D.repaintGuard();
+      })
+    );
+  }
+
   function detailRow(label, value) {
     if (value == null || value === '') return null;
     return h(
@@ -168,23 +304,42 @@
     return h('pre', { class: 'guard-cmd' }, h('code', { text: String(command) }));
   }
 
-  function askButton(entry) {
+  function askAction(entry) {
     if (!entry.explainable) return null;
-    return h(
-      'div',
-      { class: 'guard-entry-actions' },
-      h('button', {
-        class: 'guard-ask',
-        attrs: { type: 'button' },
-        text: 'Ask Claude why',
-        on: {
-          click: function (ev) {
-            ev.preventDefault();
-            send({ type: 'guardExplain', id: text(entry.id, '') });
-          },
+    return h('button', {
+      class: 'guard-ask',
+      attrs: { type: 'button' },
+      text: 'Ask Claude why',
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          send({ type: 'guardExplain', id: text(entry.id, '') });
         },
-      })
-    );
+      },
+    });
+  }
+
+  function whitelistAction(entry) {
+    var command = text(entry.command, '');
+    var rule = text(entry.rule, '');
+    if (!command || !rule || text(entry.tab, '') === 'whitelisted') return null;
+    return h('button', {
+      class: 'guard-ask guard-whitelist',
+      attrs: { type: 'button' },
+      text: 'Whitelist',
+      on: {
+        click: function (ev) {
+          ev.preventDefault();
+          send({ type: 'guardWhitelist', rule: rule, command: command });
+        },
+      },
+    });
+  }
+
+  function entryActions(entry) {
+    var actions = [askAction(entry), whitelistAction(entry)].filter(Boolean);
+    if (!actions.length) return null;
+    return h('div', { class: 'guard-entry-actions' }, actions);
   }
 
   function entryNode(entry) {
@@ -207,18 +362,29 @@
       detailRow('Matched', text(entry.detail, null)),
       detailRow('Allowed by', text(entry.viaLabel, null)),
       commandRow(entry.command),
-      askButton(entry)
+      entryActions(entry)
     );
+  }
+
+  function filtering() {
+    return !!query || !!pickedCategories || !!pickedRules;
   }
 
   function buildEntriesCard() {
     var id = currentTab();
-    var rows = entriesFor(id);
+    var rows = visibleEntries(id);
     var shown = rows.slice(0, MAX_ROWS);
-    var body = [tabStrip()];
+    var body = [tabStrip(), filterStrip()];
 
     if (!shown.length) {
-      body.push(h('div', { class: 'guard-empty', text: 'Nothing in this chat landed here.' }));
+      body.push(
+        h('div', {
+          class: 'guard-empty',
+          text: filtering()
+            ? 'Nothing here matches the search and filters.'
+            : 'Nothing in this chat landed here.',
+        })
+      );
     } else {
       body.push(h('div', { class: 'guard-list' }, shown.map(entryNode)));
     }
