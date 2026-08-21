@@ -25,7 +25,7 @@ object DestructiveCommands {
 
     private val ORCHESTRATION: List<Regex> = listOf(
         re(
-            """\b(kubectl|oc)\b$SEG\bdelete\b$SEG\b(namespace|ns|pvc|persistentvolume|secret|""" +
+            """\b(kubectl|oc)\b$SEG\bdelete\b$SEG\b(namespace|ns|project|projects|pvc|persistentvolume|secret|""" +
                 """statefulset|deployment|crd|customresourcedefinition)\b""",
         ),
         re("""\b(kubectl|oc)\b$SEG\bdelete\b$SEG(--all\b|-A\b|--all-namespaces\b)"""),
