@@ -443,8 +443,10 @@ Adding a rule means adding a file, never a branch in the verdict:
    longer decides whether the rule can be lifted (every rule can), only whether whitelisting one of its
    commands from a block warns the user first.
 2. Put the detection in the matching family file, or a new one.
-3. Add its case to `GuardPolicyContractTest` — the `when` over every rule is exhaustive, so **a new rule
-   without a test case does not compile.**
+3. Write its tests beside the family's own: the commands that must be refused, and — the half that
+   actually declares the boundary — the near-miss commands that must still run. **Nothing enforces this.**
+   No gate fails on a rule that arrives without cases, so the discipline is manual, and a rule shipped
+   without its near-misses is one whose false positives your users will find for you.
 
 Both settings surfaces iterate the enum, so the rule appears in the UI on its own. And because the stored
 configuration is the set of rules the user switched *off*, a new rule is enforced from the moment it
