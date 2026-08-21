@@ -388,6 +388,9 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         target?.let { chat.cards.resolvePermission(it.requestId, true) }
     }
 
+    private fun editSnapshotAnywhere(toolUseId: String) =
+        session.cards.editSnapshot(toolUseId) ?: panel.gitChat.session().cards.editSnapshot(toolUseId)
+
     private fun onDiffs(m: JcefBridge.Msg.Diffs) = when (m) {
         is JcefBridge.Msg.ViewDiff -> {
             cardSession(m.scope).cards.pending().firstOrNull { it.requestId == m.id }
@@ -396,7 +399,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
 
         is JcefBridge.Msg.ViewDiffByTool -> {
-            session.cards.editSnapshot(m.toolUseId)?.let {
+            editSnapshotAnywhere(m.toolUseId)?.let {
                 DiffPresenter.openDiff(panel.project, it.toolName, it.input, it.beforeText)
             }
             Unit
