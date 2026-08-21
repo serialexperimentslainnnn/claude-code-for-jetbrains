@@ -202,7 +202,7 @@ class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
             "ideMcpEnabled", "ideMcpTransport", "ideMcpPort", "customMcpServers", "strictMcpConfig",
             "maxTurns", "maxBudgetUsd", "fallbackModel", "addDirs", "betas",
             "enableFileCheckpointing", "rewindFallback", "executionTrusted",
-            "securityRuleSuspensions",
+            "securityRuleSuspensions", "vulnConsent",
             "securityBlockCredentials", "securityBlockDangerousCommands", "securityBlockTempDirs",
             "securityBlockForeignOtherUserHome", "securityBlockForeignNetworkMounts",
             "securityBlockForeignWslMounts", "securityBlockOutsideProject",

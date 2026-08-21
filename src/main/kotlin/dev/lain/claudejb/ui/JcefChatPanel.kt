@@ -19,6 +19,7 @@ import dev.lain.claudejb.ui.jcef.JcefSessionData
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefState
 import dev.lain.claudejb.ui.jcef.JcefTheme
+import dev.lain.claudejb.vuln.VulnService
 import java.awt.BorderLayout
 
 class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
@@ -57,6 +58,8 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     internal val guard = GuardFeed(this)
 
+    internal val security = SecurityViews(this)
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -83,6 +86,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         pushPermissions()
         tray.push()
         pushSession()
+        security.pushVuln()
         whenReady(feed::onSessionReady)
         feed.start()
         transcript.fullResync()
@@ -163,13 +167,6 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     internal fun pushGit() = GitIntegration.getInstance(project).refresh(::pushSession)
 
-    internal fun pushGuard() = guard.push()
-
-    fun openGuardView() {
-        pushGuard()
-        host.exec("window.cc.openGuardView && window.cc.openGuardView()")
-    }
-
     internal fun pushSession() {
         val json = JcefSessionData.sessionJson(
             session,
@@ -179,6 +176,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
             workloads = chatStrip()?.workloads().orEmpty(),
             plan = feed.plan,
             git = GitIntegration.getInstance(project).snapshot(),
+            vuln = VulnService.getInstance(project).snapshot(),
         )
         if (json == lastSessionJson) return
         lastSessionJson = json
@@ -192,6 +190,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     fun openDashboard() {
         pushSession()
+        security.pushVuln()
         feed.requestMcp()
         feed.requestVersion()
         feed.requestUsage()

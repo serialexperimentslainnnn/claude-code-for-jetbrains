@@ -50,7 +50,7 @@ class GuardViewWiringContractTest {
         assertTrue(factory.contains("showGuardView")) {
             "the tool window's gear has no entry for the guard log"
         }
-        assertTrue(source("ui/JcefChatPanel.kt").readText().contains("window.cc.openGuardView")) {
+        assertTrue(source("ui/SecurityViews.kt").readText().contains("window.cc.openGuardView")) {
             "nothing on the host side can open the guard view, so the gear entry lands nowhere"
         }
         assertTrue(File(jcefRoot(), "app-session.js").readText().contains("'guard'")) {
@@ -61,9 +61,9 @@ class GuardViewWiringContractTest {
 
     @Test
     fun `opening the view refreshes it first, so it never opens on a stale read`() {
-        val lines = source("ui/JcefChatPanel.kt").readLines()
+        val lines = source("ui/SecurityViews.kt").readLines()
         val start = lines.indexOfFirst { it.contains("fun openGuardView()") }
-        assertTrue(start >= 0) { "JcefChatPanel no longer opens the guard view" }
+        assertTrue(start >= 0) { "SecurityViews no longer opens the guard view" }
         val body = lines.drop(start).take(BODY_LINES)
         val push = body.indexOfFirst { it.contains("pushGuard()") }
         val open = body.indexOfFirst { it.contains("window.cc.openGuardView") }

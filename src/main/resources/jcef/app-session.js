@@ -14,6 +14,7 @@
   var toggleBtn = null;
   var planBtn = null;
   var gitBtn = null;
+  var vulnBtn = null;
   var panel = null;
   var inner = null;
   var toggles = null;
@@ -33,6 +34,7 @@
     var s = lastSession;
     optionalButton(planBtn, 'plan', !!(s && s.plan && s.plan.body));
     optionalButton(gitBtn, 'git', !!(s && s.git && s.git.available));
+    optionalButton(vulnBtn, 'security', !!(s && s.vuln && s.vuln.available));
   }
 
   function optionalButton(btn, view, has) {
@@ -181,6 +183,13 @@
         ];
       },
     },
+    security: {
+      title: 'Security',
+      empty: 'No dependency manifest this build can read was found in this project.',
+      cards: function (s) {
+        return typeof D.buildVulnCards === 'function' ? D.buildVulnCards(s.vuln) : [];
+      },
+    },
   };
 
   function viewButton(label, view) {
@@ -277,6 +286,8 @@
     planBtn.hidden = true;
     gitBtn = viewButton('Git', 'git');
     gitBtn.hidden = true;
+    vulnBtn = viewButton('Security', 'security');
+    vulnBtn.hidden = true;
     var stack = h(
       'div',
       { class: 'dash-toggles' },
@@ -285,6 +296,7 @@
       viewButton('Workloads', 'workloads'),
       viewButton('Guard', 'guard'),
       gitBtn,
+      vulnBtn,
       planBtn
     );
     toggles = stack;
@@ -325,6 +337,8 @@
   D.leaveDashboard = function () {
     if (shown) toggle();
   };
+
+  D.repaint = renderIfShown;
 
   D.toggleDashboard = toggle;
   D.dashboardShown = function () {
@@ -375,6 +389,16 @@
     shown = true;
     render();
     applyVisibility();
+  };
+
+  cc.showVulnView = function () {
+    ensureBuilt();
+    if (!built) return;
+    currentView = 'security';
+    shown = true;
+    render();
+    applyVisibility();
+    announceView();
   };
 
   cc.openDashboard = function () {

@@ -131,6 +131,18 @@ object JcefBridge {
 
         object OpenGitView : SessionControl
 
+        object OpenVulnView : SessionControl
+
+        data class VulnConsentChoice(val granted: Boolean) : SessionControl
+
+        object VulnScan : SessionControl
+
+        object VulnCancel : SessionControl
+
+        object VulnInventoryRequest : SessionControl
+
+        data class VulnFix(val findingId: String) : SessionControl
+
         data class RevealAgent(val agentId: String, val toolUseId: String, val chatId: String = "") :
             SessionControl
 
@@ -279,13 +291,33 @@ object JcefBridge {
 
     private fun parseSessionControls(type: String, f: Fields): Msg? = when (type) {
         "mcpReconnect" -> Msg.McpReconnect(f.text("name"))
+
         "mcpToggle" -> Msg.McpToggle(f.text("name"), f.bool("enabled"))
+
         "stopTask" -> Msg.StopTask(f.text("taskId"))
+
         "setWorkloadWindow" -> Msg.SetWorkloadWindow(f.int("minutes", -1))
+
         "installClaude" -> Msg.InstallClaude(f.text("method"))
+
         "setBinaryPath" -> Msg.SetBinaryPath(f.text("path"))
+
         "recheckBinary" -> Msg.RecheckBinary
-        else -> parseGitControls(type, f) ?: parseTabControls(type, f) ?: parseAuthControls(type, f)
+
+        else -> parseGitControls(type, f)
+            ?: parseVulnControls(type, f)
+            ?: parseTabControls(type, f)
+            ?: parseAuthControls(type, f)
+    }
+
+    private fun parseVulnControls(type: String, f: Fields): Msg? = when (type) {
+        "openVulnView" -> Msg.OpenVulnView
+        "vulnConsent" -> Msg.VulnConsentChoice(f.bool("granted"))
+        "vulnScan" -> Msg.VulnScan
+        "vulnCancel" -> Msg.VulnCancel
+        "vulnInventory" -> Msg.VulnInventoryRequest
+        "vulnFix" -> Msg.VulnFix(f.text("findingId"))
+        else -> null
     }
 
     private fun parseGitControls(type: String, f: Fields): Msg? = when (type) {

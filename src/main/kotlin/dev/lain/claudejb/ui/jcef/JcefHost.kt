@@ -364,43 +364,6 @@ class JcefHost(
 
         val libNames = listOf("purify.min.js", "marked.min.js", "highlight.min.js")
 
-        val appNames = listOf(
-            "app-core.js",
-            "app-core-markdown.js",
-            "app-core-diagram.js",
-            "app-core-theme.js",
-            "app-transcript.js",
-            "app-transcript-rows.js",
-            "app-transcript-tools.js",
-            "app-transcript-links.js",
-            "app-transcript-find.js",
-            "app-composer-base.js",
-            "app-composer-menus.js",
-            "app-composer-pills.js",
-            "app-composer-attach.js",
-            "app-composer-readout.js",
-            "app-composer-palette.js",
-            "app-composer-boot.js",
-            "app-composer-auth.js",
-            "app-composer-actions.js",
-            "app-composer-settings.js",
-            "app-composer.js",
-            "app-permissions.js",
-            "app-session-base.js",
-            "app-session-cards.js",
-            "app-session-mcp.js",
-            "app-session-workloads.js",
-            "app-session-git.js",
-            "app-session-gitchat.js",
-            "app-session-guard.js",
-            "app-session.js",
-            "app-tabs-base.js",
-            "app-tabs-guard.js",
-            "app-tabs-pill.js",
-            "app-tabs-scroll.js",
-            "app-tabs.js",
-        )
-
         val contents = LinkedHashMap<String, String>()
         (libNames + appNames).forEach { name -> readResource(name)?.let { contents[name] = it } }
 
@@ -436,6 +399,44 @@ class JcefHost(
     private companion object {
         private val log = logger<JcefHost>()
 
+        private val appNames = listOf(
+            "app-core.js",
+            "app-core-markdown.js",
+            "app-core-diagram.js",
+            "app-core-theme.js",
+            "app-transcript.js",
+            "app-transcript-rows.js",
+            "app-transcript-tools.js",
+            "app-transcript-links.js",
+            "app-transcript-find.js",
+            "app-composer-base.js",
+            "app-composer-menus.js",
+            "app-composer-pills.js",
+            "app-composer-attach.js",
+            "app-composer-readout.js",
+            "app-composer-palette.js",
+            "app-composer-boot.js",
+            "app-composer-auth.js",
+            "app-composer-actions.js",
+            "app-composer-settings.js",
+            "app-composer.js",
+            "app-permissions.js",
+            "app-session-base.js",
+            "app-session-cards.js",
+            "app-session-mcp.js",
+            "app-session-workloads.js",
+            "app-session-git.js",
+            "app-session-gitchat.js",
+            "app-session-guard.js",
+            "app-session-vuln.js",
+            "app-session.js",
+            "app-tabs-base.js",
+            "app-tabs-guard.js",
+            "app-tabs-pill.js",
+            "app-tabs-scroll.js",
+            "app-tabs.js",
+        )
+
         private val CSS_PARTS = listOf(
             "base.css",
             "transcript.css",
@@ -444,6 +445,7 @@ class JcefHost(
             "dashboard.css",
             "git.css",
             "guard.css",
+            "vuln.css",
             "boot.css",
             "tabs.css",
         )

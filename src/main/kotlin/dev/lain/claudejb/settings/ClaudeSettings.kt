@@ -60,6 +60,8 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var workloadWindowMinutes: Int = WorkloadWindow.DEFAULT_MINUTES
 
+        @JvmField var vulnConsent: String = ""
+
         @JvmField var enableFileCheckpointing: Boolean = true
 
         @JvmField var rewindFallback: String = ""

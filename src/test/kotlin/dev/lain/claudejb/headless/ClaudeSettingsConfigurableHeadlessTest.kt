@@ -260,6 +260,7 @@ class ClaudeSettingsConfigurableHeadlessTest : BasePlatformTestCase() {
             "securityBlockForeignOtherUserHome", "securityBlockForeignNetworkMounts",
             "securityBlockForeignWslMounts", "securityBlockOutsideProject",
             "securityRuleSuspensions",
+            "vulnConsent",
         )
 
         val UNWRITTEN_UNLESS_EDITED = setOf("model")

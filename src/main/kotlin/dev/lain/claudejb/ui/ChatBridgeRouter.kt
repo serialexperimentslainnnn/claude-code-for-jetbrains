@@ -22,6 +22,8 @@ import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
 import dev.lain.claudejb.ui.jcef.JcefTreeData
+import dev.lain.claudejb.ui.jcef.JcefVulnData
+import dev.lain.claudejb.vuln.VulnService
 import kotlinx.serialization.json.JsonObject
 import java.awt.datatransfer.StringSelection
 
@@ -92,7 +94,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         is JcefBridge.Msg.GuardRevokeApproval -> onGuardRevokeApproval(m)
         is JcefBridge.Msg.GuardRemoveWhitelist -> onGuardRemoveWhitelist(m)
         is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
-        JcefBridge.Msg.GuardLog -> panel.pushGuard()
+        JcefBridge.Msg.GuardLog -> panel.security.pushGuard()
         is JcefBridge.Msg.GuardExplain -> panel.guard.explain(m.id)
     }
 
@@ -458,11 +460,45 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         JcefBridge.Msg.OpenGitView -> ClaudeToolWindowFactory.showGitView(panel.project)
 
         else -> {
-            if (!onNavigation(m) && !panel.onboarding.handle(m)) {
+            if (!onVuln(m) && !onNavigation(m) && !panel.onboarding.handle(m)) {
                 logger.warn("unhandled session-control message: $m")
             }
             Unit
         }
+    }
+
+    private fun vuln(): VulnService = VulnService.getInstance(panel.project)
+
+    private fun onVuln(m: JcefBridge.Msg.SessionControl): Boolean {
+        when (m) {
+            JcefBridge.Msg.OpenVulnView -> panel.security.showVulnView()
+            is JcefBridge.Msg.VulnConsentChoice -> vuln().setConsent(m.granted) { panel.pushSession() }
+            JcefBridge.Msg.VulnScan -> vuln().scan { panel.pushSession() }
+            JcefBridge.Msg.VulnCancel -> vuln().cancel { panel.pushSession() }
+            JcefBridge.Msg.VulnInventoryRequest -> onVulnInventory(vuln())
+            is JcefBridge.Msg.VulnFix -> onVulnFix(vuln(), m.findingId)
+            else -> return false
+        }
+        return true
+    }
+
+    private fun onVulnInventory(service: VulnService) {
+        val endpoint = service.snapshot().endpoint
+        pushOffEdt("window.cc.vulnInventory") { JcefVulnData.inventoryJson(service.inventory(), endpoint) }
+    }
+
+    private fun onVulnFix(service: VulnService, findingId: String) {
+        val finding = service.finding(findingId)
+        if (finding == null) {
+            logger.warn("The security view asked to fix a finding that is no longer in the last report: $findingId")
+            return
+        }
+        val text = VulnPromptedActions.updatePrompt(finding)
+        if (text == null) {
+            logger.warn("Refusing to prompt for '$findingId': the advisory or the manifest carries unquotable text")
+            return
+        }
+        session.send(text)
     }
 
     private fun onNavigation(m: JcefBridge.Msg.SessionControl): Boolean {
@@ -500,7 +536,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             feed.requestVersion()
             panel.agentTabs.render()
             panel.pushGit()
-            panel.pushGuard()
+            panel.security.pushGuard()
+            panel.security.pushVuln()
             panel.transcript.fullResync()
         }
 

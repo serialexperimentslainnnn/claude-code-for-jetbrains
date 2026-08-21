@@ -22,6 +22,9 @@
     git: svg(
       '<circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="8" r="1.8"/><path d="M4.5 5.3v5.4"/><path d="M9.7 8H8.2a3.7 3.7 0 0 1-3.7-3.7"/>'
     ),
+    security: svg(
+      '<path d="M8 2.2 12.8 4v4.1c0 2.9-1.9 5.1-4.8 6.5C5.1 13.2 3.2 11 3.2 8.1V4z"/><path d="m6 8 1.5 1.5L10.5 6"/>'
+    ),
     closeChat: svg('<path d="M3 4.5h10"/><path d="M6.5 4.5V3h3v1.5"/><path d="M4.5 4.5 5 13h6l.5-8.5"/>'),
     signOut: svg('<path d="M9.5 3.5H4v9h5.5"/><path d="M11 5.5 13.5 8 11 10.5"/><path d="M13.5 8h-6"/>'),
   };
@@ -64,6 +67,9 @@
       commandsBtn,
       actionButton(GLYPH.git, 'Git', function () {
         send({ type: 'openGitView' });
+      }),
+      actionButton(GLYPH.security, 'Dependency vulnerabilities', function () {
+        send({ type: 'openVulnView' });
       }),
       actionButton(GLYPH.closeChat, 'Close this chat', function () {
         send({ type: 'closeThisChat' });
