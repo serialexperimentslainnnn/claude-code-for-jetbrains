@@ -1,12 +1,12 @@
 package dev.lain.claudejb.forge
 
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.util.SystemInfo
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.ProxySelector
 import java.net.http.HttpClient
+import java.net.http.HttpHeaders
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
@@ -16,22 +16,11 @@ internal object ForgeHttp {
 
     const val MAX_RESPONSE_BYTES = 512 * 1024
 
-    val USER_AGENT: String
-        get() = when {
-            SystemInfo.isWindows -> WINDOWS_UA
-            SystemInfo.isMac -> MAC_UA
-            else -> LINUX_UA
-        }
+    const val PLUGIN_VERSION = "6.0.0"
 
-    private const val LINUX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:141.0) Gecko/20100101 Firefox/141.0"
+    private const val PROJECT_URL = "https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains"
 
-    private const val WINDOWS_UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/139.0.0.0 Safari/537.36"
-
-    private const val MAC_UA =
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-            "Version/18.5 Safari/605.1.15"
+    const val USER_AGENT = "ClaudeCodeNative/$PLUGIN_VERSION (+$PROJECT_URL)"
 
     private const val CHUNK_BYTES = 8 * 1024
     private const val CONNECT_TIMEOUT_SECONDS = 5L
@@ -42,6 +31,10 @@ internal object ForgeHttp {
     private const val HTTP_UNAUTHORIZED = 401
     private const val HTTP_FORBIDDEN = 403
     private const val HTTP_NOT_FOUND = 404
+    private const val HTTP_TOO_MANY_REQUESTS = 429
+
+    private const val GITHUB_REMAINING = "x-ratelimit-remaining"
+    private const val GITLAB_REMAINING = "ratelimit-remaining"
 
     private val LOG = logger<ForgeHttp>()
 
@@ -64,7 +57,7 @@ internal object ForgeHttp {
 
         return try {
             val response = client.send(built.build(), HttpResponse.BodyHandlers.ofInputStream())
-            response.body().use { body -> bodyOrSilence(response.statusCode(), body) }
+            response.body().use { body -> bodyOrSilence(response.statusCode(), response.headers(), body) }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             ForgeAnswer.Silent(ForgeSilence.UNREACHABLE)
@@ -74,15 +67,23 @@ internal object ForgeHttp {
         }
     }
 
-    fun silenceFor(status: Int): ForgeSilence? = when (status) {
-        in HTTP_OK_MIN..HTTP_OK_MAX -> null
-        HTTP_UNAUTHORIZED -> ForgeSilence.UNAUTHORIZED
-        HTTP_FORBIDDEN, HTTP_NOT_FOUND -> ForgeSilence.NOT_VISIBLE
+    fun silenceFor(status: Int, headers: HttpHeaders): ForgeSilence? = when {
+        status in HTTP_OK_MIN..HTTP_OK_MAX -> null
+        status == HTTP_UNAUTHORIZED -> ForgeSilence.UNAUTHORIZED
+        status == HTTP_TOO_MANY_REQUESTS -> ForgeSilence.RATE_LIMITED
+        status == HTTP_FORBIDDEN && quotaExhausted(headers) -> ForgeSilence.RATE_LIMITED
+        status == HTTP_FORBIDDEN || status == HTTP_NOT_FOUND -> ForgeSilence.NOT_VISIBLE
         else -> ForgeSilence.UNREACHABLE
     }
 
-    private fun bodyOrSilence(status: Int, body: InputStream): ForgeAnswer<String> {
-        val silence = silenceFor(status)
+    private fun quotaExhausted(headers: HttpHeaders): Boolean =
+        exhaustedBy(headers, GITHUB_REMAINING) ?: exhaustedBy(headers, GITLAB_REMAINING) ?: false
+
+    private fun exhaustedBy(headers: HttpHeaders, name: String): Boolean? =
+        headers.firstValue(name).orElse(null)?.trim()?.toIntOrNull()?.let { it <= 0 }
+
+    private fun bodyOrSilence(status: Int, headers: HttpHeaders, body: InputStream): ForgeAnswer<String> {
+        val silence = silenceFor(status, headers)
         return if (silence != null) ForgeAnswer.Silent(silence) else readBounded(body)
     }
 

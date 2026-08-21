@@ -22,7 +22,11 @@ internal object ForgeProbe {
     }
 
     private fun probe(host: String, token: String): ForgeProvider? {
-        if (answersAt(host, "https://$host/api/v4/version", mapOf("PRIVATE-TOKEN" to token))) {
+        val gitlab = mapOf(
+            "User-Agent" to ForgeHttp.USER_AGENT,
+            "PRIVATE-TOKEN" to token,
+        )
+        if (answersAt(host, "https://$host/api/v4/version", gitlab)) {
             return ForgeProvider.GITLAB
         }
         val github = mapOf(

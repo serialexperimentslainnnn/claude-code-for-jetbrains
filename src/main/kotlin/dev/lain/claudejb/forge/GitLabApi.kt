@@ -48,7 +48,10 @@ internal object GitLabApi : ForgeApi {
 
     private fun base(host: String): String = "https://$host/api/v4"
 
-    private fun headers(token: String): Map<String, String> = mapOf("PRIVATE-TOKEN" to token)
+    private fun headers(token: String): Map<String, String> = mapOf(
+        "User-Agent" to ForgeHttp.USER_AGENT,
+        "PRIVATE-TOKEN" to token,
+    )
 
     private fun GlMergeRequest.toModel() = ForgePullRequest(
         number = iid,

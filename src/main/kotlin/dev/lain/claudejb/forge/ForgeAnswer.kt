@@ -19,6 +19,8 @@ enum class ForgeSilence {
 
     NOT_VISIBLE,
 
+    RATE_LIMITED,
+
     UNREACHABLE,
 
     OVERSIZED,

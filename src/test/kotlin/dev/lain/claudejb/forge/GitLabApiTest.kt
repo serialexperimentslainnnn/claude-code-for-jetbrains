@@ -36,6 +36,12 @@ class GitLabApiTest {
     }
 
     @Test
+    fun `every GitLab request names the client, as the GitHub ones already did`() {
+        assertEquals(ForgeHttp.USER_AGENT, GitLabApi.pullRequests(repo, "main", "t").headers["User-Agent"])
+        assertEquals(ForgeHttp.USER_AGENT, GitLabApi.latestRun(repo, "main", "t").headers["User-Agent"])
+    }
+
+    @Test
     fun `a merge request is read onto the shared model, iid and all`() {
         val mrs = known(GitLabApi.parsePullRequests(TWO_MERGE_REQUESTS))
 
