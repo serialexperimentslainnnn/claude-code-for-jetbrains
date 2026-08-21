@@ -17,12 +17,21 @@ object GuardRestore {
             row.copy(entry = row.entry.copy(parentToolUseId = row.anchor?.let { parentOfAnchor[it] }))
         }
         val byAnchor = anchored.filter { it.anchor != null }.groupBy({ it.anchor }, { it.entry })
-
-        val placed = mutableSetOf<String>()
-        val datable = dtos.any { it.atMillis != null }
+        val earliest = dtos.mapNotNull { it.atMillis }.minOrNull() ?: return weave(dtos, byAnchor, emptyList())
         val loose = anchored
-            .filter { datable && (it.anchor == null || it.anchor !in parentOfAnchor.keys) }
+            .filter { it.anchor == null || it.anchor !in parentOfAnchor.keys }
             .sortedBy { it.at }
+        val (inWindow, older) = loose.partition { it.at >= earliest }
+
+        return weave(dtos, byAnchor, inWindow) + older.map { it.entry }
+    }
+
+    private fun weave(
+        dtos: List<EntryDTO>,
+        byAnchor: Map<String?, List<EntryDTO>>,
+        loose: List<Row>,
+    ): List<EntryDTO> {
+        val placed = mutableSetOf<String>()
         val out = mutableListOf<EntryDTO>()
         var next = 0
         for (dto in dtos) {
