@@ -82,6 +82,17 @@ object GuardPaths {
         RegexOption.IGNORE_CASE,
     )
 
+    /** The folded absolute spelling of a candidate, anchoring a relative one at the project root the way the
+     *  shell anchors it at the working directory — so `../../../etc/passwd` is judged as `/etc/passwd`, not
+     *  waved past for lacking a leading slash. Null when there is nothing to anchor against or the token still
+     *  carries an unexpanded `~`/`$`/`%` prefix. */
+    internal fun absoluteForm(path: String, projectRoot: String?): String? = when {
+        isAbsolute(path) -> fold(path)
+        path.isEmpty() || path[0] in UNEXPANDED_PREFIXES -> null
+        projectRoot.isNullOrBlank() -> null
+        else -> fold("$projectRoot/$path")
+    }
+
     internal fun under(path: String, root: String): Boolean {
         val r = root.trimEnd('/')
         return r.isNotEmpty() && (path.equals(r, ignoreCase = true) || path.startsWith("$r/", ignoreCase = true))

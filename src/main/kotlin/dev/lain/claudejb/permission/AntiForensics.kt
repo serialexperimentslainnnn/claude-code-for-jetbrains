@@ -8,7 +8,7 @@ object AntiForensics {
 
     private const val MATCH_EXCERPT_CHARS = 120
 
-    private const val AT = """(?:^|[;&|\n]\s*|\bthen\s+|\bdo\s+)"""
+    private val AT = CommandRules.AT_COMMAND
 
     private const val SEC_LOG =
         "(?:messages|secure|auth\\.log|syslog|utmp|wtmp|btmp|lastlog" +

@@ -61,10 +61,16 @@ object ToolInputScanner {
                     sources.forEach { src -> commandTokens(src).forEach { tok -> bothSpellings(tok, home, env, out) } }
                 }
             } else {
-                bothSpellings(value, home, env, out)
+                pathSpellings(value, home, env, out)
             }
         }
         return out.toList()
+    }
+
+    private fun pathSpellings(value: String, home: String?, env: Map<String, String>, out: MutableSet<String>) {
+        bothSpellings(value, home, env, out)
+        val deobfuscated = CommandRules.deobfuscatePath(value, home, env)
+        if (deobfuscated != value) bothSpellings(deobfuscated, home, env, out)
     }
 
     private fun bothSpellings(value: String, home: String?, env: Map<String, String>, out: MutableSet<String>) {
@@ -91,7 +97,7 @@ object ToolInputScanner {
                     }
                 }
             } else {
-                bothSpellings(value, home, env, out)
+                pathSpellings(value, home, env, out)
             }
         }
         return out.toList()

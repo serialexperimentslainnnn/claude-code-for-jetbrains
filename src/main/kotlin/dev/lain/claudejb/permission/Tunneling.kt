@@ -8,7 +8,7 @@ object Tunneling {
 
     private const val MATCH_EXCERPT_CHARS = 120
 
-    private const val AT = """(?:^|[;&|\n]\s*|\bthen\s+|\bdo\s+)(?:\S*/)?"""
+    private val AT = CommandRules.AT_COMMAND
 
     private const val TOOLS =
         "ngrok|cloudflared|frpc|frps|localtunnel|iodine|iodined|dnscat2|bore|gost|" +

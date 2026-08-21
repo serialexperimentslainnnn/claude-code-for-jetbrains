@@ -38,7 +38,18 @@ object CommandRules {
 
     private fun re(p: String) = Regex(p, RegexOption.IGNORE_CASE)
 
-    internal fun cmdStart(names: String) = re("""(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?($names)\b""")
+    /** Command position, shared by every family that anchors a verb. A command runs at the start of the
+     *  input, after a separator, after a control keyword, inside a subshell `(` or group `{`, and after any
+     *  run of leading `NAME=value` assignments or no-op wrappers (`env`, `nohup`, …). Kept in one place so the
+     *  families cannot drift apart, and so closing an evasion here closes it for all of them at once. */
+    const val AT_COMMAND: String =
+        """(?:^|[;&|\n]\s*|(?<!\x24)[({]\s*|\bthen\s+|\bdo\s+|\bxargs\s+""" +
+            """|\b(?:docker|podman|nerdctl|kubectl|oc|crictl)\s+(?:exec|run)\b(?:\s+(?:-\S+|[^\s;&|]+))*?\s+(?:--\s+)?)""" +
+            """(?:(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]*|env|nohup|time|nice|command|exec|stdbuf|setsid|ionice""" +
+            """|-\S+|\d+)\s+)*""" +
+            """(?:\S*/)?"""
+
+    internal fun cmdStart(names: String) = re(AT_COMMAND + """(?:sudo\s+)?($names)\b""")
 
     private const val MATCH_EXCERPT_CHARS = 120
 
@@ -141,6 +152,35 @@ object CommandRules {
             s = substituteAssignments(s)
         }
         s = GuardPaths.expandEnv(s, home, env)
+        s = stripFusedExpansions(s)
+        return s
+    }
+
+    private val FUSED_EXPANSION = Regex(
+        """(?<=[A-Za-z0-9])(?:\x24\{[^{}]*\}|\x24[@*#?!-])""" +
+            """|(?:\x24\{[^{}]*\}|\x24[@*#?!-])(?=[A-Za-z0-9])""",
+    )
+
+    private fun stripFusedExpansions(command: String): String {
+        if ('$' !in command) return command
+        var s = command
+        var passes = 0
+        while (passes++ < MAX_ANALYSIS_DEPTH) {
+            val next = FUSED_EXPANSION.replace(s, "")
+            if (next == s) break
+            s = next
+        }
+        return s
+    }
+
+    fun deobfuscatePath(token: String, home: String? = null, env: Map<String, String> = emptyMap()): String {
+        var s = token
+        var passes = 0
+        while (passes++ < MAX_ANALYSIS_DEPTH) {
+            val next = peel(s, home, env)
+            if (next == s) break
+            s = next
+        }
         return s
     }
 

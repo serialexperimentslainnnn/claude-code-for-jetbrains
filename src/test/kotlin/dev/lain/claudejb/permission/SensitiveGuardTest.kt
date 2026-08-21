@@ -580,9 +580,11 @@ class SensitiveGuardTest {
     }
 
     @Test
-    fun `a relative candidate is never outside-project — it resolves under the working directory`() {
+    fun `a relative candidate resolves under the working directory, and a traversal out of it is caught`() {
         assertEquals(Verdict.ALLOW, v(read("src/Foo.kt")))
-        assertEquals(Verdict.ALLOW, v(bash("cat ../sibling/README.md")))
+        assertEquals(Verdict.ALLOW, v(bash("cat src/main/App.kt")))
+        assertEquals(Verdict.DENY, v(bash("cat ../sibling/README.md")))
+        assertEquals(Verdict.DENY, v(read("../../../etc/passwd")))
     }
 
     @Test

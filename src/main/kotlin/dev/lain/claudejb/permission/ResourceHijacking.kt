@@ -8,7 +8,7 @@ object ResourceHijacking {
 
     private const val MATCH_EXCERPT_CHARS = 120
 
-    private const val AT = """(?:^|[;&|\n]\s*|\bthen\s+|\bdo\s+)(?:\S*/)?"""
+    private val AT = CommandRules.AT_COMMAND
 
     private const val MINERS =
         "xmrig|minerd|cpuminer|cgminer|bfgminer|ethminer|nbminer|lolminer|phoenixminer|" +

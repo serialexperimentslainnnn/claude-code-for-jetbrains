@@ -8,7 +8,7 @@ object PrivilegeEscalation {
 
     private const val MATCH_EXCERPT_CHARS = 120
 
-    private const val AT_COMMAND = """(?:^|[;&|\n]\s*|\bthen\s+|\bdo\s+|\bxargs\s+)(?:\S*/)?"""
+    private val AT_COMMAND = CommandRules.AT_COMMAND
 
     private const val WHOLE_WORD = """(?=\s|$|[;&|])"""
 

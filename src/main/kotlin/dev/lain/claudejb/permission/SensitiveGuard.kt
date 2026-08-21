@@ -92,7 +92,48 @@ object SensitiveGuard {
 
         return placeRules(paths, outsideProject, policy)
             ?: actionRules(input, policy, depth)
+            ?: sinkWriteFindings(input, policy, depth)
+            ?: committedHookFindings(input, policy, depth)
             ?: weakRules(input, outsideProject, policy, depth)
+    }
+
+    private val PATH_KEY = Regex("""^(file_?path|path|notebook_?path|filename)$""", RegexOption.IGNORE_CASE)
+
+    private val CONTENT_KEY = Regex(
+        """^(content|contents|new_?string|new_?str|new_?source)$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private fun stringField(input: JsonObject, key: Regex): String? =
+        input.entries.firstOrNull { key.matches(it.key) }
+            ?.let { (it.value as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+
+    private fun sinkWriteFindings(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        if (depth > 0) return null
+        val content = stringField(input, CONTENT_KEY)?.takeIf { it.isNotBlank() } ?: return null
+        val destination = stringField(input, PATH_KEY)
+            ?.let { CommandRules.deobfuscatePath(it, policy.home, policy.envValues) } ?: return null
+        if (!ExecutionSinks.isSink(destination)) return null
+        val inner = classifyScript(content, policy, depth + 1) ?: return null
+        return Hit(inner.rule, "${inner.text} — inside a file that runs when it is used: $destination")
+    }
+
+    private val GIT_COMMIT_OR_PUSH = Regex("""\bgit\b[^|;&\n]*\b(commit|push)\b""", RegexOption.IGNORE_CASE)
+
+    private fun committedHookFindings(input: JsonObject, policy: Policy, depth: Int): Hit? {
+        if (depth > 0) return null
+        val root = policy.projectRoot ?: return null
+        val reader = policy.fileReader ?: return null
+        val runsGit = ToolInputScanner.commandCandidates(input).any {
+            GIT_COMMIT_OR_PUSH.containsMatchIn(CommandRules.deobfuscate(it, policy.home, policy.envValues))
+        }
+        if (!runsGit) return null
+        for (hook in ExecutionSinks.hookFiles(root)) {
+            val text = reader(hook)?.takeIf { it.isNotBlank() } ?: continue
+            val inner = classifyScript(text, policy, depth + 1) ?: continue
+            return Hit(inner.rule, "${inner.text} — inside a git hook that runs on this commit: $hook")
+        }
+        return null
     }
 
     private fun placeRules(paths: List<String>, outsideProject: List<String>, policy: Policy): Hit? {
@@ -219,8 +260,7 @@ object SensitiveGuard {
 
         if (projRoot == null) return null
         return ToolInputScanner.locationCandidates(input, policy.home, policy.envValues)
-            .filter { GuardPaths.isAbsolute(it) }
-            .map { GuardPaths.fold(it) }
+            .mapNotNull { GuardPaths.absoluteForm(it, projRoot) }
             .filterNot { ScriptExecution.inSystemBinDir(it) || SystemDevices.isDeviceNode(it) }
             .firstOrNull { !GuardPaths.under(it, projRoot) }
             ?.let { Hit(SecurityRule.OUTSIDE_PROJECT, "reaches outside the project: $it") }
@@ -233,9 +273,11 @@ object SensitiveGuard {
             return Hit(SecurityRule.RECURSION_LIMIT, "runs scripts nested deeper than $MAX_ANALYSIS_DEPTH: ${scripts.first()}")
         }
         for (script in scripts) {
-            if (isExemptDevTool(script)) continue
             val text = policy.fileReader?.invoke(script)
-                ?: return Hit(SecurityRule.SCRIPT_EXECUTION, "runs a script this guard could not read: $script")
+            if (text == null) {
+                if (isExemptDevTool(script)) continue
+                return Hit(SecurityRule.SCRIPT_EXECUTION, "runs a script this guard could not read: $script")
+            }
             val inner = classifyScript(text, policy, depth + 1) ?: continue
             return Hit(inner.rule, "${inner.text} — inside the script it runs: $script")
         }
