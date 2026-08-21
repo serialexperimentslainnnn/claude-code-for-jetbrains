@@ -1,8 +1,7 @@
 # FAQ
 
 Short answers to the questions we get most. For deeper diagnostics see
-[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md); for privacy see
-[`TELEMETRY.md`](TELEMETRY.md).
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 ## How do I install the plugin?
 
@@ -173,9 +172,12 @@ terminal leaves its own agents in the same directory, and those never appear.
 
 ## Does the plugin send my code or prompts anywhere?
 
-No. The plugin itself sends nothing. Your conversations go from the
-`claude` binary to Anthropic over the same channel `claude` already uses
-in your terminal. See [`TELEMETRY.md`](TELEMETRY.md).
+No. The plugin collects nothing about you and sends nothing to us. Your
+conversations go from the `claude` binary to Anthropic over the same
+channel `claude` already uses in your terminal. The one other call it
+makes is optional and goes to your own forge: with a GitHub or GitLab
+token it asks that server about your branch, to show you your pull
+requests and CI status.
 
 ## How do I send feedback?
 

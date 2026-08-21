@@ -505,9 +505,12 @@ The threat model is written down in [ADR 0002](docs/adr/0002-threat-model.md), i
 the lock judges the tool call and never the model's reasoning. Full model and reporting policy in
 [`SECURITY.md`](SECURITY.md).
 
-**Telemetry: none.** The plugin sends nothing anywhere. Your conversation goes from the `claude`
-binary to Anthropic over the same channel it already uses in your terminal. See
-[`docs/TELEMETRY.md`](docs/TELEMETRY.md).
+**Telemetry: none.** The plugin collects nothing about you and sends nothing to us — there is no
+analytics endpoint, no crash reporter and no usage counter. Your conversation goes from the `claude`
+binary to Anthropic over the same channel it already uses in your terminal. The only other network
+traffic the plugin makes is optional and goes to **your** forge: give it a GitHub or GitLab token and
+it asks that server about the branch you are on, to show you your own pull requests and CI status.
+None of that reaches us either.
 
 ## Troubleshooting
 
@@ -636,7 +639,6 @@ Using the plugin is covered above. Everything below is for working *on* it.
 | [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md) · [`docs/DRIFT_DETECTION.md`](docs/DRIFT_DETECTION.md) | Binary compatibility policy and drift detection |
 | [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
 | [`docs/CI_SETUP.md`](docs/CI_SETUP.md) · [`docs/UI_TESTING.md`](docs/UI_TESTING.md) | CI/CD configuration and the RemoteRobot harness |
-| [`docs/TELEMETRY.md`](docs/TELEMETRY.md) | What is (and is not) collected — nothing |
 
 ## Upstream and forks
 
