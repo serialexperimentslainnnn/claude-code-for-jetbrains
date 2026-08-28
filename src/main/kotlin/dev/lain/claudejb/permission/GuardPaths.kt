@@ -93,10 +93,20 @@ object GuardPaths {
         else -> fold("$projectRoot/$path")
     }
 
+    /** Containment is decided case-sensitively where the filesystem is, and case-insensitively where it is not.
+     *  Windows and the default macOS volume fold case, so `C:/Proj` and `c:/proj` are one directory and must both
+     *  read as inside. Linux does not, so `/home/me/PROJ` is a different directory from `/home/me/proj` — folding
+     *  case there let a sibling of the project count as part of it, which exempted it from the rules that only
+     *  apply outside. */
     internal fun under(path: String, root: String): Boolean {
         val r = root.trimEnd('/')
-        return r.isNotEmpty() && (path.equals(r, ignoreCase = true) || path.startsWith("$r/", ignoreCase = true))
+        if (r.isEmpty()) return false
+        val fold = caseInsensitiveFilesystem || isDriveRooted(r)
+        return path.equals(r, ignoreCase = fold) || path.startsWith("$r/", ignoreCase = fold)
     }
+
+    private val caseInsensitiveFilesystem: Boolean =
+        System.getProperty("os.name").orEmpty().lowercase().let { "win" in it || "mac" in it || "darwin" in it }
 
     private fun lexicalForm(path: String, projectRoot: String?): String? {
         if (path.isEmpty() || path[0] in UNEXPANDED_PREFIXES) return null
