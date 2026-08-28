@@ -321,7 +321,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val chat = cardSession(m.scope)
         val target = chat.cards.pending().firstOrNull { it.requestId == m.id } ?: return
         val rule = target.guard?.rule ?: return
-        chat.guardApprovals.approve(rule, ToolInputScanner.commandText(target.input))
+        ToolInputScanner.commandsIn(target.input).forEach { chat.guardApprovals.approve(rule, it) }
         chat.cards.resolvePermission(target.requestId, true)
     }
 
@@ -370,7 +370,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         JcefBridge.Msg.RequestAttachData -> tray.pushMenuData()
 
-        is JcefBridge.Msg.AttachPath -> tray.addPath(m.path)
+        is JcefBridge.Msg.AttachPath -> onAttachPaths(listOf(m.path))
 
         is JcefBridge.Msg.TreeChildren -> onTreeChildren(m)
 

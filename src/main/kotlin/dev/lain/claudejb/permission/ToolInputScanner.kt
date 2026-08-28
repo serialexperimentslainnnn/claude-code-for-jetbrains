@@ -231,6 +231,9 @@ object ToolInputScanner {
 
     fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()
 
+    /** Every command in the input, for the callers that must answer for all of them rather than the first. */
+    fun commandsIn(input: JsonObject): List<String> = commandCandidates(input)
+
     internal fun commandCandidates(input: JsonObject): List<String> {
         val out = ArrayList<String>()
         fun visit(element: JsonElement) {
