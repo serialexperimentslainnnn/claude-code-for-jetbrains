@@ -43,6 +43,7 @@ Three different things are often confused. All of them are legitimate; they solv
 | Permissions | An inline card per call, plus a deterministic lock that runs before any auto-approval | Handled by the CLI in the terminal | JetBrains' own approvals |
 | Account | Your `claude` subscription or API key | Your `claude` subscription or API key | JetBrains AI credits, your own Anthropic API key, or a Claude Console account |
 | Agents / background tasks | A tab and a transcript per agent; background tasks keep their output | Visible as terminal output | Not applicable |
+| [Remote Control](#remote-control--pick-a-chat-up-from-your-phone) | A button in the chat and a row in the ⚙ menu; the chat you are looking at is the one that goes to your phone | The CLI's own `/remote-control`, typed in the terminal | Not applicable — it does not run your local CLI |
 | Needs the `claude` CLI | Yes — and installs it for you if you do not have it | Yes | No |
 
 Anthropic's [Claude Code [Beta]](https://plugins.jetbrains.com/plugin/27310-claude-code-beta-) is not
@@ -639,6 +640,13 @@ can be driven from claude.ai or the Claude mobile app while Claude keeps executi
 phone button in the chat's button row and a row in the ⚙ menu, neither of which lights up until the CLI
 has accepted; a refusal names its reason on the button and in the chat. Permission cards answered from
 the phone close themselves here.
+
+**5.7.0** — the [Sensitive Guard](#security) stops being invisible: it keeps a log of every alert it
+raises, per project, and a **Guard** view in the chat's view row to read it — what matched, what the rule
+saw, the verdict, and what let the call through if anything did. Every rule gets a mode (Enforcing,
+Permissive, Allow All), as does the guard as a whole; **Settings ▸ Claude Code Security** becomes its own
+page, with the three whitelist reaches and the extra credential globs and blocked domains. A shield in
+the chat's button row suspends the guard for a duration you pick. Most settings became per project.
 
 **5.5.0** — a tab and a transcript per agent, with the whole tree one hover away; a single **Workloads**
 diagram of everything running across every chat; background tasks that keep their output after they
