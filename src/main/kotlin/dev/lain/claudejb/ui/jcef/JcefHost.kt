@@ -42,6 +42,18 @@ internal fun nextPageRoute(current: PageRoute, loopbackBound: Boolean): PageRout
     PageRoute.NOTICE -> null
 }
 
+/** Whether a navigation target is a page this host loads itself. CEF cancels a navigation when the handler
+ *  returns true, so everything else is refused: the CSP closes every other egress channel (`connect-src 'none'`,
+ *  `form-action 'none'`, `img-src data:`) and a top-level navigation is the one channel it has no directive for,
+ *  which makes `location.href` the way out if the page were ever compromised. A link click is not a
+ *  counter-example — the JS cancels those and hands them to the host, which opens them in the real browser. */
+internal fun isOwnPageUrl(url: String?, pageUrl: String, loopbackUrl: String?): Boolean {
+    val target = url?.trim().orEmpty()
+    if (target.isEmpty() || target.equals("about:blank", ignoreCase = true)) return true
+    if (target.startsWith(pageUrl, ignoreCase = true)) return true
+    return loopbackUrl?.takeIf { it.isNotBlank() }?.let { target.startsWith(it, ignoreCase = true) } == true
+}
+
 private const val HTTP_ERROR_FLOOR = 400
 
 internal fun pageArrived(httpStatusCode: Int, loadFailed: Boolean): Boolean =
@@ -313,6 +325,8 @@ class JcefHost(
         }
     }
 
+    private fun isOwnPage(url: String?): Boolean = isOwnPageUrl(url, PAGE_URL, loopback?.url)
+
     private fun installNavigationGuards(b: JBCefBrowser) {
         b.jbCefClient.addRequestHandler(
             object : CefRequestHandlerAdapter() {
@@ -322,9 +336,7 @@ class JcefHost(
                     request: CefRequest?,
                     userGesture: Boolean,
                     isRedirect: Boolean,
-                ): Boolean {
-                    return userGesture
-                }
+                ): Boolean = !isOwnPage(request?.url)
             },
             b.cefBrowser,
         )
