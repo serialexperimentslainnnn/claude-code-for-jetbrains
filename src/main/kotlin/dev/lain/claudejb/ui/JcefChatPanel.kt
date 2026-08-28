@@ -143,7 +143,8 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     }
 
     internal fun pushSettingsMenu() {
-        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state, session).toString()
+        val settings = ClaudeSettings.getInstance(project)
+        val items = JcefSettingsMenu.json(settings.scope.id, settings.state, session).toString()
         if (items == lastSettingsMenuJson) return
         lastSettingsMenuJson = items
         host.exec("window.cc.settingsMenu && window.cc.settingsMenu({\"items\":$items})")

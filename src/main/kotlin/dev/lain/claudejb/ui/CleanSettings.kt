@@ -41,7 +41,7 @@ internal object CleanSettings {
         val settings = ClaudeSettings.getInstance(project)
         settings.update { state ->
             val defaults = ClaudeSettings.State()
-            SecuritySuspensions.guardOn(state)
+            SecuritySuspensions.guardOn(settings.scope.id, state)
             state.guardMode = defaults.guardMode
             state.disabledSecurityRules = defaults.disabledSecurityRules
             state.securityRuleSuspensions = defaults.securityRuleSuspensions
@@ -51,7 +51,7 @@ internal object CleanSettings {
             state.securityRuleWhitelists = defaults.securityRuleWhitelists
             state.sensitiveExtraGlobs = defaults.sensitiveExtraGlobs
         }
-        SecurityRule.entries.forEach { SecuritySuspensions.releaseSessionScoped(it) }
+        SecurityRule.entries.forEach { SecuritySuspensions.releaseSessionScoped(settings.scope.id, it) }
         repaint()
         return true
     }

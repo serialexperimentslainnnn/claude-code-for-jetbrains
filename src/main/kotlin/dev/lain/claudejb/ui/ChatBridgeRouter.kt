@@ -129,7 +129,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
         val models = session.models.map { it.value }
         var known = false
-        settings.update { known = JcefSettingsMenu.apply(it, m.key, m.on, models) }
+        settings.update { known = JcefSettingsMenu.apply(settings.scope.id, it, m.key, m.on, models) }
         if (known) JcefSettingsMenu.applyToSession(session, m.key, m.on)
         return known
     }
@@ -189,9 +189,18 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val settings = ClaudeSettings.getInstance(panel.project)
         when (duration) {
             SecuritySuspensions.Duration.FOREVER ->
-                settings.update { JcefSettingsMenu.apply(it, "rule:${rule.name}", false, session.models.map { p -> p.value }) }
+                settings.update {
+                    JcefSettingsMenu.apply(
+                        settings.scope.id,
+                        it,
+                        "rule:${rule.name}",
+                        false,
+                        session.models.map { p -> p.value },
+                    )
+                }
 
-            SecuritySuspensions.Duration.UNTIL_IDE_CLOSES -> SecuritySuspensions.suspendUntilIdeCloses(rule)
+            SecuritySuspensions.Duration.UNTIL_IDE_CLOSES ->
+                SecuritySuspensions.suspendUntilIdeCloses(settings.scope.id, rule)
 
             else -> settings.update {
                 it.securityRuleSuspensions = SecuritySuspensions.withSuspension(
@@ -211,7 +220,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
     private fun onGuardMaster(m: JcefBridge.Msg.GuardMaster) {
         val settings = ClaudeSettings.getInstance(panel.project)
         if (m.on) {
-            settings.update { SecuritySuspensions.guardOn(it) }
+            settings.update { SecuritySuspensions.guardOn(settings.scope.id, it) }
             announceGuard("The Sensitive Guard is back on. Every tool call is judged again.")
             return
         }
@@ -220,7 +229,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             logger.warn("The shield asked to stand down for a duration this build does not have: ${m.duration}")
             return
         }
-        settings.update { SecuritySuspensions.guardOff(it, duration, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, duration, System.currentTimeMillis()) }
         announceGuard(
             "The Sensitive Guard is off ${duration.phrase}. Nothing is being judged — no rule, no card, " +
                 "no block — until it comes back on.",

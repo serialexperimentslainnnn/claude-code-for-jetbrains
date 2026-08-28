@@ -27,7 +27,7 @@ fun ClaudeSettings.sensitiveDecision(
 }
 
 fun ClaudeSettings.guardSuspended(): Boolean =
-    SecuritySuspensions.guardSuspended(state, System.currentTimeMillis())
+    SecuritySuspensions.guardSuspended(scope.id, state, System.currentTimeMillis())
 
 fun ClaudeSettings.guardMode(): GuardMode = GuardMode.from(state.guardMode) ?: GuardMode.DEFAULT
 
@@ -59,7 +59,7 @@ internal fun ClaudeSettings.permissiveRules(): Set<SecurityRule> {
     if (guardMode() == GuardMode.PERMISSIVE) return SecurityRule.entries.toSet()
     val perRule = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
     val timed = SecuritySuspensions.active(state.securityRuleSuspensions, System.currentTimeMillis())
-    return perRule.toSet() + timed + SecuritySuspensions.sessionSuspended()
+    return perRule.toSet() + timed + SecuritySuspensions.sessionSuspended(scope.id)
 }
 
 internal fun ClaudeSettings.extraBlockedDomains(): List<String> =

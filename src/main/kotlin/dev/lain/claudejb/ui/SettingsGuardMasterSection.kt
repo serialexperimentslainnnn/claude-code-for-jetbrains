@@ -10,7 +10,9 @@ import java.text.DateFormat
 import java.util.Date
 import javax.swing.JComboBox
 
-internal class SettingsGuardMasterSection : SettingsSection {
+internal class SettingsGuardMasterSection(private val settings: ClaudeSettings) : SettingsSection {
+
+    private val scope get() = settings.scope.id
 
     private val mode = JComboBox(GuardMode.entries.toTypedArray()).apply {
         renderer = labelRenderer { (it as? GuardMode)?.label }
@@ -40,7 +42,7 @@ internal class SettingsGuardMasterSection : SettingsSection {
 
     override fun reset(s: ClaudeSettings.State) {
         val now = System.currentTimeMillis()
-        shownAllowAll = SecuritySuspensions.guardSuspended(s, now)
+        shownAllowAll = SecuritySuspensions.guardSuspended(scope, s, now)
         mode.selectedItem = when {
             shownAllowAll -> GuardMode.ALLOW_ALL
             else -> GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT
@@ -52,18 +54,18 @@ internal class SettingsGuardMasterSection : SettingsSection {
     override fun apply(s: ClaudeSettings.State) {
         val chosen = selected()
         if (chosen != GuardMode.ALLOW_ALL) {
-            SecuritySuspensions.guardOn(s)
+            SecuritySuspensions.guardOn(scope, s)
             s.guardMode = chosen.wire
             return
         }
         if (shownAllowAll) return
         val span = duration.selectedItem as? SecuritySuspensions.Duration ?: SecuritySuspensions.Duration.FOREVER
-        SecuritySuspensions.guardOff(s, span, System.currentTimeMillis())
+        SecuritySuspensions.guardOff(scope, s, span, System.currentTimeMillis())
     }
 
     override fun changedFields(s: ClaudeSettings.State): List<Boolean> {
         val now = System.currentTimeMillis()
-        val shown = if (SecuritySuspensions.guardSuspended(s, now)) {
+        val shown = if (SecuritySuspensions.guardSuspended(scope, s, now)) {
             GuardMode.ALLOW_ALL
         } else {
             GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT

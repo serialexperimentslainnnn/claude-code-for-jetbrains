@@ -63,7 +63,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
             settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
         )
 
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.MINUTES_5, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.MINUTES_5, System.currentTimeMillis()) }
 
         assertEquals(
             "with the shield down nothing is judged at all — that is the whole point of it",
@@ -71,7 +71,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
             settings.sensitiveDecision(credentialRead, projectRoot = null).verdict,
         )
 
-        settings.update { SecuritySuspensions.guardOn(it) }
+        settings.update { SecuritySuspensions.guardOn(settings.scope.id, it) }
 
         assertEquals(
             SensitiveGuard.Verdict.DENY,
@@ -80,7 +80,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test Allow All still says which rule it let past`() {
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
 
         val decision = settings.sensitiveDecision(credentialRead, projectRoot = null)
 
@@ -94,7 +94,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test an ordinary call carries no rule and so warns about nothing`() {
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.HOURS_4, System.currentTimeMillis()) }
         val harmless = kotlinx.serialization.json.JsonObject(
             mapOf("command" to JsonPrimitive("git status")),
         )
@@ -130,11 +130,11 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test switching it back on clears all three stores at once`() {
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.UNTIL_IDE_CLOSES, System.currentTimeMillis()) }
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis()) }
-        settings.update { SecuritySuspensions.guardOff(it, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.UNTIL_IDE_CLOSES, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis()) }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis()) }
 
-        settings.update { SecuritySuspensions.guardOn(it) }
+        settings.update { SecuritySuspensions.guardOn(settings.scope.id, it) }
 
         assertFalse("one store outliving the others is how a switch lies", settings.guardSuspended())
     }

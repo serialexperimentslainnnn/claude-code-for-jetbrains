@@ -85,7 +85,7 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
         val stored = idsIn(s.disabledSecurityRules)
         val now = System.currentTimeMillis()
         shownSuspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
-            SecuritySuspensions.sessionSuspended()
+            SecuritySuspensions.sessionSuspended(settings.scope.id)
         modes.forEach { (rule, combo) ->
             combo.selectedItem = if (rule.name in stored) GuardMode.PERMISSIVE else GuardMode.ENFORCING
         }
@@ -118,7 +118,7 @@ internal class SettingsSecuritySection(private val settings: ClaudeSettings) : S
             shownSuspended.forEach { rule ->
                 state.securityRuleSuspensions =
                     SecuritySuspensions.without(state.securityRuleSuspensions, rule, System.currentTimeMillis())
-                SecuritySuspensions.releaseSessionScoped(rule)
+                SecuritySuspensions.releaseSessionScoped(settings.scope.id, rule)
             }
         }
         shownSuspended = emptySet()

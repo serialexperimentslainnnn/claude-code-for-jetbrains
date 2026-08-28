@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test
 
 class JcefSettingsMenuTest {
 
+    private val SCOPE = "test-project"
+
     private fun models() = listOf(
         ModelInfo("opus[1m]", "Opus (1M context)", "Opus 5 with 1M context · Best for everyday, complex tasks"),
         ModelInfo("sonnet", "Sonnet", "Sonnet 5 · Efficient for routine tasks"),
@@ -31,14 +33,14 @@ class JcefSettingsMenuTest {
     private fun menu(
         state: ClaudeSettings.State = ClaudeSettings.State(),
         selected: JcefSettingsMenu.Selected = selected(),
-    ): List<JsonObject> = JcefSettingsMenu.json(state, selected).map { it.jsonObject }
+    ): List<JsonObject> = JcefSettingsMenu.json(SCOPE, state, selected).map { it.jsonObject }
 
     private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 
     private fun JsonObject.bool(key: String): Boolean = getValue(key).jsonPrimitive.boolean
 
     private fun write(state: ClaudeSettings.State, key: String, on: Boolean) =
-        JcefSettingsMenu.apply(state, key, on, modelIds())
+        JcefSettingsMenu.apply(SCOPE, state, key, on, modelIds())
 
     @Test
     fun `the groups are drawn in the declared order`() {
@@ -291,12 +293,12 @@ class JcefSettingsMenuTest {
     @Test
     fun `choosing Enforcing ends an Allow All that is still running`() {
         val state = ClaudeSettings.State()
-        SecuritySuspensions.guardOff(state, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis())
+        SecuritySuspensions.guardOff(SCOPE, state, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis())
 
         assertTrue(write(state, "guardmode:enforcing", true))
 
         assertFalse(
-            SecuritySuspensions.guardSuspended(state, System.currentTimeMillis()),
+            SecuritySuspensions.guardSuspended(SCOPE, state, System.currentTimeMillis()),
             "a menu saying Enforcing over a live Allow All is a menu telling the user something untrue",
         )
     }

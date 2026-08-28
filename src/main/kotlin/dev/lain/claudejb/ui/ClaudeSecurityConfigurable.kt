@@ -11,7 +11,7 @@ class ClaudeSecurityConfigurable(private val project: Project) : Configurable {
 
     private val settings = ClaudeSettings.getInstance(project)
 
-    private val masterSection = SettingsGuardMasterSection()
+    private val masterSection = SettingsGuardMasterSection(settings)
     private val rulesSection = SettingsSecuritySection(settings)
     private val logSection = SettingsGuardLogSection()
 
