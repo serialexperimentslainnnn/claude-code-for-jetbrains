@@ -15,10 +15,12 @@ class SecuritySuspensionsTest {
     private val other = SecurityRule.DESTRUCTIVE_CLOUD
     private val t0 = 1_700_000_000_000L
 
+    private val scope = "suspensions-test"
+
     @AfterEach
     fun clearProcessState() {
-        SecuritySuspensions.releaseSessionScoped(rule)
-        SecuritySuspensions.releaseSessionScoped(other)
+        SecuritySuspensions.releaseSessionScoped(scope, rule)
+        SecuritySuspensions.releaseSessionScoped(scope, other)
     }
 
     @Test
@@ -94,20 +96,20 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `until-the-IDE-closes is process state and is never written to the document`() {
-        SecuritySuspensions.suspendUntilIdeCloses(rule)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, rule)
 
-        assertEquals(setOf(rule), SecuritySuspensions.sessionSuspended())
+        assertEquals(setOf(rule), SecuritySuspensions.sessionSuspended(scope))
         assertTrue(SecuritySuspensions.active("", t0).isEmpty(), "nothing timed was stored")
     }
 
     @Test
     fun `enforcing a rule again cancels its process-scoped suspension`() {
-        SecuritySuspensions.suspendUntilIdeCloses(rule)
-        SecuritySuspensions.suspendUntilIdeCloses(other)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, rule)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, other)
 
-        SecuritySuspensions.releaseSessionScoped(rule)
+        SecuritySuspensions.releaseSessionScoped(scope, rule)
 
-        assertEquals(setOf(other), SecuritySuspensions.sessionSuspended(), "one switch releases one rule")
+        assertEquals(setOf(other), SecuritySuspensions.sessionSuspended(scope), "one switch releases one rule")
     }
 
     @Test
@@ -139,65 +141,74 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `the page offers exactly the durations the host understands`() {
-        val js = File("src/main/resources/jcef/app-transcript-rows.js")
-        assertTrue(js.isFile, "the row builders moved: this contract test has to move with them")
+        val js = File("src/main/resources/jcef/app-core.js")
+        assertTrue(js.isFile, "CC.GUARD_DURATIONS moved: this contract test has to move with it")
         val tokens = Regex("""\{\s*token:\s*'([^']+)'""").findAll(js.readText()).map { it.groupValues[1] }.toList()
 
         assertEquals(SecuritySuspensions.Duration.entries.map { it.token }, tokens)
     }
 }
 
-class SecurityCommandApprovalsTest {
+class GuardCommandApprovalsTest {
 
     private val rule = SecurityRule.DESTRUCTIVE_IAC
     private val other = SecurityRule.DESTRUCTIVE_CLOUD
 
     @Test
     fun `an approved command matches, and only that command`() {
-        val lines = SecurityCommandApprovals.withApproval("", rule, "terraform destroy")
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
 
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy"))
-        assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy -auto-approve"))
-        assertFalse(SecurityCommandApprovals.isApproved(lines, rule, "terraform apply"))
+        assertTrue(approvals.isApproved(rule, "terraform destroy"))
+        assertFalse(approvals.isApproved(rule, "terraform destroy -auto-approve"))
+        assertFalse(approvals.isApproved(rule, "terraform apply"))
     }
 
     @Test
     fun `an approval does not travel to another rule`() {
-        val lines = SecurityCommandApprovals.withApproval("", rule, "terraform destroy")
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
 
-        assertFalse(SecurityCommandApprovals.isApproved(lines, other, "terraform destroy"))
+        assertFalse(approvals.isApproved(other, "terraform destroy"))
+    }
+
+    @Test
+    fun `an approval does not travel to another chat`() {
+        val mine = GuardCommandApprovals()
+        val theirs = GuardCommandApprovals()
+        mine.approve(rule, "terraform destroy")
+
+        assertFalse(theirs.isApproved(rule, "terraform destroy"), "one chat's card must not answer another's")
     }
 
     @Test
     fun `a blank command is never stored`() {
-        assertEquals("", SecurityCommandApprovals.withApproval("", rule, null))
-        assertEquals("", SecurityCommandApprovals.withApproval("", rule, "   "))
-        assertFalse(SecurityCommandApprovals.isApproved("${rule.name}=", rule, ""))
-        assertFalse(SecurityCommandApprovals.isApproved("${rule.name}=", rule, null))
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, null)
+        approvals.approve(rule, "   ")
+
+        assertTrue(approvals.all().isEmpty())
+        assertFalse(approvals.isApproved(rule, ""))
+        assertFalse(approvals.isApproved(rule, null))
     }
 
     @Test
-    fun `approving twice does not grow the document`() {
-        val once = SecurityCommandApprovals.withApproval("", rule, "kubectl delete ns prod")
-        val twice = SecurityCommandApprovals.withApproval(once, rule, "kubectl delete ns prod")
+    fun `approving twice does not grow the set`() {
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "kubectl delete ns prod")
+        approvals.approve(rule, "kubectl delete ns prod")
 
-        assertEquals(once, twice)
+        assertEquals(setOf("kubectl delete ns prod"), approvals.all()[rule])
     }
 
     @Test
-    fun `a stale rule name is dropped rather than guessed`() {
-        assertFalse(SecurityCommandApprovals.isApproved("NOT_A_RULE=terraform destroy", rule, "terraform destroy"))
-    }
+    fun `revoking one leaves the rest`() {
+        val approvals = GuardCommandApprovals()
+        approvals.approve(rule, "terraform destroy")
+        approvals.approve(rule, "terraform destroy -target=x")
+        approvals.revoke(rule, "terraform destroy")
 
-    @Test
-    fun `several approvals coexist under one rule`() {
-        val lines = SecurityCommandApprovals.withApproval(
-            SecurityCommandApprovals.withApproval("", rule, "terraform destroy"),
-            rule,
-            "terraform destroy -target=x",
-        )
-
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy"))
-        assertTrue(SecurityCommandApprovals.isApproved(lines, rule, "terraform destroy -target=x"))
+        assertFalse(approvals.isApproved(rule, "terraform destroy"))
+        assertTrue(approvals.isApproved(rule, "terraform destroy -target=x"))
     }
 }

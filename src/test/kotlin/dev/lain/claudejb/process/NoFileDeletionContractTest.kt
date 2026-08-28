@@ -27,6 +27,7 @@ class NoFileDeletionContractTest {
             "LegacyProjectSettings.kt",
             "LegacySessionHistory.kt",
             "SettingsStore.kt",
+            "SharedPluginFiles.kt",
         )
     }
 

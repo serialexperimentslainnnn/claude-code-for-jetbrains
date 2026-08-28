@@ -1,6 +1,6 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-5.5.0-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-5.7.0-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.3.1%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Claude%20Code%20Native-2A2A2A)](https://plugins.jetbrains.com/plugin/31965-claude-code-native)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -10,7 +10,8 @@ inside JetBrains IDEs as a full graphical client: a streaming chat, inline permi
 reviewed as real IDE diffs you can modify before approving, a tab per agent, and a deterministic
 security layer that gates every tool call.
 
-It drives the `claude` binary you already have installed, speaking its `stream-json` and control
+It drives the `claude` binary — the one you already have, or one it installs for you on first run if
+you do not — speaking its `stream-json` and control
 protocol directly from Kotlin. There is no Node.js at runtime, no bundled SDK, and no credentials of
 ours — you bring your own Claude subscription or API key.
 
@@ -42,7 +43,7 @@ Three different things are often confused. All of them are legitimate; they solv
 | Permissions | An inline card per call, plus a deterministic lock that runs before any auto-approval | Handled by the CLI in the terminal | JetBrains' own approvals |
 | Account | Your `claude` subscription or API key | Your `claude` subscription or API key | JetBrains AI credits, your own Anthropic API key, or a Claude Console account |
 | Agents / background tasks | A tab and a transcript per agent; background tasks keep their output | Visible as terminal output | Not applicable |
-| Needs the `claude` CLI | Yes | Yes | No |
+| Needs the `claude` CLI | Yes — and installs it for you if you do not have it | Yes | No |
 
 Anthropic's [Claude Code [Beta]](https://plugins.jetbrains.com/plugin/27310-claude-code-beta-) is not
 "just a terminal launcher" — it runs `claude` in the IDE's integrated terminal and adds diff viewing in
@@ -74,7 +75,9 @@ and RustRover.
 > to, so the dependency is declared hard and the floor is the first build that can satisfy it.
 > **On 2025.1, 2025.2 or 2025.3.0, stay on plugin version 5.1.1** — or update your IDE.
 
-**The `claude` CLI**, installed separately. The plugin looks for it in this order:
+**The `claude` CLI — and you do not have to install it yourself.** If the plugin cannot find it, its
+first screen offers to install it for you, using the official route for your OS, and runs it in the
+IDE terminal. Nothing to prepare before you start; it looks for an existing one first, in this order:
 
 1. the path set in **Settings ▸ Claude Code ▸ claude executable path**, if any — and if that path has
    gone stale, detection continues rather than failing hard;
@@ -83,7 +86,8 @@ and RustRover.
    `/usr/bin` on Linux/macOS; `%USERPROFILE%\.local\bin`, `%APPDATA%\npm`,
    `%LOCALAPPDATA%\Programs\claude`, scoop shims, volta and Chocolatey `bin` on Windows.
 
-If it is missing, the plugin says so on its first screen and offers to install it for you (below).
+Only if all three come up empty does it ask — and then it installs it for you (see
+[below](#installing-the-claude-cli)).
 
 **An account**: a paid Claude plan (Pro, Max, Team, Enterprise) or a Claude Console account, signed in
 through the plugin — or an `ANTHROPIC_API_KEY`. The free Claude.ai plan does not include Claude Code.
@@ -102,10 +106,11 @@ Or install a signed archive by hand from the
 
 The tool window appears on the right, next to where AI Assistant lives.
 
-### Installing the `claude` CLI
+### The plugin installs the `claude` CLI for you
 
-If you do not have it, the plugin's first screen offers the official routes for your OS and can run
-them for you in the IDE terminal — or you can copy the command and run it yourself:
+You do not need to install it beforehand. If it is missing, the plugin's first screen detects your OS
+and distribution, offers the official route, and runs it in the IDE terminal on one click. These are
+the commands it uses, if you would rather run them yourself:
 
 ```bash
 # macOS, Linux, WSL
@@ -156,11 +161,20 @@ Windows), or the IDE's own encrypted file.
   no OAuth client and calls no token endpoint itself.
 - **Log out** clears only what the plugin holds. Your terminal `claude` login is left alone.
 
-Your **settings** live in the same safe, as one document shared by every project. Before 5.5.0 they sat
-in `.idea/claude-code.xml` — per project, in the clear, and committable, environment block included.
-Existing settings are adopted automatically on first run, and the old file is removed only once the
-safe has confirmed it holds the copy. Settings being global now has one consequence worth knowing: if
-several projects each carry their own `claude-code.xml`, the first one adopted becomes the global set.
+Your **settings** live in the same safe, as **one document per IDE installation, per project**. Two
+repositories can disagree about the model, the permission mode or a security rule, and two IDEs on one
+checkout keep their own. What stays global is what a credential is: the sign-in, the account, the
+per-provider API keys and the Git host tokens.
+
+Nothing is lost on upgrade. Before 5.5.0 settings sat in `.idea/claude-code.xml` — per project, in the
+clear, and committable, environment block included; between 5.5.0 and 5.7.0 they were one global
+document. Both are read as a seed, so a project with no settings of its own starts from what you
+already had, and only diverges once you change something in it. The old project file is removed only
+after the safe confirms it holds the copy; the global document is never removed, because it is what
+every project opened from now on inherits.
+
+Moving between IDEs is a gesture rather than magic: **Settings ▸ Claude Code ▸ Transfer** exports and
+imports a file, and migrates straight from another JetBrains IDE on the same machine.
 
 ## User guide
 
@@ -405,9 +419,9 @@ unless you pick an action that asks it something.
 | Model · permission mode · effort · thinking | top Opus tier · Ask each time · high · adaptive on | The launch defaults for every new chat |
 | **claude executable path** | auto-detect | A non-standard install, or a GUI IDE that does not inherit your `PATH` |
 | **Provider** | Anthropic | DeepSeek's Anthropic-compatible endpoint. Each provider's key is stored separately in the safe; an `sk-ant-` key is rejected in a third-party slot so your subscription can never leak to another endpoint |
-| **Security** (five switches) | all on | See [Security](#security) |
+| **Sensitive Guard** | every rule Enforcing | Its own page since 5.7.0 — **Settings ▸ Claude Code Security**: a mode for the guard as a whole, a mode per rule grouped by category, the three whitelists, and the extra credential globs and blocked domains. See [Security](#security) |
 | **Restore open chats on startup** | on | Start with a single empty chat instead |
-| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; revocable here. Like every setting since 5.5.0, this list is shared by every project |
+| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; revocable here. This one list stays shared by every project — most settings are per project since 5.7.0, but a remembered tool approval is about the tool, not the repository. The Sensitive Guard still decides first: nothing here bypasses it |
 | **Environment variables**, **Source script** | empty | Seed the binary's environment. The source script is *executed* at session start, so it — and any custom `stdio` MCP server — is gated behind a per-project trust prompt the first time |
 | **Reduce motion** | off | Flatten the chat's animations |
 | **Advanced launch** | flags omitted | `--max-turns`, `--max-budget-usd`, `--fallback-model`, extra `--add-dir` roots, beta flags, strict MCP config |
@@ -464,11 +478,21 @@ substitution, base64 payloads) before matching.
 - **MCP servers and Skills** → denied outright; third-party code has no business reading your keys;
 - **foreign territory** → denied for every caller, trusted or not.
 
-**Per-rule switches** (Settings ▸ Claude Code ▸ Security). Credentials, dangerous commands, and each of
-the three foreign-territory checks can be turned off independently — all **on** by default. Turning one
-off is never a silent allow: detection still runs, and a hit is only *downgraded* from an automatic
-deny to a permission card, shown every time, to every caller. There is no toggle that makes a match
-invisible, and every card names the rule and the Settings path.
+**Per-rule switches** (Settings ▸ Claude Code Security, its own entry in the settings tree, kept per
+project). Every rule can be turned off independently, and so can a whole category at once — all **on** by
+default. Turning one off is never a silent allow: detection still runs, and a hit is only *downgraded* from
+an automatic deny to a permission card, shown every time, to every caller. Every card names the rule and the
+Settings path.
+
+**One switch above all of them**: a shield in the chat's button row, and the same control on that page,
+turns the guard off for a chosen duration — 5 minutes up to *Forever*, five of the seven choices expiring on
+their own. It is **on** by default, the shield is unlit whenever it is not, and while it is off the guard
+evaluates nothing at all.
+
+**Whitelisting a command** is the narrow alternative to switching a rule off: an exact command, matched whole
+and de-obfuscated on both sides, at one of three reaches — that rule, that category, or everywhere. Any rule
+can be whitelisted, and a blocked call offers a **Whitelist Command** link that files the command under the
+rule that stopped it.
 
 The built-in sensitive-path list is additive only by construction: it can be widened with extra globs and
 can never be shrunk. Paths under the project root are exempt from both the credential and
@@ -486,9 +510,12 @@ The threat model is written down in [ADR 0002](docs/adr/0002-threat-model.md), i
 the lock judges the tool call and never the model's reasoning. Full model and reporting policy in
 [`SECURITY.md`](SECURITY.md).
 
-**Telemetry: none.** The plugin sends nothing anywhere. Your conversation goes from the `claude`
-binary to Anthropic over the same channel it already uses in your terminal. See
-[`docs/TELEMETRY.md`](docs/TELEMETRY.md).
+**Telemetry: none.** The plugin collects nothing about you and sends nothing to us — there is no
+analytics endpoint, no crash reporter and no usage counter. Your conversation goes from the `claude`
+binary to Anthropic over the same channel it already uses in your terminal. The only other network
+traffic the plugin makes is optional and goes to **your** forge: give it a GitHub or GitLab token and
+it asks that server about the branch you are on, to show you your own pull requests and CI status.
+None of that reaches us either.
 
 ## Troubleshooting
 
@@ -515,7 +542,7 @@ wrapper is included.
 
 ```bash
 JAVA_HOME=/path/to/a/jdk-21 ./gradlew buildPlugin
-# → build/distributions/claude-code-native-5.5.0.zip
+# → build/distributions/claude-code-native-5.7.0.zip
 ```
 
 Install it with **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.
@@ -617,7 +644,6 @@ Using the plugin is covered above. Everything below is for working *on* it.
 | [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md) · [`docs/DRIFT_DETECTION.md`](docs/DRIFT_DETECTION.md) | Binary compatibility policy and drift detection |
 | [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
 | [`docs/CI_SETUP.md`](docs/CI_SETUP.md) · [`docs/UI_TESTING.md`](docs/UI_TESTING.md) | CI/CD configuration and the RemoteRobot harness |
-| [`docs/TELEMETRY.md`](docs/TELEMETRY.md) | What is (and is not) collected — nothing |
 
 ## Upstream and forks
 

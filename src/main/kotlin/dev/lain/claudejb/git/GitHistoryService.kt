@@ -5,6 +5,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vcs.FileStatus
 import com.intellij.openapi.vcs.VcsException
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.openapi.vfs.VirtualFile
@@ -52,6 +53,13 @@ class GitHistoryService(private val project: Project) {
             .map { path -> GitCommitInfo.relativize(root, path) }
             .distinct()
             .sorted()
+    }
+
+    fun hasConflicts(): Boolean {
+        if (ChangeListManager.getInstance(project).allChanges.any { it.fileStatus == FileStatus.MERGED_WITH_CONFLICTS }) {
+            return true
+        }
+        return withPrimaryRoot(false) { root -> GitGateway.midOperation(project, root) }
     }
 
     fun onRepositoryChanged(parent: Disposable, onChanged: () -> Unit) {

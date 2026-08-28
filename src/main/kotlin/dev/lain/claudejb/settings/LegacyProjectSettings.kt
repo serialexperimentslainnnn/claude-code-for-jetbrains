@@ -21,9 +21,9 @@ internal class LegacyProjectSettings : PersistentStateComponent<ClaudeSettings.S
     override fun getState(): ClaudeSettings.State = state
     override fun loadState(s: ClaudeSettings.State) = XmlSerializerUtil.copyBean(s, state)
 
-    fun migrate(project: Project) {
-        val adopted = SettingsStore.migrateFrom(state)
-        if (!adopted && !SettingsStore.exists()) return
+    fun migrate(project: Project, scope: SettingsScope) {
+        val adopted = SettingsStore.migrateFrom(scope, state)
+        if (!adopted && !SettingsStore.storedAnywhere(scope)) return
         deleteProjectFile(project, adopted)
     }
 
@@ -33,7 +33,7 @@ internal class LegacyProjectSettings : PersistentStateComponent<ClaudeSettings.S
         if (!Files.exists(file)) return
         runCatching { Files.delete(file) }
             .onSuccess {
-                val why = if (adopted) "after adopting it globally" else "the global settings already exist"
+                val why = if (adopted) "after adopting it into this project's settings" else "newer settings already exist"
                 log.info("removed the legacy $file — $why")
             }
             .onFailure { log.warn("could not remove the legacy settings file $file", it) }

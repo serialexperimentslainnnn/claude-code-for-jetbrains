@@ -8,6 +8,7 @@ import dev.lain.claudejb.session.EffortLevel
 import dev.lain.claudejb.session.PermissionMode
 import dev.lain.claudejb.session.ToolNaming
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardMode
 import dev.lain.claudejb.settings.SecuritySuspensions
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
@@ -22,16 +23,19 @@ internal object JcefSettingsMenu {
         val model: String,
         val effort: String?,
         val mode: String,
+        val approvals: Map<SecurityRule, Set<String>> = emptyMap(),
     )
 
-    fun json(state: ClaudeSettings.State, session: ClaudeSession): JsonArray = json(state, selectedIn(session))
+    fun json(scope: String, state: ClaudeSettings.State, session: ClaudeSession): JsonArray =
+        json(scope, state, selectedIn(session))
 
-    internal fun json(state: ClaudeSettings.State, selected: Selected): JsonArray = buildJsonArray {
+    internal fun json(scope: String, state: ClaudeSettings.State, selected: Selected): JsonArray = buildJsonArray {
         modelRows(selected)
         effortRows(selected)
         modeRows(selected)
         chatRows(state)
-        securityRows(state)
+        securityRows(scope, state)
+        sessionApprovalRows(selected.approvals)
         sourceRows(state)
         toolRows(ALLOW, "Allowed tools", state.allowedTools, deferred = true)
         toolRows(DENY, "Disallowed tools", state.disallowedTools, deferred = true)
@@ -39,11 +43,12 @@ internal object JcefSettingsMenu {
         mcpRows(state)
     }
 
-    fun apply(state: ClaudeSettings.State, key: String, on: Boolean, models: List<String>): Boolean {
+    fun apply(scope: String, state: ClaudeSettings.State, key: String, on: Boolean, models: List<String>): Boolean {
         val prefix = key.substringBefore(':', missingDelimiterValue = "")
         if (prefix.isEmpty()) return applyFlag(state, key, on)
         val value = key.substringAfter(':')
-        return applyChoice(state, prefix, value, on, models) ?: applyList(state, prefix, value, on) ?: false
+        val choice = Choice(scope, prefix, value, on)
+        return applyChoice(choice, state, models) ?: applyList(scope, state, prefix, value, on) ?: false
     }
 
     fun applyToSession(session: ClaudeSession, key: String, on: Boolean) {
@@ -89,17 +94,41 @@ internal object JcefSettingsMenu {
         entry("partialMessages", "Chat", "Stream partial messages", s.includePartialMessages)
     }
 
-    private fun JsonArrayBuilder.securityRows(s: ClaudeSettings.State) {
+    private fun JsonArrayBuilder.securityRows(scope: String, s: ClaudeSettings.State) {
         val disabled = csvItems(s.disabledSecurityRules)
         val now = System.currentTimeMillis()
         val suspended = SecuritySuspensions.active(s.securityRuleSuspensions, now) +
-            SecuritySuspensions.sessionSuspended()
+            SecuritySuspensions.sessionSuspended(scope)
+        val mode = if (SecuritySuspensions.guardSuspended(scope, s, now)) {
+            GuardMode.ALLOW_ALL
+        } else {
+            GuardMode.from(s.guardMode) ?: GuardMode.DEFAULT
+        }
+        GuardMode.entries.forEach { m ->
+            entry("$GUARD_MODE:${m.wire}", "Guard mode", m.label, m == mode, radio = true)
+        }
         SecurityCategory.entries.forEach { category ->
             SecurityRule.of(category).forEach { rule ->
                 val enforced = rule.name !in disabled && rule !in suspended
                 entry("$RULE:${rule.name}", "Security", rule.label, enforced, sub = category.label)
             }
         }
+    }
+
+    private fun JsonArrayBuilder.sessionApprovalRows(approvals: Map<SecurityRule, Set<String>>) {
+        approvals.forEach { (rule, commands) ->
+            commands.forEach { command ->
+                entry("$APPROVAL:${rule.name}:$command", "Approved in this chat", command, true, sub = rule.label)
+            }
+        }
+    }
+
+    fun sessionApproval(key: String): Pair<SecurityRule, String>? {
+        if (!key.startsWith("$APPROVAL:")) return null
+        val rest = key.removePrefix("$APPROVAL:")
+        val rule = SecurityRule.from(rest.substringBefore(':', "")) ?: return null
+        val command = rest.substringAfter(':', "").takeIf { it.isNotEmpty() } ?: return null
+        return rule to command
     }
 
     private fun JsonArrayBuilder.sourceRows(s: ClaudeSettings.State) {
@@ -153,22 +182,46 @@ internal object JcefSettingsMenu {
         return true
     }
 
+    private class Choice(val scope: String, val prefix: String, val value: String, val on: Boolean)
+
     private fun applyChoice(
+        choice: Choice,
+        state: ClaudeSettings.State,
+        models: List<String>,
+    ): Boolean? = when (choice.prefix) {
+        GUARD_MODE -> select(GuardMode.from(choice.value) != null, choice.on) {
+            applyGuardMode(choice.scope, state, GuardMode.from(choice.value) ?: GuardMode.DEFAULT)
+        }
+
+        MODEL -> select(choice.value in models, choice.on) { state.model = choice.value }
+
+        EFFORT -> select(EffortLevel.from(choice.value) != null, choice.on) { state.effort = choice.value }
+
+        MODE -> select(PermissionMode.from(choice.value) != null, choice.on) {
+            state.permissionMode = choice.value
+        }
+
+        else -> null
+    }
+
+    private fun applyGuardMode(scope: String, state: ClaudeSettings.State, chosen: GuardMode) {
+        if (chosen == GuardMode.ALLOW_ALL) {
+            SecuritySuspensions.guardOff(scope, state, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis())
+        } else {
+            SecuritySuspensions.guardOn(scope, state)
+            state.guardMode = chosen.wire
+        }
+    }
+
+    private fun applyList(
+        scope: String,
         state: ClaudeSettings.State,
         prefix: String,
         value: String,
         on: Boolean,
-        models: List<String>,
-    ): Boolean? = when (prefix) {
-        MODEL -> select(value in models, on) { state.model = value }
-        EFFORT -> select(EffortLevel.from(value) != null, on) { state.effort = value }
-        MODE -> select(PermissionMode.from(value) != null, on) { state.permissionMode = value }
-        else -> null
-    }
-
-    private fun applyList(state: ClaudeSettings.State, prefix: String, value: String, on: Boolean): Boolean? =
+    ): Boolean? =
         when (prefix) {
-            RULE -> applyRule(state, value, on)
+            RULE -> applyRule(scope, state, value, on)
 
             SOURCE -> toggle(value in ClaudeSession.SETTING_SOURCES, state.settingSources, value, on) {
                 state.settingSources = it
@@ -185,14 +238,14 @@ internal object JcefSettingsMenu {
             else -> null
         }
 
-    private fun applyRule(state: ClaudeSettings.State, value: String, on: Boolean): Boolean {
+    private fun applyRule(scope: String, state: ClaudeSettings.State, value: String, on: Boolean): Boolean {
         val rule = SecurityRule.from(value) ?: return false
         val next = csvToggle(state.disabledSecurityRules, rule.name, on = !on)
         state.disabledSecurityRules = SecurityRule.canonicalCsv(csvItems(next))
         if (on) {
             state.securityRuleSuspensions =
                 SecuritySuspensions.without(state.securityRuleSuspensions, rule, System.currentTimeMillis())
-            SecuritySuspensions.releaseSessionScoped(rule)
+            SecuritySuspensions.releaseSessionScoped(scope, rule)
         }
         return true
     }
@@ -225,8 +278,11 @@ internal object JcefSettingsMenu {
         model = session.model ?: session.preferredDefaultModel(),
         effort = session.effort,
         mode = session.permissionMode,
+        approvals = session.guardApprovals.all(),
     )
 
+    private const val APPROVAL = "approval"
+    private const val GUARD_MODE = "guardmode"
     private const val MODEL = "model"
     private const val EFFORT = "effort"
     private const val MODE = "mode"

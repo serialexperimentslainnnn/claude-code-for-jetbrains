@@ -67,8 +67,15 @@
     if (!children.length) return null;
     var head = h('div', { class: 'dash-title', text: title });
     var props = { class: 'dash-card' + (wide ? ' wide' : '') };
-    if (anchor) props.attrs = { 'data-card': anchor };
+    props.attrs = { 'data-card': anchor || slug(title) };
     return h('div', props, head, children);
+  }
+
+  function slug(title) {
+    return String(title == null ? 'card' : title)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
   }
 
   D.core = core;

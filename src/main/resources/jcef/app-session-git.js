@@ -7,8 +7,6 @@
   var send = D.send;
   var card = D.card;
 
-  var KNOWN_STATUS = { running: true, completed: true, failed: true };
-
   var announced = Object.create(null);
 
   var BRANCHES_ACTION = 'branches';
@@ -158,18 +156,9 @@
   function actionButton(action) {
     var id = text(action.id, '');
     var label = text(action.label, id || 'Action');
-    var status = statusOf(action);
-    announceStatus(id, label, status);
+    announceStatus(id, label, statusOf(action));
 
     var children = [h('span', { class: 'git-action-label', text: label })];
-    if (status) {
-      children.push(
-        h('span', {
-          class: 'git-status ' + (KNOWN_STATUS[status] ? status : 'other'),
-          text: status,
-        })
-      );
-    }
     return h(
       'button',
       {
@@ -417,7 +406,7 @@
     var hash = row.hash;
     var short = text(c.short, hash.slice(0, 7));
     var refs = byHash[hash] || [];
-    var meta = [text(c.author, null), ageText(c.ageMillis), fileCount(c.files)].filter(Boolean);
+    var meta = [text(c.author, null), ageSince(c.authoredAtMillis), fileCount(c.files)].filter(Boolean);
     return h(
       'li',
       { class: 'git-node git-commit', attrs: { 'data-hash': hash } },
@@ -519,6 +508,11 @@
     return Math.round(n) === 1 ? '1 file' : Math.round(n) + ' files';
   }
 
+  function ageSince(atMillis) {
+    if (typeof atMillis !== 'number' || !isFinite(atMillis) || atMillis <= 0) return null;
+    return ageText(Date.now() - atMillis);
+  }
+
   function ageText(ms) {
     if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return null;
     var mins = Math.floor(ms / 60000);
@@ -558,20 +552,6 @@
     return h('div', { class: 'git-note', text: lines.join(' ') });
   }
 
-  function linkTo(label, url, extraClass) {
-    return h('button', {
-      class: 'git-link' + (extraClass ? ' ' + extraClass : ''),
-      attrs: { type: 'button' },
-      text: label,
-      on: {
-        click: function (ev) {
-          ev.preventDefault();
-          send({ type: 'open', url: url });
-        },
-      },
-    });
-  }
-
   function factRow(label, value) {
     if (value == null || value === '') return null;
     return h(
@@ -598,56 +578,10 @@
     return card('Branch', rows, false, 'git-topology');
   }
 
-  function buildGitForgeCard(git) {
-    var g = gitOf(git);
-    if (!g || !repoOf(g).present) return null;
-    var hasPulls = Object.prototype.hasOwnProperty.call(g, 'pullRequests');
-    var run = g.lastRun;
-    if (!hasPulls && !run) return null;
-
-    var body = [];
-    if (run) body.push(runRow(run));
-    if (hasPulls) {
-      var pulls = list(g.pullRequests);
-      if (!pulls.length) {
-        body.push(h('div', { class: 'git-note', text: 'No open pull requests for this branch.' }));
-      } else {
-        pulls.forEach(function (pull) {
-          body.push(pullRow(pull));
-        });
-      }
-    }
-    return card('This branch elsewhere', body, false, 'git-forge');
-  }
-
-  function runRow(run) {
-    var status = text(run.status, 'running');
-    return h(
-      'div',
-      { class: 'git-forge-row' },
-      h('span', { class: 'git-dot ' + status, attrs: { title: status } }),
-      h('span', { class: 'git-forge-label', text: text(run.name, 'Last run') }),
-      linkTo('Open', text(run.url, ''), 'git-forge-open')
-    );
-  }
-
-  function pullRow(pull) {
-    var number = pull.number == null ? '' : '#' + pull.number;
-    return h(
-      'div',
-      { class: 'git-forge-row' },
-      h('span', { class: 'git-forge-num', text: number }),
-      h('span', { class: 'git-forge-label', text: text(pull.title, '(no title)') }),
-      pull.draft ? h('span', { class: 'git-forge-draft', text: 'draft' }) : null,
-      linkTo('Open', text(pull.url, ''), 'git-forge-open')
-    );
-  }
-
   D.gitViewTabs = viewTabs;
   D.gitLanes = layoutLanes;
   D.buildGitHeadCard = buildGitHeadCard;
   D.buildGitActionsCard = buildGitActionsCard;
   D.buildGitHistoryCard = buildGitHistoryCard;
   D.buildGitTopologyCard = buildGitTopologyCard;
-  D.buildGitForgeCard = buildGitForgeCard;
 })();

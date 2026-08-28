@@ -31,6 +31,25 @@ data class PendingPermission(
         get() = DiffPresenter.filePathOf(input)?.substringAfterLast('/')?.let { "$toolName on $it" } ?: toolName
 }
 
+data class GuardBypass(
+    val toolName: String,
+    val reason: String?,
+    val rule: SecurityRule,
+    val command: String? = null,
+    val action: String? = null,
+    val toolUseId: String? = null,
+    val detail: String? = null,
+)
+
+data class GuardDenial(
+    val toolName: String,
+    val reason: String?,
+    val rule: SecurityRule?,
+    val command: String? = null,
+    val toolUseId: String? = null,
+    val detail: String? = null,
+)
+
 data class GuardAlert(val rule: SecurityRule, val reason: String?) {
     val label: String get() = rule.label
 
@@ -56,8 +75,8 @@ class PermissionBroker(
     private val projectRoot: String? = null,
     private val sensitiveDecision: (input: JsonObject) -> SensitiveGuard.Decision =
         { SensitiveGuard.Decision(SensitiveGuard.Verdict.ALLOW, null) },
-    private val onSensitiveDenied: (toolName: String, reason: String?, rule: SecurityRule?) -> Unit =
-        { _, _, _ -> },
+    private val onSensitiveDenied: (GuardDenial) -> Unit = {},
+    private val onSensitiveBypassed: (GuardBypass) -> Unit = {},
     private val isGuardCommandApproved: (rule: SecurityRule, command: String?) -> Boolean = { _, _ -> false },
     private val forceAsk: () -> Boolean = { false },
 ) {
@@ -78,29 +97,76 @@ class PermissionBroker(
         return true
     }
 
+    /** An *Always allow* answered one card about one call. A tool input can carry more than one command — an MCP
+     *  server names its own inputs, and several keys read as commands — so approving what the card showed must not
+     *  approve whatever else travelled with it. Every command in the input has to be approved, which is the rule
+     *  the whitelist already applies; anything unrecognised falls through to a card rather than being waved past. */
+    private fun approvedEntirely(rule: SecurityRule, input: JsonObject): Boolean {
+        val issued = ToolInputScanner.commandCandidates(input)
+        return issued.isNotEmpty() && issued.all { isGuardCommandApproved(rule, it) }
+    }
+
+    private fun reportChatApproval(request: CanUseToolRequest, decision: SensitiveGuard.Decision) {
+        val rule = decision.rule ?: return
+        val what = decision.detail?.let { " — it $it" }.orEmpty()
+        onSensitiveBypassed(
+            GuardBypass(
+                toolName = request.toolName,
+                reason = "${rule.label} matched$what — allowed because $APPROVED_IN_CHAT",
+                rule = rule,
+                command = ToolInputScanner.commandText(request.input),
+                action = REVOKE_APPROVAL,
+                toolUseId = request.toolUseId.ifBlank { null },
+                detail = decision.detail,
+            ),
+        )
+    }
+
     private fun applySensitiveGuard(requestId: String, request: CanUseToolRequest): Boolean {
         val decision = sensitiveDecision(request.input)
         return when (decision.verdict) {
             SensitiveGuard.Verdict.DENY -> {
                 respond(ControlProtocol.permissionDeny(requestId, denialMessage(decision.reason)))
-                onSensitiveDenied(request.toolName, decision.reason, decision.rule)
+                onSensitiveDenied(
+                    GuardDenial(
+                        toolName = request.toolName,
+                        reason = decision.reason,
+                        rule = decision.rule,
+                        command = ToolInputScanner.commandText(request.input),
+                        toolUseId = request.toolUseId.ifBlank { null },
+                        detail = decision.detail,
+                    ),
+                )
                 true
             }
 
             SensitiveGuard.Verdict.ASK -> {
                 val reviewable = request.toolName in DiffPresenter.REVIEWABLE_TOOLS
-                val approved = decision.rule?.let {
-                    isGuardCommandApproved(it, ToolInputScanner.commandText(request.input))
-                } == true
+                val approved = decision.rule?.let { approvedEntirely(it, request.input) } == true
                 if (!forceAsk() && approved) {
                     autoAllow(requestId, request, reviewable)
+                    reportChatApproval(request, decision)
                 } else {
                     present(presentable(requestId, request, reviewable, decision))
                 }
                 true
             }
 
-            SensitiveGuard.Verdict.ALLOW -> false
+            SensitiveGuard.Verdict.ALLOW -> {
+                decision.rule?.let {
+                    onSensitiveBypassed(
+                        GuardBypass(
+                            toolName = request.toolName,
+                            reason = decision.reason,
+                            rule = it,
+                            command = ToolInputScanner.commandText(request.input),
+                            toolUseId = request.toolUseId.ifBlank { null },
+                            detail = decision.detail,
+                        ),
+                    )
+                }
+                false
+            }
         }
     }
 
@@ -209,12 +275,20 @@ class PermissionBroker(
     companion object {
         private const val MAX_SUMMARY_CHARS = 2000
 
+        private const val APPROVED_IN_CHAT = "you gave Allow All for this exact command in this chat"
+
+        const val REVOKE_APPROVAL = "revokeApproval"
+
+        const val ENABLE_GUARD = "enableGuard"
+
+        const val REMOVE_FROM_WHITELIST = "removeFromWhitelist"
+
         const val SENSITIVE_DENIED: String =
-            "Denied by the IDE: this call touches credentials, a dangerous command, or territory it must not. " +
-                "Do not retry it and do not attempt another way to reach the same result."
+            "Denied by the IDE's security guard: this call touches credentials, a dangerous command, or " +
+                "territory it must not. This applies to this call only."
 
         fun denialMessage(reason: String?): String =
-            reason?.let { "Denied by the IDE: it $it. Do not retry it and do not attempt another way to do the same thing." }
+            reason?.let { "Denied by the IDE's security guard: it $it. This applies to this call only." }
                 ?: SENSITIVE_DENIED
     }
 }

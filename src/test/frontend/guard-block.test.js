@@ -14,8 +14,10 @@ const DURATIONS = [
   ['forever', 'Forever'],
 ];
 
-function blockRow(win, rule = 'DESTRUCTIVE_IAC') {
-  win.cc.batch([row(1, 0, 'SYSTEM', 'Blocked Bash: it runs a destructive command.', { blockedRule: rule })]);
+function blockRow(win, rule = 'DESTRUCTIVE_IAC', extra = {}) {
+  win.cc.batch([
+    row(1, 0, 'SYSTEM', 'Blocked Bash: it runs a destructive command.', { blockedRule: rule, ...extra }),
+  ]);
   return document.querySelector('.notice.guard-block');
 }
 
@@ -219,5 +221,147 @@ describe('a guard block carries the control that can open the rule', () => {
     expect(at).toBeGreaterThan(-1);
     expect(css.slice(at, css.indexOf('}', at))).toMatch(/display:\s*none/);
     expect(at).toBeGreaterThan(css.indexOf('.guard-disable-menu {'));
+  });
+});
+
+describe('a guard block can also put the command on the whitelist', () => {
+  it('offers the link when the block names a command', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const block = blockRow(win, 'DESTRUCTIVE_IAC', { command: 'terraform destroy' });
+
+    expect(block.querySelector('.guard-whitelist-link').textContent).toBe('Whitelist Command');
+  });
+
+  it('offers nothing to whitelist when the block names no command', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const block = blockRow(win, 'CREDENTIALS');
+
+    expect(block.querySelector('.guard-whitelist-link')).toBeNull();
+  });
+
+  it('sends the exact command and the rule that blocked it', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    const block = blockRow(win, 'DESTRUCTIVE_GIT', { command: 'git push --force' });
+
+    block
+      .querySelector('.guard-whitelist-link')
+      .dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(sent).toEqual([{ type: 'guardWhitelist', rule: 'DESTRUCTIVE_GIT', command: 'git push --force' }]);
+  });
+
+  it('is a button, not a link — an anchor would be swallowed by the link router', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const block = blockRow(win, 'DESTRUCTIVE_IAC', { command: 'terraform destroy' });
+    const link = block.querySelector('.guard-whitelist-link');
+
+    expect(link.tagName).toBe('BUTTON');
+    expect(link.getAttribute('type')).toBe('button');
+  });
+
+  it('sits beside Disable rule rather than replacing it', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const block = blockRow(win, 'DESTRUCTIVE_IAC', { command: 'terraform destroy' });
+    const actions = block.querySelector('.guard-block-actions');
+
+    expect(actions.querySelector('.guard-disable-link')).toBeTruthy();
+    expect(actions.querySelector('.guard-whitelist-link')).toBeTruthy();
+  });
+});
+
+describe('a bypass is a warning, not a silence', () => {
+  function bypassRow(win, rule = 'DESTRUCTIVE_IAC', extra = {}) {
+    win.cc.batch([
+      row(
+        1,
+        0,
+        'SYSTEM',
+        'Allowed Bash: Block infrastructure teardown matched — it runs a destructive operation.',
+        {
+          bypassedRule: rule,
+          ...extra,
+        }
+      ),
+    ]);
+    return document.querySelector('.notice.guard-bypass');
+  }
+
+  it('draws a warning row when a rule matched and the call ran anyway', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const notice = bypassRow(win);
+
+    expect(notice).toBeTruthy();
+    expect(notice.textContent).toContain('runs a destructive operation');
+  });
+
+  it('offers to put the guard back on when that is why the call ran', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    const notice = bypassRow(win, 'TEMP_DIR', { bypassAction: 'enableGuard' });
+    const link = notice.querySelector('.guard-whitelist-link');
+
+    expect(link.textContent).toBe('Enable Sensitive Guard');
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(sent).toEqual([{ type: 'guardMaster', on: true, duration: '', rule: 'TEMP_DIR' }]);
+  });
+
+  it('offers to withdraw the authorisation when that is why the call ran', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const sent = [];
+    win.CC.send = (m) => sent.push(m);
+    const notice = bypassRow(win, 'DESTRUCTIVE_IAC', {
+      bypassAction: 'revokeApproval',
+      command: 'terraform destroy',
+    });
+    const link = notice.querySelector('.guard-whitelist-link');
+
+    expect(link.textContent).toBe('Disable this authorization');
+
+    link.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+
+    expect(sent).toEqual([
+      { type: 'guardRevokeApproval', rule: 'DESTRUCTIVE_IAC', command: 'terraform destroy' },
+    ]);
+  });
+
+  it('offers nothing when there is nothing left standing to undo', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    const notice = bypassRow(win);
+
+    expect(
+      notice.querySelector('.guard-whitelist-link'),
+      'a card answered once is over, and a whitelist entry belongs on its own page'
+    ).toBeNull();
+  });
+
+  it('is not the red block row — nothing was stopped', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    bypassRow(win);
+
+    expect(document.querySelector('.notice.guard-block')).toBeNull();
+    expect(document.querySelector('.guard-disable-link')).toBeNull();
+  });
+
+  it('an ordinary system notice is still an ordinary system notice', () => {
+    const win = loadFrontend(['app-transcript.js']);
+    win.cc.batch([row(1, 0, 'SYSTEM', 'Session resumed.')]);
+
+    expect(document.querySelector('.notice.guard-bypass')).toBeNull();
+  });
+
+  it('is painted in the warning colour the stylesheet defines, not the danger one', () => {
+    const css = readCss().replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = css.indexOf('.notice.guard-bypass');
+    const rule = css.slice(at, css.indexOf('}', at));
+
+    expect(at).toBeGreaterThan(-1);
+    expect(rule).toContain('var(--warning)');
+    expect(rule).not.toContain('var(--danger)');
+    expect(css).toMatch(/--warning:\s*#/);
   });
 });

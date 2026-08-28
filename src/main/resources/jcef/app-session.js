@@ -14,6 +14,7 @@
   var toggleBtn = null;
   var planBtn = null;
   var gitBtn = null;
+  var vulnBtn = null;
   var panel = null;
   var inner = null;
   var toggles = null;
@@ -33,15 +34,12 @@
     var s = lastSession;
     optionalButton(planBtn, 'plan', !!(s && s.plan && s.plan.body));
     optionalButton(gitBtn, 'git', !!(s && s.git && s.git.available));
+    optionalButton(vulnBtn, 'security', !!(s && s.vuln && s.vuln.available));
   }
 
   function optionalButton(btn, view, has) {
     if (!btn) return;
-    btn.hidden = !has;
-    if (!has && currentView === view) {
-      currentView = defaultView();
-      markActiveButton();
-    }
+    btn.hidden = !has && currentView !== view;
   }
 
   function defaultView() {
@@ -60,38 +58,66 @@
 
   function render() {
     if (!panel || !inner) return;
+    syncGuardVisibility();
     if (gitChatOpen()) {
       applyGitSub();
       return;
     }
-    var offset = panel.scrollTop;
-    while (inner.firstChild) inner.removeChild(inner.firstChild);
-
     var s = lastSession || {};
     var view = VIEWS[currentView] || VIEWS.session;
-    var cards = view.cards(s);
+    var cards = view.cards(s).filter(Boolean);
 
-    var any = false;
-    for (var i = 0; i < cards.length; i++) {
-      if (cards[i]) {
-        inner.appendChild(cards[i]);
-        any = true;
-      }
-    }
-
-    if (!any) {
-      inner.appendChild(
+    if (!cards.length) {
+      cards = [
         h(
           'div',
-          { class: 'dash-card dash-empty' },
+          { class: 'dash-card dash-empty', attrs: { 'data-card': 'empty' } },
           h('div', { class: 'dash-title', text: view.title }),
           h('div', { class: 'stat-row' }, h('span', { class: 'stat-label', text: view.empty }))
-        )
-      );
+        ),
+      ];
     }
+
+    reconcile(inner, cards);
     applyGitSub();
-    panel.scrollTop = offset;
   }
+
+  function keyOf(node) {
+    return node && node.getAttribute ? node.getAttribute('data-card') : null;
+  }
+
+  function reconcile(container, cards) {
+    var existing = Object.create(null);
+    var i;
+    for (i = 0; i < container.children.length; i++) {
+      var key = keyOf(container.children[i]);
+      if (key != null) existing[key] = container.children[i];
+    }
+
+    var ordered = [];
+    for (i = 0; i < cards.length; i++) {
+      var next = cards[i];
+      var previous = existing[keyOf(next)];
+      ordered.push(previous && previous.outerHTML === next.outerHTML ? previous : next);
+    }
+
+    for (i = container.children.length - 1; i >= 0; i--) {
+      if (ordered.indexOf(container.children[i]) < 0) container.removeChild(container.children[i]);
+    }
+
+    for (i = 0; i < ordered.length; i++) {
+      if (container.children[i] !== ordered[i])
+        container.insertBefore(ordered[i], container.children[i] || null);
+    }
+  }
+
+  function syncGuardVisibility() {
+    if (typeof D.guardVisible === 'function') D.guardVisible(shown && currentView === 'guard');
+  }
+
+  D.repaintGuard = function () {
+    if (built && shown && currentView === 'guard') render();
+  };
 
   function gitChatOpen() {
     return currentView === 'git' && gitSub === 'chat';
@@ -152,6 +178,13 @@
         return [D.buildPlanCard(s.plan)];
       },
     },
+    guard: {
+      title: 'Guard',
+      empty: 'The guard has judged nothing in this chat yet.',
+      cards: function () {
+        return typeof D.buildGuardCards === 'function' ? D.buildGuardCards() : [];
+      },
+    },
     git: {
       title: 'Git',
       empty: 'No Git repository for this project.',
@@ -159,10 +192,16 @@
         return [
           D.buildGitHeadCard(s.git),
           D.buildGitTopologyCard(s.git),
-          D.buildGitForgeCard(s.git),
           D.buildGitActionsCard(s.git),
           D.buildGitHistoryCard(s.git),
         ];
+      },
+    },
+    security: {
+      title: 'Vulnerabilities',
+      empty: 'No dependency manifest this build can read was found in this project.',
+      cards: function (s) {
+        return typeof D.buildVulnCards === 'function' ? D.buildVulnCards(s.vuln) : [];
       },
     },
   };
@@ -261,13 +300,17 @@
     planBtn.hidden = true;
     gitBtn = viewButton('Git', 'git');
     gitBtn.hidden = true;
+    vulnBtn = viewButton('Vulnerabilities', 'security');
+    vulnBtn.hidden = true;
     var stack = h(
       'div',
       { class: 'dash-toggles' },
       chatBtn,
-      toggleBtn,
       viewButton('Workloads', 'workloads'),
       gitBtn,
+      viewButton('Guard', 'guard'),
+      vulnBtn,
+      toggleBtn,
       planBtn
     );
     toggles = stack;
@@ -295,6 +338,7 @@
       CC.coverTranscript('dashboard', false);
       currentView = defaultView();
     }
+    syncGuardVisibility();
     markActiveButton();
   }
 
@@ -307,6 +351,8 @@
   D.leaveDashboard = function () {
     if (shown) toggle();
   };
+
+  D.repaint = renderIfShown;
 
   D.toggleDashboard = toggle;
   D.dashboardShown = function () {
@@ -348,6 +394,25 @@
     gitOpened = false;
     ensureBuilt();
     renderIfShown();
+  };
+
+  cc.openGuardView = function () {
+    ensureBuilt();
+    if (!built) return;
+    currentView = 'guard';
+    shown = true;
+    render();
+    applyVisibility();
+  };
+
+  cc.showVulnView = function () {
+    ensureBuilt();
+    if (!built) return;
+    currentView = 'security';
+    shown = true;
+    render();
+    applyVisibility();
+    announceView();
   };
 
   cc.openDashboard = function () {

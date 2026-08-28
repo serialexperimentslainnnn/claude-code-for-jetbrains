@@ -15,6 +15,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.content.ContentFactory
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ChatSessionManager
 import dev.lain.claudejb.session.ClaudeSession
@@ -53,7 +54,8 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         val panel = JcefChatPanel(project, session)
         val tab = tabs.add(panel, tabTitle(session.title), session.title, panel)
         session.addListener(object : SessionListener {
-            override fun onAttention(reason: AttentionReason) = onSessionAttention(project, tabs, session, reason)
+            override fun onAttention(reason: AttentionReason, landing: AttentionLanding) =
+                onSessionAttention(project, tabs, session, reason, landing)
             override fun onTitleChanged() {
                 tabs.tabFor(session)?.let { tabs.relabel(it, tabTitle(session.title), session.title) }
             }
@@ -65,11 +67,17 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
         }
     }
 
-    private fun onSessionAttention(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, reason: AttentionReason) {
+    private fun onSessionAttention(
+        project: Project,
+        tabs: ChatTabsPanel,
+        session: ClaudeSession,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ) {
         val tw = resolveToolWindow(project)
         val tab = tabs.tabFor(session) ?: return
-        val onScreen = tw != null && tw.isVisible && tabs.selected === tab
-        if (onScreen) return
+        val tabOnScreen = tw != null && tw.isVisible && tabs.selected === tab
+        if (tabOnScreen && showsWhereItLanded(tab, reason, landing)) return
 
         tabs.badge(tab, true)
 
@@ -81,13 +89,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
             AttentionReason.PERMISSION -> "Claude needs your approval in \"${session.title}\"."
             AttentionReason.TURN_DONE -> "Claude finished responding in \"${session.title}\"."
             AttentionReason.ERROR -> "Claude hit an error in \"${session.title}\"."
+            AttentionReason.GUARD_BLOCKED -> "The guard blocked a tool call in \"${session.title}\"."
         }
         NotificationGroupManager.getInstance().getNotificationGroup("Claude Code")
-            .createNotification(
-                "Claude Code",
-                text,
-                if (reason == AttentionReason.ERROR) NotificationType.ERROR else NotificationType.INFORMATION,
-            )
+            .createNotification("Claude Code", text, notificationTypeFor(reason))
             .addAction(
                 NotificationAction.createSimpleExpiring("Open") {
                     tabs.tabFor(session)?.let { tabs.select(it) }
@@ -95,6 +100,20 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
                 },
             )
             .notify(project)
+    }
+
+    private fun showsWhereItLanded(
+        tab: ChatTabsPanel.ChatTab,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ): Boolean =
+        reason != AttentionReason.GUARD_BLOCKED ||
+            (tab.component as? JcefChatPanel)?.transcript?.shows(landing) != false
+
+    private fun notificationTypeFor(reason: AttentionReason): NotificationType = when (reason) {
+        AttentionReason.ERROR -> NotificationType.ERROR
+        AttentionReason.GUARD_BLOCKED -> NotificationType.WARNING
+        else -> NotificationType.INFORMATION
     }
 
     private fun resolveToolWindow(project: Project): ToolWindow? =
@@ -105,7 +124,9 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
     private fun buildGearGroup(project: Project, tabs: ChatTabsPanel, commands: TabSessionCommands) =
         DefaultActionGroup().apply {
             add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(tabs)?.openDashboard() })
+            add(simple("Dependency Vulnerabilities…") { activePanel(tabs)?.security?.showVulnView() })
             add(simple("Agents") { activePanel(tabs)?.let { InfoDialogs.showAgents(project, it.session) } })
+            add(simple("Security Guard Log (Blocked · Allowed · Whitelisted · Disabled)") { showGuardView(project) })
             add(SessionDiffAction(project, tabs))
             add(simple("Binary Version…") { activePanel(tabs)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
             add(simple("Effective Settings…") { activePanel(tabs)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
@@ -154,6 +175,10 @@ class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
 
         fun newChat(project: Project) {
             tabsPanel(project)?.commands?.newChat()
+        }
+
+        fun showGuardView(project: Project) {
+            activePanel(project)?.security?.openGuardView()
         }
 
         fun showGitView(project: Project) {

@@ -3,28 +3,6 @@ package dev.lain.claudejb.ui
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The waiting screens never cover the chat tabs.
- *
- * The regression this pins is 5.5.0's: `#boot` was `inset: 0` over the whole of `#app`, so **a chat that was
- * still starting covered the tab bar** and you could not switch to another one while it booted — the tabs
- * were there, drawn, and unclickable. The fix was structural: the boot screen and the sign-in card live
- * inside `#work` (today, as rows of `#conversation`), which is a sibling *below* `#tabsbar`, so they cannot
- * cover something they do not own.
- *
- * Two assertions, because "does not cover" has two failure modes and only checking one of them lets the other
- * back in:
- *
- *  1. **Geometry** — `#work` starts at or below the bottom of `#tabsbar`. An overlay that goes back to
- *     `position: fixed; inset: 0` fails here even if it happens to be transparent at the top.
- *  2. **Hit testing** — the centre of a chat pill really does hit that pill. This is the user's question
- *     ("can I click my other chat?"), and it catches the case geometry misses: something stretched over the
- *     bar with a higher `z-index` and no bounding box of its own to give it away.
- *
- * Both hold whichever of the waiting screens is up, which is the point: the invariant is about the layout,
- * not about the state. The test reports which screen was showing when it ran, so a failure says what the page
- * was doing at the time.
- */
 class BootScreenUiTest : UiTestBase() {
 
     @Test
@@ -52,7 +30,6 @@ class BootScreenUiTest : UiTestBase() {
             "(function () { var b = document.getElementById(\"tabsbar\"); " +
                 "return String(!!b && !b.hidden && b.getBoundingClientRect().height > 0); })()"
 
-        /** Which waiting screen is on screen right now — for the failure message, not for the assertion. */
         const val WAITING_SCREEN =
             "(function () { var boot = document.getElementById(\"boot\"); " +
                 "var auth = document.getElementById(\"auth-card\"); " +
@@ -61,7 +38,6 @@ class BootScreenUiTest : UiTestBase() {
                 "if (auth && !auth.hidden && auth.getBoundingClientRect().height > 0) { up.push(\"auth\"); } " +
                 "return up.length ? up.join(\"+\") : \"none\"; })()"
 
-        /** One pixel of tolerance: sub-pixel layout must not be the thing that decides this. */
         const val WORK_BELOW_BAR =
             "(function () { var b = document.getElementById(\"tabsbar\"); " +
                 "var w = document.getElementById(\"work\"); if (!b || !w) { return String(false); } " +

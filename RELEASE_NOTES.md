@@ -1,3 +1,65 @@
+## v5.7.0 — 2026-08-21
+
+**The Sensitive Guard stops being invisible.** It keeps a log of every alert it raises — in the IDE's
+safe, per project — and there is now a Guard view in the chat's view row to read it: what matched,
+what the rule saw, the verdict, and what let the call through if anything did. Free-text search,
+multi-select filters by category and by rule, and a Whitelist button on any entry. How long entries
+are kept is a setting.
+
+**Guard rows survive reopening a chat.** They are the plugin's own rows and the binary's transcript
+has no record of them, so they are rebuilt from that log and anchored back to the call they judged.
+An alert a subagent earned is drawn in that agent's transcript, where the call happened, and not in
+the main one.
+
+**The guard gets a mode.** Enforcing refuses, Permissive asks on a card every time, Allow All lets
+the call run — and the choice is available per rule as well as for the guard as a whole. Rules are
+Enforcing by default and stay that way unless you say otherwise.
+
+**Settings ▸ Claude Code Security is its own page.** The mode of every rule, grouped by category and
+foldable, with All Enforcing and All Permissive per group; temporary suspensions shown and endable;
+extra credential paths and extra blocked domains; and the whitelist. Any rule can be whitelisted now,
+credential and foreign-path rules included — those ask for confirmation first. Whitelists work at
+three reaches: every rule, one category, or a single rule.
+
+**A shield in the chat's button row** switches the guard to Allow All for a duration you pick, and
+back with one click. It is unlit whenever the guard is not deciding, so it never implies a protection
+that is not running.
+
+**The detection rules see more than they did.** Privilege escalation is refused — `sudo`, `su`,
+`doas`, `pkexec` and their family, `runas`, `Start-Process -Verb RunAs`, `psexec`, `wsl -u root` —
+matched only where the payload executes, so a file documenting `sudo apt update` trips nothing.
+"Outside the project" now reads paths inside shell commands, not just a tool's own location argument,
+so `cat ~/notes.txt` no longer slips past a rule that `Read /home/you/notes.txt` would have stopped.
+Hex and reversed payloads are decoded before they are judged. Destructive orchestration covers
+OpenShift alongside `kubectl`, and recovery inhibition covers VSS and APFS snapshots.
+
+**A row that says so when a rule matched and the call ran anyway** — which rule, what it saw, and
+what let it through — carrying the undo for whatever is still in force. A refusal names the rule and
+says the decision is about that one call: the old wording made Claude generalise from a single block
+and give up for the rest of the session.
+
+**Know what your dependencies are carrying.** A Vulnerabilities view checks the project's manifests
+against a public advisory database for known CVEs, filters by severity, and hands the findings to
+Claude to plan how to solve them — reading your code and checking current advisories first, rather
+than proposing a version bump on its own.
+
+**The Git view links out to the IDE's own.** The plugin's second client is gone: Overview opens the
+IDE's Pull Requests and Merge Requests windows, which already do that job better. And every view now
+redraws in place, so a filter, a scroll position or an open card survives the transcript refreshing
+underneath it.
+
+**Take your configuration with you.** Export settings… and Import settings… use one JSON file;
+Migrate from another IDE… copies straight from another JetBrains IDE on this machine — you pick the
+IDE, the projects, and whether you want the general settings, the guard's, or its alert history. An
+exported file never carries your environment variables, because that is where an API key ends up and
+a file leaves the machine. A permission mode that would weaken security is refused on the way in.
+
+**Both settings pages were rebuilt to fit the window**, in titled groups instead of one column of
+forty rows, with every note re-wrapping as you resize. Settings are now per project and per IDE
+installation, so two repositories can disagree about the model, the permission mode or a security
+rule; nothing is lost on upgrade, your login stays global, and signing out no longer wipes your
+configuration along with your credentials.
+
 ## v5.5.0 — 2026-08-19
 
 **This release requires IntelliJ Platform 2025.3.1 or newer, and it is not optional.** From build 262 the IDE

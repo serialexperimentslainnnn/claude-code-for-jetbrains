@@ -1,5 +1,29 @@
 t# Project rules
 
+## ⛔ NO COMMENTS IN THE CODE
+
+**Do not write comments.** No KDoc, no block comments, no line comments, no docstrings — in any
+language in this repository.
+
+This overrides the general engineering habit of documenting rationale in place. It is a decision
+taken for **this** project and it is not up for re-litigation: the plugin is small, the comments were
+reaching **80% of the lines**, and the whole lot was stripped by hand once already. A codebase where
+most lines are prose is harder to read, not easier, and the bloat is paid on every read by every
+session.
+
+Where the reasoning goes instead:
+
+- **A name.** If a function needs a paragraph, it needs a better name or a smaller body.
+- **A test.** A contract worth explaining is a contract worth asserting — that is what the contract
+  tests in `src/test/` are for, and an assertion cannot go stale silently.
+- **The commit message.** Why a change was made belongs to whoever runs `blame` or `bisect`, and it
+  is already required to say so.
+- **`docs/`** for anything a user or a maintainer has to know.
+
+The only exceptions are text that is not a comment about the code: a licence header if one is ever
+required, a machine-read pragma (`@Suppress`, `// noinspection`, a `MAP:GENERATED` marker), and the
+`description` a tool renders to a user.
+
 ## ⛔ ABSOLUTE PROHIBITION — the plugin's security code is off limits
 
 **Claude is CATEGORICALLY FORBIDDEN from modifying any code in this project that implements the

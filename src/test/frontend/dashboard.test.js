@@ -140,7 +140,7 @@ describe('dashboard — a layer over the transcript, not a swap for it', () => {
     expect(work.contains(win.document.getElementById('dock'))).toBe(true);
   });
 
-  it('keeps the panel where the reader left it across a rebuild', () => {
+  it('keeps the panel, its cards and the reader s scroll across a push', () => {
     const panel = openDashboard(win);
     const grid = panel.querySelector('.dash-inner');
     expect(grid).toBeTruthy();
@@ -163,7 +163,7 @@ describe('dashboard — a layer over the transcript, not a swap for it', () => {
 
     const before = grid.firstChild;
     win.cc.session({});
-    expect(grid.firstChild).not.toBe(before);
+    expect(grid.firstChild).toBe(before);
     expect(panel.querySelector('.dash-inner')).toBe(grid);
     expect(panel.scrollTop).toBe(240);
   });

@@ -113,8 +113,8 @@ class SecurityRuleFamiliesTest {
             "npm test >/dev/null && echo ok",
             "(git status 2>/dev/null)",
             "git status >/dev/null;",
-            "ls /usr/lib64 2>/dev/null; ls /home/me/proj",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
+        assertEquals(Verdict.DENY, v(bash("ls /usr/lib64 2>/dev/null; ls /home/me/proj")))
 
         val alsoWritesForReal = bash("ls /usr 2>/dev/null; echo hi > /etc/motd")
         assertEquals(Verdict.DENY, v(alsoWritesForReal))
@@ -242,6 +242,19 @@ class SecurityRuleFamiliesTest {
     }
 
     @Test
+    fun `a variable the command assigns itself resolves to what it assigned`() {
+        assertEquals(Verdict.DENY, v(bash("CREDS=/home/me/.ssh/id_rsa; cat \$CREDS")))
+        assertTrue(why(bash("CREDS=/home/me/.ssh/id_rsa; cat \$CREDS")).contains("credentials or key material"))
+        assertEquals(Verdict.ALLOW, v(bash("OUT=/home/me/proj/build; ls \$OUT")))
+    }
+
+    @Test
+    fun `a value the guard cannot capture whole leaves the variable unresolved, never half-resolved`() {
+        val fabricated = v(bash("HOME_DIR=\$( cd -P \".\" && pwd ); ls \$HOME_DIR/build"))
+        assertEquals(Verdict.ALLOW, fabricated, why(bash("HOME_DIR=\$( cd -P \".\" && pwd ); ls \$HOME_DIR/build")))
+    }
+
+    @Test
     fun `a variable nothing can resolve is a card — the destination is genuinely unknowable`() {
         assertEquals(Verdict.DENY, v(bash("cat \$NOWHERE_DEFINED/notes.txt")))
         assertEquals(Verdict.DENY, v(read("\$NOWHERE_DEFINED/x")))
@@ -254,7 +267,7 @@ class SecurityRuleFamiliesTest {
     @Test
     fun `a command substitution is EXPANDED and inspected, not blanket-refused for being one`() {
         assertEquals(Verdict.ALLOW, v(bash("echo \$(tty)")))
-        assertEquals(Verdict.ALLOW, v(bash("cat \$(git rev-parse --show-toplevel)/README.md")))
+        assertEquals(Verdict.DENY, v(bash("cat \$(git rev-parse --show-toplevel)/README.md")))
         assertEquals(Verdict.ALLOW, v(bash("export X=\$(date +%Y)")))
         assertEquals(Verdict.ALLOW, v(bash("cat `cat list`")))
         assertEquals(SecurityRule.HACKING_TOOL, rule(bash("echo \$(nmap -sS 10.0.0.1)")))
@@ -268,6 +281,7 @@ class SecurityRuleFamiliesTest {
         )
         assertEquals(Verdict.ALLOW, v(bash("echo \$PATH"), withEnv))
         assertEquals(Verdict.ALLOW, v(bash("ls \$OUT"), withEnv))
+        assertEquals(Verdict.DENY, v(bash("cat \$PATH/x"), withEnv))
     }
 
     @Test
@@ -289,8 +303,9 @@ class SecurityRuleFamiliesTest {
             SecurityRule.UNRESOLVED_VARIABLE,
             rule(bash("for name in one two; do mkdir -p build/\$name; done")),
         )
-        assertEquals(Verdict.DENY, v(bash("echo \$SECRET_FROM_ELSEWHERE/x")))
-        assertEquals(SecurityRule.UNRESOLVED_VARIABLE, rule(bash("echo \$SECRET_FROM_ELSEWHERE/x")))
+        assertEquals(Verdict.ALLOW, v(bash("echo \$SECRET_FROM_ELSEWHERE/x")))
+        assertEquals(Verdict.DENY, v(bash("cat \$SECRET_FROM_ELSEWHERE/x")))
+        assertEquals(SecurityRule.UNRESOLVED_VARIABLE, rule(bash("cat \$SECRET_FROM_ELSEWHERE/x")))
     }
 
     @Test

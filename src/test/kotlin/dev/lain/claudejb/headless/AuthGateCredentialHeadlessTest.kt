@@ -28,7 +28,7 @@ class AuthGateCredentialHeadlessTest : BasePlatformTestCase() {
         home = Files.createTempDirectory("claudejb-home").toFile()
         CredentialsVault.homeOverride = home
         SecretStore.storeOverride = mutableMapOf()
-        SettingsStore.load()
+        SettingsStore.load(settings.scope)
         settings.replaceState(ClaudeSettings.State())
     }
 
@@ -47,7 +47,7 @@ class AuthGateCredentialHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test an explicit sign-out decides outright`() {
-        settings.update { it.signedOut = true }
+        settings.signedOut = true
 
         assertEquals(Credential.NONE, gate().heldCredential(settings))
         assertFalse(gate().hasCredential(settings))
@@ -68,19 +68,37 @@ class AuthGateCredentialHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test a configured source script defers instead of deciding`() {
-        settings.update {
-            it.sourceScript = "/nowhere/claude-env.sh"
-            it.signedOut = true
-        }
+        settings.update { it.sourceScript = "/nowhere/claude-env.sh" }
+        settings.signedOut = true
 
         assertEquals(Credential.UNKNOWN, gate().heldCredential(settings))
     }
 
     fun `test signing out outranks a key held for another provider only`() {
         settings.setProviderApiKey(settings.provider, FAKE_SECRET)
-        settings.update { it.signedOut = true }
+        settings.signedOut = true
 
         assertEquals(Credential.HELD, gate().heldCredential(settings))
+    }
+
+    fun `test signing out is global, not per project`() {
+        settings.signedOut = true
+
+        assertEquals(
+            "the flag lives beside the credential it describes, not in a per-project document",
+            true.toString(),
+            SecretStore.get(SecretStore.SIGNED_OUT),
+        )
+    }
+
+    fun `test signing out survives the credential sweep that follows it`() {
+        settings.signedOut = true
+        SecretStore.set(SecretStore.OAUTH_TOKEN, FAKE_SECRET)
+
+        SecretStore.clearAll()
+
+        assertTrue("clearAll wiping this would put the user straight back to 'maybe signed in'", settings.signedOut)
+        assertNull(SecretStore.get(SecretStore.OAUTH_TOKEN))
     }
 
     private companion object {

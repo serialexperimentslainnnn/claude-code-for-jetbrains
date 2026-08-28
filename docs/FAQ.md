@@ -1,8 +1,7 @@
 # FAQ
 
 Short answers to the questions we get most. For deeper diagnostics see
-[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md); for privacy see
-[`TELEMETRY.md`](TELEMETRY.md).
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 ## How do I install the plugin?
 
@@ -97,6 +96,27 @@ If the safe cannot be read (a locked KWallet, say), the plugin treats that as a
 failure and refuses to save over it — a failed read is not an empty
 configuration.
 
+## I configured this project in another IDE — do I have to do it again?
+
+No. **Settings ▸ Claude Code ▸ Transfer ▸ Migrate from another IDE…** lists the
+JetBrains IDEs that have run on this machine, and for the one you pick, the
+projects it actually has Claude Code settings for. Choose whether you want the
+general settings, the Sensitive Guard's, or its alert history.
+
+Every JetBrains IDE shares one keychain, so nothing leaves it: the copy is from
+one encrypted entry to another. What separates them is the **scope** — an entry
+is keyed by the IDE's configuration directory *and* the project — which is why
+this IDE has no settings for a project until something writes them. It is also
+why JetBrains' own *Import Settings* does not bring these across: that copies
+configuration files, and none of this is in one.
+
+For another machine, or a colleague, use **Export settings…** and **Import
+settings…** instead. An exported file deliberately **never carries your
+environment variables**: that is where an API key or a credentialed proxy URL
+ends up, and a file leaves the machine. Provider keys and Git host tokens are
+not in it either — they have never been part of this document. A migration
+between IDEs *does* carry the environment, because it never leaves the keychain.
+
 ## How do I disable restoring open chats on startup?
 
 **Settings ▸ Claude Code** → uncheck **Restore open chats on startup**. The
@@ -152,9 +172,12 @@ terminal leaves its own agents in the same directory, and those never appear.
 
 ## Does the plugin send my code or prompts anywhere?
 
-No. The plugin itself sends nothing. Your conversations go from the
-`claude` binary to Anthropic over the same channel `claude` already uses
-in your terminal. See [`TELEMETRY.md`](TELEMETRY.md).
+No. The plugin collects nothing about you and sends nothing to us. Your
+conversations go from the `claude` binary to Anthropic over the same
+channel `claude` already uses in your terminal. The one other call it
+makes is optional and goes to your own forge: with a GitHub or GitLab
+token it asks that server about your branch, to show you your pull
+requests and CI status.
 
 ## How do I send feedback?
 

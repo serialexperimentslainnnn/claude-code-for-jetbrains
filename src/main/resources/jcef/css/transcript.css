@@ -676,10 +676,18 @@ details.fold .fold-body p:first-child {
   background: color-mix(in srgb, var(--danger) 9%, transparent);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
+.notice.guard-bypass {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
 .guard-block-actions {
   margin-top: 6px;
+  display: flex;
+  gap: 12px;
 }
-.guard-disable-link {
+.guard-disable-link,
+.guard-whitelist-link {
   background: none;
   border: 0;
   padding: 0;

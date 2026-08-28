@@ -19,6 +19,7 @@ import dev.lain.claudejb.ui.jcef.JcefSessionData
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefState
 import dev.lain.claudejb.ui.jcef.JcefTheme
+import dev.lain.claudejb.vuln.VulnService
 import java.awt.BorderLayout
 
 class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
@@ -55,6 +56,10 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     internal val gitChat = GitChatFeed(this, host::exec)
 
+    internal val guard = GuardFeed(this)
+
+    internal val security = SecurityViews(this)
+
     init {
         background = ChatTheme.BG
         add(host.component, BorderLayout.CENTER)
@@ -81,6 +86,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
         pushPermissions()
         tray.push()
         pushSession()
+        security.pushVuln()
         whenReady(feed::onSessionReady)
         feed.start()
         transcript.fullResync()
@@ -137,7 +143,8 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     }
 
     internal fun pushSettingsMenu() {
-        val items = JcefSettingsMenu.json(ClaudeSettings.getInstance(project).state, session).toString()
+        val settings = ClaudeSettings.getInstance(project)
+        val items = JcefSettingsMenu.json(settings.scope.id, settings.state, session).toString()
         if (items == lastSettingsMenuJson) return
         lastSettingsMenuJson = items
         host.exec("window.cc.settingsMenu && window.cc.settingsMenu({\"items\":$items})")
@@ -170,6 +177,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
             workloads = chatStrip()?.workloads().orEmpty(),
             plan = feed.plan,
             git = GitIntegration.getInstance(project).snapshot(),
+            vuln = VulnService.getInstance(project).snapshot(),
         )
         if (json == lastSessionJson) return
         lastSessionJson = json
@@ -183,6 +191,7 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
     fun openDashboard() {
         pushSession()
+        security.pushVuln()
         feed.requestMcp()
         feed.requestVersion()
         feed.requestUsage()
@@ -192,8 +201,6 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
     fun focusTarget(): javax.swing.JComponent? = host.inputComponent()
 
     fun focusInput() = host.requestFocus()
-
-    fun showCommandPalette() = host.exec("window.cc.openPalette && window.cc.openPalette()")
 
     fun mentionCurrentFile() = tray.addCurrentFile()
 
@@ -226,6 +233,10 @@ class JcefChatPanel(internal val project: Project, val session: ClaudeSession) :
 
         fun pushSettingsMenuToAll() {
             livePanels.forEach { it.pushSettingsMenu() }
+        }
+
+        fun pushStateToAll() {
+            livePanels.forEach { it.pushMetaState() }
         }
     }
 }

@@ -2,7 +2,8 @@ package dev.lain.claudejb.ui
 
 import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBCheckBox
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -54,7 +55,7 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         }
     }
 
-    override fun addTo(form: FormBuilder): FormBuilder {
+    override fun addTo(panel: Panel) {
         modelCombo.renderer = modelRenderer
         modeCombo.renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
@@ -70,15 +71,18 @@ internal class SettingsModelSection(private val sessionOf: () -> ClaudeSession) 
         }
         rebuildModelCombo()
         ensureModelListener()
-        return form
-            .addLabeledComponent("Model:", modelCombo)
-            .addLabeledComponent("Effort:", effortCombo)
-            .addLabeledComponent("Permission mode:", modeCombo)
-            .addComponent(thinkingCheck)
-            .addComponent(partialCheck)
-            .addComponent(restoreChatsCheck)
-            .addComponent(reduceMotionCheck)
-            .addLabeledComponent("Keep finished workloads listed for:", workloadWindowCombo)
+        panel.group("Model") {
+            row("Model:") { cell(modelCombo).align(AlignX.FILL) }
+            row("Effort:") { cell(effortCombo) }
+            row("Permission mode:") { cell(modeCombo) }
+            row { cell(thinkingCheck) }
+        }
+        panel.group("Chat") {
+            row { cell(partialCheck) }
+            row { cell(restoreChatsCheck) }
+            row { cell(reduceMotionCheck) }
+            row("Keep finished workloads listed for:") { cell(workloadWindowCombo) }
+        }
     }
 
     override fun reset(s: ClaudeSettings.State) {

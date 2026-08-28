@@ -1,9 +1,9 @@
 package dev.lain.claudejb.ui
 
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.settings.ClaudeSettings
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
@@ -22,15 +22,17 @@ internal class SettingsAdvancedSection : SettingsSection {
         emptyText.text = "Comma-separated beta feature flags; blank = none"
     }
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addSeparator()
-        .addComponent(sectionLabel("Advanced launch (0 / blank = flag omitted)"))
-        .addLabeledComponent("Max turns:", maxTurnsSpinner)
-        .addLabeledComponent("Max budget (USD):", maxBudgetSpinner)
-        .addLabeledComponent("Fallback model:", fallbackModelField)
-        .addComponent(sectionLabel("Additional directories (one path per line)"))
-        .addComponent(JBScrollPane(addDirsArea))
-        .addLabeledComponent("Betas:", betasField)
+    override fun addTo(panel: Panel) {
+        panel.collapsibleGroup("Advanced") {
+            row("Max turns:") { cell(maxTurnsSpinner) }
+            row("Max budget (USD):") { cell(maxBudgetSpinner) }
+            row("Fallback model:") { cell(fallbackModelField).align(AlignX.FILL) }
+                .rowComment("Zero or blank means the flag is omitted entirely.")
+            row("Additional directories:") { scrollCell(addDirsArea).align(AlignX.FILL) }
+                .rowComment("One absolute path per line; blank means the project root only.")
+            row("Betas:") { cell(betasField).align(AlignX.FILL) }
+        }
+    }
 
     override fun reset(s: ClaudeSettings.State) {
         maxTurnsSpinner.value = s.maxTurns

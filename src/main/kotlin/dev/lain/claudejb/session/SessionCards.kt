@@ -53,7 +53,12 @@ class SessionCards(
             request.toolUseId?.let { session.diffs.updateSnapshotInput(it, effectiveInput) }
         }
         write(ControlProtocol.permissionAllow(requestId, effectiveInput))
-        session.systemNotice("Approved ${request.headline}")
+        val guard = request.guard
+        if (guard == null) {
+            session.systemNotice("Approved ${request.headline}")
+        } else {
+            session.guardNotice(request.toolName, "${guard.rule.label} matched, and you accepted it", guard.rule)
+        }
         if (request.isPlan && session.permissionMode == PermissionMode.PLAN.wire) {
             session.settings.changePermissionMode(PermissionMode.DEFAULT.wire)
         }

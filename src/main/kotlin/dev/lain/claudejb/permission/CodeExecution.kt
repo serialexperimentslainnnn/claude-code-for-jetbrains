@@ -20,7 +20,17 @@ object CodeExecution {
         SecurityRule.PERSISTENCE_MECHANISM to re("""(?:^|[;&|\n]\s*)at\s+\w"""),
         SecurityRule.PERSISTENCE_MECHANISM to re("""\bsystemctl\b[^|;&]*\b(enable|start)\b[^|;&]*\.timer\b"""),
         SecurityRule.PERSISTENCE_MECHANISM to re("""\bgit\b[^|;&]*\bconfig\b[^|;&]*\bcore\.hooksPath\b"""),
-        SecurityRule.PERSISTENCE_MECHANISM to re("""\.git/hooks/"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\.git(hooks|/hooks)/"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\bsystemd-run\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to
+            re("""\bsystemctl\b[^|;&]*\b(enable|start)\b[^|;&]*\.(timer|service|socket|path)\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\bloginctl\b[^|;&]*\benable-linger\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\blaunchctl\b[^|;&]*\b(load|bootstrap|submit|enable)\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\bschtasks\b[^|;&]*/create\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\bRegister-ScheduledTask\b"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\breg\b[^|;&]*\badd\b[^|;&]*\\CurrentVersion\\Run"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""\bLaunchAgents/|\bLaunchDaemons/"""),
+        SecurityRule.PERSISTENCE_MECHANISM to re("""/\.config/autostart/"""),
         SecurityRule.CODE_INJECTION to re("""\b(LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES)\s*="""),
     )
 
@@ -29,7 +39,6 @@ object CodeExecution {
             .flatMap { setOf(GuardPaths.expandEnv(it, home, env), CommandRules.deobfuscate(it, home, env)) }
             .firstNotNullOfOrNull { candidate -> firstVector(candidate) }
 
-    /** The first vector [candidate] trips, or null — kept separate so [hit] stays a flat pipeline (detekt nesting). */
     private fun firstVector(candidate: String): Hit? =
         VECTORS.firstNotNullOfOrNull { (rule, pattern) ->
             pattern.find(candidate)?.let { Hit(rule, it.value.take(MATCH_EXCERPT_CHARS)) }

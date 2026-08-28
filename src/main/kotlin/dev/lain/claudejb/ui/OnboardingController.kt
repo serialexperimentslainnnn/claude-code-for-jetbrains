@@ -163,7 +163,7 @@ internal class OnboardingController(
                     return@invokeLater
                 }
                 ClaudeSettings.getInstance(project).setProviderApiKey(Provider.ANTHROPIC, trimmed)
-                ClaudeSettings.getInstance(project).update { it.signedOut = false }
+                ClaudeSettings.getInstance(project).signedOut = false
                 session.dismissLoginCard()
                 session.restart()
             }
@@ -171,7 +171,7 @@ internal class OnboardingController(
     }
 
     internal fun logout() {
-        ClaudeSettings.getInstance(project).update { it.signedOut = true }
+        ClaudeSettings.getInstance(project).signedOut = true
         session.stop()
         ApplicationManager.getApplication().executeOnPooledThread {
             SecretStore.clearAll()

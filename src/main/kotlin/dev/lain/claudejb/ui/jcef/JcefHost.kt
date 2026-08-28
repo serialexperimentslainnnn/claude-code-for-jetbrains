@@ -42,6 +42,18 @@ internal fun nextPageRoute(current: PageRoute, loopbackBound: Boolean): PageRout
     PageRoute.NOTICE -> null
 }
 
+/** Whether a navigation target is a page this host loads itself. CEF cancels a navigation when the handler
+ *  returns true, so everything else is refused: the CSP closes every other egress channel (`connect-src 'none'`,
+ *  `form-action 'none'`, `img-src data:`) and a top-level navigation is the one channel it has no directive for,
+ *  which makes `location.href` the way out if the page were ever compromised. A link click is not a
+ *  counter-example — the JS cancels those and hands them to the host, which opens them in the real browser. */
+internal fun isOwnPageUrl(url: String?, pageUrl: String, loopbackUrl: String?): Boolean {
+    val target = url?.trim().orEmpty()
+    if (target.isEmpty() || target.equals("about:blank", ignoreCase = true)) return true
+    if (target.startsWith(pageUrl, ignoreCase = true)) return true
+    return loopbackUrl?.takeIf { it.isNotBlank() }?.let { target.startsWith(it, ignoreCase = true) } == true
+}
+
 private const val HTTP_ERROR_FLOOR = 400
 
 internal fun pageArrived(httpStatusCode: Int, loadFailed: Boolean): Boolean =
@@ -313,6 +325,8 @@ class JcefHost(
         }
     }
 
+    private fun isOwnPage(url: String?): Boolean = isOwnPageUrl(url, PAGE_URL, loopback?.url)
+
     private fun installNavigationGuards(b: JBCefBrowser) {
         b.jbCefClient.addRequestHandler(
             object : CefRequestHandlerAdapter() {
@@ -322,9 +336,7 @@ class JcefHost(
                     request: CefRequest?,
                     userGesture: Boolean,
                     isRedirect: Boolean,
-                ): Boolean {
-                    return userGesture
-                }
+                ): Boolean = !isOwnPage(request?.url)
             },
             b.cefBrowser,
         )
@@ -364,42 +376,6 @@ class JcefHost(
 
         val libNames = listOf("purify.min.js", "marked.min.js", "highlight.min.js")
 
-        val appNames = listOf(
-            "app-core.js",
-            "app-core-markdown.js",
-            "app-core-diagram.js",
-            "app-core-theme.js",
-            "app-transcript.js",
-            "app-transcript-rows.js",
-            "app-transcript-tools.js",
-            "app-transcript-links.js",
-            "app-transcript-find.js",
-            "app-composer-base.js",
-            "app-composer-menus.js",
-            "app-composer-pills.js",
-            "app-composer-attach.js",
-            "app-composer-readout.js",
-            "app-composer-palette.js",
-            "app-composer-boot.js",
-            "app-composer-auth.js",
-            "app-composer-actions.js",
-            "app-composer-settings.js",
-            "app-composer.js",
-            "app-permissions.js",
-            "app-session-base.js",
-            "app-session-cards.js",
-            "app-session-mcp.js",
-            "app-session-workloads.js",
-            "app-session-git.js",
-            "app-session-gitchat.js",
-            "app-session.js",
-            "app-tabs-base.js",
-            "app-tabs-guard.js",
-            "app-tabs-pill.js",
-            "app-tabs-scroll.js",
-            "app-tabs.js",
-        )
-
         val contents = LinkedHashMap<String, String>()
         (libNames + appNames).forEach { name -> readResource(name)?.let { contents[name] = it } }
 
@@ -435,6 +411,44 @@ class JcefHost(
     private companion object {
         private val log = logger<JcefHost>()
 
+        private val appNames = listOf(
+            "app-core.js",
+            "app-core-markdown.js",
+            "app-core-diagram.js",
+            "app-core-theme.js",
+            "app-transcript.js",
+            "app-transcript-rows.js",
+            "app-transcript-tools.js",
+            "app-transcript-links.js",
+            "app-transcript-find.js",
+            "app-composer-base.js",
+            "app-composer-menus.js",
+            "app-composer-pills.js",
+            "app-composer-attach.js",
+            "app-composer-readout.js",
+            "app-composer-palette.js",
+            "app-composer-boot.js",
+            "app-composer-auth.js",
+            "app-composer-actions.js",
+            "app-composer-settings.js",
+            "app-composer.js",
+            "app-permissions.js",
+            "app-session-base.js",
+            "app-session-cards.js",
+            "app-session-mcp.js",
+            "app-session-workloads.js",
+            "app-session-git.js",
+            "app-session-gitchat.js",
+            "app-session-guard.js",
+            "app-session-vuln.js",
+            "app-session.js",
+            "app-tabs-base.js",
+            "app-tabs-guard.js",
+            "app-tabs-pill.js",
+            "app-tabs-scroll.js",
+            "app-tabs.js",
+        )
+
         private val CSS_PARTS = listOf(
             "base.css",
             "transcript.css",
@@ -442,6 +456,8 @@ class JcefHost(
             "permissions.css",
             "dashboard.css",
             "git.css",
+            "guard.css",
+            "vuln.css",
             "boot.css",
             "tabs.css",
         )

@@ -4,16 +4,20 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SettingsScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.jetbrains.annotations.TestOnly
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
 
 @Service(Service.Level.PROJECT)
-class PluginAgentIndex {
+class PluginAgentIndex internal constructor(
+    private val scope: SettingsScope,
+    private val basePath: String?,
+) {
+
+    constructor(project: Project) : this(SettingsScope.of(project), project.basePath)
 
     private val log = logger<PluginAgentIndex>()
 
@@ -139,7 +143,8 @@ class PluginAgentIndex {
     private fun load(): LinkedHashMap<String, SessionRecord> {
         if (!loaded) {
             cache.clear()
-            val body = indexFile()?.let { f -> runCatching { Files.readString(f) }.getOrNull() }.orEmpty()
+            SharedPluginFiles.migrate(basePath)
+            val body = SecretStore.get(scope.agentIndexName).orEmpty()
             cache.putAll(decode(body))
             loaded = true
             if (body.isNotBlank() && !body.contains("\"version\":$FORMAT_VERSION")) flush()
@@ -148,17 +153,9 @@ class PluginAgentIndex {
     }
 
     private fun flush() {
-        val file = indexFile() ?: return
-        runCatching {
-            Files.createDirectories(file.parent)
-            Files.writeString(file, encode(cache))
-        }.onFailure {
-            log.warn("could not persist the agent index to ${file.parent}", it)
-        }
+        runCatching { SecretStore.set(scope.agentIndexName, encode(cache)) }
+            .onFailure { log.warn("could not persist the agent index", it) }
     }
-
-    private fun indexFile(): Path? = homeDir()?.let { Paths.get(it) }
-        ?.let { it.resolve(DIR_IDE).resolve(DIR_PLUGIN).resolve(FILE) }
 
     companion object {
         private val JSON = Json {
@@ -168,10 +165,6 @@ class PluginAgentIndex {
         }
 
         const val FORMAT_VERSION = 3
-
-        private const val DIR_IDE = "ide"
-        private const val DIR_PLUGIN = "claude-code-native"
-        private const val FILE = "agent-index.json"
 
         @Volatile
         var homeOverride: String? = defaultHome()

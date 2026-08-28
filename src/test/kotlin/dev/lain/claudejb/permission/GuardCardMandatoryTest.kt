@@ -6,6 +6,7 @@ import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -14,7 +15,8 @@ class GuardCardMandatoryTest {
     private class Observation {
         var respond: String? = null
         var presented: PendingPermission? = null
-        var denied: Triple<String, String?, SecurityRule?>? = null
+        var denied: GuardDenial? = null
+        var bypassed: GuardBypass? = null
 
         val autoApproved: Boolean get() = respond != null && presented == null
         val manualCard: Boolean get() = presented != null
@@ -34,6 +36,7 @@ class GuardCardMandatoryTest {
         mode: String = "default",
         alwaysAllowedTools: Set<String> = emptySet(),
         approvedCommands: Set<Pair<SecurityRule, String>> = emptySet(),
+        hit: SecurityRule? = rule,
     ): Observation {
         val obs = Observation()
         val broker = PermissionBroker(
@@ -44,8 +47,12 @@ class GuardCardMandatoryTest {
             onAutoReviewed = { _, _, _ -> },
             isRemembered = { tool, _ -> tool in alwaysAllowedTools },
             projectRoot = null,
-            sensitiveDecision = { SensitiveGuard.Decision(verdict, "runs a destructive command", rule) },
-            onSensitiveDenied = { tool, reason, r -> obs.denied = Triple(tool, reason, r) },
+            sensitiveDecision = {
+                val seen = hit?.let { "runs a destructive command" }
+                SensitiveGuard.Decision(verdict, seen, hit, seen)
+            },
+            onSensitiveDenied = { obs.denied = it },
+            onSensitiveBypassed = { obs.bypassed = it },
             isGuardCommandApproved = { r, command ->
                 approvedCommands.any { it.first == r && it.second == command }
             },
@@ -96,6 +103,66 @@ class GuardCardMandatoryTest {
     }
 
     @Test
+    fun `a command that skips the card still says so, and says why`() {
+        val obs = run(
+            SensitiveGuard.Verdict.ASK,
+            bashReq("terraform destroy"),
+            approvedCommands = setOf(rule to "terraform destroy"),
+        )
+
+        assertNotNull(
+            obs.bypassed,
+            "this is the only route past a rule with no card at all — silent here means invisible",
+        )
+        assertEquals(rule, obs.bypassed?.rule, "the row has to name the rule that went unenforced")
+        assertTrue(
+            obs.bypassed?.reason.orEmpty().contains("in this chat"),
+            "the bypasses are told apart by their reason, so it must say which one this was",
+        )
+        assertEquals(
+            PermissionBroker.REVOKE_APPROVAL,
+            obs.bypassed?.action,
+            "an authorisation still standing has to be undoable from the row that reports it",
+        )
+        assertEquals("terraform destroy", obs.bypassed?.command, "and undoing it needs the command")
+    }
+
+    @Test
+    fun `the warning says which rule matched and what it saw, not only the switch`() {
+        val obs = run(
+            SensitiveGuard.Verdict.ASK,
+            bashReq("terraform destroy"),
+            approvedCommands = setOf(rule to "terraform destroy"),
+        )
+
+        val reason = obs.bypassed?.reason.orEmpty()
+        assertTrue(reason.contains(rule.label), "naming the switch without the rule leaves the reader guessing")
+        assertTrue(reason.contains("runs a destructive command"), "and without the finding, guessing harder")
+    }
+
+    @Test
+    fun `a card that is shown is not a bypass`() {
+        val obs = run(SensitiveGuard.Verdict.ASK, bashReq("terraform destroy"))
+
+        assertTrue(obs.manualCard)
+        assertNull(obs.bypassed, "a question put to the user is not something that went past them")
+    }
+
+    @Test
+    fun `an ordinary call nothing objected to says nothing`() {
+        val obs = run(SensitiveGuard.Verdict.ALLOW, bashReq("git status"), hit = null)
+
+        assertNull(obs.bypassed, "narrating ordinary work as a bypass would make the warning meaningless")
+    }
+
+    @Test
+    fun `an ALLOW that still carries a rule is a bypass, and is reported as one`() {
+        val obs = run(SensitiveGuard.Verdict.ALLOW, bashReq("terraform destroy"))
+
+        assertEquals(rule, obs.bypassed?.rule, "something matched and ran: that is exactly what to warn about")
+    }
+
+    @Test
     fun `an approval does not stretch to a neighbouring command`() {
         listOf("terraform destroy -auto-approve", "terraform destroy -target=prod", "terraform apply").forEach { cmd ->
             val obs = run(
@@ -125,8 +192,46 @@ class GuardCardMandatoryTest {
 
         assertFalse(obs.manualCard, "an enforced rule is refused, not asked about")
         assertNotNull(obs.respond)
-        assertEquals(rule, obs.denied?.third, "the rule must reach the transcript block")
-        assertEquals("Bash", obs.denied?.first)
+        assertTrue(
+            obs.respond.orEmpty().contains("runs a destructive command"),
+            "the model is told why, because a refusal with no reason is one it cannot work around correctly",
+        )
+        assertFalse(
+            obs.respond.orEmpty().contains("Do not retry", ignoreCase = true),
+            "telling the model not to retry made it stop working entirely, and it never was a control",
+        )
+        assertFalse(
+            obs.respond.orEmpty().contains("another way", ignoreCase = true),
+            "same sentence, same over-reading: the guard re-judges every call on its own merits",
+        )
+        assertTrue(
+            obs.respond.orEmpty().contains("this call only"),
+            "what stops the over-reading is saying the decision is about this call, as a fact",
+        )
+        assertEquals(rule, obs.denied?.rule, "the rule must reach the transcript block")
+        assertEquals("Bash", obs.denied?.toolName)
+        assertEquals("tu_b", obs.denied?.toolUseId, "the anchor a restored conversation puts the row back on")
+        assertEquals(
+            "terraform destroy",
+            obs.denied?.command,
+            "the block's Whitelist Command link has nothing to act on without it",
+        )
+    }
+
+    @Test
+    fun `a block with no command to name carries none`() {
+        val write = CanUseToolRequest(
+            toolName = "Write",
+            input = buildJsonObject { put("file_path", "/etc/hosts") },
+            toolUseId = "tu_w",
+        )
+
+        val obs = run(SensitiveGuard.Verdict.DENY, write)
+
+        assertNull(
+            obs.denied?.command,
+            "a link offering to whitelist an empty string would be a button that does nothing",
+        )
     }
 
     @Test

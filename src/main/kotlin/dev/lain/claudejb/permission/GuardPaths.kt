@@ -17,6 +17,8 @@ object GuardPaths {
 
     private val MULTI_SEPARATOR = Regex("/{2,}")
 
+    private val BARE_HOME = Regex("""\x24HOME(?![A-Za-z0-9_])""")
+
     private fun startsWithDoubleSeparator(value: String): Boolean =
         value.length >= 2 && (value[0] == '\\' || value[0] == '/') && value[1] == value[0]
 
@@ -24,7 +26,7 @@ object GuardPaths {
         var v = value
         if (!home.isNullOrBlank()) {
             val h = home.replace('\\', '/').trimEnd('/')
-            v = v.replace("\${HOME}", h).replace("\$HOME", h)
+            v = v.replace("\${HOME}", h).replace(BARE_HOME, h)
                 .replace("\$env:USERPROFILE", h, ignoreCase = true)
                 .replace("%USERPROFILE%", h, ignoreCase = true)
                 .replace("%HOMEPATH%", h, ignoreCase = true)
@@ -82,10 +84,31 @@ object GuardPaths {
         RegexOption.IGNORE_CASE,
     )
 
+    /** The folded absolute spelling of a candidate, anchoring a relative one at the project root the way the
+     *  shell anchors it at the working directory — so `../../../etc/passwd` is judged as `/etc/passwd`, not
+     *  waved past for lacking a leading slash. Null when there is nothing to anchor against or the token still
+     *  carries an unexpanded `~`/`$`/`%` prefix. */
+    internal fun absoluteForm(path: String, projectRoot: String?): String? = when {
+        isAbsolute(path) -> fold(path)
+        path.isEmpty() || path[0] in UNEXPANDED_PREFIXES -> null
+        projectRoot.isNullOrBlank() -> null
+        else -> fold("$projectRoot/$path")
+    }
+
+    /** Containment is decided case-sensitively where the filesystem is, and case-insensitively where it is not.
+     *  Windows and the default macOS volume fold case, so `C:/Proj` and `c:/proj` are one directory and must both
+     *  read as inside. Linux does not, so `/home/me/PROJ` is a different directory from `/home/me/proj` — folding
+     *  case there let a sibling of the project count as part of it, which exempted it from the rules that only
+     *  apply outside. */
     internal fun under(path: String, root: String): Boolean {
         val r = root.trimEnd('/')
-        return r.isNotEmpty() && (path.equals(r, ignoreCase = true) || path.startsWith("$r/", ignoreCase = true))
+        if (r.isEmpty()) return false
+        val fold = caseInsensitiveFilesystem || isDriveRooted(r)
+        return path.equals(r, ignoreCase = fold) || path.startsWith("$r/", ignoreCase = fold)
     }
+
+    private val caseInsensitiveFilesystem: Boolean =
+        System.getProperty("os.name").orEmpty().lowercase().let { "win" in it || "mac" in it || "darwin" in it }
 
     private fun lexicalForm(path: String, projectRoot: String?): String? {
         if (path.isEmpty() || path[0] in UNEXPANDED_PREFIXES) return null
