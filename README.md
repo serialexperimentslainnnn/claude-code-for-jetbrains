@@ -10,7 +10,8 @@ inside JetBrains IDEs as a full graphical client: a streaming chat, inline permi
 reviewed as real IDE diffs you can modify before approving, a tab per agent, and a deterministic
 security layer that gates every tool call.
 
-It drives the `claude` binary you already have installed, speaking its `stream-json` and control
+It drives the `claude` binary — the one you already have, or one it installs for you on first run if
+you do not — speaking its `stream-json` and control
 protocol directly from Kotlin. There is no Node.js at runtime, no bundled SDK, and no credentials of
 ours — you bring your own Claude subscription or API key.
 
@@ -42,7 +43,7 @@ Three different things are often confused. All of them are legitimate; they solv
 | Permissions | An inline card per call, plus a deterministic lock that runs before any auto-approval | Handled by the CLI in the terminal | JetBrains' own approvals |
 | Account | Your `claude` subscription or API key | Your `claude` subscription or API key | JetBrains AI credits, your own Anthropic API key, or a Claude Console account |
 | Agents / background tasks | A tab and a transcript per agent; background tasks keep their output | Visible as terminal output | Not applicable |
-| Needs the `claude` CLI | Yes | Yes | No |
+| Needs the `claude` CLI | Yes — and installs it for you if you do not have it | Yes | No |
 
 Anthropic's [Claude Code [Beta]](https://plugins.jetbrains.com/plugin/27310-claude-code-beta-) is not
 "just a terminal launcher" — it runs `claude` in the IDE's integrated terminal and adds diff viewing in
@@ -74,7 +75,9 @@ and RustRover.
 > to, so the dependency is declared hard and the floor is the first build that can satisfy it.
 > **On 2025.1, 2025.2 or 2025.3.0, stay on plugin version 5.1.1** — or update your IDE.
 
-**The `claude` CLI**, installed separately. The plugin looks for it in this order:
+**The `claude` CLI — and you do not have to install it yourself.** If the plugin cannot find it, its
+first screen offers to install it for you, using the official route for your OS, and runs it in the
+IDE terminal. Nothing to prepare before you start; it looks for an existing one first, in this order:
 
 1. the path set in **Settings ▸ Claude Code ▸ claude executable path**, if any — and if that path has
    gone stale, detection continues rather than failing hard;
@@ -83,7 +86,8 @@ and RustRover.
    `/usr/bin` on Linux/macOS; `%USERPROFILE%\.local\bin`, `%APPDATA%\npm`,
    `%LOCALAPPDATA%\Programs\claude`, scoop shims, volta and Chocolatey `bin` on Windows.
 
-If it is missing, the plugin says so on its first screen and offers to install it for you (below).
+Only if all three come up empty does it ask — and then it installs it for you (see
+[below](#installing-the-claude-cli)).
 
 **An account**: a paid Claude plan (Pro, Max, Team, Enterprise) or a Claude Console account, signed in
 through the plugin — or an `ANTHROPIC_API_KEY`. The free Claude.ai plan does not include Claude Code.
@@ -102,10 +106,11 @@ Or install a signed archive by hand from the
 
 The tool window appears on the right, next to where AI Assistant lives.
 
-### Installing the `claude` CLI
+### The plugin installs the `claude` CLI for you
 
-If you do not have it, the plugin's first screen offers the official routes for your OS and can run
-them for you in the IDE terminal — or you can copy the command and run it yourself:
+You do not need to install it beforehand. If it is missing, the plugin's first screen detects your OS
+and distribution, offers the official route, and runs it in the IDE terminal on one click. These are
+the commands it uses, if you would rather run them yourself:
 
 ```bash
 # macOS, Linux, WSL
