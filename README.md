@@ -355,6 +355,29 @@ on your disk is ever removed, and nothing you authored is.
 A chat that needs you while you are looking elsewhere — a permission, a finished turn, an error —
 raises a notification and badges its tab. Suppressed for the chat already on screen.
 
+### Remote Control — pick a chat up from your phone
+
+The **phone button** in the chat's button row, left of the guard's shield, connects that chat to
+[claude.ai/code](https://claude.ai/code) or the Claude mobile app. The same switch lives in the ⚙ menu
+under **Remote control**. Claude keeps running on your machine the whole time: your files, your MCP
+servers and your project configuration stay the ones in use, and the browser or the phone is a second
+window onto the conversation already open in the IDE. When the connection carries a session URL, the
+chat prints it.
+
+Messages go both ways, and so do permissions — a call you approve from the phone stops asking here, and
+its card leaves the chat by itself. The **Sensitive Guard still decides first**, on this machine, before
+anything is offered to anyone to approve: connecting a phone does not widen what a chat is allowed to
+do, only who can answer it. That is worth being deliberate about, because the person tapping *Approve*
+is no longer necessarily sitting in front of the diff.
+
+**It has to be enabled for your Claude account**, and on Team and Enterprise plans an organisation Owner
+has to turn it on first; the feature needs a claude.ai subscription, so an API key will not do. When the
+request is refused the button turns red, its tooltip carries the reason, and the same reason is written
+into the chat. Neither control switches itself on until the CLI has said yes, so a lit button means a
+live connection.
+
+Turning it off, from either control, disconnects the remote session and leaves the chat running here.
+
 ### Git
 
 The **Git** button in the tool window's title bar opens a chat dedicated to the integration, and with it
@@ -610,6 +633,12 @@ Architecture, protocol details and the empirically verified facts about the bina
 [`CLAUDE.md`](CLAUDE.md); where each thing lives is in [`PROJECTMAP.md`](PROJECTMAP.md).
 
 ## What's new
+
+**5.8.0** — [Remote Control](#remote-control--pick-a-chat-up-from-your-phone): a chat running in the IDE
+can be driven from claude.ai or the Claude mobile app while Claude keeps executing on your machine. A
+phone button in the chat's button row and a row in the ⚙ menu, neither of which lights up until the CLI
+has accepted; a refusal names its reason on the button and in the chat. Permission cards answered from
+the phone close themselves here.
 
 **5.5.0** — a tab and a transcript per agent, with the whole tree one hover away; a single **Workloads**
 diagram of everything running across every chat; background tasks that keep their output after they
