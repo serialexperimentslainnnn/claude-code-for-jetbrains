@@ -25,6 +25,8 @@ object JcefBridge {
 
         sealed interface Settings : Msg
 
+        sealed interface Guard : Settings
+
         sealed interface RequestCard : Msg
 
         sealed interface Diffs : Msg
@@ -57,9 +59,21 @@ object JcefBridge {
 
         data class SettingsToggle(val key: String, val on: Boolean) : Settings
 
-        data class GuardSuspend(val rule: String, val duration: String) : Settings
+        data class GuardSuspend(val rule: String, val duration: String) : Guard
 
-        data class GuardAllowAlways(val id: String, val scope: String = "") : Settings
+        data class GuardMaster(val on: Boolean, val duration: String) : Guard
+
+        data class GuardWhitelist(val rule: String, val command: String) : Guard
+
+        data class GuardRevokeApproval(val rule: String, val command: String) : Guard
+
+        data class GuardRemoveWhitelist(val rule: String, val command: String) : Guard
+
+        data class GuardAllowAlways(val id: String, val scope: String = "") : Guard
+
+        object GuardLog : Guard
+
+        data class GuardExplain(val id: String) : Guard
 
         object SettingsRefresh : Settings
 
@@ -117,6 +131,20 @@ object JcefBridge {
 
         object OpenGitView : SessionControl
 
+        object OpenVulnView : SessionControl
+
+        data class VulnConsentChoice(val granted: Boolean) : SessionControl
+
+        object VulnScan : SessionControl
+
+        object VulnCancel : SessionControl
+
+        object VulnInventoryRequest : SessionControl
+
+        data class VulnFix(val findingId: String) : SessionControl
+
+        data class VulnPlan(val tiers: List<String>) : SessionControl
+
         data class RevealAgent(val agentId: String, val toolUseId: String, val chatId: String = "") :
             SessionControl
 
@@ -150,6 +178,8 @@ object JcefBridge {
         fun int(key: String, fallback: Int): Int = (obj[key] as? JsonPrimitive)?.intOrNull ?: fallback
         fun long(key: String, fallback: Long): Long = (obj[key] as? JsonPrimitive)?.longOrNull ?: fallback
         fun json(key: String): JsonObject? = obj[key] as? JsonObject
+        fun strings(key: String): List<String> =
+            (obj[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
     }
 
     fun jsString(s: String): String = JsonPrimitive(s).toString()
@@ -161,6 +191,7 @@ object JcefBridge {
         val f = Fields(obj)
         return parseComposer(type, f)
             ?: parseSettings(type, f)
+            ?: parseGuard(type, f)
             ?: parseRequestCards(type, f)
             ?: parseDiffs(type, f)
             ?: parseAttachments(type, f)
@@ -187,10 +218,20 @@ object JcefBridge {
         "changeVibe" -> Msg.ChangeVibe(f.bool("on"))
         "changeProvider" -> Msg.ChangeProvider(f.text("id"))
         "settingsToggle" -> Msg.SettingsToggle(f.text("key"), f.bool("on"))
-        "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
-        "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
         "settingsRefresh" -> Msg.SettingsRefresh
         "openSettings" -> Msg.OpenSettings
+        else -> null
+    }
+
+    private fun parseGuard(type: String, f: Fields): Msg? = when (type) {
+        "guardSuspend" -> Msg.GuardSuspend(f.text("rule"), f.text("duration"))
+        "guardMaster" -> Msg.GuardMaster(f.bool("on"), f.text("duration"))
+        "guardWhitelist" -> Msg.GuardWhitelist(f.text("rule"), f.text("command"))
+        "guardRevokeApproval" -> Msg.GuardRevokeApproval(f.text("rule"), f.text("command"))
+        "guardRemoveWhitelist" -> Msg.GuardRemoveWhitelist(f.text("rule"), f.text("command"))
+        "guardAllowAlways" -> Msg.GuardAllowAlways(f.text("id"), f.text("scope"))
+        "guardLog" -> Msg.GuardLog
+        "guardExplain" -> Msg.GuardExplain(f.text("id"))
         else -> null
     }
 
@@ -254,13 +295,34 @@ object JcefBridge {
 
     private fun parseSessionControls(type: String, f: Fields): Msg? = when (type) {
         "mcpReconnect" -> Msg.McpReconnect(f.text("name"))
+
         "mcpToggle" -> Msg.McpToggle(f.text("name"), f.bool("enabled"))
+
         "stopTask" -> Msg.StopTask(f.text("taskId"))
+
         "setWorkloadWindow" -> Msg.SetWorkloadWindow(f.int("minutes", -1))
+
         "installClaude" -> Msg.InstallClaude(f.text("method"))
+
         "setBinaryPath" -> Msg.SetBinaryPath(f.text("path"))
+
         "recheckBinary" -> Msg.RecheckBinary
-        else -> parseGitControls(type, f) ?: parseTabControls(type, f) ?: parseAuthControls(type, f)
+
+        else -> parseGitControls(type, f)
+            ?: parseVulnControls(type, f)
+            ?: parseTabControls(type, f)
+            ?: parseAuthControls(type, f)
+    }
+
+    private fun parseVulnControls(type: String, f: Fields): Msg? = when (type) {
+        "openVulnView" -> Msg.OpenVulnView
+        "vulnConsent" -> Msg.VulnConsentChoice(f.bool("granted"))
+        "vulnScan" -> Msg.VulnScan
+        "vulnCancel" -> Msg.VulnCancel
+        "vulnInventory" -> Msg.VulnInventoryRequest
+        "vulnFix" -> Msg.VulnFix(f.text("findingId"))
+        "vulnPlan" -> Msg.VulnPlan(f.strings("tiers"))
+        else -> null
     }
 
     private fun parseGitControls(type: String, f: Fields): Msg? = when (type) {

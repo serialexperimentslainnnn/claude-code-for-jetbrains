@@ -67,7 +67,7 @@ class AuthGate(
         if (settings.state.sourceScript.isNotBlank()) return Credential.UNKNOWN
         val explicit = settings.resolveEnv()
         if (SecretStore.API_KEY in explicit || SecretStore.OAUTH_TOKEN in explicit) return Credential.HELD
-        if (settings.state.signedOut) return Credential.NONE
+        if (settings.signedOut) return Credential.NONE
         val probed = cachedBinaryLogin() ?: return Credential.UNKNOWN
         return if (probed) Credential.HELD else Credential.NONE
     }

@@ -4,65 +4,44 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SettingsScope
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
 
 @Service(Service.Level.PROJECT)
 class SessionHistory(private val project: Project) {
 
     private val log = logger<SessionHistory>()
 
+    private val scope: SettingsScope get() = SettingsScope.of(project)
+
     @Synchronized
     fun setOpenSessions(ids: List<String>) {
-        val key = projectKey() ?: return
-        val all = readAll().toMutableMap()
-        all[key] = ids.filter { it.isNotBlank() }
-        write(all)
+        SecretStore.set(scope.openChatsName, encodeIds(ids.filter { it.isNotBlank() }))
     }
 
     @Synchronized
     fun openSessions(): List<String> {
-        val key = projectKey() ?: return emptyList()
-        readAll()[key]?.let { return it }
+        stored()?.let { return it }
+        SharedPluginFiles.migrate(project.basePath)
+        stored()?.let { return it }
+        return adoptFromWorkspace()
+    }
+
+    private fun stored(): List<String>? = SecretStore.get(scope.openChatsName)?.let { decodeIds(it) }
+
+    private fun adoptFromWorkspace(): List<String> {
         val legacy = runCatching { LegacySessionHistory.getInstance(project).openSessions() }
             .getOrDefault(emptyList())
-        if (legacy.isNotEmpty()) {
-            log.info("migrating ${legacy.size} open chat(s) from workspace.xml to ~/.claude")
-            setOpenSessions(legacy)
-        }
+        if (legacy.isEmpty()) return emptyList()
+        log.info("migrating ${legacy.size} open chat(s) out of workspace.xml")
+        setOpenSessions(legacy)
         return legacy
     }
 
-    private fun projectKey(): String? = project.basePath?.takeIf { it.isNotBlank() }?.let(SessionStore::encodePath)
-
-    private fun readAll(): Map<String, List<String>> {
-        val file = indexFile() ?: return emptyMap()
-        val body = runCatching { Files.readString(file) }.getOrNull().orEmpty()
-        return decode(body)
-    }
-
-    private fun write(all: Map<String, List<String>>) {
-        val file = indexFile() ?: return
-        runCatching {
-            Files.createDirectories(file.parent)
-            Files.writeString(file, encode(all))
-        }.onFailure {
-            log.warn("could not persist the open-chat list to ${file.parent}", it)
-        }
-    }
-
-    private fun indexFile(): Path? = PluginAgentIndex.homeDir()?.let { Paths.get(it) }
-        ?.resolve(DIR_IDE)?.resolve(DIR_PLUGIN)?.resolve(FILE)
-
     companion object {
         private val JSON = Json { ignoreUnknownKeys = true }
-
-        private const val DIR_IDE = "ide"
-        private const val DIR_PLUGIN = "claude-code-native"
-        private const val FILE = "open-chats.json"
 
         fun getInstance(project: Project): SessionHistory = project.service()
 

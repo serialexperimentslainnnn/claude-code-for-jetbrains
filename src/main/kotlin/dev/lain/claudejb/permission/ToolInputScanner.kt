@@ -35,25 +35,42 @@ object ToolInputScanner {
         }
     }
 
-    private val URLISH = Regex("""^[a-z][a-z0-9+.\-]*://""", RegexOption.IGNORE_CASE)
+    private val URLISH = Regex("""^[a-z][a-z0-9+.\-]*+://""", RegexOption.IGNORE_CASE)
 
-    private val URL_IN_TEXT = Regex("""[a-z][a-z0-9+.\-]*://[^\s"'`<>()\[\]{}|\\^]+""", RegexOption.IGNORE_CASE)
+    private val URL_IN_TEXT = Regex("""[a-z][a-z0-9+.\-]*+://[^\s"'`<>()\[\]{}|\\^]+""", RegexOption.IGNORE_CASE)
 
     private const val MAX_PATH_LEN = 512
 
     private const val MAX_FOLD_LEN = 64 * 1024
 
+    private const val MAX_COMMAND_LEN = 8 * 1024
+
+    private fun windowed(command: String): List<String> =
+        if (command.length <= MAX_COMMAND_LEN) {
+            listOf(command)
+        } else {
+            listOf(command.take(MAX_COMMAND_LEN), command.takeLast(MAX_COMMAND_LEN))
+        }
+
     fun pathCandidates(input: JsonObject, home: String?, env: Map<String, String> = emptyMap()): List<String> {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
             if (COMMAND_KEY.matches(key)) {
-                val sources = setOf(value, CommandRules.deobfuscate(value, home, env))
-                sources.forEach { src -> commandTokens(src).forEach { tok -> bothSpellings(tok, home, env, out) } }
+                windowed(value).forEach { win ->
+                    val sources = setOf(win, CommandRules.deobfuscate(win, home, env))
+                    sources.forEach { src -> commandTokens(src).forEach { tok -> bothSpellings(tok, home, env, out) } }
+                }
             } else {
-                bothSpellings(value, home, env, out)
+                pathSpellings(value, home, env, out)
             }
         }
         return out.toList()
+    }
+
+    private fun pathSpellings(value: String, home: String?, env: Map<String, String>, out: MutableSet<String>) {
+        bothSpellings(value, home, env, out)
+        val deobfuscated = CommandRules.deobfuscatePath(value, home, env)
+        if (deobfuscated != value) bothSpellings(deobfuscated, home, env, out)
     }
 
     private fun bothSpellings(value: String, home: String?, env: Map<String, String>, out: MutableSet<String>) {
@@ -68,9 +85,20 @@ object ToolInputScanner {
     ): List<String> {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
-            if (COMMAND_KEY.matches(key) || PATTERN_KEY.matches(key)) return@walkStrings
+            if (PATTERN_KEY.matches(key)) return@walkStrings
             if (CONTENT_KEY.matches(key) && BLOCK_COMMENT_ONLY.matches(value.trim())) return@walkStrings
-            bothSpellings(value, home, env, out)
+            if (COMMAND_KEY.matches(key)) {
+                windowed(value).forEach { win ->
+                    val sources = setOf(win, CommandRules.deobfuscate(win, home, env))
+                    sources.forEach { src ->
+                        val parsed = commandPaths(src)
+                        val scope = if (parsed.bindings.isEmpty()) env else env + parsed.bindings
+                        parsed.tokens.forEach { tok -> bothSpellings(tok, home, scope, out) }
+                    }
+                }
+            } else {
+                pathSpellings(value, home, env, out)
+            }
         }
         return out.toList()
     }
@@ -80,8 +108,7 @@ object ToolInputScanner {
         walkStrings(input) { key, value ->
             if (PATTERN_KEY.matches(key) || CONTENT_KEY.matches(key)) return@walkStrings
             if (COMMAND_KEY.matches(key)) {
-                out += value
-                commandTokens(value).forEach { out += it }
+                commandPaths(value).tokens.forEach { out += it }
             } else {
                 out += value
             }
@@ -93,7 +120,7 @@ object ToolInputScanner {
         val out = LinkedHashSet<String>()
         walkStrings(input) { key, value ->
             if (CONTENT_KEY.matches(key)) return@walkStrings
-            if (value.length > MAX_FOLD_LEN) return@walkStrings
+            if (value.length > MAX_FOLD_LEN || "://" !in value) return@walkStrings
             URL_IN_TEXT.findAll(value).forEach { out += it.value }
         }
         return out.toList()
@@ -121,7 +148,28 @@ object ToolInputScanner {
 
     private val SPLIT_CHARS = charArrayOf(';', '|', '&', '<', '>', '=', '(', ')', ',')
 
-    private fun commandTokens(command: String): List<String> {
+    private val LOCATION_SPLIT_CHARS = charArrayOf(';', '|', '&', '<', '>', '(', ')', ',')
+
+    private val SEGMENT_SPLIT = Regex("""[;&|\n]""")
+
+    private val ASSIGNMENT = Regex("""^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$""")
+
+    private val ASSIGNMENT_PREFIX = setOf("export", "declare", "local", "readonly", "typeset", "env", "set")
+
+    private val PATH_SHAPED = Regex("""^(?:[/~]|\.{1,2}/|[A-Za-z]:[/\\]|[\x24%])""")
+
+    private val EXECUTION_CONTROLLING = setOf(
+        "PATH", "BASH_ENV", "ENV", "SHELL",
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+        "NODE_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP", "PERL5LIB", "RUBYOPT",
+        "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "PAGER", "EDITOR", "VISUAL",
+    )
+
+    private class CommandPaths(val tokens: List<String>, val bindings: Map<String, String>)
+
+    private fun commandTokens(command: String): List<String> = splitTokens(command, SPLIT_CHARS)
+
+    private fun splitTokens(command: String, splitChars: CharArray): List<String> {
         val tokens = ArrayList<String>()
         val current = StringBuilder()
         var quote: Char? = null
@@ -131,7 +179,7 @@ object ToolInputScanner {
 
                 c == '\'' || c == '"' || c == '`' -> quote = c
 
-                c.isWhitespace() || c in SPLIT_CHARS -> if (current.isNotEmpty()) {
+                c.isWhitespace() || c in splitChars -> if (current.isNotEmpty()) {
                     tokens += current.toString()
                     current.clear()
                 }
@@ -143,7 +191,122 @@ object ToolInputScanner {
         return tokens
     }
 
+    private fun bind(declared: MatchResult, bindings: MutableMap<String, String>, tokens: MutableList<String>) {
+        val name = declared.groupValues[1]
+        val value = declared.groupValues[2]
+        bindings[name] = value
+        if (name.uppercase() in EXECUTION_CONTROLLING) {
+            value.split(':').filterTo(tokens) { PATH_SHAPED.containsMatchIn(it) }
+        }
+    }
+
+    private fun emitPathShaped(token: String, tokens: MutableList<String>) {
+        val assigned = token.indexOf('=')
+        if (assigned >= 0 && token.startsWith("-")) return
+        val candidates = if (assigned >= 0) listOf(token, token.substring(assigned + 1)) else listOf(token)
+        candidates.filterTo(tokens) { PATH_SHAPED.containsMatchIn(it) }
+    }
+
+    private val INERT_VERBS = setOf(
+        "echo", "printf", ":", "true", "false", "test", "[", "[[", "case", "esac", "in",
+        "read", "return", "shift", "unset", "type", "command", "which", "basename", "dirname",
+    )
+
+    private val NAVIGATION_VERBS = setOf("cd", "chdir", "pushd", "popd")
+
+    private val REDIRECT_TARGET = Regex("""\d?>>?\s*([^\s;|&<>]+)|<\s*([^\s;|&<>]+)""")
+
+    private fun emitRedirectTargets(segment: String, tokens: MutableList<String>) {
+        if ('>' !in segment && '<' !in segment) return
+        REDIRECT_TARGET.findAll(segment).forEach { m ->
+            m.groupValues.drop(1).firstOrNull { it.isNotEmpty() }
+                ?.takeIf { PATH_SHAPED.containsMatchIn(it) }
+                ?.let { tokens += it }
+        }
+    }
+
+    private fun withoutComments(command: String): String {
+        if ('#' !in command) return command
+        val out = StringBuilder(command.length)
+        var quote: Char? = null
+        var afterBlank = true
+        var skipping = false
+        for (c in command) {
+            when {
+                c == '\n' -> {
+                    skipping = false
+                    quote = null
+                    afterBlank = true
+                    out.append(c)
+                }
+
+                skipping -> Unit
+
+                quote != null -> {
+                    if (c == quote) quote = null
+                    afterBlank = false
+                    out.append(c)
+                }
+
+                c == '\'' || c == '"' -> {
+                    quote = c
+                    afterBlank = false
+                    out.append(c)
+                }
+
+                c == '#' && afterBlank -> skipping = true
+
+                else -> {
+                    afterBlank = c.isWhitespace()
+                    out.append(c)
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    private fun commandPaths(command: String): CommandPaths {
+        val tokens = ArrayList<String>()
+        val bindings = LinkedHashMap<String, String>()
+        val segments = withoutComments(command).split(SEGMENT_SPLIT)
+        segments.forEachIndexed { index, segment ->
+            emitRedirectTargets(segment, tokens)
+            val acts = segments.drop(index + 1).any { it.isNotBlank() }
+            var declaring = true
+            var verb: String? = null
+            for (token in splitTokens(segment, LOCATION_SPLIT_CHARS)) {
+                val declared = ASSIGNMENT.matchEntire(token)
+                when {
+                    declared != null -> bind(declared, bindings, tokens)
+
+                    token.lowercase() in ASSIGNMENT_PREFIX -> Unit
+
+                    else -> {
+                        declaring = false
+                        if (verb == null) {
+                            verb = token.lowercase().substringAfterLast('/')
+                            if ('*' !in token && '?' !in token) emitPathShaped(token, tokens)
+                        } else if (operative(verb, acts)) {
+                            emitPathShaped(token, tokens)
+                        }
+                    }
+                }
+            }
+        }
+        return CommandPaths(tokens, bindings)
+    }
+
+    private fun operative(verb: String?, acts: Boolean): Boolean = when (verb) {
+        null -> true
+        in INERT_VERBS -> false
+        in NAVIGATION_VERBS -> acts
+        else -> true
+    }
+
     fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()
+
+    /** Every command in the input, for the callers that must answer for all of them rather than the first. */
+    fun commandsIn(input: JsonObject): List<String> = commandCandidates(input)
 
     internal fun commandCandidates(input: JsonObject): List<String> {
         val out = ArrayList<String>()
@@ -164,15 +327,19 @@ object ToolInputScanner {
             return
         }
         when (value) {
-            is JsonPrimitive -> if (value.isString) out.add(value.content)
+            is JsonPrimitive -> if (value.isString) addWindows(value.content, out)
 
             is JsonArray -> {
                 val joined = value.filterIsInstance<JsonPrimitive>().filter { it.isString }
                     .joinToString(" ") { it.content }
-                if (joined.isNotBlank()) out.add(joined)
+                if (joined.isNotBlank()) addWindows(joined, out)
             }
 
             else -> descend(value)
         }
+    }
+
+    private fun addWindows(command: String, out: MutableList<String>) {
+        out.addAll(windowed(command))
     }
 }

@@ -19,7 +19,7 @@ updates:
     commit-message:
       prefix: build       # Conventional Commits — the commit-msg hook and the changelog both depend on it
       include: scope
-    labels: [dependencies, ci]
+    labels: [dependencies]
     groups:
       # Every action here is pinned by full commit SHA, so a bump is a one-line SHA change per action and
       # reviewing them one PR at a time buys nothing but pipeline runs.
@@ -126,7 +126,7 @@ updates:
     commit-message:
       prefix: build
       include: scope
-    labels: [dependencies, ci]
+    labels: [dependencies]
     groups:
       security:
         applies-to: security-updates

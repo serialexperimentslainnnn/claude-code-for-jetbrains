@@ -1,7 +1,9 @@
 package dev.lain.claudejb.ui
 
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EntryDTO
+import dev.lain.claudejb.session.GuardRestore
 import dev.lain.claudejb.session.TranscriptEntry
 import dev.lain.claudejb.session.TranscriptModel
 import dev.lain.claudejb.ui.jcef.JcefBridge
@@ -25,9 +27,11 @@ internal class ChatTranscriptView(
 
     private var shown: Shown = Shown.Chat
 
-    private var lastPushed: String? = null
+    private var lastRows: List<String> = emptyList()
 
     val showsTask: Boolean get() = shown is Shown.Task
+
+    val showsChat: Boolean get() = shown is Shown.Chat
 
     fun showTranscript(agentId: String?) {
         show(agentId?.let { Shown.Agent(it) } ?: Shown.Chat)
@@ -40,7 +44,7 @@ internal class ChatTranscriptView(
         if (shown == next) return
         shown = next
         dirty.clear()
-        lastPushed = null
+        lastRows = emptyList()
         exec("window.cc.clear && window.cc.clear()")
         when (next) {
             is Shown.Chat -> {
@@ -49,7 +53,7 @@ internal class ChatTranscriptView(
                 trimNotice(emptyList(), session.transcript.trimmedCount)
             }
 
-            is Shown.Agent -> pushEntries(session.runningAgents.nodes[next.id]?.entries.orEmpty())
+            is Shown.Agent -> pushEntries(agentEntries(next.id))
 
             is Shown.Task -> {
                 exec("window.cc.revealTaskTab && window.cc.revealTaskTab(" + JcefBridge.jsString(next.id) + ")")
@@ -61,9 +65,20 @@ internal class ChatTranscriptView(
     fun refreshShown() {
         when (val current = shown) {
             is Shown.Chat -> Unit
-            is Shown.Agent -> pushEntries(session.runningAgents.nodes[current.id]?.entries.orEmpty())
+            is Shown.Agent -> pushEntries(agentEntries(current.id))
             is Shown.Task -> pushEntries(BackgroundTaskView.entries(session, current.id), expanded = true)
         }
+    }
+
+    private fun agentEntries(agentId: String): List<EntryDTO> {
+        val entries = session.runningAgents.nodes[agentId]?.entries.orEmpty()
+        return GuardRestore.reinstate(entries, session.guardAlertsAnchoredIn(entries))
+    }
+
+    fun shows(landing: AttentionLanding): Boolean = when (landing) {
+        is AttentionLanding.Chat -> showsChat
+        is AttentionLanding.Agent -> shown == Shown.Agent(landing.agentId)
+        is AttentionLanding.Elsewhere -> false
     }
 
     private fun pushEntries(entries: List<EntryDTO>, expanded: Boolean = false) {
@@ -82,18 +97,17 @@ internal class ChatTranscriptView(
 
             else -> false
         }
-        val payload =
-            if (entries.isEmpty()) {
-                ""
-            } else {
-                JcefTranscriptPayload.agentBatchJson(entries, titles, running, expanded, ownerRunning)
-            }
-        if (payload == lastPushed) return
-        lastPushed = payload
-        exec("window.cc.clear && window.cc.clear()")
-        if (payload.isNotEmpty()) {
-            exec("window.cc.batch && window.cc.batch($payload)")
+        val rows = JcefTranscriptPayload.agentRowsJson(entries, titles, running, expanded, ownerRunning)
+        if (rows == lastRows) return
+        if (rows.size < lastRows.size) {
+            lastRows = rows
+            exec("window.cc.clear && window.cc.clear()")
+            if (rows.isNotEmpty()) exec("window.cc.batch && window.cc.batch([${rows.joinToString(",")}])")
+            return
         }
+        val changed = rows.filterIndexed { index, row -> index >= lastRows.size || lastRows[index] != row }
+        lastRows = rows
+        if (changed.isNotEmpty()) exec("window.cc.batch && window.cc.batch([${changed.joinToString(",")}])")
     }
 
     override fun onAdded(entry: TranscriptEntry, index: Int) {

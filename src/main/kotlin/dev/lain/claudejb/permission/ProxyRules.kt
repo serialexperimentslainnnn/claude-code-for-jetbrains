@@ -23,7 +23,7 @@ object ProxyRules {
     internal fun proxyHit(input: JsonObject, policy: SensitiveGuard.Policy): String? {
         if (policy.httpProxy.isNullOrBlank() && policy.httpsProxy.isNullOrBlank()) return null
         for (raw in ToolInputScanner.commandCandidates(input)) {
-            val command = CommandRules.deobfuscate(raw)
+            val command = CommandRules.deobfuscate(raw, policy.home, policy.envValues)
             explicitBypass(command, policy)?.let { return it }
             alternateProxy(command, policy)?.let { return it }
         }

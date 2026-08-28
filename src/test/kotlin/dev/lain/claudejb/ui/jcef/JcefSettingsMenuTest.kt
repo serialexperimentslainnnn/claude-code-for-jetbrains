@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui.jcef
 import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.protocol.ModelInfo
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.SecuritySuspensions
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class JcefSettingsMenuTest {
+
+    private val scope = "test-project"
 
     private fun models() = listOf(
         ModelInfo("opus[1m]", "Opus (1M context)", "Opus 5 with 1M context · Best for everyday, complex tasks"),
@@ -30,20 +33,20 @@ class JcefSettingsMenuTest {
     private fun menu(
         state: ClaudeSettings.State = ClaudeSettings.State(),
         selected: JcefSettingsMenu.Selected = selected(),
-    ): List<JsonObject> = JcefSettingsMenu.json(state, selected).map { it.jsonObject }
+    ): List<JsonObject> = JcefSettingsMenu.json(scope, state, selected).map { it.jsonObject }
 
     private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 
     private fun JsonObject.bool(key: String): Boolean = getValue(key).jsonPrimitive.boolean
 
     private fun write(state: ClaudeSettings.State, key: String, on: Boolean) =
-        JcefSettingsMenu.apply(state, key, on, modelIds())
+        JcefSettingsMenu.apply(scope, state, key, on, modelIds())
 
     @Test
     fun `the groups are drawn in the declared order`() {
         assertEquals(
             listOf(
-                "Model", "Effort", "Permission mode", "Chat", "Security",
+                "Model", "Effort", "Permission mode", "Chat", "Guard mode", "Security",
                 "Setting sources", "Allowed tools", "Disallowed tools", "Always allowed tools", "MCP",
             ),
             menu().map { it.str("group") }.distinct(),
@@ -258,7 +261,7 @@ class JcefSettingsMenuTest {
 
     @Test
     fun `every rule of every category has a row, and each carries its category as its sub-level`() {
-        val rows = menu().filter { it.str("group") == "Security" }
+        val rows = menu().filter { it.str("group") == "Security" && it.str("key") != "guard" }
         assertEquals(SecurityRule.entries.size, rows.size)
         rows.forEach { row ->
             val rule = SecurityRule.from(row.str("key").removePrefix("rule:"))
@@ -267,5 +270,44 @@ class JcefSettingsMenuTest {
             assertEquals(rule.label, row.str("label"))
             assertTrue(row.bool("on"), row.str("key"))
         }
+    }
+
+    @Test
+    fun `the guard's own mode is one choice of three, and Enforcing by default`() {
+        val rows = menu().filter { it.str("group") == "Guard mode" }
+
+        assertEquals(listOf("Enforcing", "Permissive", "Allow All"), rows.map { it.str("label") })
+        assertTrue(rows.all { it.str("type") == "radio" }, "three ways to answer one question, not three switches")
+        assertEquals("Enforcing", rows.single { it.bool("on") }.str("label"))
+    }
+
+    @Test
+    fun `choosing Allow All here is Forever, because a menu cannot ask for how long`() {
+        val state = ClaudeSettings.State()
+
+        assertTrue(write(state, "guardmode:allowAll", true))
+        assertEquals("allowAll", state.guardMode)
+        assertEquals(0L, state.guardDisabledUntil, "a menu must not invent a deadline")
+    }
+
+    @Test
+    fun `choosing Enforcing ends an Allow All that is still running`() {
+        val state = ClaudeSettings.State()
+        SecuritySuspensions.guardOff(scope, state, SecuritySuspensions.Duration.HOURS_8, System.currentTimeMillis())
+
+        assertTrue(write(state, "guardmode:enforcing", true))
+
+        assertFalse(
+            SecuritySuspensions.guardSuspended(scope, state, System.currentTimeMillis()),
+            "a menu saying Enforcing over a live Allow All is a menu telling the user something untrue",
+        )
+    }
+
+    @Test
+    fun `a mode nobody offers is refused and writes nothing`() {
+        val state = ClaudeSettings.State()
+
+        assertFalse(write(state, "guardmode:whatever", true))
+        assertEquals("enforcing", state.guardMode)
     }
 }

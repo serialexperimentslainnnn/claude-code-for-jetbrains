@@ -17,6 +17,7 @@ import dev.lain.claudejb.diff.EditSnapshot
 import dev.lain.claudejb.permission.ElicitationCard
 import dev.lain.claudejb.permission.PendingPermission
 import dev.lain.claudejb.permission.PermissionBroker
+import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.process.ClaudeBinaryLocator
 import dev.lain.claudejb.process.ClaudeProcess
@@ -40,10 +41,12 @@ import dev.lain.claudejb.protocol.parseElicitationFields
 import dev.lain.claudejb.protocol.parseUsageReport
 import dev.lain.claudejb.protocol.str
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardAlert
+import dev.lain.claudejb.settings.GuardAlertLog
+import dev.lain.claudejb.settings.GuardCommandApprovals
 import dev.lain.claudejb.settings.Provider
 import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SecurityCommandApprovals
-import dev.lain.claudejb.settings.approvedGuardCommands
+import dev.lain.claudejb.settings.guardSuspended
 import dev.lain.claudejb.settings.requiresTrustPrompt
 import dev.lain.claudejb.settings.resolveEnv
 import dev.lain.claudejb.settings.sensitiveDecision
@@ -79,14 +82,6 @@ class ClaudeSession(
     private val rollback = RollbackManager(project, diffs, reseedReadState = { p, m -> queries.seedReadState(p, m) })
     internal val controlClient = SessionControlClient(write = ::write)
 
-    /**
-     * Changing a LIVE session's options — `session.settings.changeModel(…)`, `…changePermissionMode(…)`.
-     *
-     * Seven verbs that were members here. Internal visibility on a PROPERTY costs nothing against the size of
-     * this class's API (detekt counts functions, and rightly: a property is a thing you read, a function is a
-     * thing that can act on a running session), which is what makes moving the verbs out an actual reduction
-     * rather than a rename.
-     */
     val settings = SessionLiveSettings(
         session = this,
         project = project,
@@ -349,6 +344,8 @@ class ClaudeSession(
 
     val checkpointingEnabled: Boolean get() = ClaudeSettings.getInstance(project).enableFileCheckpointing
 
+    val guardEnforced: Boolean get() = !ClaudeSettings.getInstance(project).guardSuspended()
+
     private val poll = PollSchedule(
         isRunning = ::isRunning,
         turnActive = { turnActive },
@@ -374,6 +371,12 @@ class ClaudeSession(
     var initialized: Boolean = false
         private set
 
+    val guardApprovals = GuardCommandApprovals()
+
+    val guardLog = GuardLogTally()
+
+    private val guardAlerts = java.util.concurrent.CopyOnWriteArrayList<GuardAlert>()
+
     private val broker by lazy {
         PermissionBroker(
             permissionMode = { permissionMode },
@@ -387,23 +390,59 @@ class ClaudeSession(
             sensitiveDecision = { input ->
                 ClaudeSettings.getInstance(project).sensitiveDecision(input, project.basePath)
             },
-            isGuardCommandApproved = { rule, command ->
-                SecurityCommandApprovals.isApproved(
-                    ClaudeSettings.getInstance(project).approvedGuardCommands(),
-                    rule,
-                    command,
-                )
-            },
-            onSensitiveDenied = { toolName, reason, rule ->
+            isGuardCommandApproved = { rule, command -> guardApprovals.isApproved(rule, command) },
+            onSensitiveDenied = { denial ->
                 edt {
-                    transcript.add(
-                        Speaker.SYSTEM,
-                        reason?.let { "Blocked $toolName: it $it." }
-                            ?: "Blocked $toolName by the sensitive-data guard. See Settings ▸ Claude Code ▸ Security.",
-                        blockedRule = rule?.name,
+                    val landing = guardLandingOf(denial.toolUseId)
+                    if (landing == AttentionLanding.Chat) {
+                        transcript.add(
+                            Speaker.SYSTEM,
+                            denial.reason?.let { "Blocked ${denial.toolName}: it $it." }
+                                ?: "Blocked ${denial.toolName} by the sensitive-data guard. " +
+                                "See Settings ▸ Claude Code Security.",
+                            commandText = denial.command?.takeIf { it.isNotBlank() },
+                            blockedRule = denial.rule?.name,
+                        )
+                    }
+                    fireAttention(AttentionReason.GUARD_BLOCKED, landing)
+                    recordAlert(
+                        GuardAlert.DENIED,
+                        denial.rule,
+                        denial.toolName,
+                        command = denial.command,
+                        toolUseId = denial.toolUseId,
+                        detail = denial.detail,
+                        inAgent = landing != AttentionLanding.Chat,
+                    )
+                    fireState()
+                }
+            },
+            onSensitiveBypassed = { bypass ->
+                val offer = bypass.action ?: if (ClaudeSettings.getInstance(project).guardSuspended()) {
+                    PermissionBroker.ENABLE_GUARD
+                } else {
+                    PermissionBroker.REMOVE_FROM_WHITELIST
+                }
+                guardNotice(
+                    bypass.toolName,
+                    bypass.reason ?: "${bypass.rule.label} matched, and a bypass is in force",
+                    bypass.rule,
+                    offer,
+                    bypass.command,
+                    bypass.toolUseId,
+                )
+                edt {
+                    recordAlert(
+                        GuardAlert.ALLOWED,
+                        bypass.rule,
+                        bypass.toolName,
+                        via = offer,
+                        command = bypass.command,
+                        toolUseId = bypass.toolUseId,
+                        detail = bypass.detail,
+                        inAgent = guardLandingOf(bypass.toolUseId) != AttentionLanding.Chat,
                     )
                 }
-                fireState()
             },
         )
     }
@@ -790,7 +829,47 @@ class ClaudeSession(
         fireState()
     }
 
+    private fun recordAlert(
+        verdict: String,
+        rule: SecurityRule?,
+        toolName: String,
+        via: String? = null,
+        command: String? = null,
+        toolUseId: String? = null,
+        detail: String? = null,
+        inAgent: Boolean = false,
+    ) {
+        val matched = rule ?: return
+        val settings = ClaudeSettings.getInstance(project)
+        val alert = GuardAlert(
+            at = System.currentTimeMillis(),
+            rule = matched.name,
+            category = matched.category.name,
+            verdict = verdict,
+            sessionId = sessionId,
+            toolUseId = toolUseId,
+            via = via,
+            tool = toolName,
+            detail = detail,
+            command = command,
+            inAgent = inAgent,
+        )
+        guardAlerts += alert
+        val submitted = GuardAlertLog.record(settings.scope, alert, retentionDays = settings.state.guardLogRetentionDays)
+        guardLog.submitted(submitted != null)
+    }
+
     private fun presentPermission(request: PendingPermission) = edt {
+        request.guard?.let {
+            recordAlert(
+                GuardAlert.ASKED,
+                it.rule,
+                request.toolName,
+                command = ToolInputScanner.commandText(request.input),
+                toolUseId = request.toolUseId,
+                detail = it.reason,
+            )
+        }
         cards.present(request)
         if (request.reviewable && request.toolName in DiffPresenter.REVIEWABLE_TOOLS) {
             diffs.openReviewDiff(request.requestId, request.toolName, request.input)
@@ -805,9 +884,12 @@ class ClaudeSession(
         agentScanner.restoreAdmitted(onTasksReplayed = ::fireState)
         toolUseTurn.clear()
         currentUserMessageId = null
+        val saved = GuardAlertLog.forSession(ClaudeSettings.getInstance(project).scope, savedSessionId)
+        guardAlerts.addAll(saved)
+        val withGuard = GuardRestore.reinstate(dtos, GuardRestore.raisedInThisChat(dtos, saved))
         edt {
             transcript.clear()
-            for (dto in dtos) {
+            for (dto in withGuard) {
                 val speaker = runCatching { Speaker.valueOf(dto.speaker) }.getOrNull() ?: continue
                 transcript.add(
                     speaker,
@@ -818,6 +900,9 @@ class ClaudeSession(
                     filePath = dto.filePath,
                     commandText = dto.commandText,
                     messageText = dto.messageText,
+                    blockedRule = dto.blockedRule,
+                    bypassedRule = dto.bypassedRule,
+                    bypassAction = dto.bypassAction,
                     toolState = when {
                         dto.failed -> ToolState.ERROR
                         dto.inFlight -> ToolState.ERROR
@@ -1311,6 +1396,37 @@ class ClaudeSession(
 
     internal fun systemNotice(message: String) = edt { transcript.add(Speaker.SYSTEM, message) }
 
+    internal fun guardNotice(
+        toolName: String,
+        reason: String,
+        rule: SecurityRule,
+        action: String? = null,
+        command: String? = null,
+        toolUseId: String? = null,
+    ) = edt {
+        if (guardLandingOf(toolUseId) != AttentionLanding.Chat) return@edt
+        transcript.add(
+            Speaker.SYSTEM,
+            "Allowed $toolName: $reason.",
+            commandText = command?.takeIf { it.isNotBlank() },
+            bypassedRule = rule.name,
+            bypassAction = action,
+        )
+    }
+
+    private fun guardLandingOf(toolUseId: String?): AttentionLanding {
+        if (toolUseId == null || transcript.knowsTool(toolUseId)) return AttentionLanding.Chat
+        val owner = runningAgents.nodes.values
+            .firstOrNull { node -> node.entries.any { it.toolUseId == toolUseId } }
+        return owner?.let { AttentionLanding.Agent(it.agentId) } ?: AttentionLanding.Elsewhere
+    }
+
+    fun guardAlertsAnchoredIn(entries: List<EntryDTO>): List<GuardAlert> {
+        if (guardAlerts.isEmpty()) return emptyList()
+        val anchors = entries.mapNotNullTo(HashSet()) { it.toolUseId }
+        return guardAlerts.filter { it.toolUseId in anchors }
+    }
+
     fun scanAgents() = agentScanner.scan()
 
     private fun labelAgentCards() {
@@ -1353,7 +1469,8 @@ class ClaudeSession(
     private fun fireState() = listeners.forEach { it.onStateChanged() }
     private fun fireMetadata() = listeners.forEach { it.onMetadataChanged() }
     private fun firePermissions() = listeners.forEach { it.onPermissionsChanged() }
-    private fun fireAttention(reason: AttentionReason) = listeners.forEach { it.onAttention(reason) }
+    private fun fireAttention(reason: AttentionReason, landing: AttentionLanding = AttentionLanding.Chat) =
+        listeners.forEach { it.onAttention(reason, landing) }
     private fun fireTitleChanged() = listeners.forEach { it.onTitleChanged() }
 
     private fun edt(block: () -> Unit) =

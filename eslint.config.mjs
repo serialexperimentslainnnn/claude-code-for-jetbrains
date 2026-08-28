@@ -28,6 +28,9 @@ export default [
       // directory is gitignored, so CI never sees it; without this line `npm run lint` is red on every
       // workstation that has ever run `runIde`, which is every workstation.
       '.intellijPlatform/**',
+      // Assistant scratch tooling: node scripts that run on the workstation, never shipped and gitignored.
+      // They are CommonJS against node globals, so `no-undef` fires on every one of them.
+      '.claudetools/**',
     ],
   },
 

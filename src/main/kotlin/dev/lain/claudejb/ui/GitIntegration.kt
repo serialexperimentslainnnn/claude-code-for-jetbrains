@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUiKind
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.AnActionResult
 import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
@@ -21,18 +22,14 @@ import com.intellij.openapi.vcs.VcsDirectoryMapping
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import dev.lain.claudejb.context.EditorContextProvider
-import dev.lain.claudejb.forge.ForgeAnswer
-import dev.lain.claudejb.forge.ForgeProbe
-import dev.lain.claudejb.forge.ForgeProvider
-import dev.lain.claudejb.forge.ForgeRepo
-import dev.lain.claudejb.forge.ForgeService
-import dev.lain.claudejb.forge.ForgeTokens
+import dev.lain.claudejb.git.ForgeViewNavigator
 import dev.lain.claudejb.git.GitAvailability
 import dev.lain.claudejb.git.GitCommitInfo
 import dev.lain.claudejb.git.GitHistoryService
 import dev.lain.claudejb.git.GitLogNavigator
 import dev.lain.claudejb.git.GitLogScope
 import dev.lain.claudejb.git.GitRemoteProvider
+import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.AttentionReason
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.SessionListener
@@ -103,7 +100,6 @@ internal class GitIntegration(private val project: Project) {
         }
         val changes = history.workingTreeChanges()
         val branch = history.currentBranch()
-        val forge = forgeRepo(history)
         return JcefGitData.Snapshot(
             available = true,
             repo = JcefGitData.Repo(
@@ -116,34 +112,10 @@ internal class GitIntegration(private val project: Project) {
             commits = history.recentCommits(limit = GRAPH_COMMIT_LIMIT, scope = GitLogScope.EVERY_LINE_OF_DEVELOPMENT),
             refs = history.refs(),
             changedFileOpen = relativeChangedFile(root, changes, openFilePath) != null,
+            conflicted = history.hasConflicts(),
             actionStates = states.toMap(),
             topology = history.branchTopology(),
-            pullRequests = forge.drawable(branch) { repo, on -> ForgeService.openPullRequests(repo, on) },
-            lastRun = forge.drawable(branch) { repo, on -> ForgeService.lastRun(repo, on) },
         )
-    }
-
-    private fun forgeRepo(history: GitHistoryService): ForgeRepo? {
-        val remote = history.primaryRemote() ?: return null
-        val host = remote.host ?: return null
-        val owner = remote.owner ?: return null
-        val name = remote.repo ?: return null
-        val token = ForgeTokens.get(host) ?: return null
-        val provider = when (remote.provider) {
-            GitRemoteProvider.GITHUB -> ForgeProvider.GITHUB
-            GitRemoteProvider.GITLAB -> ForgeProvider.GITLAB
-            GitRemoteProvider.OTHER -> ForgeProbe.detect(host, token) ?: return null
-        }
-        return ForgeRepo(provider, host, owner, name)
-    }
-
-    private fun <T> ForgeRepo?.drawable(branch: String?, ask: (ForgeRepo, String) -> ForgeAnswer<T>): T? {
-        val repo = this ?: return null
-        val on = branch?.takeIf { it.isNotBlank() } ?: return null
-        return when (val answer = ask(repo, on)) {
-            is ForgeAnswer.Known -> answer.value
-            is ForgeAnswer.Silent -> null
-        }
     }
 
     private fun relativeChangedFile(root: String, changes: List<String>, absolutePath: String?): String? {
@@ -235,6 +207,10 @@ internal class GitIntegration(private val project: Project) {
 
             COMMIT_REVERT -> GitPromptedActions.revertCommitPrompt(hash)
 
+            COMMIT_BRANCH -> GitPromptedActions.createBranchFromCommitPrompt(hash)
+
+            COMMIT_TAG -> GitPromptedActions.createTagFromCommitPrompt(hash)
+
             else -> {
                 LOG.warn("No prompt is wired for Git action '${action.id}'")
                 null
@@ -250,6 +226,10 @@ internal class GitIntegration(private val project: Project) {
             }
 
             COMMIT_DIFF -> GitLogNavigator.showCommit(project, hash)
+
+            FORGE_VIEW -> ForgeViewNavigator.open(project)
+
+            GIT_LOG -> GitLogNavigator.showLog(project)
 
             else -> {
                 LOG.warn("No host action is wired for Git action '${action.id}'")
@@ -271,8 +251,9 @@ internal class GitIntegration(private val project: Project) {
             if (session.turnActive) started = true
         }
 
-        override fun onAttention(reason: AttentionReason) {
-            if (reason == AttentionReason.PERMISSION || !started) return
+        override fun onAttention(reason: AttentionReason, landing: AttentionLanding) {
+            if (!started) return
+            if (reason != AttentionReason.TURN_DONE && reason != AttentionReason.ERROR) return
             session.removeListener(this)
             val state = if (reason == AttentionReason.ERROR) {
                 JcefGitData.ActionState.FAILED
@@ -284,7 +265,11 @@ internal class GitIntegration(private val project: Project) {
     }
 
     private fun invokeIde(action: GitActionCatalog.GitAction, onChanged: () -> Unit) {
-        val actionId = action.ideActionId ?: return
+        val actionId = action.ideActionId ?: run {
+            LOG.warn("Git action '${action.id}' says it is an IDE action but names none")
+            settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
+            return
+        }
         val target = ActionManager.getInstance().getAction(actionId) ?: run {
             LOG.warn("This IDE has no action '$actionId'; the Git view's '${action.id}' button does nothing")
             settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
@@ -310,7 +295,13 @@ internal class GitIntegration(private val project: Project) {
             settle(action.id, JcefGitData.ActionState.FAILED, onChanged)
             return
         }
-        ActionUtil.performAction(target, event)
+        val result = ActionUtil.performAction(target, event)
+        settle(action.id, stateOf(result), onChanged)
+    }
+
+    private fun stateOf(result: AnActionResult): JcefGitData.ActionState = when {
+        result.isPerformed -> JcefGitData.ActionState.COMPLETED
+        else -> JcefGitData.ActionState.FAILED
     }
 
     private fun settle(id: String, state: JcefGitData.ActionState, onChanged: () -> Unit) {
@@ -334,8 +325,12 @@ internal class GitIntegration(private val project: Project) {
 
         const val COMMIT_DIFF = "commitDiff"
         const val COMMIT_COPY_HASH = "commitCopyHash"
+        const val FORGE_VIEW = "forgeView"
+        const val GIT_LOG = "gitLog"
         const val COMMIT_REVERT_TO_BRANCH = "commitRevertToBranch"
         const val COMMIT_REVERT = "commitRevert"
+        const val COMMIT_BRANCH = "commitBranch"
+        const val COMMIT_TAG = "commitTag"
 
         private const val GIT_VCS_NAME = "Git"
 

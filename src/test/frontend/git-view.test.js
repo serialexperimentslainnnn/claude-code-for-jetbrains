@@ -17,7 +17,7 @@ const GIT = {
       short: '8933592',
       subject: 'chore: invert .gitignore into an allowlist',
       author: 'Lain',
-      ageMillis: 3 * 3600 * 1000,
+      authoredAtMillis: Date.now() - 3 * 3600 * 1000,
       files: 3,
     },
     {
@@ -25,7 +25,7 @@ const GIT = {
       short: '6f781c5',
       subject: "feat(session): review the whole session's changes",
       author: 'Lain',
-      ageMillis: 5 * 86400 * 1000,
+      authoredAtMillis: Date.now() - 5 * 86400 * 1000,
       files: 12,
     },
   ],
@@ -102,19 +102,11 @@ describe('git view', () => {
     expect(sent.pop()).toEqual({ type: 'gitAction', id: 'explain' });
   });
 
-  it('paints the word the host sent for each state, never a colour alone', () => {
+  it('carries no state chip on the button, whatever the host reports', () => {
     openView('git');
-    const chips = Array.from(panel().querySelectorAll('.git-status'));
-    expect(chips.map((c) => c.textContent)).toEqual(['failed', 'running', 'completed']);
-    expect(chips.map((c) => c.className)).toEqual([
-      'git-status failed',
-      'git-status running',
-      'git-status completed',
-    ]);
-    const refresh = Array.from(panel().querySelectorAll('.git-action')).find((b) =>
-      b.textContent.includes('Refresh')
-    );
-    expect(refresh.querySelector('.git-status')).toBeNull();
+    expect(panel().querySelectorAll('.git-status').length).toBe(0);
+    const labels = Array.from(panel().querySelectorAll('.git-action')).map((b) => b.textContent);
+    expect(labels.some((l) => /completed|failed|running/.test(l))).toBe(false);
   });
 
   it('announces a state change, because the chip changes without the focus moving', () => {
@@ -303,34 +295,13 @@ describe('git view', () => {
     openView('git');
   };
 
-  it('says nothing about a forge nobody configured', () => {
-    withGit({});
-    expect(panel().querySelector('[data-card="git-forge"]')).toBeNull();
-    expect(panel().querySelector('[data-card="git-topology"]')).toBeNull();
-  });
-
-  it('an empty pull-request list is an answer, and says so', () => {
-    withGit({ pullRequests: [] });
-    const card = panel().querySelector('[data-card="git-forge"]');
-    expect(card).toBeTruthy();
-    expect(card.textContent).toContain('No open pull requests');
-  });
-
-  it('draws each pull request and the last run, opening them through the host', () => {
-    const sent = [];
-    win.CC.send = (m) => sent.push(m);
+  it('draws no forge card at all — the plugin no longer talks to GitHub or GitLab', () => {
     withGit({
       pullRequests: [{ number: 7, title: 'Add the thing', url: 'https://example/pr/7', draft: true }],
       lastRun: { name: 'CI', status: 'failed', url: 'https://example/run/1', finishedAt: null },
     });
-    const card = panel().querySelector('[data-card="git-forge"]');
-    expect(card.textContent).toContain('#7');
-    expect(card.textContent).toContain('Add the thing');
-    expect(card.textContent).toContain('draft');
-    expect(card.querySelector('.git-dot.failed')).toBeTruthy();
-
-    click(card.querySelector('.git-link'));
-    expect(sent.filter((m) => m.type === 'open').map((m) => m.url)).toContain('https://example/run/1');
+    expect(panel().querySelector('[data-card="git-forge"]')).toBeNull();
+    expect(panel().textContent).not.toContain('Add the thing');
   });
 
   it('omits a count it was not given rather than drawing a zero', () => {

@@ -7,6 +7,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.settings.SecretStore
 
 object ReviewPrompt {
 
@@ -14,6 +15,7 @@ object ReviewPrompt {
 
     private const val TURNS_KEY = "claudejb.successfulTurns"
     private const val ASKED_KEY = "claudejb.reviewAsked"
+    private const val ASKED = "asked"
 
     const val REVIEW_URL = "https://plugins.jetbrains.com/plugin/31965-claude-code-native/reviews"
 
@@ -24,14 +26,29 @@ object ReviewPrompt {
         if (successfulTurns >= TURNS_BEFORE_ASK) TURNS_BEFORE_ASK else successfulTurns + 1
 
     fun onSuccessfulTurn(project: Project) {
-        val props = PropertiesComponent.getInstance()
-        if (props.getBoolean(ASKED_KEY, false)) return
-        val turns = recordTurn(props.getInt(TURNS_KEY, 0))
-        props.setValue(TURNS_KEY, turns, 0)
-        if (!shouldAsk(turns, asked = false)) return
-        props.setValue(ASKED_KEY, true)
+        val safe = SecretStore.get(SecretStore.REVIEW_PROMPT)
+        if (safe == ASKED) return
+        val state = safe ?: fromProperties()
+        if (state == ASKED) {
+            write(ASKED)
+            return
+        }
+        val turns = recordTurn(state?.toIntOrNull() ?: 0)
+        if (!shouldAsk(turns, asked = false)) {
+            write(turns.toString())
+            return
+        }
+        write(ASKED)
         show(project)
     }
+
+    private fun fromProperties(): String? {
+        val props = PropertiesComponent.getInstance()
+        if (props.getBoolean(ASKED_KEY, false)) return ASKED
+        return props.getInt(TURNS_KEY, 0).takeIf { it > 0 }?.toString()
+    }
+
+    private fun write(value: String) = SecretStore.set(SecretStore.REVIEW_PROMPT, value)
 
     private fun show(project: Project) {
         NotificationGroupManager.getInstance()

@@ -4,8 +4,10 @@ import kotlinx.serialization.json.JsonObject
 
 object ScriptExecution {
 
+    private val AT = CommandRules.AT_COMMAND
+
     private val SOURCED = Regex(
-        """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:source|\.)\s+(\S+)""",
+        AT + """(?:sudo\s+)?(?:source|\.)\s+(\S+)""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -15,8 +17,13 @@ object ScriptExecution {
             """swift|dart|crystal|clojure|bb|racket|guile|gosh|chez|sbcl"""
 
     private val SOURCE_RUN = Regex(
-        """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?""" +
-            """(?:go\s+run|nim\s+[cr]|crystal\s+run|dart\s+run|tcc\s+-run|java)\s+([^\s;&|]+)""",
+        AT + """(?:sudo\s+)?""" +
+            """(?:go\s+run|nim\s+[cr]|crystal\s+run|dart\s+run|tcc\s+-run)\s+([^\s;&|]+)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val JAVA_SOURCE = Regex(
+        AT + """(?:sudo\s+)?java\s+([^\s;&|-][^\s;&|]*\.java)\b""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -26,7 +33,7 @@ object ScriptExecution {
     )
 
     private val INTERPRETED = Regex(
-        """(?:^|[;&|\n]\s*)(?:sudo\s+)?(?:\S*/)?($INTERPRETERS)\b([^;&|\n]*)""",
+        AT + """(?:sudo\s+)?($INTERPRETERS)\b([^;&|\n]*)""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -48,6 +55,7 @@ object ScriptExecution {
             val command = CommandRules.deobfuscate(raw, policy.home, policy.envValues)
             SOURCED.findAll(command).forEach { m -> anchor(m.groupValues[1], policy)?.let { out += it } }
             SOURCE_RUN.findAll(command).forEach { m -> anchor(m.groupValues[1], policy)?.let { out += it } }
+            JAVA_SOURCE.findAll(command).forEach { m -> anchor(m.groupValues[1], policy)?.let { out += it } }
             interpretedFiles(command).forEach { f -> anchor(f, policy)?.let { out += it } }
             launchedFiles(command).forEach { f -> anchor(f, policy)?.let { out += it } }
         }
@@ -92,8 +100,13 @@ object ScriptExecution {
         return SYSTEM_BIN_DIRS.none { lower.startsWith(it) }
     }
 
+    internal fun inSystemBinDir(path: String): Boolean {
+        val lower = path.replace('\\', '/').lowercase()
+        return SYSTEM_BIN_DIRS.any { lower.startsWith(it) }
+    }
+
     private fun commandWords(command: String): List<String> =
-        command.split(';', '|', '&', '\n')
+        command.split(';', '|', '&', '\n', '(', ')', '{', '}')
             .mapNotNull { segment ->
                 segment.trim().split(' ', '\t').map { it.trim() }.filter { it.isNotEmpty() }
                     .dropWhile { it.equals("sudo", ignoreCase = true) || ASSIGNMENT.matches(it) }

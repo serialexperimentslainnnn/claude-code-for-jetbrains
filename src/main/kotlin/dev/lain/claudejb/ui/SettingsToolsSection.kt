@@ -3,7 +3,10 @@ package dev.lain.claudejb.ui
 import com.intellij.ui.CollectionListModel
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBList
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.AlignY
+import com.intellij.ui.dsl.builder.MAX_LINE_LENGTH_WORD_WRAP
+import com.intellij.ui.dsl.builder.Panel
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.ToolNaming
 import dev.lain.claudejb.settings.ClaudeSettings
@@ -11,9 +14,9 @@ import javax.swing.JComponent
 
 internal class SettingsToolsSection(private val settings: ClaudeSettings) : SettingsSection {
 
-    private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES, columns = 3)
-    private val allowedToolsGroup = CheckboxGroup(ToolNaming.BUILTIN_TOOLS, columns = 4)
-    private val disallowedToolsGroup = CheckboxGroup(ToolNaming.BUILTIN_TOOLS, columns = 4)
+    private val settingSourcesGroup = CheckboxGroup(ClaudeSession.SETTING_SOURCES)
+    private val allowedToolsGroup = CheckboxGroup(ToolNaming.BUILTIN_TOOLS)
+    private val disallowedToolsGroup = CheckboxGroup(ToolNaming.BUILTIN_TOOLS)
 
     private val alwaysAllowModel = CollectionListModel<String>()
     private val alwaysAllowList = JBList(alwaysAllowModel).apply {
@@ -21,17 +24,18 @@ internal class SettingsToolsSection(private val settings: ClaudeSettings) : Sett
         visibleRowCount = COMBO_VISIBLE_ROWS
     }
 
-    override fun addTo(form: FormBuilder): FormBuilder = form
-        .addSeparator()
-        .addComponent(sectionLabel("Setting sources (none = don't pass --setting-sources)"))
-        .addComponent(settingSourcesGroup.component)
-        .addComponent(sectionLabel("Allowed tools (none = all tools allowed)"))
-        .addComponent(allowedToolsGroup.component)
-        .addComponent(sectionLabel("Disallowed tools (none = nothing blocked)"))
-        .addComponent(disallowedToolsGroup.component)
-        .addComponent(sectionLabel("Always-allowed tools"))
-        .addComponent(alwaysAllowedWarningLabel())
-        .addComponent(alwaysAllowedComponent())
+    override fun addTo(panel: Panel) {
+        panel.collapsibleGroup("Tools") {
+            row("Setting sources:") { cell(settingSourcesGroup.component).align(AlignY.TOP) }
+                .rowComment("None ticked means <code>--setting-sources</code> is not passed at all.")
+            row("Allowed tools:") { cell(allowedToolsGroup.component).align(AlignY.TOP) }
+                .rowComment("None ticked means every tool is allowed.")
+            row("Disallowed tools:") { cell(disallowedToolsGroup.component).align(AlignY.TOP) }
+                .rowComment("None ticked means nothing is blocked.")
+            row("Always-allowed:") { cell(alwaysAllowedComponent()).align(AlignX.FILL) }
+                .rowComment(ALWAYS_ALLOW_NOTE, MAX_LINE_LENGTH_WORD_WRAP)
+        }
+    }
 
     override fun reset(s: ClaudeSettings.State) {
         settingSourcesGroup.setFrom(s.settingSources)
@@ -54,12 +58,6 @@ internal class SettingsToolsSection(private val settings: ClaudeSettings) : Sett
         alwaysAllowModel.items != settings.alwaysAllow.all(),
     )
 
-    private fun alwaysAllowedWarningLabel() = noteLabel(
-        "⚠ <b>Security:</b> listed tools are auto-approved without a prompt <b>in every project</b> — the " +
-            "settings are global since 5.5.0 (writes still stay within each project's own root, and the " +
-            "sensitive-data lock above still applies). Select an entry and click <b>Remove</b> to revoke it.",
-    )
-
     private fun alwaysAllowedComponent(): JComponent =
         ToolbarDecorator.createDecorator(alwaysAllowList)
             .setRemoveAction { alwaysAllowList.selectedValuesList.forEach { alwaysAllowModel.remove(it) } }
@@ -69,5 +67,10 @@ internal class SettingsToolsSection(private val settings: ClaudeSettings) : Sett
 
     private companion object {
         const val COMBO_VISIBLE_ROWS = 4
+
+        const val ALWAYS_ALLOW_NOTE =
+            "⚠ Listed tools are auto-approved without a prompt, and this list is <b>global to every project</b>. " +
+                "The Sensitive Guard still decides first: nothing here can bypass it. Select an entry and press " +
+                "<b>Remove</b> to revoke it."
     }
 }

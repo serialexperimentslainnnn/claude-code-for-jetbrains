@@ -236,6 +236,13 @@ describe('git commit graph', () => {
     expect(svg.getAttribute('viewBox')).toMatch(/ 100$/);
   });
 
+  it('stretches the graph to the row instead of letting the viewBox size it', () => {
+    const graph = /\.git-graph\s*\{[^}]*\}/.exec(readCss())[0];
+
+    expect(graph).toMatch(/width:\s*100%/);
+    expect(graph).toMatch(/height:\s*100%/);
+  });
+
   it('keeps the per-commit actions reachable by keyboard, and off the row they hang from', () => {
     const css = readCss();
     const strip = /\.git-commit-actions\s*\{[^}]*\}/.exec(css)[0];

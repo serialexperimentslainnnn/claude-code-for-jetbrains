@@ -13,10 +13,40 @@ class GitActionCatalogTest {
     @Test
     fun `the catalogue is exactly these actions, in this order`() {
         assertEquals(
-            listOf("init", "commit", "revertFile") + COMMIT_IDS + IDE_IDS,
+            listOf("init", "commit", "revertFile") + COMMIT_IDS + HOST_IDS + IDE_IDS,
             GitActionCatalog.ACTIONS.map { it.id },
             "an id is what the page sends back — renaming one silently unwires its button",
         )
+    }
+
+    @Test
+    fun `a conditional entry names the state it needs, so it cannot be offered on a whim`() {
+        fun requires(id: String) = GitActionCatalog.byId(id)?.requires
+
+        assertEquals(GitActionCatalog.Requires.CHANGES, requires("commit"))
+        assertEquals(GitActionCatalog.Requires.CHANGED_FILE, requires("revertFile"))
+        assertEquals(GitActionCatalog.Requires.NO_REPO, requires("init"))
+    }
+
+    @Test
+    fun `nothing conditional is offered on a repository that reports none of it`() {
+        val bare = GitActionCatalog.applicable(GitActionCatalog.RepoState(hasRepo = true)).map { it.id }
+
+        assertTrue("commit" !in bare, "no changes, nothing to commit")
+        assertTrue("revertFile" !in bare, "no changed file open, nothing to revert")
+        assertTrue("init" !in bare, "the repository already exists")
+    }
+
+    @Test
+    fun `the shortcuts into the IDE are answered by the host, not by an action id`() {
+        HOST_IDS.forEach { id ->
+            val action = GitActionCatalog.byId(id)
+
+            assertNotNull(action, "$id is expected in the catalogue")
+            assertEquals(Kind.HOST, action!!.kind, "$id opens a window of the IDE's, it does not invoke an action")
+            assertNull(action.ideActionId, "an id here would have to exist in every IDE this ships to")
+            assertEquals(GitActionCatalog.Requires.REPO, action.requires)
+        }
     }
 
     @Test
@@ -49,7 +79,7 @@ class GitActionCatalogTest {
     @Test
     fun `the IDE entries fall into the blocks the submenu draws dividers between`() {
         assertEquals(
-            listOf("pull", "merge", "stash", "commitDialog"),
+            listOf("pull", "merge"),
             GitActionCatalog.ideActions().filter { it.startsBlock }.map { it.id },
             "the first entry never opens a block, or the submenu would start with a divider",
         )
@@ -102,13 +132,15 @@ class GitActionCatalogTest {
     }
 
     @Test
-    fun `the two reads are answered by the host and the two writes by the agent`() {
+    fun `the two reads are answered by the host and every write by the agent`() {
         assertEquals(
             mapOf(
                 "commitDiff" to Kind.HOST,
                 "commitCopyHash" to Kind.HOST,
                 "commitRevertToBranch" to Kind.PROMPT,
                 "commitRevert" to Kind.PROMPT,
+                "commitBranch" to Kind.PROMPT,
+                "commitTag" to Kind.PROMPT,
             ),
             GitActionCatalog.commitActions().associate { it.id to it.kind },
             "a write that stopped being PROMPT would stop arriving as an approval card",
@@ -177,26 +209,29 @@ class GitActionCatalogTest {
 
     @Test
     fun `a clean repository offers the IDE actions, nothing to commit and no second initialize`() {
-        assertEquals(IDE_IDS, applicable(hasRepo = true, hasChanges = false, hasChangedFile = false))
+        assertEquals(ideFor("stash"), applicable(hasRepo = true, hasChanges = false, hasChangedFile = false))
     }
 
     @Test
     fun `a changed file in the editor offers revert on its own account`() {
         assertEquals(
-            listOf("revertFile") + IDE_IDS,
+            listOf("revertFile") + ideFor("stash", "file"),
             applicable(hasRepo = true, hasChanges = false, hasChangedFile = true),
         )
     }
 
     @Test
     fun `changes add commit, but reverting needs the changed file open`() {
-        assertEquals(listOf("commit") + IDE_IDS, applicable(hasRepo = true, hasChanges = true, hasChangedFile = false))
+        assertEquals(
+            listOf("commit") + ideFor("stash", "changes"),
+            applicable(hasRepo = true, hasChanges = true, hasChangedFile = false),
+        )
     }
 
     @Test
     fun `changes with the file open offer both commit and revert, in view order`() {
         assertEquals(
-            listOf("commit", "revertFile") + IDE_IDS,
+            listOf("commit", "revertFile") + ideFor("stash", "changes", "file"),
             applicable(hasRepo = true, hasChanges = true, hasChangedFile = true),
         )
     }
@@ -214,36 +249,48 @@ class GitActionCatalogTest {
         }
     }
 
+    private fun ideFor(vararg on: String): List<String> =
+        HOST_IDS + IDE_IDS.filter { id -> CONDITIONAL_IDE_IDS[id]?.let { it in on } ?: true }
+
     private fun applicable(hasRepo: Boolean, hasChanges: Boolean, hasChangedFile: Boolean): List<String> =
-        GitActionCatalog.applicable(hasRepo, hasChanges, hasChangedFile).map { it.id }
+        GitActionCatalog.applicable(
+            GitActionCatalog.RepoState(
+                hasRepo = hasRepo,
+                hasChanges = hasChanges,
+                hasChangedFile = hasChangedFile,
+            ),
+        ).map { it.id }
 
     private companion object {
-        val COMMIT_IDS = listOf("commitDiff", "commitCopyHash", "commitRevertToBranch", "commitRevert")
+        val COMMIT_IDS = listOf(
+            "commitDiff",
+            "commitCopyHash",
+            "commitRevertToBranch",
+            "commitRevert",
+            "commitBranch",
+            "commitTag",
+        )
+
+        val HOST_IDS = listOf("forgeView", "gitLog")
 
         val IDE_IDS = listOf(
             "branches",
-            "newBranch",
             "pull",
             "fetch",
             "push",
             "merge",
             "rebase",
-            "stash",
-            "unstash",
-            "commitDialog",
         )
+
+        val CONDITIONAL_IDE_IDS = emptyMap<String, String>()
 
         val IDE_IDS_TO_ACTIONS = mapOf(
             "branches" to "Git.Branches",
-            "newBranch" to "Git.CreateNewBranch",
             "pull" to "Git.Pull",
             "fetch" to "Git.Fetch",
             "push" to "Vcs.Push",
             "merge" to "Git.Merge",
             "rebase" to "Git.Rebase",
-            "stash" to "Git.Stash",
-            "unstash" to "Git.Unstash",
-            "commitDialog" to "CheckinProject",
         )
     }
 }

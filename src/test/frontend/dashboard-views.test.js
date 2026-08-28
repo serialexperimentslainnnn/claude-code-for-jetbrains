@@ -333,14 +333,14 @@ describe('dashboard views', () => {
       Array.from(win.document.querySelectorAll('.dash-toggles button'))
         .filter((b) => !b.hidden)
         .map((b) => b.textContent);
-    expect(visibleLabels()).toEqual(['Chat', 'Session', 'Workloads']);
+    expect(visibleLabels()).toEqual(['Chat', 'Workloads', 'Guard', 'Session']);
 
     chat().dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
     expect(panel().hasAttribute('hidden')).toBe(true);
     expect(lit()).toEqual(['Chat']);
   });
 
-  it('the Plan button appears only when there is a plan, and its arrival IS the notice', () => {
+  it('the Plan button arrives with the plan, and never yanks the reader off the view it opened', () => {
     const planBtn = () =>
       Array.from(win.document.querySelectorAll('.dash-toggles button')).find((b) => b.textContent === 'Plan');
     win.cc.session({ plan: null });
@@ -354,10 +354,14 @@ describe('dashboard views', () => {
     expect(panel().textContent).toContain('/tmp/plan.md');
 
     win.cc.session({ plan: null });
-    expect(planBtn().hidden).toBe(true);
+    expect(planBtn().hidden).toBe(false);
     expect(
       Array.from(win.document.querySelectorAll('.dash-toggle.active')).map((b) => b.textContent)
-    ).not.toContain('Plan');
+    ).toContain('Plan');
+
+    openView('workloads');
+    win.cc.session({ plan: null });
+    expect(planBtn().hidden).toBe(true);
   });
 
   it('one press switches, and pressing the open view returns to the chat', () => {

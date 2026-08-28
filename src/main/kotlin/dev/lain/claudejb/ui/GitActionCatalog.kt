@@ -16,6 +16,12 @@ internal object GitActionCatalog {
         COMMIT,
     }
 
+    data class RepoState(
+        val hasRepo: Boolean,
+        val hasChanges: Boolean = false,
+        val hasChangedFile: Boolean = false,
+    )
+
     data class GitAction(
         val id: String,
         val label: String,
@@ -69,16 +75,40 @@ internal object GitActionCatalog {
             "Ask Claude to record a new commit undoing this one, keeping the history",
             Kind.PROMPT,
         ),
+        commitAction(
+            "commitBranch",
+            "Create branch from this commit",
+            "Ask Claude to start a branch at this commit — the branch you are on does not move",
+            Kind.PROMPT,
+        ),
+        commitAction(
+            "commitTag",
+            "Create tag from this commit",
+            "Ask Claude to put a tag on this commit",
+            Kind.PROMPT,
+        ),
+        GitAction(
+            id = "forgeView",
+            label = "Requests",
+            hint = "Open the IDE's own pull or merge request view",
+            kind = Kind.HOST,
+            requires = Requires.REPO,
+            group = "Repository",
+        ),
+        GitAction(
+            id = "gitLog",
+            label = "Git log",
+            hint = "Open the IDE's Git log",
+            kind = Kind.HOST,
+            requires = Requires.REPO,
+            group = "Repository",
+        ),
         ideAction("branches", "Branches", "Switch, create or compare branches", "Git.Branches"),
-        ideAction("newBranch", "New branch", "Create a branch from here", "Git.CreateNewBranch"),
         ideAction("pull", "Pull", "Pull from the remote", "Git.Pull", startsBlock = true),
         ideAction("fetch", "Fetch", "Fetch from the remote", "Git.Fetch"),
         ideAction("push", "Push", "Push to the remote", "Vcs.Push"),
         ideAction("merge", "Merge", "Merge a branch into this one", "Git.Merge", startsBlock = true),
         ideAction("rebase", "Rebase", "Rebase this branch", "Git.Rebase"),
-        ideAction("stash", "Stash", "Put the current changes aside", "Git.Stash", startsBlock = true),
-        ideAction("unstash", "Unstash", "Bring stashed changes back", "Git.Unstash"),
-        ideAction("commitDialog", "Commit dialog", "The IDE's own commit dialog", "CheckinProject", startsBlock = true),
     )
 
     fun byId(id: String): GitAction? = ACTIONS.firstOrNull { it.id == id }
@@ -87,13 +117,13 @@ internal object GitActionCatalog {
         hash.length in MIN_HASH_LENGTH..MAX_HASH_LENGTH &&
             hash.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
 
-    fun applicable(hasRepo: Boolean, hasChanges: Boolean, hasChangedFile: Boolean): List<GitAction> =
+    fun applicable(state: RepoState): List<GitAction> =
         ACTIONS.filter {
             when (it.requires) {
-                Requires.NO_REPO -> !hasRepo
-                Requires.REPO -> hasRepo
-                Requires.CHANGES -> hasRepo && hasChanges
-                Requires.CHANGED_FILE -> hasRepo && hasChangedFile
+                Requires.NO_REPO -> !state.hasRepo
+                Requires.REPO -> state.hasRepo
+                Requires.CHANGES -> state.hasRepo && state.hasChanges
+                Requires.CHANGED_FILE -> state.hasRepo && state.hasChangedFile
                 Requires.COMMIT -> false
             }
         }
@@ -117,14 +147,16 @@ internal object GitActionCatalog {
         hint: String,
         actionId: String,
         startsBlock: Boolean = false,
+        requires: Requires = Requires.REPO,
+        group: String = "IDE actions",
     ) = GitAction(
         id = id,
         label = label,
         hint = hint,
         kind = Kind.IDE,
-        requires = Requires.REPO,
+        requires = requires,
         ideActionId = actionId,
-        group = "IDE actions",
+        group = group,
         startsBlock = startsBlock,
     )
 

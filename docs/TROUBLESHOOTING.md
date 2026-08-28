@@ -103,9 +103,9 @@ Most of these are the intended behaviour, so it is worth knowing which is which.
   green.
 - **Agents you started from a terminal never appear**, even in the same session.
   An agent is shown only if this plugin saw the `Task` call, or recorded it
-  previously in `~/.claude/ide/claude-code-native/agent-index.json`, or its
-  parent is already shown. Deleting that index file makes past agents disappear
-  from restored chats.
+  previously in its agent index, or its parent is already shown. That index lives
+  in the IDE's safe, per project; *Restore Plugin to default state* clears it, and
+  past agents then disappear from restored chats.
 - **A backgrounded task with no output** is showing you the truth: a backgrounded
   shell command publishes no output file, so what is displayed is what the binary
   actually reported. A backgrounded *agent* does publish one, and it is tailed
@@ -133,9 +133,17 @@ the card again.
 
 The reverse also happens and is not a bug: **a card appears even in
 `bypassPermissions`** when the call touches credential material, a dangerous
-command or foreign territory. That check runs before any auto-approval and has no
-opt-out; the per-rule toggles under Settings ▸ Claude Code ▸ Security only
-downgrade an automatic refusal to a card, never to a silent allow.
+command or foreign territory. That check runs before any auto-approval, and no
+permission mode and no *Always allow* tool can answer it. The per-rule toggles
+under Settings ▸ Claude Code Security only downgrade an automatic refusal to a
+card, never to a silent allow.
+
+Three things do let a watched call through, all of them switched by hand: the
+**shield** in the composer (or the master switch on that page), which stops the
+guard evaluating anything for a chosen duration; a **whitelisted command**; and
+*Always allow* on the card itself, which lasts for that chat until the IDE
+closes. If a call you expected to be stopped went through, the shield is the
+first thing to look at — it is unlit whenever the guard is off.
 
 If the card is missing in `default` mode, check the IDE log
 (see [Logs](#logs)) for entries from `PermissionBroker` — a hung control

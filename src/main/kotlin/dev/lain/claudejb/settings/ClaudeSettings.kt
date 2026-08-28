@@ -42,8 +42,6 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var customMcpServers: String = ""
 
-        @JvmField var signedOut: Boolean = false
-
         @JvmField var claudePath: String = ""
 
         @JvmField var nodePath: String = ""
@@ -62,21 +60,33 @@ class ClaudeSettings(internal val project: Project? = null) {
 
         @JvmField var workloadWindowMinutes: Int = WorkloadWindow.DEFAULT_MINUTES
 
+        @JvmField var vulnConsent: String = ""
+
         @JvmField var enableFileCheckpointing: Boolean = true
 
         @JvmField var rewindFallback: String = ""
 
+        @JvmField var executionTrusted: Boolean = false
+
         @JvmField var sensitiveExtraGlobs: String = ""
+
+        @JvmField var guardMode: String = GuardMode.DEFAULT.wire
+
+        @JvmField var guardDisabledUntil: Long = 0
+
+        @JvmField var guardLogRetentionDays: Int = DEFAULT_GUARD_LOG_RETENTION_DAYS
 
         @JvmField var disabledSecurityRules: String = ""
 
         @JvmField var securityRuleSuspensions: String = ""
 
-        @JvmField var securityCommandApprovals: String = ""
-
         @JvmField var securityExtraBlockedDomains: String = ""
 
         @JvmField var securityCommandWhitelist: String = ""
+
+        @JvmField var securityCategoryWhitelists: String = ""
+
+        @JvmField var securityRuleWhitelists: String = ""
 
         @JvmField var securityBlockCredentials: Boolean = true
 
@@ -162,12 +172,20 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     val strictMcpConfig: Boolean get() = state.strictMcpConfig
 
+    val scope: SettingsScope by lazy { SettingsScope.of(project) }
+
+    var signedOut: Boolean
+        get() = runCatching { SecretStore.get(SecretStore.SIGNED_OUT) }.getOrNull().toBoolean()
+        set(value) = runCatching {
+            if (value) SecretStore.set(SecretStore.SIGNED_OUT, true.toString()) else SecretStore.clear(SecretStore.SIGNED_OUT)
+        }.getOrDefault(Unit)
+
     private var loaded: State? = null
 
     val state: State
         @Synchronized get() = loaded ?: run {
-            project?.let { runCatching { LegacyProjectSettings.getInstance(it).migrate(it) } }
-            SettingsStore.load().also { loaded = it }
+            project?.let { runCatching { LegacyProjectSettings.getInstance(it).migrate(it, scope) } }
+            SettingsStore.load(scope).also { loaded = it }
         }
 
     @org.jetbrains.annotations.TestOnly
@@ -175,14 +193,22 @@ class ClaudeSettings(internal val project: Project? = null) {
 
     fun update(block: (State) -> Unit) {
         block(state)
-        writes.execute { SettingsStore.mutate(block) }
+        val target = scope
+        writes.execute { SettingsStore.mutate(target, block) }
     }
 
-    fun save() = SettingsStore.save(state)
+    fun save() = SettingsStore.save(scope, state)
+
+    fun wipe(): Boolean {
+        val cleared = SettingsStore.wipe(scope)
+        if (cleared) replace(State())
+        return cleared
+    }
 
     fun reload(onReloaded: () -> Unit) {
+        val target = scope
         writes.execute {
-            val fresh = SettingsStore.loadOrNull()
+            val fresh = SettingsStore.loadOrNull(target)
             ApplicationManager.getApplication()?.invokeLater({
                 if (fresh != null) replace(fresh)
                 onReloaded()
@@ -224,6 +250,8 @@ class ClaudeSettings(internal val project: Project? = null) {
     fun isToolAlwaysAllowed(toolName: String, input: JsonObject): Boolean = toolName in alwaysAllow
 
     companion object {
+        const val DEFAULT_GUARD_LOG_RETENTION_DAYS = 30
+
         private const val FAKE_CLAUDE_PROP = "claudejb.fakeClaude"
 
         private val writes = AppExecutorUtil.createBoundedApplicationPoolExecutor("Claude Code settings", 1)

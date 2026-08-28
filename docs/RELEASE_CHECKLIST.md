@@ -48,29 +48,35 @@ releasing.
 Regenerate the figures rather than trusting the ones below — a measurement ages in silence and nothing here can
 notice when it has. `./gradlew cleanTest test koverXmlReport` writes `build/reports/kover/report.xml`; the
 `<counter type="LINE">` and `<counter type="BRANCH">` elements under each `<package>` are the per-package rows,
-and the ones at the root of the document are the **all gated code** row. Measured 2026-08-14:
+and the ones at the root of the document are the **all gated code** row. Measured 2026-08-21:
 
 | package | line % | branch % | gated |
 |---|---|---|---|
-| `permission/` | 98.1 | 74.5 | ✅ |
-| `protocol/` | 88.9 | 27.5 | ✅ |
-| `git/` | 100.0 | 100.0 | ✅ — **`GitCommitInfo` only**; the other four classes are excluded by name |
-| `settings/` | 79.0 | 57.3 | ✅ |
-| `diff/` | 72.0 | 64.7 | ✅ |
-| `session/` | 70.7 | 48.6 | ✅ |
-| **all gated code** | **76.99** | **43.63** | — the aggregate the second rule bounds |
+| `permission/` | 97.5 | 79.6 | ✅ |
+| `git/` | 90.3 | 82.7 | ✅ — the pure half only; four classes are excluded by name |
+| `protocol/` | 88.9 | 27.8 | ✅ |
+| `vuln/` | 82.0 | 47.8 | ✅ — `OsvHttp` and `VulnService` excluded by name; **`OsvScanner` is gated at 0 %** |
+| `settings/` | 79.3 | 58.8 | ✅ |
+| `session/` | 73.6 | 51.0 | ✅ |
+| `diff/` | 71.8 | 64.7 | ✅ |
+| **all gated code** | **81.87** | **49.82** | — the aggregate the second rule bounds |
 | `context/`, `process/` | — | — | ❌ excluded — known gap |
 | `ui/`, `ui/jcef/` | — | — | ❌ excluded — covered elsewhere |
 | `actions/` | — | — | ❌ excluded — one delegate call each |
 | `util/` | — | — | ❌ excluded — one line, and it needs a live platform to run |
 
+`vuln/` carries the one **known debt** in this table: `OsvScanner` has no test at all and is deliberately left
+inside the gate rather than excluded with its two neighbours, so the package figure keeps paying for it. It
+needs a seam to be testable — it reaches `OsvHttp` through a direct call — and until it has one the package
+floor is met by the rest of the package, not by the scanner.
+
 The excluded rows carry no percentage on purpose. `reports.filters.excludes` removes those classes from the
 **report**, not merely from the calculation, so they are absent from `report.xml` altogether and there is no
 measured figure to quote. An estimate in this table would defeat the only reason it exists.
 
-`git/` is gated and easy to miss: the exclusion names four classes, not the package, so `GitCommitInfo` — the
-pure half, and the only place a bug there would be silent — stays inside the gate and is subject to the floor
-like any other package.
+`git/` is gated and easy to miss: the exclusion names four classes, not the package, so everything else —
+`GitCommitInfo`, `GitBranchTopology`, `GitRefInfo`, `GitRemoteInfo`, the pure half where a bug would be
+silent — stays inside the gate and is subject to the floor like any other package.
 
 **Excluded, and why it is stated rather than gated at a token value.** `ui/` needs a live IDE and a live
 Chromium; it is covered by a different layer — the vitest suite, which drives the *real shipped JS* out of

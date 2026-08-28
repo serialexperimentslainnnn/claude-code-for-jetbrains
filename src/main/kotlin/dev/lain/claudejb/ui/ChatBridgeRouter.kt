@@ -9,17 +9,21 @@ import dev.lain.claudejb.context.ImageAttachments
 import dev.lain.claudejb.context.ProjectTree
 import dev.lain.claudejb.diff.DiffPresenter
 import dev.lain.claudejb.permission.SecurityRule
+import dev.lain.claudejb.permission.SensitiveGuard
 import dev.lain.claudejb.permission.ToolInputScanner
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.WorkloadWindow
 import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.settings.GuardWhitelists
 import dev.lain.claudejb.settings.Provider
-import dev.lain.claudejb.settings.SecurityCommandApprovals
 import dev.lain.claudejb.settings.SecuritySuspensions
+import dev.lain.claudejb.settings.sensitivePolicy
 import dev.lain.claudejb.ui.jcef.JcefBridge
 import dev.lain.claudejb.ui.jcef.JcefSettingsMenu
 import dev.lain.claudejb.ui.jcef.JcefTranscriptPayload
 import dev.lain.claudejb.ui.jcef.JcefTreeData
+import dev.lain.claudejb.ui.jcef.JcefVulnData
+import dev.lain.claudejb.vuln.VulnService
 import kotlinx.serialization.json.JsonObject
 import java.awt.datatransfer.StringSelection
 
@@ -74,15 +78,35 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         is JcefBridge.Msg.SettingsToggle -> onSettingsToggle(m)
 
-        is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
-
-        is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
+        is JcefBridge.Msg.Guard -> onGuard(m)
 
         JcefBridge.Msg.SettingsRefresh ->
             ClaudeSettings.getInstance(panel.project).reload { JcefChatPanel.pushSettingsMenuToAll() }
 
         JcefBridge.Msg.OpenSettings ->
             ShowSettingsUtil.getInstance().showSettingsDialog(panel.project, ClaudeSettingsConfigurable::class.java)
+    }
+
+    private fun onGuard(m: JcefBridge.Msg.Guard) = when (m) {
+        is JcefBridge.Msg.GuardSuspend -> onGuardSuspend(m)
+        is JcefBridge.Msg.GuardMaster -> onGuardMaster(m)
+        is JcefBridge.Msg.GuardWhitelist -> onGuardWhitelist(m)
+        is JcefBridge.Msg.GuardRevokeApproval -> onGuardRevokeApproval(m)
+        is JcefBridge.Msg.GuardRemoveWhitelist -> onGuardRemoveWhitelist(m)
+        is JcefBridge.Msg.GuardAllowAlways -> onGuardAllowAlways(m)
+        JcefBridge.Msg.GuardLog -> panel.security.pushGuard()
+        is JcefBridge.Msg.GuardExplain -> panel.guard.explain(m.id)
+    }
+
+    private fun onGuardRevokeApproval(m: JcefBridge.Msg.GuardRevokeApproval) {
+        val rule = SecurityRule.from(m.rule)
+        if (rule == null || m.command.isBlank()) {
+            logger.warn("A bypass warning asked to revoke something this build cannot place: ${m.rule}")
+            return
+        }
+        session.guardApprovals.revoke(rule, m.command.trim())
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`${m.command.trim()}` is no longer pre-approved. ${rule.label} decides again.")
     }
 
     private fun onSettingsToggle(m: JcefBridge.Msg.SettingsToggle) {
@@ -99,9 +123,13 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             if (m.on) settings.alwaysAllow.remember(tool) else settings.alwaysAllow.forget(tool)
             return true
         }
+        JcefSettingsMenu.sessionApproval(m.key)?.let { (rule, command) ->
+            if (!m.on) session.guardApprovals.revoke(rule, command)
+            return true
+        }
         val models = session.models.map { it.value }
         var known = false
-        settings.update { known = JcefSettingsMenu.apply(it, m.key, m.on, models) }
+        settings.update { known = JcefSettingsMenu.apply(settings.scope.id, it, m.key, m.on, models) }
         if (known) JcefSettingsMenu.applyToSession(session, m.key, m.on)
         return known
     }
@@ -161,9 +189,18 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         val settings = ClaudeSettings.getInstance(panel.project)
         when (duration) {
             SecuritySuspensions.Duration.FOREVER ->
-                settings.update { JcefSettingsMenu.apply(it, "rule:${rule.name}", false, session.models.map { p -> p.value }) }
+                settings.update {
+                    JcefSettingsMenu.apply(
+                        settings.scope.id,
+                        it,
+                        "rule:${rule.name}",
+                        false,
+                        session.models.map { p -> p.value },
+                    )
+                }
 
-            SecuritySuspensions.Duration.UNTIL_IDE_CLOSES -> SecuritySuspensions.suspendUntilIdeCloses(rule)
+            SecuritySuspensions.Duration.UNTIL_IDE_CLOSES ->
+                SecuritySuspensions.suspendUntilIdeCloses(settings.scope.id, rule)
 
             else -> settings.update {
                 it.securityRuleSuspensions = SecuritySuspensions.withSuspension(
@@ -180,15 +217,111 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         )
     }
 
+    private fun onGuardMaster(m: JcefBridge.Msg.GuardMaster) {
+        val settings = ClaudeSettings.getInstance(panel.project)
+        if (m.on) {
+            settings.update { SecuritySuspensions.guardOn(settings.scope.id, it) }
+            announceGuard("The Sensitive Guard is back on. Every tool call is judged again.")
+            return
+        }
+        val duration = SecuritySuspensions.Duration.from(m.duration)
+        if (duration == null) {
+            logger.warn("The shield asked to stand down for a duration this build does not have: ${m.duration}")
+            return
+        }
+        settings.update { SecuritySuspensions.guardOff(settings.scope.id, it, duration, System.currentTimeMillis()) }
+        announceGuard(
+            "The Sensitive Guard is off ${duration.phrase}. Nothing is being judged — no rule, no card, " +
+                "no block — until it comes back on.",
+        )
+    }
+
+    private fun announceGuard(notice: String) {
+        JcefChatPanel.pushSettingsMenuToAll()
+        JcefChatPanel.pushStateToAll()
+        session.systemNotice(notice)
+    }
+
+    private fun onGuardWhitelist(m: JcefBridge.Msg.GuardWhitelist) {
+        val rule = SecurityRule.from(m.rule)
+        val command = m.command.trim()
+        if (rule == null || command.isEmpty()) {
+            logger.warn("A guard block asked to whitelist something this build cannot place: ${m.rule}")
+            return
+        }
+        val settings = ClaudeSettings.getInstance(panel.project)
+        if (!GuardWhitelistPrompt.confirm(panel.project, rule, command)) return
+        val policy = settings.sensitivePolicy(panel.project.basePath)
+        val canonical = SensitiveGuard.canonicalCommand(command, policy)
+        val already = GuardWhitelists.byRule(settings.state.securityRuleWhitelists)[rule].orEmpty()
+            .plus(GuardWhitelists.byCategory(settings.state.securityCategoryWhitelists)[rule.category].orEmpty())
+            .plus(GuardWhitelists.commands(settings.state.securityCommandWhitelist))
+            .any { SensitiveGuard.canonicalCommand(it, policy) == canonical }
+        if (already) {
+            session.systemNotice("`$command` is already whitelisted — nothing added.")
+            return
+        }
+        settings.update {
+            it.securityRuleWhitelists = GuardWhitelists.withEntry(it.securityRuleWhitelists, rule.name, command)
+        }
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`$command` is whitelisted for ${rule.label}. Every other rule still judges it.")
+    }
+
+    private fun onGuardRemoveWhitelist(m: JcefBridge.Msg.GuardRemoveWhitelist) {
+        val rule = SecurityRule.from(m.rule)
+        if (rule == null || m.command.isBlank()) {
+            logger.warn("A bypass warning asked to un-whitelist something this build cannot place: ${m.rule}")
+            return
+        }
+        val settings = ClaudeSettings.getInstance(panel.project)
+        val policy = settings.sensitivePolicy(panel.project.basePath)
+        val wanted = SensitiveGuard.canonicalCommand(m.command, policy)
+        val same = { entry: String -> SensitiveGuard.canonicalCommand(entry, policy) == wanted }
+
+        val removedFrom = removeWhitelisted(settings, rule, same)
+        if (removedFrom == null) {
+            session.systemNotice("`${m.command.trim()}` is not on any whitelist any more.")
+            return
+        }
+        JcefChatPanel.pushSettingsMenuToAll()
+        session.systemNotice("`${m.command.trim()}` is off the $removedFrom. ${rule.label} decides it again.")
+    }
+
+    private fun removeWhitelisted(
+        settings: ClaudeSettings,
+        rule: SecurityRule,
+        same: (String) -> Boolean,
+    ): String? {
+        val state = settings.state
+        return when {
+            GuardWhitelists.holds(state.securityRuleWhitelists, rule.name, same) -> {
+                settings.update { it.securityRuleWhitelists = GuardWhitelists.without(it.securityRuleWhitelists, rule.name, same) }
+                "whitelist for ${rule.label}"
+            }
+
+            GuardWhitelists.holds(state.securityCategoryWhitelists, rule.category.name, same) -> {
+                settings.update {
+                    it.securityCategoryWhitelists =
+                        GuardWhitelists.without(it.securityCategoryWhitelists, rule.category.name, same)
+                }
+                "whitelist for ${rule.category.label}"
+            }
+
+            GuardWhitelists.holds(state.securityCommandWhitelist, null, same) -> {
+                settings.update { it.securityCommandWhitelist = GuardWhitelists.without(it.securityCommandWhitelist, null, same) }
+                "whitelist that applies everywhere"
+            }
+
+            else -> null
+        }
+    }
+
     private fun onGuardAllowAlways(m: JcefBridge.Msg.GuardAllowAlways) {
         val chat = cardSession(m.scope)
         val target = chat.cards.pending().firstOrNull { it.requestId == m.id } ?: return
         val rule = target.guard?.rule ?: return
-        val command = ToolInputScanner.commandText(target.input)
-        ClaudeSettings.getInstance(panel.project).update {
-            it.securityCommandApprovals =
-                SecurityCommandApprovals.withApproval(it.securityCommandApprovals, rule, command)
-        }
+        ToolInputScanner.commandsIn(target.input).forEach { chat.guardApprovals.approve(rule, it) }
         chat.cards.resolvePermission(target.requestId, true)
     }
 
@@ -201,6 +334,9 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         target?.let { chat.cards.resolvePermission(it.requestId, true) }
     }
 
+    private fun editSnapshotAnywhere(toolUseId: String) =
+        session.cards.editSnapshot(toolUseId) ?: panel.gitChat.session().cards.editSnapshot(toolUseId)
+
     private fun onDiffs(m: JcefBridge.Msg.Diffs) = when (m) {
         is JcefBridge.Msg.ViewDiff -> {
             cardSession(m.scope).cards.pending().firstOrNull { it.requestId == m.id }
@@ -209,7 +345,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         }
 
         is JcefBridge.Msg.ViewDiffByTool -> {
-            session.cards.editSnapshot(m.toolUseId)?.let {
+            editSnapshotAnywhere(m.toolUseId)?.let {
                 DiffPresenter.openDiff(panel.project, it.toolName, it.input, it.beforeText)
             }
             Unit
@@ -234,7 +370,7 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
 
         JcefBridge.Msg.RequestAttachData -> tray.pushMenuData()
 
-        is JcefBridge.Msg.AttachPath -> tray.addPath(m.path)
+        is JcefBridge.Msg.AttachPath -> onAttachPaths(listOf(m.path))
 
         is JcefBridge.Msg.TreeChildren -> onTreeChildren(m)
 
@@ -336,11 +472,61 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
         JcefBridge.Msg.OpenGitView -> ClaudeToolWindowFactory.showGitView(panel.project)
 
         else -> {
-            if (!onNavigation(m) && !panel.onboarding.handle(m)) {
+            if (!onVuln(m) && !onNavigation(m) && !panel.onboarding.handle(m)) {
                 logger.warn("unhandled session-control message: $m")
             }
             Unit
         }
+    }
+
+    private fun vuln(): VulnService = VulnService.getInstance(panel.project)
+
+    private fun onVuln(m: JcefBridge.Msg.SessionControl): Boolean {
+        when (m) {
+            JcefBridge.Msg.OpenVulnView -> panel.security.showVulnView()
+            is JcefBridge.Msg.VulnConsentChoice -> vuln().setConsent(m.granted) { panel.pushSession() }
+            JcefBridge.Msg.VulnScan -> vuln().scan { panel.pushSession() }
+            JcefBridge.Msg.VulnCancel -> vuln().cancel { panel.pushSession() }
+            JcefBridge.Msg.VulnInventoryRequest -> onVulnInventory(vuln())
+            is JcefBridge.Msg.VulnFix -> onVulnFix(vuln(), m.findingId)
+            is JcefBridge.Msg.VulnPlan -> onVulnPlan(vuln(), m.tiers)
+            else -> return false
+        }
+        return true
+    }
+
+    private fun onVulnInventory(service: VulnService) {
+        val endpoint = service.snapshot().endpoint
+        pushOffEdt("window.cc.vulnInventory") { JcefVulnData.inventoryJson(service.inventory(), endpoint) }
+    }
+
+    private fun onVulnFix(service: VulnService, findingId: String) {
+        val finding = service.finding(findingId)
+        if (finding == null) {
+            logger.warn("The security view asked to fix a finding that is no longer in the last report: $findingId")
+            return
+        }
+        val text = VulnPromptedActions.updatePrompt(finding)
+        if (text == null) {
+            logger.warn("Refusing to prompt for '$findingId': the advisory or the manifest carries unquotable text")
+            return
+        }
+        session.send(text)
+    }
+
+    private fun onVulnPlan(service: VulnService, tiers: List<String>) {
+        val report = service.snapshot().report
+        if (report == null) {
+            logger.warn("The security view asked to plan without a report to plan from")
+            return
+        }
+        val wanted = report.ordered().filter { tiers.isEmpty() || it.tier.wire in tiers }
+        val text = VulnPromptedActions.planPrompt(wanted)
+        if (text == null) {
+            logger.warn("Refusing to plan: every finding carries text this build will not quote")
+            return
+        }
+        session.send(text)
     }
 
     private fun onNavigation(m: JcefBridge.Msg.SessionControl): Boolean {
@@ -378,6 +564,8 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             feed.requestVersion()
             panel.agentTabs.render()
             panel.pushGit()
+            panel.security.pushGuard()
+            panel.security.pushVuln()
             panel.transcript.fullResync()
         }
 

@@ -60,6 +60,8 @@ object JcefState {
                 put("thinkingStatus", null as String?)
             }
 
+            put("guardOn", session.guardEnforced)
+
             put("provider", JcefComposerOptions.providerJson(provider))
             put("model", JcefComposerOptions.modelJson(session))
             put("mode", JcefComposerOptions.modeJson(mode))

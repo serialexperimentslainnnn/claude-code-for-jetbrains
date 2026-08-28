@@ -14,7 +14,22 @@ fun ClaudeSettings.sensitiveGlobs(): List<String> {
 fun ClaudeSettings.sensitiveDecision(
     input: JsonObject,
     projectRoot: String?,
-): SensitiveGuard.Decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
+): SensitiveGuard.Decision {
+    val decision = SensitiveGuard.evaluate(input, sensitivePolicy(projectRoot))
+    if (decision.verdict == SensitiveGuard.Verdict.ALLOW || !guardSuspended()) return decision
+    val what = decision.detail?.let { " — it $it" }.orEmpty()
+    return SensitiveGuard.Decision(
+        SensitiveGuard.Verdict.ALLOW,
+        "${decision.rule?.label ?: "A guard rule"} matched$what — allowed because the Sensitive Guard is disabled",
+        decision.rule,
+        decision.detail,
+    )
+}
+
+fun ClaudeSettings.guardSuspended(): Boolean =
+    SecuritySuspensions.guardSuspended(scope.id, state, System.currentTimeMillis())
+
+fun ClaudeSettings.guardMode(): GuardMode = GuardMode.from(state.guardMode) ?: GuardMode.DEFAULT
 
 fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy {
     val snap = RemoteMounts.snapshot()
@@ -29,28 +44,29 @@ fun ClaudeSettings.sensitivePolicy(projectRoot: String?): SensitiveGuard.Policy 
         pathResolver = { raw -> runCatching { java.io.File(raw).canonicalPath }.getOrNull() },
         envValues = launchEnvValues(env),
         fileReader = ::readForAnalysis,
-        disabledRules = disabledSecurityRules(),
+        permissiveRules = permissiveRules(),
         httpProxy = env.proxyValue("http_proxy"),
         httpsProxy = env.proxyValue("https_proxy"),
         noProxyHosts = env.proxyValue("no_proxy").orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() },
         extraBlockedDomains = extraBlockedDomains(),
         commandWhitelist = commandWhitelist(),
+        categoryWhitelist = GuardWhitelists.byCategory(state.securityCategoryWhitelists),
+        ruleWhitelist = GuardWhitelists.byRule(state.securityRuleWhitelists),
     )
 }
 
-internal fun ClaudeSettings.disabledSecurityRules(): Set<SecurityRule> {
-    val permanent = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
+internal fun ClaudeSettings.permissiveRules(): Set<SecurityRule> {
+    if (guardMode() == GuardMode.PERMISSIVE) return SecurityRule.entries.toSet()
+    val perRule = state.disabledSecurityRules.split(',').mapNotNull { SecurityRule.from(it.trim()) }
     val timed = SecuritySuspensions.active(state.securityRuleSuspensions, System.currentTimeMillis())
-    return permanent.toSet() + timed + SecuritySuspensions.sessionSuspended()
+    return perRule.toSet() + timed + SecuritySuspensions.sessionSuspended(scope.id)
 }
-
-internal fun ClaudeSettings.approvedGuardCommands(): String = state.securityCommandApprovals
 
 internal fun ClaudeSettings.extraBlockedDomains(): List<String> =
     state.securityExtraBlockedDomains.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
 
 internal fun ClaudeSettings.commandWhitelist(): List<String> =
-    state.securityCommandWhitelist.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+    GuardWhitelists.commands(state.securityCommandWhitelist)
 
 private fun launchEnvValues(settingsEnv: Map<String, String>): Map<String, String> =
     System.getenv() + settingsEnv

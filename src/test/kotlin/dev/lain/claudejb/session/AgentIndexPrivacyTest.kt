@@ -1,9 +1,12 @@
 package dev.lain.claudejb.session
 
+import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.settings.SettingsScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 
 class AgentIndexPrivacyTest {
 
@@ -85,8 +88,16 @@ class AgentIndexPrivacyTest {
     }
 
     @Test
-    fun `the index lives under the user's claude home, never in the project`() {
-        val home = PluginAgentIndex.homeOverride
-        assertTrue(home != null && home.endsWith("/.claude"), "expected ~/.claude, got $home")
+    fun `the index lives in the IDE's safe, and nothing writes it to a file`() {
+        assertTrue(SettingsScope("abc123").agentIndexName.startsWith(SecretStore.AGENT_INDEX + "@"))
+
+        val source = File("src/main/kotlin/dev/lain/claudejb/session/PluginAgentIndex.kt")
+        assertTrue(source.isFile, "the index moved: this contract has to move with it")
+        val code = source.readLines()
+            .filterNot { it.trim().startsWith("*") || it.trim().startsWith("//") || it.trim().startsWith("/*") }
+            .joinToString("\n")
+        listOf("Files.write", "writeText", "FileWriter").forEach { writing ->
+            assertFalse(writing in code, "`$writing` would put the index back on disk in the clear")
+        }
     }
 }

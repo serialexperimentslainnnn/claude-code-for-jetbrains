@@ -1,0 +1,308 @@
+.vuln-lede {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.vuln-state {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.vuln-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--dim);
+}
+.vuln-state[data-status='running'] .vuln-dot {
+  background: var(--accent);
+}
+.vuln-state[data-status='completed'] .vuln-dot {
+  background: var(--success);
+}
+.vuln-state[data-status='failed'] .vuln-dot {
+  background: var(--danger);
+}
+.vuln-state[data-status='stopped'] .vuln-dot {
+  background: var(--dim);
+}
+
+.vuln-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.vuln-block-title {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.vuln-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.vuln-list-item {
+  overflow-wrap: anywhere;
+}
+
+.vuln-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.vuln-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.vuln-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  overflow: hidden;
+}
+.vuln-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width 0.2s var(--ease);
+}
+.vuln-count {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vuln-asof {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.vuln-note {
+  color: var(--dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.vuln-clean {
+  color: var(--success);
+  font-size: 12.5px;
+}
+
+.vuln-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vuln-tier {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.vuln-tier-filter {
+  cursor: pointer;
+  font-family: var(--font);
+  opacity: 0.55;
+  transition:
+    opacity 0.12s,
+    box-shadow 0.12s;
+}
+.vuln-tier-filter:hover,
+.vuln-tier-filter:focus-visible {
+  opacity: 1;
+}
+.vuln-tier-filter.picked {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+.vuln-counts:not(:has(.picked)) .vuln-tier-filter {
+  opacity: 1;
+}
+
+.vuln-tier[data-tier='malicious'] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--text);
+}
+.vuln-tier[data-tier='critical'] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.vuln-tier[data-tier='high'] {
+  border-color: var(--neon-orange);
+  background: color-mix(in srgb, var(--neon-orange) 16%, transparent);
+}
+.vuln-tier[data-tier='moderate'] {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+.vuln-tier[data-tier='low'] {
+  border-color: var(--info);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.vuln-tier[data-tier='unrated'] {
+  border-color: var(--border);
+  color: var(--dim);
+}
+
+.vuln-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  min-width: 0;
+}
+.vuln-finding[data-tier='malicious'] {
+  border-left-color: var(--danger);
+}
+.vuln-finding[data-tier='critical'] {
+  border-left-color: var(--danger);
+}
+.vuln-finding[data-tier='high'] {
+  border-left-color: var(--neon-orange);
+}
+.vuln-finding[data-tier='moderate'] {
+  border-left-color: var(--warning);
+}
+.vuln-finding[data-tier='low'] {
+  border-left-color: var(--info);
+}
+
+.vuln-finding-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.vuln-pkg {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.vuln-id {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.vuln-where {
+  color: var(--dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.vuln-summary {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.vuln-cvss {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+.vuln-fixed {
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.vuln-details {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.vuln-details > :first-child {
+  margin-top: 0;
+}
+.vuln-details > :last-child {
+  margin-bottom: 0;
+}
+.vuln-refs {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 11.5px;
+}
+.vuln-ref {
+  overflow-wrap: anywhere;
+}
+
+.vuln-inv {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.vuln-inv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  min-width: 0;
+}
+.vuln-inv-eco {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  min-width: 62px;
+}
+.vuln-inv-name {
+  flex: 1 1 auto;
+  color: var(--text);
+  font-family: var(--mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.vuln-inv-version {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.vuln-inv-origin {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+@media (forced-colors: active) {
+  .vuln-tier,
+  .vuln-finding {
+    border-color: CanvasText;
+  }
+  .vuln-fill {
+    background: Highlight;
+  }
+}

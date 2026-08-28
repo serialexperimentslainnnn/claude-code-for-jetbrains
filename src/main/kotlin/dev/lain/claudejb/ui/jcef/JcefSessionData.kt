@@ -3,6 +3,7 @@ package dev.lain.claudejb.ui.jcef
 import dev.lain.claudejb.protocol.UsageReport
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.ui.LinkResolver
+import dev.lain.claudejb.vuln.VulnSnapshot
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -24,12 +25,14 @@ object JcefSessionData {
         workloads: List<Workload> = emptyList(),
         plan: dev.lain.claudejb.session.PlanInfo? = null,
         git: JcefGitData.Snapshot? = null,
+        vuln: VulnSnapshot? = null,
     ): String {
         val shown = JcefWorkloadData.visible(session, windowMinutes, nowMillis)
         val obj = buildJsonObject {
             put("usage", JcefUsageData.usageJson(session, usage) ?: JsonNull)
             put("plan", JcefPlanData.planJson(plan) ?: JsonNull)
             put("git", JcefGitData.gitJson(git) ?: JsonNull)
+            put("vuln", JcefVulnData.vulnJson(vuln) ?: JsonNull)
             put("context", JcefCostData.contextJson(session) ?: JsonNull)
             put("cost", JcefCostData.costJson(session) ?: JsonNull)
             put("account", JcefAccountData.accountJson(session) ?: JsonNull)

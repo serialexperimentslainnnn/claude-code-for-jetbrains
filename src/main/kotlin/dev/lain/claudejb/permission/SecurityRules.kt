@@ -17,6 +17,8 @@ enum class SecurityCategory(val label: String) {
 
     INTRUSION_TECHNIQUE("Intrusion techniques"),
 
+    DEFENCE_EVASION("Defence evasion"),
+
     OPAQUE("Opaque to the guard"),
 }
 
@@ -114,6 +116,19 @@ enum class SecurityRule(
             "a disk directly, or opening a network connection disguised as a file.",
     ),
 
+    PRIVILEGE_ESCALATION(
+        SecurityCategory.SYSTEM_INTEGRITY,
+        "Block running as another user or as root",
+        "sudo, su, doas, pkexec, runuser, sudoedit and the desktop wrappers on Linux and macOS; osascript " +
+            "asking for administrator privileges; runas, Start-Process -Verb RunAs and psexec on Windows; " +
+            "wsl -u root",
+        "You can't run this with elevated privileges.",
+        "Every other rule here is scoped to what this account may already do. Root is outside that scope: it " +
+            "reaches any file on the machine, and a mistake made there is not recoverable by the user who " +
+            "approved it.",
+        whitelistable = true,
+    ),
+
     PROXY_BYPASS(
         SecurityCategory.NETWORK_EGRESS,
         "Block egress that bypasses the proxy",
@@ -121,6 +136,19 @@ enum class SecurityRule(
         "You can't route network traffic around the proxy that's declared.",
         "Bypassing it hides that traffic from whatever inspection or logging the user put the proxy there for.",
     ),
+    TUNNELING(
+        SecurityCategory.NETWORK_EGRESS,
+        "Block tunnels and anonymising proxies",
+        "outbound tunnels and command-and-control or exfiltration channels — ssh -R/-D/-L, ngrok, " +
+            "cloudflared, chisel, frp, localtunnel, bore, iodine/dnscat2 DNS tunnels, and tor/proxychains " +
+            "anonymisers",
+        "You can't open a network tunnel or route through an anonymiser.",
+        "A reverse or dynamic tunnel turns this machine into an entry point or an exfiltration channel, " +
+            "and an anonymiser hides where traffic goes. Legitimate port-forwarding is the user's to " +
+            "whitelist, not ours to leave open.",
+        whitelistable = true,
+    ),
+
     BLOCKED_DOMAIN(
         SecurityCategory.NETWORK_EGRESS,
         "Block staging and exfiltration domains",
@@ -195,6 +223,19 @@ enum class SecurityRule(
         whitelistable = true,
     ),
 
+    INHIBIT_RECOVERY(
+        SecurityCategory.DESTRUCTIVE_OPERATION,
+        "Block inhibiting system recovery",
+        "destroying the means to recover — wbadmin delete, bcdedit recoveryenabled no, vssadmin resize " +
+            "shadowstorage, WMI shadow-copy deletion, diskshadow, Disable-ComputerRestore, and macOS " +
+            "tmutil disable",
+        "You can't disable or destroy the system's recovery.",
+        "Deleting backups and shadow copies or turning recovery off removes the only way back from a " +
+            "destructive change — it is the step ransomware takes before it encrypts, and nothing in " +
+            "development needs it.",
+        whitelistable = true,
+    ),
+
     PACKAGE_INSTALL_HOOK(
         SecurityCategory.CODE_EXECUTION,
         "Block package installs that run install hooks",
@@ -252,6 +293,56 @@ enum class SecurityRule(
         "You can't use that binary to escape to a shell.",
         "These are the documented GTFOBins escapes: a trusted tool coerced into spawning a shell or running a " +
             "command, which is how a restricted context — or a sudo rule — becomes full command execution.",
+    ),
+
+    CONTAINER_ESCAPE(
+        SecurityCategory.INTRUSION_TECHNIQUE,
+        "Block container escapes to the host",
+        "entering the host's namespaces (nsenter into PID 1, /proc/1/ns), mounting the host's root " +
+            "filesystem into a container (-v /:/…, --mount source=/), and running a container with full " +
+            "host control (--privileged, hostPID, privileged: true) — the documented ways out onto the host",
+        "You can't break a container out onto the host.",
+        "Entering PID 1's namespaces, mounting the host's root filesystem, or running a --privileged " +
+            "container hands it full control of the machine it runs on. That has legitimate uses, so it is " +
+            "whitelistable — but it is a decision with a record, not a default, exactly like sudo.",
+        whitelistable = true,
+    ),
+
+    RESOURCE_HIJACKING(
+        SecurityCategory.INTRUSION_TECHNIQUE,
+        "Block cryptocurrency miners",
+        "known mining binaries (xmrig, minerd, cpuminer, ethminer, cgminer, t-rex and the like) and the " +
+            "stratum+tcp:// pool-protocol scheme they connect with — matched at command position",
+        "You can't run a cryptocurrency miner.",
+        "Mining software exists to spend this machine's CPU, GPU and power on someone else's behalf. A " +
+            "coding session never runs one, and it is a common payload dropped after a machine is " +
+            "compromised.",
+    ),
+
+    DISABLE_DEFENCES(
+        SecurityCategory.DEFENCE_EVASION,
+        "Block turning off security defences",
+        "disabling the host's protections — setenforce 0, stopping auditd/firewalld/apparmor, ufw disable, " +
+            "flushing the firewall, spctl/csrutil disable on macOS, and disabling Windows Defender or the " +
+            "firewall (Set-MpPreference, netsh advfirewall off, auditpol /clear)",
+        "You can't disable the machine's security defences.",
+        "Turning off the firewall, the audit system, SELinux/AppArmor, Gatekeeper or the antivirus removes " +
+            "the protection an attack has to get past. A legitimate need is the user's to whitelist, not " +
+            "ours to leave open.",
+        whitelistable = true,
+    ),
+
+    ANTI_FORENSIC(
+        SecurityCategory.DEFENCE_EVASION,
+        "Block erasing the session's own tracks",
+        "clearing the shell history (history -c, unset HISTFILE, set +o history), vacuuming the systemd " +
+            "journal, and the Windows equivalents (Clear-History, Set-PSReadlineOption SaveNothing, " +
+            "wevtutil cl, Clear-EventLog) — matched at command position, never as a bare mention",
+        "You can't erase the record of what happened here.",
+        "A coding session has no legitimate reason to wipe the shell history or the system logs. Clearing " +
+            "the trail is what an intrusion does to hide, and it destroys the evidence of everything else " +
+            "that was done.",
+        whitelistable = true,
     ),
 
     UNRESOLVED_VARIABLE(

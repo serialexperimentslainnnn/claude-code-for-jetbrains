@@ -22,16 +22,52 @@ object SecuritySuspensions {
         }
     }
 
-    private val sessionScoped = ConcurrentHashMap.newKeySet<SecurityRule>()
+    /**
+     * The two "until this IDE closes" relaxations cannot live in the settings document, because the point of them
+     * is that they die with the process. They are still **per project**, which is what the settings are and what
+     * the documentation promises: tuning one repository's rules says nothing about the next one you open. Keyed,
+     * therefore, rather than held in a single field — a scratch project must not be able to relax a rule, or the
+     * whole guard, for every other project open in the same IDE.
+     */
+    private val sessionScoped = ConcurrentHashMap<String, MutableSet<SecurityRule>>()
 
-    fun suspendUntilIdeCloses(rule: SecurityRule) {
-        sessionScoped += rule
+    private val guardOffForSession = ConcurrentHashMap.newKeySet<String>()
+
+    private fun rulesFor(scope: String) = sessionScoped.computeIfAbsent(scope) { ConcurrentHashMap.newKeySet() }
+
+    fun suspendUntilIdeCloses(scope: String, rule: SecurityRule) {
+        rulesFor(scope) += rule
     }
 
-    fun sessionSuspended(): Set<SecurityRule> = sessionScoped.toSet()
+    fun guardOff(scope: String, state: ClaudeSettings.State, duration: Duration, now: Long) = when (duration) {
+        Duration.FOREVER -> state.guardMode = GuardMode.ALLOW_ALL.wire
 
-    fun releaseSessionScoped(rule: SecurityRule) {
-        sessionScoped -= rule
+        Duration.UNTIL_IDE_CLOSES -> {
+            guardOffForSession += scope
+            Unit
+        }
+
+        else -> state.guardDisabledUntil = now + (duration.millis ?: 0)
+    }
+
+    fun guardOn(scope: String, state: ClaudeSettings.State) {
+        if (GuardMode.from(state.guardMode) == GuardMode.ALLOW_ALL) state.guardMode = GuardMode.DEFAULT.wire
+        state.guardDisabledUntil = 0
+        guardOffForSession -= scope
+    }
+
+    fun guardSuspended(scope: String, state: ClaudeSettings.State, now: Long): Boolean =
+        GuardMode.from(state.guardMode) == GuardMode.ALLOW_ALL ||
+            scope in guardOffForSession ||
+            state.guardDisabledUntil > now
+
+    fun guardSuspendedUntil(state: ClaudeSettings.State, now: Long): Long? =
+        state.guardDisabledUntil.takeIf { it > now }
+
+    fun sessionSuspended(scope: String): Set<SecurityRule> = sessionScoped[scope]?.toSet().orEmpty()
+
+    fun releaseSessionScoped(scope: String, rule: SecurityRule) {
+        sessionScoped[scope]?.remove(rule)
     }
 
     fun active(csv: String, now: Long): Set<SecurityRule> =
@@ -61,28 +97,4 @@ object SecuritySuspensions {
     private const val THIRTY_MINUTES = 30 * MINUTE
     private const val FOUR_HOURS = 4 * HOUR
     private const val EIGHT_HOURS = 8 * HOUR
-}
-
-object SecurityCommandApprovals {
-
-    fun isApproved(lines: String, rule: SecurityRule, command: String?): Boolean {
-        val wanted = command?.trim().orEmpty()
-        if (wanted.isEmpty()) return false
-        return parse(lines).any { it.first == rule && it.second == wanted }
-    }
-
-    fun withApproval(lines: String, rule: SecurityRule, command: String?): String {
-        val wanted = command?.trim().orEmpty()
-        if (wanted.isEmpty()) return lines
-        if (isApproved(lines, rule, wanted)) return lines
-        return (parse(lines) + (rule to wanted)).joinToString("\n") { "${it.first.name}=${it.second}" }
-    }
-
-    private fun parse(lines: String): List<Pair<SecurityRule, String>> =
-        lines.lines().mapNotNull { line ->
-            val name = line.substringBefore('=', "").trim()
-            val command = line.substringAfter('=', "").trim()
-            if (command.isEmpty()) return@mapNotNull null
-            SecurityRule.from(name)?.let { it to command }
-        }
 }
