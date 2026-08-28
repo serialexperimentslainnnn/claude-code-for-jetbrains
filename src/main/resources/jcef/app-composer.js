@@ -21,7 +21,7 @@
       if (followOn) followBtnRef.classList.add('active');
       else followBtnRef.classList.remove('active');
     }
-    if (window.CC && typeof CC.emit === 'function') CC.emit('follow', followOn);
+    if (CC && typeof CC.emit === 'function') CC.emit('follow', followOn);
   }
 
   function sendGlyph() {

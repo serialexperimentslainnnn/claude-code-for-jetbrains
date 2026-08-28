@@ -460,6 +460,7 @@
   function announceReady() {
     var tries = 0;
     (function attempt() {
+      if (typeof window === 'undefined') return;
       if (typeof window.__ccSend === 'function') {
         CC.send({ type: 'ready' });
         try {
