@@ -37,13 +37,29 @@ object SensitiveGuard {
         val detail: String? = null,
     )
 
-    fun evaluate(input: JsonObject, policy: Policy): Decision {
+    fun evaluate(input: JsonObject, policy: Policy): Decision = withoutSecrets(decide(input, policy), policy)
+
+    private fun decide(input: JsonObject, policy: Policy): Decision {
         val hit = classify(input, policy) ?: return Decision(Verdict.ALLOW, null)
         liftedByWhitelist(input, hit, policy)?.let { list ->
             return Decision(Verdict.ALLOW, "${hit.text} — allowed by the $list", hit.rule, hit.text)
         }
         return Decision(verdictFor(hit, policy), reasonFor(hit, policy), hit.rule, hit.text)
     }
+
+    /** The guard expands variables so it can judge what a path really points at, which means a secret's VALUE can
+     *  end up inside the text describing the hit. That text is handed back to the model as the refusal, and stored
+     *  in the transcript and the alert log — so the control against exfiltration would perform it, one refusal per
+     *  variable. Strip it at the single exit, so no rule, present or future, can leak through this door. */
+    private fun withoutSecrets(decision: Decision, policy: Policy): Decision =
+        if (policy.envValues.isEmpty()) {
+            decision
+        } else {
+            decision.copy(
+                reason = ReasonSecrecy.redact(decision.reason, policy.envValues),
+                detail = ReasonSecrecy.redact(decision.detail, policy.envValues),
+            )
+        }
 
     private fun verdictFor(hit: Hit, policy: Policy): Verdict =
         if (isEnforced(hit, policy)) Verdict.DENY else Verdict.ASK
