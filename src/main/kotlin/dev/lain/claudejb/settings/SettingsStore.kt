@@ -127,7 +127,10 @@ internal object SettingsStore {
     @Synchronized
     fun migrateFrom(scope: SettingsScope, legacy: ClaudeSettings.State): Boolean {
         if (exists(scope) || inheritedExists()) return false
-        val adoptable = copyOf(withoutWeakenedSecurity(legacy)).also { LegacySecurityToggles.adopt(it) }
+        if (LegacyPermissionMode.weakensSecurity(legacy.permissionMode)) {
+            LegacySettingsNotice.permissionModeRefused(legacy.permissionMode)
+        }
+        val adoptable = UntrustedState.fromProjectFile(copyOf(legacy)).also { LegacySecurityToggles.adopt(it) }
         if (encode(adoptable) == encode(ClaudeSettings.State())) {
             log.info("no legacy settings to migrate (the project carries none)")
             return false
@@ -135,12 +138,6 @@ internal object SettingsStore {
         save(scope, adoptable)
         log.info("migrated plugin settings from the project's claude-code.xml into the password safe")
         return exists(scope)
-    }
-
-    private fun withoutWeakenedSecurity(legacy: ClaudeSettings.State): ClaudeSettings.State {
-        if (!LegacyPermissionMode.weakensSecurity(legacy.permissionMode)) return legacy
-        LegacySettingsNotice.permissionModeRefused(legacy.permissionMode)
-        return copyOf(legacy).apply { permissionMode = LegacyPermissionMode.SAFE }
     }
 
     private fun copyOf(state: ClaudeSettings.State): ClaudeSettings.State =

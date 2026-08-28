@@ -1,6 +1,5 @@
 package dev.lain.claudejb.settings
 
-import com.intellij.openapi.diagnostic.logger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,8 +33,6 @@ internal object SettingsTransfer {
         "securityRuleWhitelists",
     )
 
-    private val log = logger<SettingsTransfer>()
-
     private val JSON = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -56,7 +53,7 @@ internal object SettingsTransfer {
         val clean = JsonObject(settings.filterKeys { it !in WITHHELD })
         val state = runCatching { JSON.decodeFromJsonElement(ClaudeSettings.State.serializer(), clean) }
             .getOrNull() ?: return null
-        return withoutWeakenedSecurity(state)
+        return UntrustedState.fromImportedFile(state)
     }
 
     fun copyScope(from: SettingsScope, to: SettingsScope, parts: Set<Part>): Boolean {
@@ -86,16 +83,6 @@ internal object SettingsTransfer {
         }
         val merged = JsonObject(target + source.filterKeys { it in wanted })
         return SecretStore.setVerified(to.secretName, JSON.encodeToString(JsonObject.serializer(), merged))
-    }
-
-    private fun withoutWeakenedSecurity(state: ClaudeSettings.State): ClaudeSettings.State {
-        if (!LegacyPermissionMode.weakensSecurity(state.permissionMode)) return state
-        log.warn(
-            "not importing the permission mode '${state.permissionMode}': an imported file does not get to " +
-                "decide how much Claude Code asks — keeping '${LegacyPermissionMode.SAFE}'",
-        )
-        state.permissionMode = LegacyPermissionMode.SAFE
-        return state
     }
 
     private fun read(name: String): String? = runCatching { SecretStore.get(name) }.getOrNull()
