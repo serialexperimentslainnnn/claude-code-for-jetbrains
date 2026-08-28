@@ -24,6 +24,7 @@ internal object JcefSettingsMenu {
         val effort: String?,
         val mode: String,
         val approvals: Map<SecurityRule, Set<String>> = emptyMap(),
+        val remoteControl: Boolean = false,
     )
 
     fun json(scope: String, state: ClaudeSettings.State, session: ClaudeSession): JsonArray =
@@ -33,6 +34,7 @@ internal object JcefSettingsMenu {
         modelRows(selected)
         effortRows(selected)
         modeRows(selected)
+        remoteControlRows(selected)
         chatRows(state)
         securityRows(scope, state)
         sessionApprovalRows(selected.approvals)
@@ -62,6 +64,8 @@ internal object JcefSettingsMenu {
         }
     }
 
+    fun isRemoteControl(key: String): Boolean = key == REMOTE_CONTROL
+
     fun alwaysAllowTool(key: String): String? {
         if (!key.startsWith("$ALWAYS:")) return null
         return key.removePrefix("$ALWAYS:").takeIf { it in ToolNaming.BUILTIN_TOOLS }
@@ -85,6 +89,10 @@ internal object JcefSettingsMenu {
         ClaudeSession.PERMISSION_MODES.forEach { wire ->
             entry("$MODE:$wire", "Permission mode", PermissionMode.labelFor(wire), wire == selected.mode, radio = true)
         }
+    }
+
+    private fun JsonArrayBuilder.remoteControlRows(selected: Selected) {
+        entry(REMOTE_CONTROL, "Remote control", "Drive this chat from claude.ai", selected.remoteControl)
     }
 
     private fun JsonArrayBuilder.chatRows(s: ClaudeSettings.State) {
@@ -279,7 +287,10 @@ internal object JcefSettingsMenu {
         effort = session.effort,
         mode = session.permissionMode,
         approvals = session.guardApprovals.all(),
+        remoteControl = session.remoteControlEnabled,
     )
+
+    internal const val REMOTE_CONTROL = "remoteControl"
 
     private const val APPROVAL = "approval"
     private const val GUARD_MODE = "guardmode"

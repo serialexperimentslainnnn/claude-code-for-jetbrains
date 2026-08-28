@@ -313,6 +313,8 @@ class ClaudeSession(
         private set
     var account: AccountInfo = AccountInfo()
         private set
+    var remoteControlEnabled: Boolean = false
+        private set
 
     @Volatile private var process: ClaudeProcess? = null
 
@@ -766,6 +768,30 @@ class ClaudeSession(
             }
             pump()
         }
+    }
+
+    fun setRemoteControl(enabled: Boolean, onSettled: () -> Unit) {
+        queries.setRemoteControl(enabled) { outcome ->
+            if (outcome.ok) {
+                remoteControlEnabled = outcome.enabled
+                fireState()
+            }
+            transcript.add(Speaker.SYSTEM, remoteControlNotice(outcome))
+            onSettled()
+        }
+    }
+
+    private fun remoteControlNotice(outcome: RemoteControlOutcome): String = when {
+        !outcome.ok -> {
+            val what = if (outcome.enabled) "switched on" else "switched off"
+            "Remote Control could not be $what" + (outcome.error?.let { ": $it" } ?: ".")
+        }
+
+        !outcome.enabled -> "Remote Control is off. This chat keeps running in the IDE."
+
+        outcome.sessionUrl != null -> "Remote Control is on — ${outcome.sessionUrl}"
+
+        else -> "Remote Control is on. The session is listed at https://claude.ai/code"
     }
 
     fun removeQueued(index: Int) = edt {

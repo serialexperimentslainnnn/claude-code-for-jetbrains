@@ -19,6 +19,18 @@ import kotlinx.serialization.json.put
 
 data class RewindResult(val canRewind: Boolean, val error: String?, val filesChanged: List<String>)
 
+data class RemoteControlOutcome(
+    val enabled: Boolean,
+    val ok: Boolean,
+    val sessionUrl: String?,
+    val error: String?,
+)
+
+private val CLAUDE_SESSION_URL = Regex("""https://claude\.ai/[A-Za-z0-9./_#?=&-]+""")
+
+internal fun sessionUrlIn(payload: JsonObject?): String? =
+    payload?.let { CLAUDE_SESSION_URL.find(it.toString())?.value }
+
 @Serializable
 data class PlanInfo(
     val exists: Boolean? = null,
@@ -142,6 +154,12 @@ object Asks {
         decode = { payload ->
             (payload?.get("response") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
         },
+    )
+
+    fun remoteControl(enabled: Boolean) = Ask(
+        subtype = "remote_control",
+        params = { put("enabled", enabled) },
+        decode = { it },
     )
 
     fun rewind(userMessageId: String, dryRun: Boolean) = Ask(
