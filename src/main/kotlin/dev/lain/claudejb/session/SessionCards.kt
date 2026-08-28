@@ -77,6 +77,13 @@ class SessionCards(
         session.systemNotice("Rejected ${request.headline}")
     }
 
+    fun withdraw(requestId: String) {
+        val request = session.cardManager.remove(requestId) ?: return
+        session.diffs.closeReviewDiff(requestId)
+        session.systemNotice("${request.headline} was answered from a connected device.")
+        firePermissions()
+    }
+
     fun resolveQuestion(requestId: String, answers: Map<String, String>) {
         val request = session.cardManager.remove(requestId) ?: return
         val updated = buildJsonObject {

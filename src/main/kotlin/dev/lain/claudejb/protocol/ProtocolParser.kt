@@ -18,6 +18,7 @@ object ProtocolParser {
         put("stream_event", ::parseStreamEvent)
         put("control_request", ::parseControlRequest)
         put("control_response", ::parseControlResponse)
+        put("control_cancel_request", ::parseControlCancel)
         put("rate_limit_event", ::parseRateLimit)
         put("keep_alive") { emptyList() }
         typed("result", ResultMessage.serializer(), ClaudeEvent::Result)
@@ -250,6 +251,11 @@ object ProtocolParser {
         return runCatching {
             listOf(ClaudeEvent.RateLimit(ClaudeJson.decodeFromJsonElement(RateLimitInfo.serializer(), info)))
         }.getOrDefault(emptyList())
+    }
+
+    private fun parseControlCancel(root: JsonObject): List<ClaudeEvent> {
+        val requestId = root.str("request_id") ?: return emptyList()
+        return listOf(ClaudeEvent.ControlCancel(requestId))
     }
 
     private fun parseControlResponse(root: JsonObject): List<ClaudeEvent> {

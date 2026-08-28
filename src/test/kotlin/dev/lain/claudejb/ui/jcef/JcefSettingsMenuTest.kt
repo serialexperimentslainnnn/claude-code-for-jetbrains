@@ -46,7 +46,7 @@ class JcefSettingsMenuTest {
     fun `the groups are drawn in the declared order`() {
         assertEquals(
             listOf(
-                "Model", "Effort", "Permission mode", "Chat", "Guard mode", "Security",
+                "Model", "Effort", "Permission mode", "Remote control", "Chat", "Guard mode", "Security",
                 "Setting sources", "Allowed tools", "Disallowed tools", "Always allowed tools", "MCP",
             ),
             menu().map { it.str("group") }.distinct(),
@@ -63,7 +63,7 @@ class JcefSettingsMenuTest {
             assertTrue(rows.none { it.bool("deferred") }, "$group takes effect on the live session")
         }
 
-        listOf("Chat", "Security", "Always allowed tools").forEach { group ->
+        listOf("Chat", "Remote control", "Security", "Always allowed tools").forEach { group ->
             val rows = byGroup.getValue(group)
             assertTrue(rows.all { it.str("type") == "check" }, "$group must be a checkbox group")
             assertTrue(rows.none { it.bool("deferred") }, "$group takes effect immediately")
@@ -115,6 +115,7 @@ class JcefSettingsMenuTest {
         menu().forEach { row ->
             val key = row.str("key")
             val accepted = JcefSettingsMenu.alwaysAllowTool(key) != null ||
+                JcefSettingsMenu.isRemoteControl(key) ||
                 write(ClaudeSettings.State(), key, true)
             assertTrue(accepted, "no destination accepts the menu key '$key'")
         }

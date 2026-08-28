@@ -1,3 +1,18 @@
+## v5.8.0 — 2026-08-28
+
+**Pick a chat up from your phone.** Remote Control connects a chat running in your IDE to
+claude.ai/code or the Claude mobile app, and Claude keeps running on your machine the whole
+time — your filesystem, your MCP servers and your project configuration stay the ones in use.
+Start a task at the desk, follow it or steer it from the couch, and carry on in the IDE.
+
+**Two ways in, and neither lies to you.** A phone button sits in the chat's button row, left of
+the guard's shield, and *Remote control* is in the ⚙ menu. Both wait for the binary before they
+light up, so a control that looks on is on. If the request is refused the button turns red and
+its tooltip says why, with the same reason spelled out in the chat.
+
+**What it needs.** Remote Control has to be enabled for your Claude account, and on Team and
+Enterprise plans an organisation Owner has to turn it on first.
+
 ## v5.7.0 — 2026-08-21
 
 **The Sensitive Guard stops being invisible.** It keeps a log of every alert it raises — in the IDE's

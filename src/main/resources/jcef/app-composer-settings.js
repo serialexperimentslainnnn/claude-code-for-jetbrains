@@ -177,6 +177,10 @@
       if (CC.announce) CC.announce(labelOf(it) + ' selected');
       return;
     }
+    if (it.hostOwned) {
+      CC.send({ type: 'settingsToggle', key: String(it.key), on: !already });
+      return;
+    }
     it.on = !already;
     applyState(row, !already);
     CC.send({ type: 'settingsToggle', key: String(it.key), on: !already });
