@@ -17,6 +17,10 @@ fun ClaudeSettings.setExecutionTrusted(trusted: Boolean) {
     update { it.executionTrusted = trusted }
 }
 
+/** What the trust dialog is for: config that arrives WITH a project and runs code when a session starts. The two
+ *  binary paths are deliberately not here — the dialog asks whether you trust this project, and a path you typed
+ *  into your own settings is your choice, not the project's. Nothing else has to defend that boundary either:
+ *  [UntrustedState] strips both paths from any state adopted from a file, so they can only be set by hand. */
 fun ClaudeSettings.hasRiskyExecConfig(): Boolean =
     state.sourceScript.isNotBlank() || customMcpServersHaveStdioCommand()
 

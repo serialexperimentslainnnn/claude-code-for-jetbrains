@@ -28,6 +28,10 @@ internal object SourceScriptAudit {
         return decision.reason.takeIf { decision.verdict != SensitiveGuard.Verdict.ALLOW }
     }
 
+    fun untrusted(scriptPath: String) {
+        log.warn("not sourcing '$scriptPath': the execution config has not been trusted for this project")
+    }
+
     fun refused(scriptPath: String, reason: String) {
         log.warn("not sourcing '$scriptPath': $reason")
         val app = ApplicationManager.getApplication() ?: return
