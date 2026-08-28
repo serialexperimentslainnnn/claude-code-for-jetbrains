@@ -13,13 +13,9 @@ object ReasonSecrecy {
 
     fun redact(text: String?, env: Map<String, String>): String? {
         if (text.isNullOrEmpty() || env.isEmpty()) return text
-        var out: String = text
-        for ((name, value) in env) {
-            if (value.length < MIN_SECRET_LENGTH) continue
-            if (!SENSITIVE_NAME.containsMatchIn(name)) continue
-            if (!out.contains(value)) continue
-            out = out.replace(value, PLACEHOLDER)
-        }
-        return out
+        val secrets = env.entries
+            .filter { it.value.length >= MIN_SECRET_LENGTH && SENSITIVE_NAME.containsMatchIn(it.key) }
+            .map { it.value }
+        return secrets.fold(text) { carried, secret -> carried.replace(secret, PLACEHOLDER) }
     }
 }

@@ -47,7 +47,8 @@ internal object JcefSettingsMenu {
         val prefix = key.substringBefore(':', missingDelimiterValue = "")
         if (prefix.isEmpty()) return applyFlag(state, key, on)
         val value = key.substringAfter(':')
-        return applyChoice(scope, state, prefix, value, on, models) ?: applyList(scope, state, prefix, value, on) ?: false
+        val choice = Choice(scope, prefix, value, on)
+        return applyChoice(choice, state, models) ?: applyList(scope, state, prefix, value, on) ?: false
     }
 
     fun applyToSession(session: ClaudeSession, key: String, on: Boolean) {
@@ -181,36 +182,35 @@ internal object JcefSettingsMenu {
         return true
     }
 
+    private class Choice(val scope: String, val prefix: String, val value: String, val on: Boolean)
+
     private fun applyChoice(
-        scope: String,
+        choice: Choice,
         state: ClaudeSettings.State,
-        prefix: String,
-        value: String,
-        on: Boolean,
         models: List<String>,
-    ): Boolean? = when (prefix) {
-        GUARD_MODE -> select(GuardMode.from(value) != null, on) {
-            val chosen = GuardMode.from(value) ?: GuardMode.DEFAULT
-            if (chosen == GuardMode.ALLOW_ALL) {
-                SecuritySuspensions.guardOff(
-                    scope,
-                    state,
-                    SecuritySuspensions.Duration.FOREVER,
-                    System.currentTimeMillis(),
-                )
-            } else {
-                SecuritySuspensions.guardOn(scope, state)
-                state.guardMode = chosen.wire
-            }
+    ): Boolean? = when (choice.prefix) {
+        GUARD_MODE -> select(GuardMode.from(choice.value) != null, choice.on) {
+            applyGuardMode(choice.scope, state, GuardMode.from(choice.value) ?: GuardMode.DEFAULT)
         }
 
-        MODEL -> select(value in models, on) { state.model = value }
+        MODEL -> select(choice.value in models, choice.on) { state.model = choice.value }
 
-        EFFORT -> select(EffortLevel.from(value) != null, on) { state.effort = value }
+        EFFORT -> select(EffortLevel.from(choice.value) != null, choice.on) { state.effort = choice.value }
 
-        MODE -> select(PermissionMode.from(value) != null, on) { state.permissionMode = value }
+        MODE -> select(PermissionMode.from(choice.value) != null, choice.on) {
+            state.permissionMode = choice.value
+        }
 
         else -> null
+    }
+
+    private fun applyGuardMode(scope: String, state: ClaudeSettings.State, chosen: GuardMode) {
+        if (chosen == GuardMode.ALLOW_ALL) {
+            SecuritySuspensions.guardOff(scope, state, SecuritySuspensions.Duration.FOREVER, System.currentTimeMillis())
+        } else {
+            SecuritySuspensions.guardOn(scope, state)
+            state.guardMode = chosen.wire
+        }
     }
 
     private fun applyList(

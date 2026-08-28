@@ -41,6 +41,7 @@ object SecuritySuspensions {
 
     fun guardOff(scope: String, state: ClaudeSettings.State, duration: Duration, now: Long) = when (duration) {
         Duration.FOREVER -> state.guardMode = GuardMode.ALLOW_ALL.wire
+
         Duration.UNTIL_IDE_CLOSES -> {
             guardOffForSession += scope
             Unit

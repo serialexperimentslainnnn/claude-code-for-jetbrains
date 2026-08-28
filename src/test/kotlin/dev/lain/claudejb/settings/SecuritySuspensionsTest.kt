@@ -15,12 +15,12 @@ class SecuritySuspensionsTest {
     private val other = SecurityRule.DESTRUCTIVE_CLOUD
     private val t0 = 1_700_000_000_000L
 
-    private val SCOPE = "suspensions-test"
+    private val scope = "suspensions-test"
 
     @AfterEach
     fun clearProcessState() {
-        SecuritySuspensions.releaseSessionScoped(SCOPE, rule)
-        SecuritySuspensions.releaseSessionScoped(SCOPE, other)
+        SecuritySuspensions.releaseSessionScoped(scope, rule)
+        SecuritySuspensions.releaseSessionScoped(scope, other)
     }
 
     @Test
@@ -96,20 +96,20 @@ class SecuritySuspensionsTest {
 
     @Test
     fun `until-the-IDE-closes is process state and is never written to the document`() {
-        SecuritySuspensions.suspendUntilIdeCloses(SCOPE,rule)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, rule)
 
-        assertEquals(setOf(rule), SecuritySuspensions.sessionSuspended(SCOPE))
+        assertEquals(setOf(rule), SecuritySuspensions.sessionSuspended(scope))
         assertTrue(SecuritySuspensions.active("", t0).isEmpty(), "nothing timed was stored")
     }
 
     @Test
     fun `enforcing a rule again cancels its process-scoped suspension`() {
-        SecuritySuspensions.suspendUntilIdeCloses(SCOPE,rule)
-        SecuritySuspensions.suspendUntilIdeCloses(SCOPE,other)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, rule)
+        SecuritySuspensions.suspendUntilIdeCloses(scope, other)
 
-        SecuritySuspensions.releaseSessionScoped(SCOPE,rule)
+        SecuritySuspensions.releaseSessionScoped(scope, rule)
 
-        assertEquals(setOf(other), SecuritySuspensions.sessionSuspended(SCOPE), "one switch releases one rule")
+        assertEquals(setOf(other), SecuritySuspensions.sessionSuspended(scope), "one switch releases one rule")
     }
 
     @Test

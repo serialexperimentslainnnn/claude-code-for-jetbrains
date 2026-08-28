@@ -103,5 +103,4 @@ describe('the shield says what is protecting the machine, and can stand it down'
     expect(sent).toEqual([{ type: 'guardMaster', on: true, duration: '' }]);
     expect(document.querySelector('.guard-disable-menu').hasAttribute('hidden')).toBe(true);
   });
-
 });

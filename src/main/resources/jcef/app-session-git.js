@@ -7,7 +7,6 @@
   var send = D.send;
   var card = D.card;
 
-
   var announced = Object.create(null);
 
   var BRANCHES_ACTION = 'branches';

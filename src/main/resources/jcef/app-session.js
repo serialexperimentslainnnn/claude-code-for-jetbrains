@@ -106,7 +106,8 @@
     }
 
     for (i = 0; i < ordered.length; i++) {
-      if (container.children[i] !== ordered[i]) container.insertBefore(ordered[i], container.children[i] || null);
+      if (container.children[i] !== ordered[i])
+        container.insertBefore(ordered[i], container.children[i] || null);
     }
   }
 

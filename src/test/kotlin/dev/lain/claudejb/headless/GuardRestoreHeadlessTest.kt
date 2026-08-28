@@ -7,11 +7,11 @@ import dev.lain.claudejb.permission.SecurityRule
 import dev.lain.claudejb.session.AttentionLanding
 import dev.lain.claudejb.session.ClaudeSession
 import dev.lain.claudejb.session.EntryDTO
-import dev.lain.claudejb.ui.ChatTranscriptView
 import dev.lain.claudejb.settings.ClaudeSettings
 import dev.lain.claudejb.settings.GuardAlert
 import dev.lain.claudejb.settings.GuardAlertLog
 import dev.lain.claudejb.settings.SecretStore
+import dev.lain.claudejb.ui.ChatTranscriptView
 
 class GuardRestoreHeadlessTest : BasePlatformTestCase() {
 
