@@ -83,7 +83,7 @@ class SensitiveGuardUncShapeTest {
             """python3 -c 'print("a\tb\nc")'""",
         ).forEach { assertEquals(Verdict.ALLOW, v(bash(it)), it) }
         assertEquals(Verdict.DENY, v(bash("""rg '// TODO: drop this' src/""")))
-        assertEquals(Verdict.DENY, v(bash("""echo 'C:\\Users\\me\\app'""")))
+        assertEquals(Verdict.ALLOW, v(bash("""echo 'C:\\Users\\me\\app'""")))
         assertEquals(Verdict.ALLOW, v(bash("""sed -i 's/\bfoo\b/bar/g' src/App.kt""")))
         assertEquals(
             SecurityRule.SHELL_FILE_WRITE,

@@ -17,6 +17,8 @@ object GuardPaths {
 
     private val MULTI_SEPARATOR = Regex("/{2,}")
 
+    private val BARE_HOME = Regex("""\x24HOME(?![A-Za-z0-9_])""")
+
     private fun startsWithDoubleSeparator(value: String): Boolean =
         value.length >= 2 && (value[0] == '\\' || value[0] == '/') && value[1] == value[0]
 
@@ -24,7 +26,7 @@ object GuardPaths {
         var v = value
         if (!home.isNullOrBlank()) {
             val h = home.replace('\\', '/').trimEnd('/')
-            v = v.replace("\${HOME}", h).replace("\$HOME", h)
+            v = v.replace("\${HOME}", h).replace(BARE_HOME, h)
                 .replace("\$env:USERPROFILE", h, ignoreCase = true)
                 .replace("%USERPROFILE%", h, ignoreCase = true)
                 .replace("%HOMEPATH%", h, ignoreCase = true)

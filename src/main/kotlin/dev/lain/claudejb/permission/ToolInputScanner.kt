@@ -108,8 +108,7 @@ object ToolInputScanner {
         walkStrings(input) { key, value ->
             if (PATTERN_KEY.matches(key) || CONTENT_KEY.matches(key)) return@walkStrings
             if (COMMAND_KEY.matches(key)) {
-                out += value
-                commandTokens(value).forEach { out += it }
+                commandPaths(value).tokens.forEach { out += it }
             } else {
                 out += value
             }
@@ -203,17 +202,80 @@ object ToolInputScanner {
 
     private fun emitPathShaped(token: String, tokens: MutableList<String>) {
         val assigned = token.indexOf('=')
+        if (assigned >= 0 && token.startsWith("-")) return
         val candidates = if (assigned >= 0) listOf(token, token.substring(assigned + 1)) else listOf(token)
         candidates.filterTo(tokens) { PATH_SHAPED.containsMatchIn(it) }
+    }
+
+    private val INERT_VERBS = setOf(
+        "echo", "printf", ":", "true", "false", "test", "[", "[[", "case", "esac", "in",
+        "read", "return", "shift", "unset", "type", "command", "which", "basename", "dirname",
+    )
+
+    private val NAVIGATION_VERBS = setOf("cd", "chdir", "pushd", "popd")
+
+    private val REDIRECT_TARGET = Regex("""\d?>>?\s*([^\s;|&<>]+)|<\s*([^\s;|&<>]+)""")
+
+    private fun emitRedirectTargets(segment: String, tokens: MutableList<String>) {
+        if ('>' !in segment && '<' !in segment) return
+        REDIRECT_TARGET.findAll(segment).forEach { m ->
+            m.groupValues.drop(1).firstOrNull { it.isNotEmpty() }
+                ?.takeIf { PATH_SHAPED.containsMatchIn(it) }
+                ?.let { tokens += it }
+        }
+    }
+
+    private fun withoutComments(command: String): String {
+        if ('#' !in command) return command
+        val out = StringBuilder(command.length)
+        var quote: Char? = null
+        var afterBlank = true
+        var skipping = false
+        for (c in command) {
+            when {
+                c == '\n' -> {
+                    skipping = false
+                    quote = null
+                    afterBlank = true
+                    out.append(c)
+                }
+
+                skipping -> Unit
+
+                quote != null -> {
+                    if (c == quote) quote = null
+                    afterBlank = false
+                    out.append(c)
+                }
+
+                c == '\'' || c == '"' -> {
+                    quote = c
+                    afterBlank = false
+                    out.append(c)
+                }
+
+                c == '#' && afterBlank -> skipping = true
+
+                else -> {
+                    afterBlank = c.isWhitespace()
+                    out.append(c)
+                }
+            }
+        }
+        return out.toString()
     }
 
     private fun commandPaths(command: String): CommandPaths {
         val tokens = ArrayList<String>()
         val bindings = LinkedHashMap<String, String>()
-        for (segment in command.split(SEGMENT_SPLIT)) {
+        val segments = withoutComments(command).split(SEGMENT_SPLIT)
+        segments.forEachIndexed { index, segment ->
+            emitRedirectTargets(segment, tokens)
+            val acts = segments.drop(index + 1).any { it.isNotBlank() }
             var declaring = true
+            var verb: String? = null
             for (token in splitTokens(segment, LOCATION_SPLIT_CHARS)) {
-                val declared = if (declaring) ASSIGNMENT.matchEntire(token) else null
+                val declared = ASSIGNMENT.matchEntire(token)
                 when {
                     declared != null -> bind(declared, bindings, tokens)
 
@@ -221,12 +283,24 @@ object ToolInputScanner {
 
                     else -> {
                         declaring = false
-                        emitPathShaped(token, tokens)
+                        if (verb == null) {
+                            verb = token.lowercase().substringAfterLast('/')
+                            if ('*' !in token && '?' !in token) emitPathShaped(token, tokens)
+                        } else if (operative(verb, acts)) {
+                            emitPathShaped(token, tokens)
+                        }
                     }
                 }
             }
         }
         return CommandPaths(tokens, bindings)
+    }
+
+    private fun operative(verb: String?, acts: Boolean): Boolean = when (verb) {
+        null -> true
+        in INERT_VERBS -> false
+        in NAVIGATION_VERBS -> acts
+        else -> true
     }
 
     fun commandText(input: JsonObject): String? = commandCandidates(input).firstOrNull()

@@ -18,11 +18,17 @@ class GuardObfuscationHardeningTest {
         "\${!X}", "\$@", "\$*", "\$#", "\$?", "''", "\"\"", "``", "\\",
     )
 
+    private fun splittable(text: String, at: Int): Boolean {
+        val here = text[at]
+        val next = text.getOrNull(at + 1) ?: return false
+        return here.isLetterOrDigit() && next.isLetterOrDigit()
+    }
+
     private fun splice(word: String): String {
         val sb = StringBuilder()
         word.forEachIndexed { i, c ->
             sb.append(c)
-            if (i < word.lastIndex && c.isLetterOrDigit() && word[i + 1].isLetterOrDigit() && rng.nextInt(2) == 0) {
+            if (splittable(word, i) && rng.nextInt(2) == 0) {
                 repeat(rng.nextInt(1, 3)) { sb.append(splices.random(rng)) }
             }
         }
@@ -33,10 +39,7 @@ class GuardObfuscationHardeningTest {
         val sb = StringBuilder()
         path.forEachIndexed { i, c ->
             sb.append(c)
-            val next = path.getOrNull(i + 1)
-            if (c.isLetterOrDigit() && next != null && next.isLetterOrDigit() && rng.nextInt(2) == 0) {
-                sb.append(splices.random(rng))
-            }
+            if (splittable(path, i) && rng.nextInt(2) == 0) sb.append(splices.random(rng))
         }
         return sb.toString()
     }

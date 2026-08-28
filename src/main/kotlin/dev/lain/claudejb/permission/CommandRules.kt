@@ -18,22 +18,34 @@ object CommandRules {
         re("""\baws\b[^|;&]*\bsecretsmanager\b[^|;&]*\b(get-secret-value|batch-get-secret-value)\b"""),
         re("""\baws\b[^|;&]*\bssm\b[^|;&]*\bget-parameters?(-by-path)?\b[^|;&]*--with-decryption\b"""),
         re("""\baws\b[^|;&]*\bkms\b[^|;&]*\b(decrypt|generate-data-key(-pair)?|re-encrypt|get-public-key)\b"""),
-        re("""\baws\b[^|;&]*\biam\b[^|;&]*\b(create-access-key|create-login-profile|update-login-profile|""" +
-            """create-service-specific-credential)\b"""),
-        re("""\baws\b[^|;&]*\bsts\b[^|;&]*\b(assume-role\S*|assume-root|get-session-token|get-federation-token|""" +
-            """get-web-identity-token|get-delegated-access-token)\b"""),
-        re("""\baws\b[^|;&]*\bec2\b[^|;&]*\b(get-password-data|get-console-output|get-console-screenshot|""" +
-            """get-launch-template-data)\b"""),
+        re(
+            """\baws\b[^|;&]*\biam\b[^|;&]*\b(create-access-key|create-login-profile|update-login-profile|""" +
+                """create-service-specific-credential)\b""",
+        ),
+        re(
+            """\baws\b[^|;&]*\bsts\b[^|;&]*\b(assume-role\S*|assume-root|get-session-token|get-federation-token|""" +
+                """get-web-identity-token|get-delegated-access-token)\b""",
+        ),
+        re(
+            """\baws\b[^|;&]*\bec2\b[^|;&]*\b(get-password-data|get-console-output|get-console-screenshot|""" +
+                """get-launch-template-data)\b""",
+        ),
         re("""\baws\b[^|;&]*\bec2\b[^|;&]*\bdescribe-instance-attribute\b[^|;&]*\buserData\b"""),
         re("""\baws\b[^|;&]*\becr\b[^|;&]*\b(get-login-password|get-authorization-token|get-download-url-for-layer)\b"""),
-        re("""\baws\b[^|;&]*\bcognito-idp\b[^|;&]*\badmin-(get-user|set-user-password|create-user|initiate-auth|""" +
-            """respond-to-auth-challenge)\b"""),
+        re(
+            """\baws\b[^|;&]*\bcognito-idp\b[^|;&]*\badmin-(get-user|set-user-password|create-user|initiate-auth|""" +
+                """respond-to-auth-challenge)\b""",
+        ),
         re("""\baws\b[^|;&]*\bcognito-identity\b[^|;&]*\bget-(credentials-for-identity|open-id-token\S*)\b"""),
-        re("""\baws\b[^|;&]*\b(sso\b[^|;&]*get-role-credentials|acm\b[^|;&]*export-certificate|""" +
-            """redshift\b[^|;&]*get-cluster-credentials\S*|rds\b[^|;&]*generate-db-auth-token|""" +
-            """lightsail\b[^|;&]*(get-instance-access-details|download-default-key-pair))\b"""),
-        re("""\baws\b[^|;&]*\b(apigateway\b[^|;&]*get-api-keys?\b[^|;&]*--include-values?|""" +
-            """appsync\b[^|;&]*(list|create)-api-keys?|lambda\b[^|;&]*get-function-configuration)\b"""),
+        re(
+            """\baws\b[^|;&]*\b(sso\b[^|;&]*get-role-credentials|acm\b[^|;&]*export-certificate|""" +
+                """redshift\b[^|;&]*get-cluster-credentials\S*|rds\b[^|;&]*generate-db-auth-token|""" +
+                """lightsail\b[^|;&]*(get-instance-access-details|download-default-key-pair))\b""",
+        ),
+        re(
+            """\baws\b[^|;&]*\b(apigateway\b[^|;&]*get-api-keys?\b[^|;&]*--include-values?|""" +
+                """appsync\b[^|;&]*(list|create)-api-keys?|lambda\b[^|;&]*get-function-configuration)\b""",
+        ),
         re("""\bgcloud\b[^|;&]*\bsecrets\b[^|;&]*\bversions\b[^|;&]*\baccess\b"""),
         re("""\bgcloud\b[^|;&]*\bauth\b[^|;&]*\bprint-(access|identity)-token\b"""),
         re("""\bgcloud\b[^|;&]*--impersonate-service-account[= ]"""),
@@ -217,10 +229,18 @@ object CommandRules {
         return s
     }
 
+    private fun truncated(value: String): Boolean =
+        value.count { it == '(' } != value.count { it == ')' } ||
+            value.count { it == '`' } % 2 != 0 ||
+            value.count { it == '{' } != value.count { it == '}' }
+
     private fun substituteAssignments(command: String): String {
         val assign = Regex("""(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|]+)""")
         val vars = HashMap<String, String>()
-        assign.findAll(command).forEach { vars[it.groupValues[1]] = it.groupValues[2] }
+        assign.findAll(command).forEach { m ->
+            val value = m.groupValues[2]
+            if (!truncated(value)) vars[m.groupValues[1]] = value
+        }
         if (vars.isEmpty()) return command
         var s = command
         for ((k, v) in vars) {
