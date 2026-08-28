@@ -15,6 +15,9 @@
   var followBtnRef = null;
   var guardOn = true;
   var guardBtnRef = null;
+  var rcOn = false;
+  var rcError = null;
+  var rcBtnRef = null;
 
   function applyFollow() {
     if (followBtnRef) {
@@ -65,6 +68,32 @@
     if (next === guardOn) return;
     guardOn = next;
     applyGuard();
+  };
+
+  function phoneGlyph() {
+    return (
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect x="4.6" y="1.5" width="6.8" height="13" rx="1.6"/><path d="M7 12.4h2"/></svg>'
+    );
+  }
+
+  function applyRemoteControl() {
+    if (!rcBtnRef) return;
+    rcBtnRef.classList.toggle('active', rcOn);
+    rcBtnRef.classList.toggle('failed', !rcOn && !!rcError);
+    if (!rcOn && rcError) rcBtnRef.title = rcError;
+    else if (rcOn) rcBtnRef.title = 'Remote Control is on — click to disconnect this chat from claude.ai';
+    else rcBtnRef.title = 'Remote Control is off — click to drive this chat from claude.ai';
+  }
+
+  CX.setRemoteControlOn = function (on, error) {
+    var next = on === true;
+    var nextError = typeof error === 'string' && error ? error : null;
+    if (next === rcOn && nextError === rcError) return;
+    rcOn = next;
+    rcError = nextError;
+    applyRemoteControl();
   };
 
   function ensureBuilt() {
@@ -163,7 +192,23 @@
     });
     guardBtn.innerHTML = guardGlyph();
     guardBtnRef = guardBtn;
-    var barRight = h('div', { class: 'bar-right' }, guardBtn, followBtn, vibeBtn, sendBtn);
+
+    var rcBtn = h('button', {
+      class: 'bar-icon',
+      attrs: { type: 'button', 'aria-label': 'Remote Control' },
+      on: {
+        click: function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          send({ type: 'settingsToggle', key: 'remoteControl', on: !rcOn });
+        },
+      },
+    });
+    rcBtn.innerHTML = phoneGlyph();
+    rcBtnRef = rcBtn;
+    applyRemoteControl();
+
+    var barRight = h('div', { class: 'bar-right' }, rcBtn, guardBtn, followBtn, vibeBtn, sendBtn);
     var bar = h('div', { class: 'composer-bar' }, barLeft, barRight);
 
     var guardMenu = CC.durationMenu({
@@ -441,6 +486,7 @@
     if (!s) return;
     announceTurnState(s);
     CX.setGuardOn(s.guardOn);
+    CX.setRemoteControlOn(s.remoteControlOn, s.remoteControlError);
     CX.renderAuth(s);
     renderSendMode(s);
     CX.renderPills(s);

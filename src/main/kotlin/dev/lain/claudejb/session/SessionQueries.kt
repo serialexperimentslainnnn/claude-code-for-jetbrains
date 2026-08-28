@@ -46,6 +46,17 @@ class SessionQueries(
     fun requestRewindFiles(userMessageId: String, dryRun: Boolean, onResult: (RewindResult?) -> Unit) =
         ask(Asks.rewind(userMessageId, dryRun), onResult)
 
+    fun setRemoteControl(enabled: Boolean, onResult: (RemoteControlOutcome) -> Unit) {
+        val ask = Asks.remoteControl(enabled)
+        if (!isRunning()) {
+            edt { onResult(RemoteControlOutcome(enabled, ok = false, sessionUrl = null, error = "the session is not running")) }
+            return
+        }
+        controlClient.send({ id -> ControlProtocol.of(id, ask.subtype, ask.params) }) { res ->
+            edt { onResult(RemoteControlOutcome(enabled, res.success, sessionUrlIn(res.payload), res.error)) }
+        }
+    }
+
     fun reconnectMcp(name: String) = fireAndForget { id -> ControlProtocol.mcpReconnectRequest(id, name) }
 
     fun toggleMcp(name: String, enabled: Boolean) = fireAndForget { id -> ControlProtocol.mcpToggleRequest(id, name, enabled) }

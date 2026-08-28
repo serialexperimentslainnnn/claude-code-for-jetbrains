@@ -127,6 +127,10 @@ internal class ChatBridgeRouter(private val panel: JcefChatPanel) {
             if (!m.on) session.guardApprovals.revoke(rule, command)
             return true
         }
+        if (JcefSettingsMenu.isRemoteControl(m.key)) {
+            session.setRemoteControl(m.on) { JcefChatPanel.pushSettingsMenuToAll() }
+            return true
+        }
         val models = session.models.map { it.value }
         var known = false
         settings.update { known = JcefSettingsMenu.apply(settings.scope.id, it, m.key, m.on, models) }

@@ -78,6 +78,8 @@ sealed interface ClaudeEvent {
 
     data class UnsupportedControlRequest(val requestId: String, val subtype: String?) : Control
 
+    data class ControlCancel(val requestId: String) : Control
+
     data class ControlResult(
         val requestId: String,
         val success: Boolean,
