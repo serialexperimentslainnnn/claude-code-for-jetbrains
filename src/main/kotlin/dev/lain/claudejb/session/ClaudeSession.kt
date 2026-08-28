@@ -1214,6 +1214,8 @@ class ClaudeSession(
 
             is ClaudeEvent.UnsupportedControlRequest -> broker.rejectUnsupported(event.requestId, event.subtype)
 
+            is ClaudeEvent.ControlCancel -> edt { cards.withdraw(event.requestId) }
+
             is ClaudeEvent.ControlResult -> controlClient.onControlResult(event)
         }
     }

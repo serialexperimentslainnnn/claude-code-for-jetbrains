@@ -49,7 +49,7 @@ data class ProtocolSurface(
 
         val KNOWN_EVENT_TYPES: Set<String> = setOf(
             "system", "assistant", "user", "stream_event", "result",
-            "control_request", "control_response", "rate_limit_event", "keep_alive",
+            "control_request", "control_response", "control_cancel_request", "rate_limit_event", "keep_alive",
             "auth_status", "tool_progress", "tool_use_summary", "prompt_suggestion",
         )
 
