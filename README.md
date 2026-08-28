@@ -1,6 +1,6 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-5.7.1-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-5.8.0-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.3.1%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Claude%20Code%20Native-2A2A2A)](https://plugins.jetbrains.com/plugin/31965-claude-code-native)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -542,7 +542,7 @@ wrapper is included.
 
 ```bash
 JAVA_HOME=/path/to/a/jdk-21 ./gradlew buildPlugin
-# → build/distributions/claude-code-native-5.7.1.zip
+# → build/distributions/claude-code-native-5.8.0.zip
 ```
 
 Install it with **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.

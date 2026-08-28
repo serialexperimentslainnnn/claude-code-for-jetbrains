@@ -28,7 +28,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "5.7.1"
+version = "5.8.0"
 
 repositories {
     mavenCentral()

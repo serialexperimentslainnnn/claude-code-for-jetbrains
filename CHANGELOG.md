@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-08-28
+
+**A chat in the IDE can now be driven from claude.ai or the Claude app**, and keeps running on your own
+machine the whole time.
+
+### Added
+- **Remote Control for a chat**, from a phone button in the chat's button row — left of the guard's shield —
+  or from *Remote control* in the ⚙ menu. Execution and filesystem access stay local: your files, your MCP
+  servers and your project configuration remain the ones in use, and claude.ai or the Claude app becomes a
+  second window onto the same conversation. The transcript announces the session URL when the reply carries
+  one.
+- **The button reports its own outcome.** Lit while Remote Control is on, red with the reason in its tooltip
+  when the request was refused — Remote Control has to be enabled for your account, and on Team and
+  Enterprise plans by an organisation Owner as well. Neither control turns itself on until the binary has
+  said yes.
+
 ## [5.7.0] — 2026-08-21
 
 **The guard is now something you can see, tune and audit**, instead of a set of rules that only spoke up to
