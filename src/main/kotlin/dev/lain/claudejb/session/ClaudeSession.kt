@@ -315,6 +315,8 @@ class ClaudeSession(
         private set
     var remoteControlEnabled: Boolean = false
         private set
+    var remoteControlError: String? = null
+        private set
 
     @Volatile private var process: ClaudeProcess? = null
 
@@ -772,20 +774,22 @@ class ClaudeSession(
 
     fun setRemoteControl(enabled: Boolean, onSettled: () -> Unit) {
         queries.setRemoteControl(enabled) { outcome ->
-            if (outcome.ok) {
-                remoteControlEnabled = outcome.enabled
-                fireState()
-            }
+            if (outcome.ok) remoteControlEnabled = outcome.enabled
+            remoteControlError = if (outcome.ok) null else remoteControlRefusal(outcome)
+            fireState()
             transcript.add(Speaker.SYSTEM, remoteControlNotice(outcome))
             onSettled()
         }
     }
 
+    private fun remoteControlRefusal(outcome: RemoteControlOutcome): String {
+        val what = if (outcome.enabled) "switch Remote Control on" else "switch Remote Control off"
+        return outcome.error?.takeIf { it.isNotBlank() }?.let { "Could not $what: $it" } ?: "Could not $what."
+    }
+
     private fun remoteControlNotice(outcome: RemoteControlOutcome): String = when {
-        !outcome.ok -> {
-            val what = if (outcome.enabled) "switched on" else "switched off"
-            "Remote Control could not be $what" + (outcome.error?.let { ": $it" } ?: ".")
-        }
+        !outcome.ok -> remoteControlRefusal(outcome) +
+            " Remote Control has to be enabled for your account, and by your organisation on Team and Enterprise plans."
 
         !outcome.enabled -> "Remote Control is off. This chat keeps running in the IDE."
 

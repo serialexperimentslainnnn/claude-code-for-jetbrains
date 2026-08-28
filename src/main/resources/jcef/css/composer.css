@@ -294,6 +294,9 @@
 .bar-icon.active {
   color: var(--accent);
 }
+.bar-icon.failed {
+  color: var(--danger);
+}
 .bar-icon .vibe-emoji {
   font-size: 16px;
   line-height: 1;

@@ -16,6 +16,7 @@
   var guardOn = true;
   var guardBtnRef = null;
   var rcOn = false;
+  var rcError = null;
   var rcBtnRef = null;
 
   function applyFollow() {
@@ -79,17 +80,19 @@
 
   function applyRemoteControl() {
     if (!rcBtnRef) return;
-    if (rcOn) rcBtnRef.classList.add('active');
-    else rcBtnRef.classList.remove('active');
-    rcBtnRef.title = rcOn
-      ? 'Remote Control is on — click to disconnect this chat from claude.ai'
-      : 'Remote Control is off — click to drive this chat from claude.ai';
+    rcBtnRef.classList.toggle('active', rcOn);
+    rcBtnRef.classList.toggle('failed', !rcOn && !!rcError);
+    if (!rcOn && rcError) rcBtnRef.title = rcError;
+    else if (rcOn) rcBtnRef.title = 'Remote Control is on — click to disconnect this chat from claude.ai';
+    else rcBtnRef.title = 'Remote Control is off — click to drive this chat from claude.ai';
   }
 
-  CX.setRemoteControlOn = function (on) {
+  CX.setRemoteControlOn = function (on, error) {
     var next = on === true;
-    if (next === rcOn) return;
+    var nextError = typeof error === 'string' && error ? error : null;
+    if (next === rcOn && nextError === rcError) return;
     rcOn = next;
+    rcError = nextError;
     applyRemoteControl();
   };
 
@@ -483,7 +486,7 @@
     if (!s) return;
     announceTurnState(s);
     CX.setGuardOn(s.guardOn);
-    CX.setRemoteControlOn(s.remoteControlOn);
+    CX.setRemoteControlOn(s.remoteControlOn, s.remoteControlError);
     CX.renderAuth(s);
     renderSendMode(s);
     CX.renderPills(s);

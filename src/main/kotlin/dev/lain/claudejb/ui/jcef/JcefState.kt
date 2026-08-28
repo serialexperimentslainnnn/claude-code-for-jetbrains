@@ -62,6 +62,7 @@ object JcefState {
 
             put("guardOn", session.guardEnforced)
             put("remoteControlOn", session.remoteControlEnabled)
+            put("remoteControlError", session.remoteControlError)
 
             put("provider", JcefComposerOptions.providerJson(provider))
             put("model", JcefComposerOptions.modelJson(session))

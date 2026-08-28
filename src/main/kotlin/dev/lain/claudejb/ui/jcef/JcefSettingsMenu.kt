@@ -92,7 +92,13 @@ internal object JcefSettingsMenu {
     }
 
     private fun JsonArrayBuilder.remoteControlRows(selected: Selected) {
-        entry(REMOTE_CONTROL, "Remote control", "Drive this chat from claude.ai", selected.remoteControl)
+        entry(
+            REMOTE_CONTROL,
+            "Remote control",
+            "Drive this chat from claude.ai",
+            selected.remoteControl,
+            hostOwned = true,
+        )
     }
 
     private fun JsonArrayBuilder.chatRows(s: ClaudeSettings.State) {
@@ -165,6 +171,7 @@ internal object JcefSettingsMenu {
         radio: Boolean = false,
         deferred: Boolean = false,
         sub: String? = null,
+        hostOwned: Boolean = false,
     ) = addJsonObject {
         put("key", key)
         put("group", group)
@@ -173,6 +180,7 @@ internal object JcefSettingsMenu {
         put("on", on)
         put("type", if (radio) TYPE_RADIO else TYPE_CHECK)
         put("deferred", deferred)
+        if (hostOwned) put("hostOwned", true)
     }
 
     private val FLAG_SETTERS: Map<String, (ClaudeSettings.State, Boolean) -> Unit> = mapOf(
