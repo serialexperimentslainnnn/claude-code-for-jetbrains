@@ -116,6 +116,7 @@ internal class ChatTabsPanel : JBPanel<ChatTabsPanel>(BorderLayout()), Disposabl
         } else {
             pushChats()
         }
+        tab.component.isVisible = false
         onClosed(tab)
         content.remove(tab.component)
         tab.disposer?.let { Disposer.dispose(it) }
