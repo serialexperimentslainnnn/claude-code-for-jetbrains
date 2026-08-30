@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.1] — 2026-08-30
+
+### Fixed
+- **Closing the last chat no longer reports an internal error.** Closing a chat that was the only one
+  open, and that had been used, left the IDE logging `Already disposed` from the browser component the
+  chat had just torn down. The chat's card is now hidden before it leaves the tool window, so the layout
+  never lays out a browser that is already gone. Nothing about closing a chat changes for you: the
+  replacement chat still opens as before.
+
 ## [5.8.0] — 2026-08-28
 
 **A chat in the IDE can now be driven from claude.ai or the Claude app**, and keeps running on your own

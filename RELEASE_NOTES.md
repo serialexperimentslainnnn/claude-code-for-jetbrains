@@ -1,3 +1,11 @@
+## v5.8.1 — 2026-08-30
+
+**Closing your last chat no longer raises an internal error.** If the chat you closed was the
+only one open and you had actually used it, the IDE logged an `Already disposed` error while
+tearing the chat's browser down. The chat is now hidden before it is removed, so nothing tries
+to lay out a browser that has already gone. Closing a chat behaves exactly as before otherwise,
+replacement chat included.
+
 ## v5.8.0 — 2026-08-28
 
 **Pick a chat up from your phone.** Remote Control connects a chat running in your IDE to
