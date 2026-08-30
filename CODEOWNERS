@@ -15,6 +15,13 @@
 /src/main/kotlin/dev/lain/claudejb/permission/   @serialexperimentslainnnn
 /src/main/kotlin/dev/lain/claudejb/protocol/     @serialexperimentslainnnn
 
+# Two files nothing may edit in passing. CLAUDE.md carries the standing directive over the
+# guard and its tests, and .gitignore is what keeps credentials and local state out of the
+# history in the first place — a quiet line added to either is a change to the rules, not a
+# chore, so both are owned outright.
+/CLAUDE.md              @serialexperimentslainnnn
+/.gitignore             @serialexperimentslainnnn
+
 # A workflow is privileged code: it runs with a token, and it can publish to the Marketplace. A ruleset is
 # the gate that decides what reaches main at all. Both are listed LAST so they win over every earlier glob.
 #
