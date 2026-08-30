@@ -108,6 +108,30 @@ class ChatTabsCloseHeadlessTest : BasePlatformTestCase() {
         assertEquals(listOf("A"), closed)
     }
 
+    fun `test the last tab is hidden before it leaves the deck, never shown again`() {
+        val a = open("A")
+        tabs.select(a)
+
+        tabs.close(a)
+
+        assertFalse(
+            "closing the only card must not leave the card layout re-showing the torn down chat",
+            a.component.isVisible,
+        )
+        assertNull("and the card must be out of the deck", a.component.parent)
+    }
+
+    fun `test closing the selected tab hides it and shows the survivor`() {
+        val a = open("A")
+        val b = open("B")
+        tabs.select(a)
+
+        tabs.close(a)
+
+        assertFalse(a.component.isVisible)
+        assertTrue(b.component.isVisible)
+    }
+
     fun `test the closed tab is out of the model when close returns`() {
         val a = open("A")
         open("B")

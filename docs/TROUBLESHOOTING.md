@@ -73,8 +73,12 @@ Since **5.5.0** the settings live in the IDE's **PasswordSafe**, not in a file.
 The old `.idea/claude-code.xml` is read once, copied into the safe, and deleted
 only after the safe has accepted the copy. Two things follow:
 
-- **Settings are now global**, not per project. The safe is application-wide,
-  which is also the scope these settings actually had.
+- **Settings are kept per IDE installation, per project** since 5.7.0. The safe
+  is application-wide, but each entry is keyed by the IDE's configuration
+  directory and the project, so two IDEs — or two checkouts — do not share a
+  document. The single global document that 5.5.0–5.7.0 wrote is still read as
+  the seed for a project that has none of its own, which is why it is never
+  deleted.
 - **If the safe cannot be read**, the plugin refuses to save over it rather than
   treating a failed read as an empty configuration. On Linux that usually means a
   locked KWallet/keyring — unlock it and restart the IDE. A read that failed
