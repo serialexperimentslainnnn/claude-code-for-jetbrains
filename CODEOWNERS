@@ -1,7 +1,7 @@
 # CODEOWNERS — Claude Code Native
 #
 # GitHub uses this file to auto-request reviews on pull requests.
-# Maintainer: @serialexperimentslainnnn (the local author "Lain" / lain.agent604@passmail.com).
+# Maintainer: @serialexperimentslainnnn (the local author "Lain" / lain@digitalexperiments.dev).
 
 # Default owner for everything in the repo.
 *                       @serialexperimentslainnnn
