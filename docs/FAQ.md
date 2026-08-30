@@ -89,8 +89,11 @@ Because that is where its settings and credentials live. Since 5.5.0 the whole
 settings document is in the IDE's PasswordSafe rather than in
 `.idea/claude-code.xml` — they were per-project plaintext in a file people
 commit, and they include an env block, which is where an API key or a
-credentialed proxy URL ends up. One consequence worth knowing: **the settings are
-now global, not per project.**
+credentialed proxy URL ends up. The scope worth knowing: **since 5.7.0 the
+settings are one document per IDE installation, per project** — two IDEs on the
+same machine keep separate settings, and so do two projects in the same IDE.
+(Between 5.5.0 and 5.7.0 there was a single global document; it is kept as the
+seed a project without settings of its own starts from.)
 
 If the safe cannot be read (a locked KWallet, say), the plugin treats that as a
 failure and refuses to save over it — a failed read is not an empty
