@@ -2,14 +2,14 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.permission.SecurityCategory
-import dev.lain.claudejb.permission.SecurityRule
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.GuardMode
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStore
-import dev.lain.claudejb.ui.ClaudeSecurityConfigurable
-import dev.lain.claudejb.ui.SettingsSecuritySection
+import dev.lain.claudejb.model.permission.vocab.SecurityCategory
+import dev.lain.claudejb.model.permission.vocab.SecurityRule
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsStore
+import dev.lain.claudejb.model.settings.guard.GuardMode
+import dev.lain.claudejb.view.settings.ClaudeSecurityConfigurable
+import dev.lain.claudejb.view.settings.sections.SettingsSecuritySection
 import javax.swing.JComboBox
 
 class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
@@ -201,7 +201,7 @@ class ClaudeSecurityConfigurableHeadlessTest : BasePlatformTestCase() {
             "restoreOpenChatsOnStartup", "reduceMotion", "workloadWindowMinutes",
             "provider", "claudePath", "nodePath", "sourceScript", "envVars",
             "settingSources", "allowedTools", "disallowedTools", "alwaysAllowTools",
-            "ideMcpEnabled", "ideMcpTransport", "ideMcpPort", "customMcpServers", "strictMcpConfig",
+            "customMcpServers", "strictMcpConfig", "ideMcp",
             "maxTurns", "maxBudgetUsd", "fallbackModel", "addDirs", "betas",
             "enableFileCheckpointing", "rewindFallback", "executionTrusted",
             "securityRuleSuspensions", "vulnConsent",

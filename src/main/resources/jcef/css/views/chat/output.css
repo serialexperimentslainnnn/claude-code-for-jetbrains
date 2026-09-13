@@ -1,0 +1,57 @@
+.tool-out pre,
+.tool-cmd pre.command-src,
+.tool-msg pre.message-src {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--code-bg);
+  box-shadow: none;
+  overflow: auto;
+}
+.tool-out pre {
+  max-height: 420px;
+}
+.tool-out pre code,
+.tool-cmd pre.command-src code,
+.tool-msg pre.message-src code {
+  font-size: 12px;
+}
+.tool.failed .tool-out pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-out pre.diff code {
+  display: block;
+}
+.tool-out pre.command,
+.tool-out pre.flow {
+  overflow: hidden;
+}
+.tool-out pre.command code,
+.tool-out pre.flow code {
+  display: block;
+  max-height: 380px;
+  overflow: auto;
+}
+.tool-out pre.flow code {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-cmd:empty {
+  display: none;
+}
+.tool-cmd {
+  border-top: 1px solid var(--border);
+}
+.tool-cmd pre.command-src {
+  overflow: hidden;
+}
+.tool-cmd pre.command-src code {
+  display: block;
+  max-height: 160px;
+  overflow: auto;
+}
+.tool.cmd-tool {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+}

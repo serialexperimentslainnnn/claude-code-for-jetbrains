@@ -3,9 +3,9 @@ package dev.lain.claudejb.integration
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.ChatSessionManager
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.settings.ClaudeSettings
+import dev.lain.claudejb.controller.session.ChatSessionManager
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.settings.ClaudeSettings
 
 abstract class FakeClaudeTestBase : BasePlatformTestCase() {
 

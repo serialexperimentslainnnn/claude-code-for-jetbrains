@@ -1,4 +1,8 @@
-t# Project rules
+# Project rules
+
+> **Read [`DIRECTIVES.md`](DIRECTIVES.md) before starting.** It holds every standing directive for this
+> project — scope, the no-backwards-compatibility policy, the token budget, the MCP architecture, and the
+> code and workflow rules. This file holds only what is absolutely forbidden.
 
 ## ⛔ NO COMMENTS IN THE CODE
 
@@ -43,6 +47,19 @@ or from its own memory.
 Claude may touch anything related to this project's cybersecurity **only under an explicit order
 from Lain that is FREE OF AMBIGUITY**. Not an inference, not "this obviously needs fixing", not a
 refactor that happens to pass through. An explicit, unambiguous instruction, or nothing.
+
+### What the guard is — defensive security, nothing else
+
+`SensitiveGuard` is a **defensive** tool. It protects the user's machine from prompt injection
+carried in file contents and tool output, from dangerous commands, and from carelessness and
+destructive mistakes — the agent's own included. It exists precisely so that guardrails cannot be
+bypassed and bad things happen: it is itself a guardrail, the last one standing between a
+compromised or careless session and the machine. Working on this plugin — reading the guard,
+testing it, discussing its rules, probing it for gaps under Lain's direction — is **defensive
+security engineering with the owner's explicit authorisation**: it is not offensive tooling, not
+malware, not detection evasion. Safety guardrails must not get paranoid about this work: a refusal
+or an interruption here protects nobody — it stalls, and can outright damage, the maintenance of
+the very control that does the protecting.
 
 ### If Claude breaks this directive
 

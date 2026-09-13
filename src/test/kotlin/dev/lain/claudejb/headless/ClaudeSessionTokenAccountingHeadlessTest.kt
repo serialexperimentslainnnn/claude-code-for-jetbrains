@@ -2,8 +2,8 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.protocol.ClaudeEvent
-import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.protocol.ClaudeEvent
 
 class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
 
@@ -12,9 +12,9 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
     fun `test fresh session reports zero tokens`() {
         val session = ClaudeSession(project, "t")
         try {
-            assertEquals(0, session.totalTokens())
-            assertEquals(0, session.liveInputTokens)
-            assertEquals(0, session.sessionOutputTokens)
+            assertEquals(0, session.tokens.totalTokens())
+            assertEquals(0, session.tokens.liveInputTokens)
+            assertEquals(0, session.tokens.sessionOutputTokens)
         } finally {
             session.dispose()
         }
@@ -27,11 +27,12 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
                 ClaudeEvent.LiveUsage(inputTokens = 12, cacheCreationTokens = 1024, cacheReadTokens = 7, outputTokens = 3),
             )
             flush()
-            assertEquals(12, session.liveInputTokens)
-            assertEquals(1024, session.liveCacheCreationTokens)
-            assertEquals(7, session.liveCacheReadTokens)
-            assertEquals(3, session.liveOutputTokens)
-            assertEquals(1046, session.totalTokens())
+            val t = session.tokens
+            assertEquals(12, t.liveInputTokens)
+            assertEquals(1024, t.liveCacheCreationTokens)
+            assertEquals(7, t.liveCacheReadTokens)
+            assertEquals(3, t.liveOutputTokens)
+            assertEquals(1046, t.totalTokens())
         } finally {
             session.dispose()
         }
@@ -44,19 +45,20 @@ class ClaudeSessionTokenAccountingHeadlessTest : BasePlatformTestCase() {
                 ClaudeEvent.LiveUsage(inputTokens = 10, cacheCreationTokens = 100, cacheReadTokens = 0, outputTokens = 5),
             )
             flush()
-            assertEquals(115, session.totalTokens())
+            val t = session.tokens
+            assertEquals(115, t.totalTokens())
 
             session.handleEventForTest(ClaudeEvent.MessageStart)
             flush()
-            assertEquals(0, session.liveOutputTokens)
-            assertEquals(115, session.sessionInputTokens + session.sessionCacheCreationTokens + session.sessionCacheReadTokens + session.sessionOutputTokens)
-            assertEquals(115, session.totalTokens())
+            assertEquals(0, t.liveOutputTokens)
+            assertEquals(115, t.sessionInputTokens + t.sessionCacheCreationTokens + t.sessionCacheReadTokens + t.sessionOutputTokens)
+            assertEquals(115, t.totalTokens())
 
             session.handleEventForTest(
                 ClaudeEvent.LiveUsage(inputTokens = 20, cacheCreationTokens = 0, cacheReadTokens = 50, outputTokens = 8),
             )
             flush()
-            assertEquals(115 + 78, session.totalTokens())
+            assertEquals(115 + 78, t.totalTokens())
         } finally {
             session.dispose()
         }

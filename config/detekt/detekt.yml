@@ -650,7 +650,7 @@ style:
     # DIFF_ADDED_BG_LIGHT = 0xE6FFEC adds a line and explains nothing. The behavioural constants in those two
     # files (timer period, hue step, luminance coefficients, surface nudge) are named anyway, because those
     # genuinely encode decisions someone might revisit — the exclusion buys silence on the palette, not on them.
-    excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/androidUnitTest/**', '**/androidInstrumentedTest/**', '**/jsTest/**', '**/iosTest/**', '**/*.kts', '**/ui/ChatTheme.kt', '**/ui/jcef/JcefTheme.kt']
+    excludes: ['**/test/**', '**/androidTest/**', '**/commonTest/**', '**/jvmTest/**', '**/androidUnitTest/**', '**/androidInstrumentedTest/**', '**/jsTest/**', '**/iosTest/**', '**/*.kts', '**/view/feed/ChatTheme.kt', '**/view/payload/JcefTheme.kt']
     ignoreNumbers:
       - '-1'
       - '0'

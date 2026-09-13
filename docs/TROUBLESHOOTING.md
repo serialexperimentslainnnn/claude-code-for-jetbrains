@@ -260,9 +260,30 @@ support itself is tracked under
 
 ## Logs
 
-The IDE writes a single rolling log file. The plugin tags its entries with
-`claudejb`, `ClaudeSession`, `ClaudeProcess`, `PermissionBroker`,
-`ProtocolParser`, or `DiffPresenter`.
+The quickest route to a report is the **Log** view in the chat's view row,
+next to Guard and Vulnerabilities: the plugin's own entries, filtered by
+level, with a *Copy* button that puts a report-ready text on the clipboard
+(plugin, IDE, OS and binary versions in the header) and a *Debug* switch that
+turns the trace on for the current IDE session. Credentials, `sk-ant-…` keys
+and your home directory are redacted before a line is stored, and prompt text
+is never logged. Paths outside the project are kept — which binary ran, which
+file the guard refused — because a report needs them, so read the copied
+text once before publishing it.
+
+The same lines go to the IDE's single rolling log file, `idea.log`. Every
+entry is written under the category of the class that wrote it,
+`#dev.lain.claudejb.<package>.<Class>` — `controller.process.ClaudeProcess`
+for the binary's lifecycle and stderr, `controller.session.guard.SessionGuard`
+for the guard's verdicts, `view.jcef.JcefHost` for the chat page's own
+console — so
+`claudejb` matches all of them. Three levels, one meaning each: `WARN` is
+something that went wrong, `INFO` a lifecycle step, `DEBUG` the trace, which
+is off unless switched on.
+
+To trace before the plugin loads, or across restarts, use **Help ▸ Diagnostic
+Tools ▸ Debug Log Settings** and add `#dev.lain.claudejb` (a full class
+category narrows it). A sandbox IDE started with `./gradlew runIde` traces
+from the start.
 
 Log file locations:
 

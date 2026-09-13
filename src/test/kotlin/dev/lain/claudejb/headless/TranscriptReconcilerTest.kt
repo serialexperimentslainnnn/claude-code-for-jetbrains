@@ -1,9 +1,9 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.Speaker
-import dev.lain.claudejb.session.TranscriptModel
-import dev.lain.claudejb.session.TranscriptReconciler
+import dev.lain.claudejb.model.session.transcript.Speaker
+import dev.lain.claudejb.model.session.transcript.TranscriptModel
+import dev.lain.claudejb.model.session.transcript.TranscriptReconciler
 
 class TranscriptReconcilerTest : BasePlatformTestCase() {
 

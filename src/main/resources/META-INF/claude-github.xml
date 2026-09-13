@@ -1,0 +1,11 @@
+<!--
+  Optional-dependency descriptor, loaded by the IntelliJ Platform ONLY when the bundled GitHub plugin (id
+  `org.jetbrains.plugins.github`) is present and enabled. It satisfies the `config-file` requirement of the
+  optional <depends> in plugin.xml, which grants runtime classloader access to `org.jetbrains.plugins.github.*`
+  (the Gradle `bundledPlugin("org.jetbrains.plugins.github")` dependency only covers compilation).
+
+  DELIBERATELY OPTIONAL: an IDE without the GitHub plugin must still load this plugin; the pull-request tools
+  answer "not available" (see GitHubGateway.isAvailable). No extensions are registered here on purpose.
+-->
+<idea-plugin>
+</idea-plugin>

@@ -5,40 +5,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **Every `private` declaration must be used by its own file.** The neighbouring [ReachabilityContractTest]
- * asks the same question of the whole tree and declares two shapes out of scope: top-level `private`
- * declarations (it skips any line starting with `private `) and anything NESTED (it skips indented lines).
- * This is that gap, and it is a gap with a body count.
- *
- * **What fell through it.** Six `AnAction` subclasses — New Chat, Log out, Interrupt, Commands, Git, Close All
- * Diffs — lived as `private class`es inside `ClaudeToolWindowFactory`. When their buttons moved into the
- * composer and `setTitleActions` stopped being called, all six became unreachable: 90 lines of live-looking
- * UI code, with icons, enablement rules and threading arguments, registered by nothing. The Kotlin compiler
- * did not warn, detekt did not warn, `koverVerify` was happy and `ReachabilityContractTest` passed. Nothing in
- * this build could see them.
- *
- * **Why this question is exact where the other one is a judgement call.** `private` means *this file and
- * nowhere else* — so unlike the tree-wide scan, there is no cross-file guessing, no import to resolve and no
- * ambiguity about which `Owner.member` a bare name belongs to. If the name is not written again in the file
- * that declares it, nothing can be calling it. That is a fact about Kotlin's visibility rules rather than a
- * heuristic about this codebase's style, which is what makes the gate safe to fail the build on.
- *
- * The reduction — comments out, string literals out, template expressions kept — is [MainSources], shared with
- * the tree-wide scan so the two cannot disagree about what counts as a mention.
- *
- * WHAT IS SKIPPED, and why each one would otherwise be a false alarm:
- *  - **`override`s**: called through the supertype, so their own name proves nothing.
- *  - **`private constructor`**: invoked by writing the CLASS's name, never its own.
- *  - **`private companion object`** and other anonymous forms: there is no name to look for.
- *  - **The declaration's own body**: a class that names itself in its own `toString`, a recursive function, a
- *    factory returning its own type — all natural, and none of them evidence that anything outside asks.
- *
- * THE BLIND SPOT, named rather than left to be discovered: **two dead private declarations that name each
- * other both read as live.** The question is "is this name written elsewhere in the file", not "is it reachable
- * from something that runs". Closing that needs a call graph, which needs a compiler — the same boundary
- * [ReachabilityContractTest] draws for the same reason.
- */
 class PrivateReachabilityContractTest {
 
     private val files: List<File> = MainSources.files()

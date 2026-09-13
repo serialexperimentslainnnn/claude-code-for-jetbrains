@@ -1,0 +1,73 @@
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px 2px;
+}
+.att-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(240px, 100%);
+  font-size: 11.5px;
+  color: var(--text);
+  padding: 4px 6px 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  transition: border-color 0.14s;
+}
+.att-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.att-icon {
+  flex: 0 0 auto;
+  color: var(--dim);
+  display: inline-flex;
+  font-size: 12px;
+  line-height: 1;
+}
+.att-chip .att-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  color: var(--dim);
+  transition:
+    color 0.14s,
+    background-color 0.14s,
+    transform 0.1s;
+}
+.attach-btn:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.attach-btn:active {
+  transform: scale(0.96);
+}
+.attach-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: currentColor;
+}
+
+.composer-card.drag-over {
+  border-color: var(--accent);
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px var(--accent-soft);
+}

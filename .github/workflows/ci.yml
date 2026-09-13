@@ -528,7 +528,7 @@ jobs:
             | grep -vE '^dev/lain/claudejb/.*\.class$' \
             | grep -vE '^META-INF/' \
             | grep -vE '^icons/[^/]+\.svg$' \
-            | grep -vE '^jcef/([^/]+\.(js|html)|css/[^/]+\.css)$' > /tmp/unexpected.txt || true
+            | grep -vE '^jcef/(.+\.(js|html)|css/.+\.css)$' > /tmp/unexpected.txt || true
           if [ -s /tmp/unexpected.txt ]; then
             echo "::error::unexpected entries in the plugin jar — either they must not ship, or add their family to this allowlist"
             cat /tmp/unexpected.txt

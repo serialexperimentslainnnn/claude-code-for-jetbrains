@@ -6,9 +6,9 @@ class RateLimitIntegrationTest : FakeClaudeTestBase() {
         val session = newSessionWith("rate_limit.jsonl")
         session.send("status?")
 
-        waitUntil("rate limit received") { session.rateLimit != null }
+        waitUntil("rate limit received") { session.signals.rateLimit != null }
 
-        val rl = session.rateLimit!!
+        val rl = session.signals.rateLimit!!
         assertEquals("allowed_warning", rl.status)
         assertEquals("five_hour", rl.rateLimitType)
         assertEquals(93, rl.utilizationPercent())

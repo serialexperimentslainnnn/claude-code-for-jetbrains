@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleDetection": "legacy",
+    "strict": true,
+    "noEmitOnError": true,
+    "removeComments": true,
+    "types": [],
+    "skipLibCheck": true,
+    "newLine": "lf",
+    "rootDir": "src/main/ts/jcef",
+    "outDir": "build/web/jcef"
+  },
+  "include": ["src/main/ts/jcef/**/*.ts"]
+}

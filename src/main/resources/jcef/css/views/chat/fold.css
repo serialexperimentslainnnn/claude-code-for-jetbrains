@@ -1,0 +1,57 @@
+details.fold {
+  margin: 8px 0;
+  animation: rise 0.22s var(--ease) both;
+}
+details.fold > summary {
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 12.5px;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color 0.14s,
+    color 0.14s;
+}
+details.fold > summary:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.fold-hint {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+  opacity: 0.6;
+}
+details.fold[open] > summary .fold-hint {
+  display: none;
+}
+details.fold > summary .tri {
+  display: inline-block;
+  flex: 0 0 auto;
+  transition: transform 0.16s var(--ease);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent var(--dim);
+}
+details.fold[open] > summary .tri {
+  transform: rotate(90deg);
+}
+details.fold .fold-body {
+  padding: 8px 8px 4px 22px;
+  color: var(--dim);
+  font-size: 0.96em;
+  border-left: 2px solid var(--border);
+  margin: 4px 0 0 10px;
+}
+details.fold .fold-body p:first-child {
+  margin-top: 0;
+}

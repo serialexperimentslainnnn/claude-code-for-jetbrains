@@ -1,0 +1,60 @@
+.find-bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow);
+  animation: pop 0.14s var(--ease);
+}
+.find-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12.5px;
+  width: 200px;
+  max-width: 100%;
+  min-width: 80px;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  margin: 0;
+}
+.find-input::placeholder {
+  color: var(--dim);
+}
+.find-count {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 3.5em;
+  text-align: right;
+  white-space: nowrap;
+}
+.find-x {
+  width: 22px;
+  height: 22px;
+}
+.find-x:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+
+.tool-elapsed {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

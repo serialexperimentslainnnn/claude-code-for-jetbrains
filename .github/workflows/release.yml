@@ -389,6 +389,13 @@ jobs:
           EOF
           gh release create "$TAG" --draft --title "$TAG" --notes-file /tmp/notes.md --verify-tag
 
+      # The chat page is TypeScript compiled by `tsc` during the Gradle build (`compileWeb`), so the
+      # publish runner needs node. Pinned by SHA like every other action here; the version comes from
+      # `.nvmrc`, the one place it is written.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin

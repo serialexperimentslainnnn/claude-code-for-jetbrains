@@ -49,7 +49,7 @@ one of them is a legal obligation in the plugin's distribution market:
 
 - **`lang` on the document is declared** (`shell.html`). Without it a screen reader pronounces the interface
   with the wrong phonetics — WCAG 3.1.1 Language of Page, Level **A**, and among the six most common failures
-  on the web. It is pinned by a test in `src/test/frontend/accessibility.test.js`.
+  on the web. It is pinned by a test in `src/test/frontend/contracts/accessibility.test.js`.
 - **Layout must tolerate text it did not author.** Model output, file paths and tool names are arbitrary
   length and arbitrary script; the transcript and composer wrap and scroll rather than assuming English-width
   content. That is a robustness property, and it happens to be most of what makes a later translation

@@ -1,12 +1,12 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.process.CredentialsVault
-import dev.lain.claudejb.session.AuthGate
-import dev.lain.claudejb.session.Credential
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsStore
+import dev.lain.claudejb.controller.process.credentials.CredentialsVault
+import dev.lain.claudejb.controller.session.auth.AuthGate
+import dev.lain.claudejb.controller.session.auth.Credential
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsStore
 import java.io.File
 import java.nio.file.Files
 

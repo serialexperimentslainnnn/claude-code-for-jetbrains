@@ -1,8 +1,8 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.context.Attachment
-import dev.lain.claudejb.ui.AttachmentTray
+import dev.lain.claudejb.model.context.Attachment
+import dev.lain.claudejb.view.feed.AttachmentTray
 
 class AttachmentTrayBatchHeadlessTest : BasePlatformTestCase() {
 

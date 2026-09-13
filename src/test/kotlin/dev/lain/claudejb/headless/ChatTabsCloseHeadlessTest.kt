@@ -2,9 +2,9 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.ChatSessionManager
-import dev.lain.claudejb.ui.ChatTabsPanel
-import dev.lain.claudejb.ui.TabSessionCommands
+import dev.lain.claudejb.controller.commands.TabSessionCommands
+import dev.lain.claudejb.controller.session.ChatSessionManager
+import dev.lain.claudejb.view.window.ChatTabsPanel
 import javax.swing.JPanel
 
 class ChatTabsCloseHeadlessTest : BasePlatformTestCase() {
@@ -178,6 +178,19 @@ class ChatTabsCloseHeadlessTest : BasePlatformTestCase() {
         flush()
         assertEquals("exactly one, however many events are pumped", listOf("Replacement"), opened)
         assertEquals(listOf("Replacement"), tabs.all().map { it.title })
+    }
+
+    fun `test a teardown that throws still opens the replacement`() {
+        wireCommands()
+        tabs.onEvents(selected = {}, closed = { error("the session refused to die") })
+        val a = open("A")
+        tabs.select(a)
+
+        val outcome = runCatching { tabs.close(a) }
+        flush()
+
+        assertTrue("the failure is not swallowed", outcome.isFailure)
+        assertEquals("but the user is not left with an empty tool window", listOf("Replacement"), opened)
     }
 
     fun `test a strip disposed before the replacement runs opens nothing`() {

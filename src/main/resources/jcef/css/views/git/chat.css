@@ -1,0 +1,36 @@
+.gitchat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px clamp(10px, 2.5vw, 20px) 14px;
+}
+.gitchat[hidden] {
+  display: none;
+}
+.gitchat-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gitchat-status {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 11px;
+}
+.gitchat-status[hidden] {
+  display: none;
+}
+
+.git-branch-pick {
+  min-height: 24px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.git-branch-pick:hover {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--text) 12%);
+}

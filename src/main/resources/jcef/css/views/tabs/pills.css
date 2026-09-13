@@ -1,0 +1,73 @@
+.tab-capsule:not(.subtab-capsule) .pill-wrap {
+  width: 123px;
+  height: 22px;
+  padding: 0 2px 0 8px;
+}
+.tab-capsule:not(.subtab-capsule) .pill-wrap.selected {
+  height: 27px;
+}
+.tab-capsule:not(.subtab-capsule) .pill {
+  font-size: 10.5px;
+}
+.tab-capsule:not(.subtab-capsule) .pill.selected {
+  font-size: 11.5px;
+}
+.tab-capsule:not(.subtab-capsule) .pill-x {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+
+.pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--dim);
+}
+.pill-dot.running {
+  background: var(--info);
+  animation: pillRun 1.3s ease-in-out infinite;
+}
+@keyframes pillRun {
+  0%,
+  100% {
+    background: var(--info);
+  }
+  50% {
+    background: var(--warning);
+  }
+}
+body.reduced-motion .pill-dot.running {
+  animation: none;
+  background: var(--info);
+}
+.pill-dot.completed {
+  background: var(--success);
+}
+.pill-dot.failed,
+.pill-dot.stopped {
+  background: var(--danger);
+}
+.pill-dot.attention {
+  background: var(--neon-orange);
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}

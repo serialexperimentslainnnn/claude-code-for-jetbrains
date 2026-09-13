@@ -1,10 +1,10 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsScope
-import dev.lain.claudejb.settings.SettingsStore
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsScope
+import dev.lain.claudejb.model.settings.SettingsStore
 
 class SettingsStoreHeadlessTest : BasePlatformTestCase() {
 
@@ -121,7 +121,7 @@ class SettingsStoreHeadlessTest : BasePlatformTestCase() {
     fun `test the defaults are Opus, ask each time, high effort, guard on`() {
         SecretStore.clear(SecretStore.SETTINGS_JSON)
         val fresh = SettingsStore.load(scope)
-        assertEquals(dev.lain.claudejb.session.ClaudeSession.DEFAULT_MODEL, fresh.model)
+        assertEquals(dev.lain.claudejb.model.settings.LaunchDefaults.DEFAULT_MODEL, fresh.model)
         assertEquals("opus[1m]", fresh.model)
         assertEquals("default", fresh.permissionMode)
         assertEquals("high", fresh.effort)

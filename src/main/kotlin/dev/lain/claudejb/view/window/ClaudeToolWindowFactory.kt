@@ -1,0 +1,201 @@
+package dev.lain.claudejb.view.window
+
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.ui.content.ContentFactory
+import dev.lain.claudejb.controller.commands.SessionDiffAction
+import dev.lain.claudejb.controller.commands.TabSessionCommands
+import dev.lain.claudejb.controller.commands.git.GitContextActions
+import dev.lain.claudejb.controller.commands.git.GitIdeMenu
+import dev.lain.claudejb.controller.commands.git.GitPromptedActions
+import dev.lain.claudejb.controller.session.AttentionLanding
+import dev.lain.claudejb.controller.session.AttentionReason
+import dev.lain.claudejb.controller.session.ChatSessionManager
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.controller.session.SessionListener
+import dev.lain.claudejb.model.session.launch.LaunchOptions
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.view.settings.ClaudeSettingsConfigurable
+import javax.swing.JComponent
+
+class ClaudeToolWindowFactory : ToolWindowFactory, DumbAware {
+
+    override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        val settings = ClaudeSettings.getInstance(project)
+        com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().execute { settings.warm() }
+        val manager = ChatSessionManager.getInstance(project)
+        val cm = toolWindow.contentManager
+
+        val tabs = ChatTabsPanel()
+        tabs.onEvents(
+            selected = { tab -> tab?.session?.let { manager.setActive(it) } },
+            closed = { tab -> tab.session?.let { manager.remove(it) } },
+        )
+        val content = ContentFactory.getInstance().createContent(tabs, "", false)
+        content.isCloseable = false
+        content.setPreferredFocusedComponent { tabs.selectedChat?.focusTarget() }
+        content.setDisposer(tabs)
+        cm.addContent(content)
+
+        val commands = TabSessionCommands(project, tabs) { session, select -> openChat(project, tabs, session, select) }
+        tabs.commands = commands
+        commands.restoreOrCreate()
+
+        toolWindow.setAdditionalGearActions(buildGearGroup(project, tabs, commands))
+    }
+
+    private fun openChat(project: Project, tabs: ChatTabsPanel, session: ClaudeSession, select: Boolean = true) {
+        session.settings.adopt(LaunchOptions.from(ClaudeSettings.getInstance(project)))
+        session.start()
+
+        val panel = JcefChatPanel(project, session)
+        val tab = tabs.add(panel, tabTitle(session.title), session.title, panel)
+        session.addListener(object : SessionListener {
+            override fun onAttention(reason: AttentionReason, landing: AttentionLanding) =
+                onSessionAttention(project, tabs, session, reason, landing)
+            override fun onTitleChanged() {
+                tabs.tabFor(session)?.let { tabs.relabel(it, tabTitle(session.title), session.title) }
+            }
+        })
+        if (select) {
+            panel.host.whenWebReady {
+                if (tabs.all().lastOrNull() === tab) tabs.select(tab)
+            }
+        }
+    }
+
+    private fun onSessionAttention(
+        project: Project,
+        tabs: ChatTabsPanel,
+        session: ClaudeSession,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ) {
+        val tw = resolveToolWindow(project)
+        val tab = tabs.tabFor(session) ?: return
+        val tabOnScreen = tw != null && tw.isVisible && tabs.selected === tab
+        if (tabOnScreen && showsWhereItLanded(tab, reason, landing)) return
+
+        tabs.badge(tab, true)
+
+        val now = System.currentTimeMillis()
+        if (now - tab.lastNotified <= NOTIFY_THROTTLE_MS) return
+        tab.lastNotified = now
+
+        val text = when (reason) {
+            AttentionReason.PERMISSION -> "Claude needs your approval in \"${session.title}\"."
+            AttentionReason.TURN_DONE -> "Claude finished responding in \"${session.title}\"."
+            AttentionReason.ERROR -> "Claude hit an error in \"${session.title}\"."
+            AttentionReason.GUARD_BLOCKED -> "The guard blocked a tool call in \"${session.title}\"."
+        }
+        NotificationGroupManager.getInstance().getNotificationGroup("Claude Code")
+            .createNotification("Claude Code", text, notificationTypeFor(reason))
+            .addAction(
+                NotificationAction.createSimpleExpiring("Open") {
+                    tabs.tabFor(session)?.let { tabs.select(it) }
+                    resolveToolWindow(project)?.activate(null)
+                },
+            )
+            .notify(project)
+    }
+
+    private fun showsWhereItLanded(
+        tab: ChatTabsPanel.ChatTab,
+        reason: AttentionReason,
+        landing: AttentionLanding,
+    ): Boolean =
+        reason != AttentionReason.GUARD_BLOCKED ||
+            (tab.component as? JcefChatPanel)?.transcript?.shows(landing) != false
+
+    private fun notificationTypeFor(reason: AttentionReason): NotificationType = when (reason) {
+        AttentionReason.ERROR -> NotificationType.ERROR
+        AttentionReason.GUARD_BLOCKED -> NotificationType.WARNING
+        else -> NotificationType.INFORMATION
+    }
+
+    private fun resolveToolWindow(project: Project): ToolWindow? =
+        ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)
+
+    private fun activePanel(tabs: ChatTabsPanel): JcefChatPanel? = tabs.selectedChat
+
+    private fun buildGearGroup(project: Project, tabs: ChatTabsPanel, commands: TabSessionCommands) =
+        DefaultActionGroup().apply {
+            add(simple("Session Info (Context · Cost · Account · MCP)…") { activePanel(tabs)?.openDashboard() })
+            add(simple("Dependency Vulnerabilities…") { activePanel(tabs)?.security?.showVulnView() })
+            add(simple("Agents") { activePanel(tabs)?.let { InfoDialogs.showAgents(project, it.session) } })
+            add(simple("Security Guard Log (Blocked · Allowed · Whitelisted · Disabled)") { showGuardView(project) })
+            add(SessionDiffAction(project, tabs))
+            add(simple("Binary Version…") { activePanel(tabs)?.let { InfoDialogs.showBinaryVersion(project, it.session) } })
+            add(simple("Effective Settings…") { activePanel(tabs)?.let { InfoDialogs.showEffectiveSettings(project, it.session) } })
+            addSeparator()
+            add(simple("Rename Session…") { commands.renameActiveSession() })
+            add(simple("Fork Session") { commands.forkActiveSession() })
+            add(simple("Open Previous Session…") { commands.openPreviousSession() })
+            add(simple("Add Current File as @-context") { activePanel(tabs)?.mentionCurrentFile() })
+            addSeparator()
+            addAll(GitContextActions.gearEntries(project))
+            addAll(
+                GitPromptedActions.gearEntries(project) {
+                    activePanel(project)?.gitChat?.session()
+                        ?: ChatSessionManager.getInstance(project).gitChatOrCreate()
+                },
+            )
+            add(GitIdeMenu.gearEntry())
+            addSeparator()
+            add(
+                simple("Settings…") {
+                    ShowSettingsUtil.getInstance().showSettingsDialog(project, ClaudeSettingsConfigurable::class.java)
+                },
+            )
+        }
+
+    private fun tabTitle(title: String): String =
+        TabSessionCommands.truncate(title.trim().ifBlank { "Chat" }, TAB_TITLE_MAX)
+
+    private fun simple(text: String, action: () -> Unit): AnAction = object : AnAction(text) {
+        override fun actionPerformed(e: AnActionEvent) = action()
+    }
+
+    companion object {
+        const val TOOL_WINDOW_ID = "Claude Code"
+
+        private fun tabsPanel(project: Project): ChatTabsPanel? {
+            val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return null
+            return toolWindow.contentManager.contents.firstNotNullOfOrNull { it.component as? ChatTabsPanel }
+        }
+
+        fun activePanel(project: Project): JcefChatPanel? = tabsPanel(project)?.selectedChat
+
+        internal fun chatTabs(project: Project): ChatTabsPanel? = tabsPanel(project)
+
+        fun contextComponent(project: Project): JComponent? = tabsPanel(project)
+
+        fun newChat(project: Project) {
+            tabsPanel(project)?.commands?.newChat()
+        }
+
+        fun showGuardView(project: Project) {
+            activePanel(project)?.security?.openGuardView()
+        }
+
+        fun showGitView(project: Project) {
+            val panel = activePanel(project) ?: return
+            panel.pushGit()
+            panel.host.exec("window.cc.showGitView && window.cc.showGitView()")
+        }
+
+        const val NOTIFY_THROTTLE_MS = 3000L
+
+        const val TAB_TITLE_MAX = 22
+    }
+}

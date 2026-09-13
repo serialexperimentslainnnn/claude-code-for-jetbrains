@@ -28,7 +28,7 @@ plugins {
 }
 
 group = "dev.lain"
-version = "5.8.1"
+version = "6.0.0"
 
 repositories {
     mavenCentral()
@@ -103,6 +103,16 @@ dependencies {
         // without Git, or a project that is not a working copy, must still load the plugin; `GitGateway` is the
         // only file that names a git4idea type and it is never reached unless `GitAvailability` says yes.
         bundledPlugin("Git4Idea")
+        // Bundled GitHub plugin: compile-only coupling for the pull-request data (`GHAccountsUtil`, the API
+        // executor, `GHGQLRequests`). OPTIONAL in META-INF/plugin.xml (config-file claude-github.xml);
+        // `GitHubGateway` is the only file that names an org.jetbrains.plugins.github type and checks the
+        // plugin before touching it, so an IDE without it answers "not available" instead of dying.
+        bundledPlugin("org.jetbrains.plugins.github")
+        // Bundled Java plugin: compile-only coupling for UAST (the unified AST over Java, Kotlin, Scala, Groovy),
+        // which ships inside it. OPTIONAL in META-INF/plugin.xml (config-file claude-java.xml): PyCharm and the
+        // other IDEs without Java load the plugin without the uast domain; UastTools is the only file naming
+        // org.jetbrains.uast and the catalog row checks JavaAvailability before touching it.
+        bundledPlugin("com.intellij.java")
     }
 
     // JSON (de)serialization for the stream-json / control protocol.
@@ -153,7 +163,37 @@ tasks {
     // Kept as a build step rather than a checked-in copy under `src/main/resources/`, so the notices cannot
     // drift out of sync with the files they describe: one source of truth at the repository root, packaged at
     // build time. `THIRD-PARTY-NOTICES.md` is surfaced to the user by the About dialog (see InfoDialogs).
+    val npm = if (System.getProperty("os.name").startsWith("Windows")) "npm.cmd" else "npm"
+
+    val npmInstall by registering(Exec::class) {
+        inputs.files("package.json", "package-lock.json")
+        outputs.file("node_modules/.package-lock.json")
+        commandLine(npm, "ci")
+    }
+
+    val compileWeb by registering(Exec::class) {
+        dependsOn(npmInstall)
+        inputs.dir("src/main/ts/jcef")
+        inputs.file("tsconfig.json")
+        outputs.dir(layout.buildDirectory.dir("web"))
+        doFirst { delete(layout.buildDirectory.dir("web")) }
+        commandLine(npm, "run", "build")
+    }
+
+    val frontendTest by registering(Exec::class) {
+        dependsOn(compileWeb)
+        inputs.dir("src/test/frontend")
+        inputs.dir("src/main/resources/jcef")
+        inputs.dir("src/main/ts/jcef")
+        outputs.dir(layout.buildDirectory.dir("reports/frontend"))
+        environment("CI", "true")
+        commandLine(npm, "test")
+    }
+
+    check { dependsOn(frontendTest) }
+
     processResources {
+        from(compileWeb)
         // The distributed map is written FOR this repository and lands in the artifact by accident: the one
         // under `src/main/resources/jcef/` is a resource like any other, so it shipped inside the plugin jar —
         // 20 KB of internal design notes and source paths handed to every user, for nothing. Excluded by
@@ -166,7 +206,7 @@ tasks {
         from(rootProject.file("LICENSES")) { into("META-INF/licenses") }
     }
     runIde {
-        jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false")
+        jvmArgs("-Djb.privacy.policy.text=<!--999.999-->", "-Djb.consents.confirmation.enabled=false", "-Dclaudejb.debug=true")
     }
     test {
         // Exclude the live drift check: it downloads the latest SDK from npm and spawns the real binary,
@@ -413,6 +453,7 @@ intellijPlatform {
         // 'JetBrains' in the plugin name is a Marketplace naming lint, not an API problem; muting it lets
         // the verifier proceed to the actual binary-compatibility / internal-API checks we care about.
         freeArgs = listOf("-mute", "TemplateWordInPluginName")
+        externalPrefixes = listOf("org.jetbrains.uast")
 
         // The "zero deprecations" rule, ENFORCED rather than merely written down.
         //
@@ -428,19 +469,19 @@ intellijPlatform {
         // experimental API is acceptable with a reason; a deprecated one is not acceptable at all, because
         // it has an announced removal date and the plugin has to keep working across the IDE range.
         //
-        // MISSING_DEPENDENCIES is here for a reason found the hard way, and it is the most load-bearing entry
-        // in this list: a mandatory `<depends>` that the target IDE cannot satisfy means **the plugin does not
-        // load at all** — not a degraded feature, not a warning, nothing. The verifier detects it perfectly
-        // (pointed at 253.28294.334 it says "1 missing mandatory dependency" in as many words) and, without
-        // this line, still finished with BUILD SUCCESSFUL. A gate that finds the fault and passes anyway is
-        // worse than no gate: it is a green tick over a plugin that cannot start.
+        // MISSING_DEPENDENCIES is deliberately NOT here either. A mandatory `<depends>` the target IDE cannot
+        // satisfy means the plugin does not load at all, and the verifier does detect it — but the Gradle plugin
+        // (2.16.0, and 2.18.1 alike) parses the verifier's stdout by the "Missing dependencies" heading and
+        // cannot tell `(optional): Unavailable` from a mandatory gap, so with that level on, every PyCharm
+        // target fails on the optional com.intellij.modules.java dependency that PyCharm lacks by design.
+        // The protection that level gave lives in PluginDependenciesContractTest instead: every non-optional
+        // <depends> must be a platform module every IntelliJ-based IDE ships.
         failureLevel =
             listOf(
                 VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS,
                 VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES,
                 VerifyPluginTask.FailureLevel.OVERRIDE_ONLY_API_USAGES,
                 VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES,
-                VerifyPluginTask.FailureLevel.MISSING_DEPENDENCIES,
             )
         ides {
             // No hardcoded path in the repo: a developer can point the verifier at local IDE installs to skip the
@@ -512,6 +553,7 @@ intellijPlatform {
 kotlin {
     jvmToolchain(21)
     compilerOptions {
+        allWarningsAsErrors.set(true)
         freeCompilerArgs.add("-Xjvm-default=all")
     }
 }
@@ -589,6 +631,12 @@ kover {
             // other IDE process, which this build never instruments.
             disabledForTestTasks.add("uiTest")
         }
+        // The `uiTest` source set is a custom one, so kover reads it as code to measure rather than as tests
+        // that measure: its RemoteRobot suites showed up as a package `dev.lain.claudejb.ui` at 0% and failed the
+        // floor. They drive an external IDE and are never code under test.
+        sources {
+            excludedSourceSets.add("uiTest")
+        }
     }
     reports {
         filters {
@@ -596,16 +644,27 @@ kover {
                 // Need a live IDE / live Chromium to execute at all. Covered instead by the vitest suite,
                 // which drives the REAL shipped JS (`npm test` is what counts it), and by the manual UI pass
                 // the release checklist requires.
-                classes("dev.lain.claudejb.ui.*")
+                classes(
+                    "dev.lain.claudejb.view.*",
+                    "dev.lain.claudejb.model.bridge.*",
+                    "dev.lain.claudejb.controller.bridge.*",
+                    "dev.lain.claudejb.controller.commands.*",
+                    "dev.lain.claudejb.controller.context.Link*",
+                )
                 // Thin IDE-action shells: their bodies are one delegate call each, and exercising them means
                 // booting an IDE to assert that a menu item calls a method.
-                classes("dev.lain.claudejb.actions.*")
+                classes("dev.lain.claudejb.controller.actions.*")
                 // Wrappers over the OS — system clipboard, process spawn, shell environment. Most of what is
                 // uncovered here cannot run on a CI box at all. A KNOWN GAP, listed so it is not mistaken for
-                // coverage; the parts that are pure ARE tested — `ClipboardCli`/`ImageAttachments` in `context/`
-                // (ClipboardCliTest, ImageAttachmentsTest) and `EnvScriptLoader.parse` in `process/`. Those
-                // names are load-bearing: a comment citing a file that no longer exists is worse than none.
-                classes("dev.lain.claudejb.context.*", "dev.lain.claudejb.process.*")
+                // coverage; the parts that are pure ARE tested — `ClipboardCli` in `controller/context/`,
+                // `ImageAttachments` in `model/context/` (ClipboardCliTest, ImageAttachmentsTest) and
+                // `EnvScriptLoader.parse` in `model/settings/env/`. Those names are load-bearing: a comment
+                // citing a file that no longer exists is worse than none.
+                classes(
+                    "dev.lain.claudejb.model.context.*",
+                    "dev.lain.claudejb.controller.context.*",
+                    "dev.lain.claudejb.controller.process.*",
+                )
                 // The Git integration's IDE-bound half: the availability probe (asks the running IDE's plugin
                 // set), the git4idea gateway (spawns `git log` through the platform) and the hand-off to the
                 // Version Control tool window. Exercising any of them means a live IDE AND a real repository on
@@ -620,10 +679,10 @@ kover {
                 // match. A lambda added inside an excluded object would otherwise start counting against the
                 // package's floor, which reads as coverage erosion in code that was never gated.
                 classes(
-                    "dev.lain.claudejb.git.GitAvailability*",
-                    "dev.lain.claudejb.git.GitGateway*",
-                    "dev.lain.claudejb.git.GitHistoryService*",
-                    "dev.lain.claudejb.git.GitLogNavigator*",
+                    "dev.lain.claudejb.controller.git.GitAvailability*",
+                    "dev.lain.claudejb.controller.git.GitGateway*",
+                    "dev.lain.claudejb.controller.git.GitHistoryService*",
+                    "dev.lain.claudejb.controller.git.GitLogNavigator*",
                 )
                 // A single line delegating to PluginManager.isPluginInstalled. It exists precisely BECAUSE it
                 // must run against a real platform (PluginId is a Kotlin class since 2025.2, so the naive call
@@ -635,7 +694,22 @@ kover {
                 // needs a Project, the pooled thread and the EDT. `OsvScanner` is deliberately NOT excluded —
                 // it talks to OsvHttp through a plain call and its gap is real debt, so it stays gated and
                 // visible rather than being defined out of the measurement.
-                classes("dev.lain.claudejb.vuln.OsvHttp*", "dev.lain.claudejb.vuln.VulnService*")
+                classes("dev.lain.claudejb.controller.vuln.OsvHttp*", "dev.lain.claudejb.controller.vuln.VulnService*")
+                // The IDE MCP servers' platform-bound half: the project `@Service` that owns the sockets and
+                // the approval notifications, the catalog that binds servers to a Project, and the tools
+                // themselves (FileDocumentManager, FindInProjectUtil, FilenameIndex — every one needs a live
+                // index). `ServerEndpoint`, `SocketHome` and `GuardGate` are NOT excluded: they run on a real
+                // Unix socket and the real guard in unit tests, and the whole `model.mcp` layer is pure.
+                classes(
+                    "dev.lain.claudejb.controller.mcp.IdeMcpService*",
+                    "dev.lain.claudejb.controller.mcp.IdeToolCatalog*",
+                    "dev.lain.claudejb.controller.mcp.tools.*",
+                    "dev.lain.claudejb.controller.db.*",
+                )
+                // The GitHub plugin's gateway: every call needs the plugin loaded, an account in the IDE's safe and
+                // GitHub itself — the same grounds as `controller.db.*`. Its availability check and the Marketplace
+                // gateway stay measured: the first runs headless, the second takes its fetch as a parameter.
+                classes("dev.lain.claudejb.controller.github.GitHubGateway*")
             }
         }
         verify {

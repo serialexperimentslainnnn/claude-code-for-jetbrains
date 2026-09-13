@@ -3,13 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "description": "Build-time tooling for the Claude Code Native IntelliJ plugin: frontend tests and protocol-drift reference. Nothing here is published or shipped.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "test": "vitest run",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/main/resources/jcef/**/*.{js,css,html}\" \"src/test/frontend/**/*.js\"",
-    "format:check": "prettier --check \"src/main/resources/jcef/**/*.{js,css,html}\" \"src/test/frontend/**/*.js\""
+    "format": "prettier --write \"src/main/resources/jcef/**/*.{js,css,html}\" \"src/main/ts/**/*.ts\" \"src/test/frontend/**/*.js\"",
+    "format:check": "prettier --check \"src/main/resources/jcef/**/*.{js,css,html}\" \"src/main/ts/**/*.ts\" \"src/test/frontend/**/*.js\""
   },
   "license": "GPL-3.0-only",
   "type": "commonjs",

@@ -2,13 +2,13 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.protocol.ClaudeEvent
-import dev.lain.claudejb.protocol.TaskPatch
-import dev.lain.claudejb.protocol.TaskStartedInfo
-import dev.lain.claudejb.protocol.TaskUpdatedInfo
-import dev.lain.claudejb.session.AgentMeta
-import dev.lain.claudejb.session.AgentStatus
-import dev.lain.claudejb.session.ClaudeSession
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.protocol.ClaudeEvent
+import dev.lain.claudejb.model.protocol.models.TaskPatch
+import dev.lain.claudejb.model.protocol.models.TaskStartedInfo
+import dev.lain.claudejb.model.protocol.models.TaskUpdatedInfo
+import dev.lain.claudejb.model.session.agents.AgentMeta
+import dev.lain.claudejb.model.session.agents.AgentStatus
 import java.nio.file.Files
 import java.nio.file.Path
 

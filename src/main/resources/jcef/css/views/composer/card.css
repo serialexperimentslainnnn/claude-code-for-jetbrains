@@ -1,0 +1,206 @@
+.composer-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 8px 8px 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition:
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.composer-card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow:
+    var(--shadow),
+    0 0 0 3px var(--accent-soft);
+}
+
+.composer-input-row {
+  width: 100%;
+}
+.composer-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.5;
+  padding: 4px 4px 0;
+  margin: 0;
+  max-height: 40vh;
+  min-height: 3em;
+}
+.composer-input::placeholder {
+  color: var(--dim);
+}
+
+.send-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  transition:
+    transform 0.12s var(--ease),
+    color 0.14s,
+    filter 0.16s;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--text) 55%, transparent));
+}
+.send-btn:hover {
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--text) 90%, transparent));
+  transform: translateY(-1px);
+}
+.send-btn:active {
+  transform: translateY(0) scale(0.96);
+}
+.send-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  filter: none;
+  transform: none;
+}
+.send-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  fill: currentColor;
+}
+.send-btn.stop:hover {
+  color: var(--danger);
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--danger) 70%, transparent));
+}
+.send-btn.interrupting {
+  color: var(--danger);
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+  animation: cc-pulse 1s ease-in-out infinite;
+}
+@keyframes cc-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.composer-bar,
+.bar-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.composer-bar {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.bar-left {
+  flex: 0 0 auto;
+}
+.bar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 8px;
+  flex: 0 0 auto;
+}
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+}
+.composer-controls:empty {
+  display: none;
+}
+.composer-views {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+}
+.composer-views .dash-toggles {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.composer-views .dash-toggle + .dash-toggle {
+  border-left: 1px solid var(--border);
+}
+.composer-views .dash-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--dim);
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.composer-views .dash-toggle:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.composer-views .dash-toggle.active {
+  color: var(--neon-orange);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--neon-orange);
+}
+.composer-views .dash-toggle.dash-exit {
+  color: var(--text);
+}
+.composer-views .settings-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 0;
+  border-right: 1px solid var(--border);
+}
+.composer-views .settings-btn[aria-expanded='true'] {
+  background: var(--surface2);
+  color: var(--text);
+}

@@ -1,9 +1,9 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.ChatSessionManager
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.SessionHistory
+import dev.lain.claudejb.controller.session.ChatSessionManager
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.controller.session.history.SessionHistory
 
 class ChatSessionManagerHeadlessTest : BasePlatformTestCase() {
 

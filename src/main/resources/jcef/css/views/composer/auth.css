@@ -1,0 +1,78 @@
+#auth-card {
+  grid-area: 1 / 1;
+  z-index: 1;
+  min-height: 0;
+  background: var(--bg);
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  align-items: safe center;
+  justify-content: center;
+  padding: clamp(24px, 10vh, 70px) clamp(16px, 5vw, 40px);
+  --wait-grace: 0s;
+}
+.auth-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 440px;
+  padding: 0 24px;
+  text-align: center;
+}
+.auth-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.auth-step,
+#auth-key-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.auth-primary {
+  font-weight: 600;
+}
+.auth-divider {
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.auth-quiet {
+  background: none;
+  border: none;
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+}
+.auth-wait {
+  font-size: 13px;
+  color: var(--dim);
+}
+.auth-sub-wait {
+  font-size: 13px;
+  font-weight: 600;
+}
+.auth-url-actions {
+  gap: 8px;
+}
+.account-auth-row {
+  margin-top: 6px;
+}
+.account-auth-btn {
+  font-size: 12px;
+}
+
+body.reduced-motion *,
+body.reduced-motion *::before,
+body.reduced-motion *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-delay: 0s !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}

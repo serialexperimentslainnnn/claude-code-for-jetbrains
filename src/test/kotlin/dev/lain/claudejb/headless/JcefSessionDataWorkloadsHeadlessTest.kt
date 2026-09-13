@@ -1,9 +1,9 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.WorkloadWindow
-import dev.lain.claudejb.ui.jcef.JcefSessionData
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.settings.WorkloadWindow
+import dev.lain.claudejb.view.payload.panel.JcefSessionData
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray

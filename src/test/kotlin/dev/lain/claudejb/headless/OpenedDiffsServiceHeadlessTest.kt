@@ -2,7 +2,7 @@ package dev.lain.claudejb.headless
 
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.diff.OpenedDiffsService
+import dev.lain.claudejb.view.diff.OpenedDiffsService
 
 class OpenedDiffsServiceHeadlessTest : BasePlatformTestCase() {
 

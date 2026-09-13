@@ -2,13 +2,12 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.protocol.ClaudeEvent
-import dev.lain.claudejb.protocol.ElicitationRequest
-import dev.lain.claudejb.session.ChatSessionManager
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.Speaker
-import dev.lain.claudejb.ui.GitChatConversation
-import dev.lain.claudejb.ui.jcef.JcefBridge
+import dev.lain.claudejb.controller.commands.git.GitChatConversation
+import dev.lain.claudejb.controller.session.ChatSessionManager
+import dev.lain.claudejb.model.bridge.JcefBridge
+import dev.lain.claudejb.model.protocol.ClaudeEvent
+import dev.lain.claudejb.model.protocol.models.ElicitationRequest
+import dev.lain.claudejb.model.session.transcript.Speaker
 
 class GitChatRoutingHeadlessTest : BasePlatformTestCase() {
 

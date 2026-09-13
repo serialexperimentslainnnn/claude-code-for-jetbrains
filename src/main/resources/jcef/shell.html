@@ -25,7 +25,7 @@
 
       <!-- The tab bar: chats, their agents, and the background tasks. Declared here (empty, hidden) rather
          than created on first use, so the page has a stable place to put it and no layout jump when the
-         first agent appears. Filled by app-tabs.js from the host's `cc.tabs` payload. -->
+         first agent appears. Filled by the tabs controller from the host's `cc.tabs` payload. -->
       <nav id="tabsbar" aria-label="Chats and agents" hidden></nav>
 
       <!-- The work area: what belongs to ONE chat, and the dock, which belongs to none.
@@ -83,7 +83,7 @@
 
               <!-- The FOURTH boot state: no `claude` binary was found. Static like the rest of the shell (the
              a11y lesson: markup that exists at load announces; markup created on first use does not), shown
-             by app-composer.js only when the host reports binaryMissing. Each install method renders as a
+             by the composer modules only when the host reports binaryMissing. Each install method renders as a
              button plus the EXACT command it runs, copyable — corporate networks block individual
              installers, and a command the user can read is a command they can take to whatever route their
              machine allows. The path row is the manual escape hatch for an install that lives elsewhere. -->
@@ -117,7 +117,7 @@
           <!-- Sign-in card: raised whenever the plugin detects the binary is not authenticated (proactive
            `auth status` probe, a failed turn, or a fresh install), independent of the boot overlay — a live
            session can lose its login too. Static markup for the same a11y reason as the boot screen; every
-           step container exists up front and app-composer.js shows exactly one (`cc.authState`). -->
+           step container exists up front and the composer modules shows exactly one (`cc.authState`). -->
           <div id="auth-card" role="status" aria-live="polite" hidden>
             <div class="auth-inner">
               <div class="boot-mark" aria-hidden="true">✶</div>
@@ -226,7 +226,7 @@
            attachment chip, so the list covered the box you were typing in exactly when you had most in it. A
            row above the composer cannot cover the composer at any height. -->
         <div id="dock">
-          <!-- The slash palette. app-composer.js moves it INTO the prompt card, where it is anchored to the
+          <!-- The slash palette. the composer modules moves it INTO the prompt card, where it is anchored to the
              card's top edge and hangs over whatever is above — the meters are worth covering for as long as
              you are choosing a command; the box you are typing in is not, which is why it hangs upwards. -->
           <div id="palette" hidden></div>
@@ -234,10 +234,10 @@
              right. Two groups rather than one list, because they are two kinds of thing — a state and a set
              of actions — but one line, because two stacked strips of controls over a text box is a wall.
              Declared HERE, in the static shell, rather than created by the composer — because two families
-             need them and neither may assume the other has run. `#composer` is filled by app-composer.js on
+             need them and neither may assume the other has run. `#composer` is filled by the composer modules on
              the first state push, so a page that has had a session payload but no state yet would otherwise
              have a dashboard whose view buttons exist and are attached to nothing.
-             app-composer.js MOVES the row to its final place (under the reset line, above the prompt box); if
+             the composer modules MOVES the row to its final place (under the reset line, above the prompt box); if
              it never runs it simply stays here, which is the same dock and still works. -->
           <div id="controls" class="composer-controls">
             <div id="views" class="composer-views"></div>

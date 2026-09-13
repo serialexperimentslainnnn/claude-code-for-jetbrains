@@ -1,10 +1,10 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.DiffLifecycleManager
-import dev.lain.claudejb.session.RollbackManager
-import dev.lain.claudejb.session.Speaker
-import dev.lain.claudejb.session.TranscriptModel
+import dev.lain.claudejb.controller.session.diff.DiffLifecycleManager
+import dev.lain.claudejb.controller.session.diff.RollbackManager
+import dev.lain.claudejb.model.session.transcript.Speaker
+import dev.lain.claudejb.model.session.transcript.TranscriptModel
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File

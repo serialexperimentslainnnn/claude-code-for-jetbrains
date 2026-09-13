@@ -33,7 +33,7 @@ TS="$(date +%s)"
 OUT="/tmp/probe-${TS}.jsonl"
 
 # Hardcoded inline expected types — keep in sync with
-# src/main/kotlin/dev/lain/claudejb/protocol/ProtocolParser.kt
+# src/main/kotlin/dev/lain/claudejb/model/protocol/parse/ProtocolParser.kt
 EXPECTED_TYPES=(system assistant user result stream_event control_request control_response rate_limit_event)
 
 is_expected() {

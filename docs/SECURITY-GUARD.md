@@ -317,10 +317,12 @@ rule in plain words and carries two links.
 That is why the rules are narrow in the first place. A one-click action can only ever be as safe as the
 smallest thing it can relax.
 
-**Whitelist Command** takes the exact command that was refused and adds it to the whitelist of **the rule
-that refused it**, so that command runs and nothing else changes. It is not offered when the block names no
-command to match on; it never writes to the category or global lists, which are edited on the Settings page;
-and it checks the command is not already permitted, so pressing it twice does not grow the list.
+**Whitelist Command** takes the program and its subcommand from the command that was refused — `npm install`
+from `npm install left-pad`, `sudo` from `sudo -l` — and adds that prefix to the whitelist of **the rule that
+refused it**, so every command starting with it runs under that rule and nothing else changes. It is not
+offered when the block names no command to match on; it never writes to the category or global lists, which
+are edited on the Settings page; and it checks the entry is not already there, so pressing it twice does not
+grow the list.
 
 **And it asks for how long.** Seven choices — 5 minutes, 15 minutes, 30 minutes, 4 hours, 8 hours, until the
 IDE closes, or for ever — with no pre-selected default, so opening the menu commits to nothing and the choice
@@ -341,8 +343,9 @@ next one you open.
 
 ### Whitelisting a command
 
-If `terraform destroy` is part of your actual job, a whitelist takes a full command and runs it without
-asking. There are three, and they differ only in **reach**:
+If `terraform destroy` is part of your actual job, a whitelist takes a command **prefix** and runs whatever
+starts with it without asking: `sudo` covers every `sudo …`, `sudo ls /home` covers `sudo ls /home/anything`
+but not `sudo ls /etc`. There are three lists, and they differ only in **reach**:
 
 | List | Applies to |
 |---|---|
@@ -350,14 +353,15 @@ asking. There are three, and they differ only in **reach**:
 | **This category** | every rule in one group |
 | **Everywhere** | any rule at all |
 
-The guard asks them narrowest first, so a permission can always be traced to one entry rather than to
-"it is whitelisted somewhere".
+Any of the three lifts the verdict; the notice names the narrowest one that matched, and **Remove from
+whitelist** on that notice clears the entry from every list that covers the command, so removing it means
+it is judged again.
 
 Two fences remain, and they are about *what* is matched, never about *which rule* you are allowed to lift:
 
-- **The whole command, de-obfuscated on both sides.** `terraform destroy` does not authorise
-  `terraform destroy && rm -rf /` — that is a different string — and `t""erraform destroy` cannot sneak
-  past an entry written normally.
+- **Every segment of the line, de-obfuscated on both sides.** A compound line is split on `&&`, `;`, `|`
+  and newlines and each piece must start with an entry: `sudo` authorises `sudo -l && sudo ls /` and does
+  not authorise `sudo -l && rm -rf /`, and `t""erraform destroy` cannot sneak past an entry written normally.
 - **Every command the call issues has to be covered.** One approved command in a chain of three approves
   nothing.
 
@@ -433,7 +437,7 @@ stops or arrives on your screen for a decision. One layer, doing one job properl
 
 ## For contributors
 
-The guard lives in `src/main/kotlin/dev/lain/claudejb/permission/`. `SensitiveGuard.kt` owns the policy
+The guard lives in `src/main/kotlin/dev/lain/claudejb/model/permission/`. `SensitiveGuard.kt` owns the policy
 and the verdict; every rule family is a file of its own.
 
 Adding a rule means adding a file, never a branch in the verdict:

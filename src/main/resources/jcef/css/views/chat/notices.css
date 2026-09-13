@@ -1,0 +1,110 @@
+.tool-children {
+  display: none;
+  padding: 2px 0 2px 12px;
+  margin: 0 0 0 10px;
+  border-left: 2px solid var(--border);
+}
+.tool.open > .tool-children {
+  display: block;
+}
+.tool-children:empty {
+  display: none;
+}
+
+.notice {
+  margin: 10px 0;
+  font-size: 12.5px;
+  color: var(--dim);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  animation: rise 0.22s var(--ease) both;
+  border: 1px solid var(--border);
+}
+.notice p:first-child {
+  margin-top: 0;
+}
+.notice p:last-child {
+  margin-bottom: 0;
+}
+.notice.trim-notice {
+  background: transparent;
+  border-style: dashed;
+  text-align: center;
+}
+.notice.error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.notice.guard-block {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.notice.guard-bypass {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.guard-block-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+}
+.guard-disable-link,
+.guard-whitelist-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: currentColor;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.guard-disable-menu {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.guard-disable-menu[hidden] {
+  display: none;
+}
+.guard-disable-option {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.guard-disable-option:hover,
+.guard-disable-option:focus-visible {
+  background: var(--surface2);
+}
+
+mark.cc-hit {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+mark.cc-hit.active {
+  background: var(--accent);
+  color: var(--bg);
+}

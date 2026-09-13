@@ -1,752 +1,496 @@
 # Claude Code Native
 
-[![Version](https://img.shields.io/badge/version-5.8.0-E07B5A)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-6.0.0-E07B5A)](CHANGELOG.md)
 [![IDE](https://img.shields.io/badge/JetBrains-2025.3.1%20%E2%86%92%20263.*-000000?logo=jetbrains)](#requirements)
 [![Marketplace](https://img.shields.io/badge/Marketplace-Claude%20Code%20Native-2A2A2A)](https://plugins.jetbrains.com/plugin/31965-claude-code-native)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
-An unofficial IntelliJ Platform plugin that puts [Claude Code](https://code.claude.com/docs/en/overview)
-inside JetBrains IDEs as a full graphical client: a streaming chat, inline permission cards, file edits
-reviewed as real IDE diffs you can modify before approving, a tab per agent, and a deterministic
-security layer that gates every tool call.
+**Claude Code, living inside your JetBrains IDE — with hands.** This plugin runs your own `claude` CLI in
+a native chat and hands the agent the IDE itself: it opens files for you, takes you to a line, shows you a
+commit in the Log or a diff in the diff viewer, finds you a pull request and puts it on screen; it reads
+through the index, edits through the document model, refactors with the refactoring engine, builds, runs,
+tests and debugs through the run system, drives Git and GitHub through the IDE's own account and views,
+works the Services panel, and can fire any menu entry the IDE registers. Everything is shown to you as it
+happens, without ever taking your focus, and every call passes a deterministic security guard first.
 
-It drives the `claude` binary — the one you already have, or one it installs for you on first run if
-you do not — speaking its `stream-json` and control
-protocol directly from Kotlin. There is no Node.js at runtime, no bundled SDK, and no credentials of
-ours — you bring your own Claude subscription or API key.
-
-> **This repository is the project's origin**, written and maintained by
-> [Lain](https://github.com/serialexperimentslainnnn) — every release on the JetBrains Marketplace is
-> published from here. Canonical location:
-> **<https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains>**. Forks are welcome and
-> licensed; see [Upstream and forks](#upstream-and-forks) for where they are and how to tell them apart.
+Unofficial, community-built, open source. Not affiliated with, sponsored by, or endorsed by Anthropic or
+JetBrains. It needs your own `claude` CLI and your own Claude subscription or API key; nothing is bundled.
 
 ## Contents
 
-- [How it compares](#how-it-compares)
 - [Requirements](#requirements) · [Installation](#installation) · [First run](#first-run)
-- [User guide](#user-guide)
+- [What you can ask for](#what-you-can-ask-for) — the manual
+  - [Open it, show me, take me there](#open-it-show-me-take-me-there)
+  - [Ask about what is on screen](#ask-about-what-is-on-screen)
+  - [Read and navigate the code](#read-and-navigate-the-code)
+  - [Edit, refactor, format](#edit-refactor-format)
+  - [Diagnose and analyse](#diagnose-and-analyse)
+  - [Build, run, test](#build-run-test) · [Debug](#debug) · [Run a command](#run-a-command)
+  - [Git](#git) · [Pull requests and releases](#pull-requests-and-releases)
+  - [Services, containers, databases, HTTP, SSH](#services-containers-databases-http-ssh)
+  - [Drive the IDE itself](#drive-the-ide-itself) · [Leave marks for me](#leave-marks-for-me)
+  - [The IDE's internals](#the-ides-internals)
+- [How it shows up in the IDE](#how-it-shows-up-in-the-ide)
+- [The chat](#the-chat)
 - [Security](#security)
-- [Troubleshooting](#troubleshooting)
-- [Build from source](#build-from-source) · [How it works](#how-it-works)
-- [Documentation](#documentation)
-- [Upstream and forks](#upstream-and-forks) · [Licence](#licence-and-attribution)
-
-## How it compares
-
-Three different things are often confused. All of them are legitimate; they solve different problems.
-
-| | **Claude Code Native** (this plugin) | **Claude Code [Beta]** (Anthropic's own plugin) | **AI Assistant / Claude Agent** (JetBrains) |
-|---|---|---|---|
-| Where you type | A chat panel in the IDE | The IDE's terminal | The AI Assistant chat panel |
-| Diffs | The IDE's own diff viewer, opened on the permission request; your edits to the proposed side are what gets written | The IDE's own diff viewer, for reviewing and modifying proposed changes | JetBrains' own diff flow |
-| Permissions | An inline card per call, plus a deterministic lock that runs before any auto-approval | Handled by the CLI in the terminal | JetBrains' own approvals |
-| Account | Your `claude` subscription or API key | Your `claude` subscription or API key | JetBrains AI credits, your own Anthropic API key, or a Claude Console account |
-| Agents / background tasks | A tab and a transcript per agent; background tasks keep their output | Visible as terminal output | Not applicable |
-| [Remote Control](#remote-control--pick-a-chat-up-from-your-phone) | A button in the chat and a row in the ⚙ menu; the chat you are looking at is the one that goes to your phone | The CLI's own `/remote-control`, typed in the terminal | Not applicable — it does not run your local CLI |
-| Needs the `claude` CLI | Yes — and installs it for you if you do not have it | Yes | No |
-
-Anthropic's [Claude Code [Beta]](https://plugins.jetbrains.com/plugin/27310-claude-code-beta-) is not
-"just a terminal launcher" — it runs `claude` in the IDE's integrated terminal and adds diff viewing in
-the IDE's own viewer, automatic sharing of the current selection and open tab, diagnostics sharing, and
-a file-reference shortcut (`Cmd+Option+K` / `Ctrl+Alt+K`). What it deliberately does not do is replace
-the terminal with a GUI. That is the gap this plugin fills.
-
-JetBrains' **Claude Agent** lives inside AI Assistant. It does not use your local `claude` CLI: it
-authenticates through a JetBrains AI subscription (credits), your own Anthropic API key, or a Claude
-Console account. If you want a graphical client driven by the CLI you already have, this plugin is the
-option; if you are already inside the JetBrains AI ecosystem, theirs is the shorter path.
-
-This project is unofficial and not affiliated with Anthropic or JetBrains.
+- [Settings that matter](#settings-that-matter)
+- [Any MCP client can drive the IDE](#any-mcp-client-can-drive-the-ide)
+- [Troubleshooting](#troubleshooting) · [Build from source](#build-from-source) · [Documentation](#documentation)
 
 ## Requirements
 
-**JetBrains IDE 2025.3.1 or newer** — `sinceBuild 253.29346.138`, `untilBuild 263.*`, so the range is
-declared ahead of the 2026.3 branch and an EAP user is never locked out by a ceiling nobody widened.
-IntelliJ IDEA, PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip, DataSpell, Aqua
-and RustRover.
+**A JetBrains IDE on 2025.3.1 or newer** (`sinceBuild 253.29346.138`, `untilBuild 263.*`): IntelliJ IDEA,
+PyCharm, WebStorm, PhpStorm, GoLand, RubyMine, CLion, Rider, DataGrip, DataSpell, Aqua, RustRover. The floor
+is hard: the chat is the IDE's embedded browser (JCEF), which from build 262 is a bundled plugin the plugin
+must declare, and that module id first exists in 2025.3.1. On 2025.1, 2025.2 or 2025.3.0 stay on plugin
+5.1.1, or update the IDE.
 
-> **Why 2025.3.1 is a hard floor — and why it is .1 and not .0.** The whole chat UI is the IDE's
-> embedded browser (JCEF). From build **262** the platform ships that browser as a *separate bundled
-> plugin*, `com.intellij.modules.jcef`, and a plugin that does not declare a dependency on it gets no
-> browser classes in its classloader at all — every chat dies on `NoClassDefFoundError:
-> com/intellij/ui/jcef/JBCefApp`. Declaring the dependency is the fix. That module id does not exist in
-> **2025.3** (build 253.28294.334) either, so there the IDE refuses to load the plugin outright; it
-> appears in **2025.3.1** (253.29346.138), ten days later. There is no browser-less mode to fall back
-> to, so the dependency is declared hard and the floor is the first build that can satisfy it.
-> **On 2025.1, 2025.2 or 2025.3.0, stay on plugin version 5.1.1** — or update your IDE.
+**The `claude` CLI.** You do not have to install it yourself: if the plugin cannot find it, its first screen
+offers the official install route for your OS and runs it in the IDE terminal. It looks first at **Settings
+▸ Claude Code ▸ claude executable path**, then at the IDE's `PATH`, then at the usual places (`~/.local/bin`,
+`~/.claude/local`, `/usr/local/bin`, `/opt/homebrew/bin`, `/usr/bin`; on Windows `%USERPROFILE%\.local\bin`,
+`%APPDATA%\npm`, `%LOCALAPPDATA%\Programs\claude`, scoop, volta, Chocolatey).
 
-**The `claude` CLI — and you do not have to install it yourself.** If the plugin cannot find it, its
-first screen offers to install it for you, using the official route for your OS, and runs it in the
-IDE terminal. Nothing to prepare before you start; it looks for an existing one first, in this order:
+**An account**: a paid Claude plan (Pro, Max, Team, Enterprise) or a Console account signed in through the
+plugin, or an `ANTHROPIC_API_KEY`. The free Claude.ai plan does not include Claude Code.
 
-1. the path set in **Settings ▸ Claude Code ▸ claude executable path**, if any — and if that path has
-   gone stale, detection continues rather than failing hard;
-2. the IDE process's `PATH`;
-3. typical locations — `~/.local/bin`, `~/.claude/local`, `/usr/local/bin`, `/opt/homebrew/bin`,
-   `/usr/bin` on Linux/macOS; `%USERPROFILE%\.local\bin`, `%APPDATA%\npm`,
-   `%LOCALAPPDATA%\Programs\claude`, scoop shims, volta and Chocolatey `bin` on Windows.
-
-Only if all three come up empty does it ask — and then it installs it for you (see
-[below](#installing-the-claude-cli)).
-
-**An account**: a paid Claude plan (Pro, Max, Team, Enterprise) or a Claude Console account, signed in
-through the plugin — or an `ANTHROPIC_API_KEY`. The free Claude.ai plan does not include Claude Code.
+Some capabilities depend on IDE plugins that are bundled but optional, and degrade to "not available"
+without them: Git (Git4Idea), GitHub, Java (for UAST), IntelliLang, Database Tools, Terminal, Docker and
+Kubernetes, SSH, Deployment, Qodana, Package Checker. Everything else needs nothing beyond the IDE.
 
 ## Installation
 
-From the JetBrains Marketplace:
+1. **Settings ▸ Plugins ▸ Marketplace**, search **Claude Code Native**, install, restart.
+2. Or install a signed archive from the
+   [GitHub releases](https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/releases) with
+   **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.
 
-1. **Settings ▸ Plugins ▸ Marketplace**
-2. Search for **Claude Code Native**
-3. Install, then restart the IDE
+The **Claude Code** tool window appears on the right.
 
-Or install a signed archive by hand from the
-[GitHub releases](https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains/releases):
-**Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.
-
-The tool window appears on the right, next to where AI Assistant lives.
-
-### The plugin installs the `claude` CLI for you
-
-You do not need to install it beforehand. If it is missing, the plugin's first screen detects your OS
-and distribution, offers the official route, and runs it in the IDE terminal on one click. These are
-the commands it uses, if you would rather run them yourself:
+If the CLI is missing, the first screen installs it on one click, with these commands should you prefer to
+run them yourself:
 
 ```bash
-# macOS, Linux, WSL
-curl -fsSL https://claude.ai/install.sh | bash
-
-# macOS, with Homebrew
-brew install --cask claude-code
+curl -fsSL https://claude.ai/install.sh | bash      # macOS, Linux, WSL
+brew install --cask claude-code                     # macOS, Homebrew
 ```
 
 ```powershell
-# Windows, PowerShell
-irm https://claude.ai/install.ps1 | iex
-
-# Windows, with WinGet
-winget install Anthropic.ClaudeCode
+irm https://claude.ai/install.ps1 | iex             # Windows
+winget install Anthropic.ClaudeCode                 # Windows, WinGet
 ```
 
-On Debian/Ubuntu, Fedora/RHEL and Alpine the card also offers Anthropic's signed `apt`, `dnf` and
-`apk` repositories, detected from the running distribution. Verify with `claude --version`.
+Debian/Ubuntu, Fedora/RHEL and Alpine also get Anthropic's signed `apt`, `dnf` and `apk` repositories,
+detected from the running distribution.
 
 ## First run
 
-Open the **Claude Code** tool window. What you see first depends on what the plugin finds, and it is
-re-checked every few seconds while no session is running — installing the binary or signing in
-elsewhere takes effect without closing the tab.
+Open the tool window. It shows one of three cards, re-checked every few seconds while no session runs:
+**Claude Code was not found** (install, or point at an existing binary), **Sign in** (one button opens the
+browser; a field takes an `ANTHROPIC_API_KEY`), or **Loading**.
 
-- **"Claude Code was not found"** — the binary is not installed, or not anywhere the plugin looks. The
-  card lists the official install commands for your OS (readable before you run them, because
-  corporate networks block installers) and has a field to point at an existing binary.
-- **Sign in** — no credential is held yet. One button opens your browser; the binary itself captures
-  the callback. If your browser shows you a code instead of returning automatically, paste it into the
-  same card. There is also a field for an `ANTHROPIC_API_KEY`, and a skip button that consents to
-  riding your terminal's own `claude` login for the session.
-- **Loading** — the binary is starting. You can switch to another chat while it does.
+Your sign-in lives in the **IDE's password safe** (the OS keychain by default). `claude auth login` writes
+`~/.claude/.credentials.json` in plaintext; the plugin harvests it into the safe and deletes the file, and
+the credential reaches the binary only as an environment variable — never a command line, a log or the
+transcript. Settings live in the same safe, one document per IDE installation per project.
 
-### Where your credential lives
+The IDE integration is **on by default** — the flame in the chat bar is lit: all four servers, every rule.
+There is nothing to configure before you start asking.
 
-Your sign-in is kept in the **IDE's password safe**, which resolves to whatever you have configured it
-to use: the OS keychain by default (KWallet / GNOME Keyring on Linux, Keychain on macOS, DPAPI on
-Windows), or the IDE's own encrypted file.
+## What you can ask for
 
-- `claude auth login` writes `~/.claude/.credentials.json` in plaintext. The plugin **harvests that
-  file into the safe and deletes it**, including a login you made in your own terminal.
-- **Nothing ever writes it back.** The credential reaches the binary as an environment variable,
-  never on a command line, never in a log or the transcript.
-- Access tokens expire in hours; the refresh token is good for weeks. The plugin renews silently at
-  launch using the binary's own non-interactive refresh path — no browser, no prompt. The plugin holds
-  no OAuth client and calls no token endpoint itself.
-- **Log out** clears only what the plugin holds. Your terminal `claude` login is left alone.
+This is the manual. Every chapter is a kind of request in your own words, what Claude does with it and what
+appears on your screen. Claude reaches the IDE through **178 tools in 55 domains**, served by four MCP
+servers the plugin runs inside the IDE — `code`, `run`, `vcs`, `ops` — over Unix sockets, with no port,
+nothing to install and nothing exposed. The tool-by-tool reference is
+[`docs/SKILL_INVENTORY.md`](docs/SKILL_INVENTORY.md); you never need it to use the plugin, because Claude is
+told the rule of every tool on every turn and picks them itself. You ask in plain language.
 
-Your **settings** live in the same safe, as **one document per IDE installation, per project**. Two
-repositories can disagree about the model, the permission mode or a security rule, and two IDEs on one
-checkout keep their own. What stays global is what a credential is: the sign-in, the account, the
-per-provider API keys and the Git host tokens.
+Two things hold for the whole surface. **Every registered action of your IDE is reachable**: what has no
+named tool is one action away, with a file, a commit or a Services node as its target, so a menu entry of a
+plugin nobody here ever saw is still yours to ask for. And **everything is shown, nothing is stolen**: what
+Claude opens for you lands in the IDE — the editor, the Log, the diff viewer, a tool window — while your
+caret stays where it was and your Terminal keeps its tab.
 
-Nothing is lost on upgrade. Before 5.5.0 settings sat in `.idea/claude-code.xml` — per project, in the
-clear, and committable, environment block included; between 5.5.0 and 5.7.0 they were one global
-document. Both are read as a seed, so a project with no settings of its own starts from what you
-already had, and only diverges once you change something in it. The old project file is removed only
-after the safe confirms it holds the copy; the global document is never removed, because it is what
-every project opened from now on inherits.
+### Open it, show me, take me there
 
-Moving between IDEs is a gesture rather than magic: **Settings ▸ Claude Code ▸ Transfer** exports and
-imports a file, and migrates straight from another JetBrains IDE on the same machine.
+> **"Open `SessionLauncher.kt` for me."** · **"Take me to line 120 of that file."** · **"Show me the last
+> commit."** · **"Show me commit `d7351c4`."** · **"Show me the diff of this branch against `v5.7.0`."**
+> · **"Show me the diff of my last change."** · **"Show me how this file looked on `main`."** · **"Find me the
+> last pull request and open it."** · **"Open the Problems view."** · **"Open the Git Log."** · **"Open
+> Settings at Editor ▸ Code Style."** · **"Show me `api` in Services."** · **"Open this folder in the file
+> manager."** · **"Show me who wrote this."** · **"Show me the history of this file."** · **"Compare these
+> two files."** · **"Show me the coverage."** · **"Open the request file `users.http`."** · **"Go back to
+> where I was."**
 
-## User guide
+This is the first thing the integration is for: **you tell Claude what you want to see and it appears in
+the IDE**, in the right place, without you touching the mouse. A file opens in the editor at the line you
+named, or in the italic preview tab if Claude is only reading it. A commit is selected in the Git Log
+(opened first if it was closed) with its details and changes; a range of commits shows only that range.
+A diff opens in the IDE's diff viewer: two files, a file against the active editor, a file against how it
+was at any branch, tag or commit, the whole uncommitted work, or the clipboard against a file. A pull
+request is found through the IDE's GitHub account and selected in the Pull Requests view — not a browser
+tab. Blame turns the annotation gutter on; a file's history opens in its tab; Local History opens its view.
+The Problems view, the Build, Run, Debug, Services, Terminal and any other tool window open on request,
+Settings opens at the page you name, a Services node is revealed, a file is selected in the Project view,
+a path opens in the file manager, the IDE terminal or its default application, coverage shows its window,
+and the navigation history moves back and forward like the arrows in the toolbar. **Your focus never
+moves**: the thing appears, you keep typing.
 
-### The chat
+### Ask about what is on screen
 
-Each chat tab is an independent session with its own `claude` process. Type in the composer and press
-`Enter`. Replies stream in token by token; tool calls appear as collapsible cards that colour by state
-(in flight, finished, failed) and show elapsed time. A `Bash`/PowerShell/MCP-exec call renders the
-exact command as its own copyable code block, visible without expanding the card.
+> *"What file am I in?"* · *"What is under my caret?"* · *"What did I have open before this?"* · *"Which
+> files did I change last?"* · *"Which run configurations does this project have?"* · *"Is the index
+> ready?"* · *"What is running?"* · *"What is in the clipboard versus this file?"*
 
-You can keep typing while a turn is running: follow-ups go into a visible queue and are sent in order.
-Reasoning ("Thought process") is collapsed by default.
+Claude knows where you are: the active file, the caret and the selection, the editor's recent and
+recently-changed files, its tabs, the running processes, the run configurations, the indexing state, the
+SDK, modules and dependencies of the project as Project Structure shows them, the installed plugins. So
+"this file" and "here" mean what they mean to you. Questions about the project are answered from the IDE,
+never from memory, and Claude says what it looked at.
 
-#### Keyboard shortcuts
+### Read and navigate the code
 
-| Shortcut | Action |
-|---|---|
-| `Enter` | Send |
-| `Shift+Enter` | New line |
-| `Shift+Tab` | Cycle permission mode (Ask each time → Accept edits → Plan) |
-| `Tab` (empty composer) | Put the suggested next prompt into the field — it is not sent, you still press `Enter` |
-| `Esc` | Close an open chip menu; otherwise interrupt the running turn |
-| `Ctrl/Cmd+F` | Find in transcript (`Enter` / `Shift+Enter` walk the hits, `Esc` closes) |
-| `Ctrl/Cmd+O` | Collapse / expand all reasoning |
-| `/` (empty composer) | Slash-command palette |
+> *"What does `SessionLauncher` do?"* · *"Where is `resolveHelper` called from?"* · *"Take me to the
+> definition."* · *"Who implements `ToolGate`?"* · *"Show me the structure of this file."* · *"Find every
+> `*Gateway.kt`."* · *"Who calls this, and who calls them?"* · *"Show me the docs of this symbol."*
 
-#### The composer bar
+Claude reads files **as the editor holds them**, unsaved edits included, and searches text, globs and
+symbols through the IDE's index instead of scanning the disk. Symbols resolve as the IDE resolves them:
+definition, references, implementations, the signature and documentation of what is under a position, the
+Structure-view outline of a file, the call hierarchy three levels deep. Quick Documentation opens as the
+popup you know. Anything it reads is put in the preview tab so you can follow along.
 
-Along the bottom: **provider · model · permission mode · effort · thinking** chips, all changeable
-mid-conversation. Model and mode take effect immediately; toggling extended thinking restarts the
-session behind the scenes with `--resume`, so nothing is lost.
+### Edit, refactor, format
 
-**Attach files** sits to their left. On the right: **Auto-scroll (follow output)**, **Vibe Mode**, and
-**Send** (which becomes **Stop** during a turn).
+> *"Rename `adopted` to `reconcile` everywhere."* · *"Extract these lines into a method."* · *"Move
+> `GodMode.kt` to the settings package."* · *"Replace `foo` with `bar` across the project."* · *"Undo
+> that."* · *"Reformat and optimise the imports."* · *"Expand the `main` template here."* · *"Create a
+> Kotlin class from the file template."* · *"Inline this variable."* · *"Change the signature."*
 
-The model list is read from the binary's own handshake and each entry shows its real version, so new
-tiers appear on their own — nothing is hardcoded. Older generations sit in a collapsed **Other
-models** group. Effort runs `low · medium · high · xhigh · max`, defaulting to **high**.
+Every edit goes through the IDE's document model — **one undo entry, saved, shown as a Before/After diff**
+— so `Ctrl+Z` in the file works and Local History has it. Rename, move and safe-delete are the IDE's own
+refactorings: every reference follows, a conflict refuses. The rest of the Refactor menu (introduce
+variable/constant/field/parameter, extract method/interface/superclass/delegate, inline, change signature,
+pull up, push down, move members, encapsulate fields) runs the IDE's refactoring at the position you name,
+in place or with its dialog left open for you to finish. Undo and Redo go through the IDE's undo stack per
+file; Replace in Files replaces across the project; the editor's line operations and the Code menu's
+editing actions (override, implement, generate, surround, unwrap, comment, move statement or line,
+rearrange, fold) run with the caret where you said; Reformat Code and Optimize Imports use the project's
+code style and `.editorconfig`; live and file templates expand as `Tab` and *New* would. For structural
+edits Claude can act on the **PSI tree** itself and let the IDE re-resolve and reformat the result.
 
-#### Attachments and context
+### Diagnose and analyse
 
-The attach button offers files, a directory, an image, the current selection, the open file, and a
-filterable list of recently-opened files. You can also **drag an image in or paste one** — including
-on native-Wayland desktops, where the plugin reads the system clipboard host-side because the embedded
-browser cannot.
+> *"Is this file clean?"* · *"Is the project clean?"* · *"What does Qodana say?"* · *"Run the inspections
+> on this module."* · *"Clean up this package."* · *"What does this file depend on?"* · *"Where does this
+> value come from?"* · *"Here is a stack trace, take me to it."* · *"Is this duplicated anywhere?"*
+> · *"Which dependencies are vulnerable?"* · *"Where are the tests for this class?"*
 
-From the editor, right-click gives you **Explain with Claude**, **Add Selection to Claude Context** and
-**Add File to Claude Context**.
+Claude reads what the IDE's analysis shows — the highlights of a file with line, column, severity and
+inspection; the whole Problems view; the Qodana, Vulnerable Dependencies and Security Analysis tabs — and
+**checks that it introduced no problem before calling an edit done**. It runs inspections on demand (one
+by id, or Code ▸ Inspect Code on a scope into the Inspection Results window), applies Code Cleanup, walks
+file dependencies (backward too, in the IDE's analysis window), opens Analyze Data Flow at an expression,
+resolves a pasted stack trace to your files and opens the Analyze Stack Trace console, locates duplicates,
+infers nullity, and finds what is related to a symbol: its tests, its subject, its supers, its
+implementations.
 
-Paths, directories and symbols in Claude's replies become links **only once the IDE has confirmed they
-exist**, so a link never dead-ends. Clicking one opens the file at the line, or reveals a directory.
+### Build, run, test
 
-### When Claude wants to change a file
+> *"Build the project."* · *"Recompile this file."* · *"Run the `Kotlin tests` configuration."* · *"Run
+> the tests in this file."* · *"Run the test on this line."* · *"Run it with coverage."* · *"Run `Server`
+> and show me its output."* · *"Stop it."* · *"Open the run configuration editor on `Server`."*
+> · *"Attach the debugger to that process."*
 
-Nothing is written without you seeing it. On the permission request the proposal opens as an
-**editable diff tab** in the editor — Current | Proposed — with an inline **Accept / Reject** card in
-the chat. Never a modal dialog.
+Builds go through the Build menu — project, rebuild, module or one file — and come back with the
+compiler's errors positioned, the Build window showing them. Run configurations start exactly as the Run
+button starts them, before-launch tasks included, under run, debug, coverage or the profiler; their output
+streams to the chat card and the Run window, and a long run answers `running` and is resumed rather than
+blocking. Tests run through the IDE's test runner (a file, the test at a line, a named configuration) and
+come back as pass/fail counts with each failure's message and frame, drawn in the IDE's test tree. A tool
+the project has no configuration for gets one under `.idea/runConfigurations`, so what Claude runs is
+something you can run too.
 
-- **Edit the proposed side before accepting.** What gets written is your edited version.
-- **Accept or reject the change as a whole.** Per-hunk selection was removed in 4.0.5 because
-  accepting an incoherent subset of an edit produced code that did not hold together.
-- The diff closes on accept, reject, stop or interrupt.
-- **View diff** on any past tool card reopens what that call actually wrote, at any time.
-- On acceptance **the binary writes the file**, and the IDE refreshes that exact path immediately
-  (plus a tree rescan after `Bash` or a mutating MCP tool, which may have touched anything).
+### Debug
 
-**Undo.** Every completed Edit/Write/MultiEdit card carries a **Restore**, which asks Claude Code to
-rewind the files to the turn that made that edit (probed with a dry run first); if the binary cannot,
-the plugin offers to revert them itself from its own pre-write snapshot, with a confirmation you can
-tell it to remember.
+> *"Put a breakpoint on line 85 and debug `ToolModelTest`."* · *"Step over."* · *"Step into."* · *"What
+> is `arguments` here?"* · *"Evaluate `arguments.size`."* · *"Set `x` to 3 and resume."* · *"Show me the
+> frames."* · *"Which breakpoints do I have?"* · *"Remove them all."*
 
-Reverting a write that *created* a file removes that file, which is the only way to undo a creation.
+Claude debugs with breakpoints instead of prints: line breakpoints with conditions (temporary if you like),
+a configuration started under the debugger and waited for to the first stop, threads and frames, the
+variables of a frame, expressions evaluated in the debuggee, values set, steps of every kind (over, into,
+out, force into, smart into, run to, resume, pause, mute) and the next stop waited for. The Debug window
+shows the execution point as it goes; the gutter shows the breakpoints.
 
-To see everything a long run touched rather than one edit at a time, use ⚙ ▸ **Review This Session's
-Changes…**, which diffs the whole session against its base. Undoing a *commit* is [Git](#git), below.
+### Run a command
 
-#### Permission modes
+> *"Run `git status`."* · *"Run the migration script."* · *"Run `npm test`."* · *"Tail the log."*
 
-The mode chip decides how often you are asked:
-
-| Mode | Behaviour |
-|---|---|
-| **Ask each time** (default) | A card for every tool call |
-| **Accept edits** | File edits auto-approved; the diff still opens so you can see it |
-| **Plan** | Claude proposes a plan and waits for you before doing anything |
-| **Bypass permissions** | No cards, except where the security lock demands one |
-| **Don't ask** · **Auto** | The binary's own additional modes, available from the chip menu |
-
-`Shift+Tab` cycles the first three, matching the CLI. Whatever the mode, the
-[security lock](#security) is evaluated **first** and cannot be switched off — at most, a rule you
-disable in Settings turns an automatic block into a card you must answer.
-
-Other request types render inline too: **AskUserQuestion** as option cards with wrapped labels and
-descriptions, and **MCP elicitation** as a form built from the server's schema (a URL flow is gated to
-`http`/`https`, so an untrusted server cannot reach `file:` or `javascript:`).
-
-### Agents, subtabs and Workloads
-
-When Claude spawns agents, **each gets its own tab and its own transcript**, so its thinking and tool
-calls stay out of the main conversation. Before 5.5.0 a session running dozens of agents put all of it
-in one transcript, interleaved and unfollowable.
-
-- The bar under the chat tabs shows which transcript you are reading.
-- Resting on a chat's tab for a second — or clicking its `⋮` — opens the whole tree at once: agents,
-  their agents, and the background tasks each of them started. Clicking any row goes there.
-- **A finished agent keeps its tab**, marked finished. Reading why something failed is the point.
-- **Closing a subtab hides a view; it destroys nothing.** The card that spawned it opens it again.
-- **Pin** turns the subtab you are reading into a tab of its own, next to the chats.
-
-**Workloads** — one of the view buttons in the tab bar — draws everything running across *every* open
-chat as one diagram: chats at the root, agents beneath them, tasks under whoever started them. Every node
-is somewhere you can go, and a running task can be stopped from there.
-
-### Background tasks
-
-The binary stops listing a background task the moment it ends — which is exactly when its output is
-worth reading. So the plugin keeps its own record: the task, its command and its output survive the
-task's death, are tailed live from the file the binary writes, and are rebuilt from the session
-transcript after an IDE restart.
-
-### The dashboard and your plan limits
-
-The tab bar carries the dashboard's view buttons: **Chat** (the way back out), **Session**, **Workloads**,
-and — only while the session has that surface to show — **Git** and **Plan**. One view at a time; the
-button that is lit is where you are.
-
-The **Session** view shows what the current session is doing and costing: the context breakdown by
-category, token usage and cost (input / output / cache read / cache write, in USD when the binary
-reports it), your plan's limit windows with the time left on each, the account you are signed in as
-(email / organisation / plan / provider), the active model, the working directory, the binary version,
-and MCP server health with per-server reconnect and enable/disable.
-
-**Plan** is the plan-mode document, on its own rather than as a card among the numbers — prose you go
-back and re-read while working. Its button appearing is also how you learn one has been written.
-
-Your plan limits also sit as small labelled bars under the composer, so you can see them without
-opening anything: **blue below 65%, amber below 85%, red at or above**. They refresh every 30 seconds
-whether or not the chat is on screen — a window can reset, or fill up from another device, while you
-are looking elsewhere.
-
-Above them, a status line always carries the same session's numbers: running or idle, context used,
-tokens out, the live reasoning-token estimate, and the cost in USD once there is any. In the transcript,
-a collapsible "Recalled N memories" row names which memories (scope · path · content) influenced a turn.
-
-### Sessions
-
-Chats **are** the binary's own sessions, stored in its own files, so they are the same conversations
-you see from the terminal. From the tool window's gear menu:
-
-- **Open Previous Session…** — every past chat for this project, by the title Claude gave it, reopened
-  with its transcript via `--resume`.
-- **Rename Session…** and **Fork Session** — fork branches the conversation into a new tab from the
-  same history.
-- **Session Info**, **Agents**, **Binary Version…**, **Effective Settings…**, **Add Current File as
-  @-context**, **Settings…**.
-
-Chats you had open are restored when the IDE starts (switchable in Settings). **The plugin stores no
-transcripts of its own** — only which tabs were open.
-
-**The plugin never deletes your conversations.** There is deliberately no "delete session" action. This
-is pinned by a source contract (`NoFileDeletionContractTest`), written after an earlier release
-destroyed a user's history: **recursive deletion is banned outright anywhere in the codebase**, and a
-single-file deletion is allowed only in the handful of source files that contract names, each for one
-purpose — and every file any of them removes is one the plugin itself wrote:
-
-- `~/.claude/.credentials.json`, once it has been harvested into the keychain — that removal *is* the
-  feature;
-- the plugin's own superseded settings and bookkeeping files, after their contents have been adopted and
-  the new location has confirmed the write: `.idea/claude-code.xml` and
-  `~/.claude/ide/claude-code-native/settings.json`.
-
-Nothing else in the plugin can call a delete at all; the build fails if it tries.
-
-The one other thing the plugin can remove is a file that an `Edit`/`Write` *created*, and only when you
-press **Revert** on it — undoing a creation means removing it, not leaving a zero-byte husk. Nothing else
-on your disk is ever removed, and nothing you authored is.
-
-A chat that needs you while you are looking elsewhere — a permission, a finished turn, an error —
-raises a notification and badges its tab. Suppressed for the chat already on screen.
-
-### Remote Control — pick a chat up from your phone
-
-The **phone button** in the chat's button row, left of the guard's shield, connects that chat to
-[claude.ai/code](https://claude.ai/code) or the Claude mobile app. The same switch lives in the ⚙ menu
-under **Remote control**. Claude keeps running on your machine the whole time: your files, your MCP
-servers and your project configuration stay the ones in use, and the browser or the phone is a second
-window onto the conversation already open in the IDE. When the connection carries a session URL, the
-chat prints it.
-
-Messages go both ways, and so do permissions — a call you approve from the phone stops asking here, and
-its card leaves the chat by itself. The **Sensitive Guard still decides first**, on this machine, before
-anything is offered to anyone to approve: connecting a phone does not widen what a chat is allowed to
-do, only who can answer it. That is worth being deliberate about, because the person tapping *Approve*
-is no longer necessarily sitting in front of the diff.
-
-**It has to be enabled for your Claude account**, and on Team and Enterprise plans an organisation Owner
-has to turn it on first; the feature needs a claude.ai subscription, so an API key will not do. When the
-request is refused the button turns red, its tooltip carries the reason, and the same reason is written
-into the chat. Neither control switches itself on until the CLI has said yes, so a lit button means a
-live connection.
-
-Turning it off, from either control, disconnects the remote session and leaves the chat running here.
+A command runs in the IDE's Terminal window, in a tab named **Claude**, and comes back with its exit code
+and output; several commands go in one call. The tab is shown but never focused and never switched while
+you are in the Terminal, and the output stays there when the tab is reused, so *View in terminal* on the
+card lands on it. Claude's own `Bash` is retired while the IDE serves: a new process would cost a guard
+pass and a permission, and the IDE already has a shell.
 
 ### Git
 
-The **Git** button in the tool window's title bar opens a chat dedicated to the integration, and with it
-the dashboard's **Git** view: where `HEAD` is, what can be done to the repository, and its recent history.
-Entries are there only when the IDE's Git plugin is enabled, and each one hides itself when it does not
-apply — absent rather than greyed out, re-derived every time the menu opens, so creating a repository or
-enabling the Git plugin takes effect without reopening anything.
+> *"What changed?"* · *"Show me the last five commits."* · *"Commit these two files."* · *"Create a branch
+> from here."* · *"Push."* · *"Cherry-pick `a1b2c3d`."* · *"Revert that commit."* · *"Rebase this branch
+> onto develop."* · *"Merge develop into this."* · *"Stash this, pop it later."* · *"Roll back this
+> file."* · *"Make a patch of my changes."* · *"Add a worktree for `hotfix`."* · *"Open the merge
+> dialog."*
 
-**Reading** is three gear entries, all of which hand off to the IDE's own Git UI rather than drawing
-another one:
+Git is read as the IDE sees it — status with upstream ahead/behind, log, diff, branches — and written
+through the IDE's Git: stage, commit (signed and hooked as your Git configures, the IDE answering any
+prompt), branch, fetch, pull, push with the IDE's credentials. The **Log's commit menu** works on any hash
+(cherry-pick, checkout, browse at revision, compare with local, reset, revert, undo, reword, fixup, squash,
+drop, interactive rebase, push up to, new branch or tag, copy revision, open in browser): the commit is
+selected in the Log and the action runs with the Log's own context, and anything that rewrites history
+opens the IDE's dialog for you to finish. The **Branches popup** (merge, rebase, compare, diff with local,
+rename, delete, checkout, checkout as new, new tag) goes through the IDE's branch machinery with its
+progress and conflict resolution; so do worktrees and remotes. Uncommitted work: stash, the IDE's shelf,
+patches, rollback. A file's past: blame with the gutter shown, history in its tab, Local History with labels
+you can revert to, and its content at any ref diffed against the working tree. Every entry of the Git menu
+and its GitHub and GitLab submenus opens by name for you to finish.
 
-- **Recent Commits on `<branch>`…** — the label names the branch you have checked out, so the menu itself
-  answers "which branch is Claude working on". Opening it lists the last 20 commits of the repository your
-  project lives in, one line each: short hash, subject, author, age, and how many files it touched.
-  Choosing one opens the IDE's Git Log.
-- **Git History for the Current File** — hands the file in the active editor to the IDE's own file-history
-  view. Only for a file inside the project: anything outside it is refused, by the same canonical,
-  symlink-resolving check the write path uses.
-- **Open Git Log** — brings up the IDE's Version Control tool window.
+### Pull requests and releases
 
-The package behind all three is **read-only, and it is the code that says so**: no ref moves, no history
-rewriting, no remote traffic, and it never runs `git` itself. A source contract
-(`GitReadOnlyContractTest`) enforces that — an allowlist of four read-only APIs, plus a scan for the
-symbols that would mean it had grown its own way to execute Git. Adding a write path fails the build.
+> *"Find me the PR."* · *"Show me the open pull requests."* · *"Open #74 in the IDE."* · *"Open a PR from
+> this branch to develop."* · *"Comment on it."* · *"Is the CI green?"* · *"Merge it when it is."* · *"Is
+> v6.0.0 tagged, released, and on the Marketplace?"*
 
-**Changing the repository** is offered three different ways, and which way an action gets is the design:
+Pull requests come **through the IDE's own GitHub account** — no `gh`, no token of its own — and are
+shown in the IDE's Pull Requests view with the row selected. Claude lists them (open, closed, merged),
+reads one with its branches, review decision and description, creates one from named branches, comments on
+it, reads its mergeability and every check on its head commit polling until they settle, and merges it with
+a merge commit only once the state is clean and no check failed — saying so first when the target branch
+publishes on merge. It then verifies what a release left behind: the tags, the GitHub Actions runs of a
+branch, the GitHub Release of a tag with its assets, and the plugin's versions on the JetBrains
+Marketplace. This plugin's own releases are driven that way. GitLab merge requests live in the IDE's GitLab
+view and actions.
 
-- **Claude does it.** *Commit with Claude* and *Revert this file with Claude* — in the Git view, and in
-  the gear menu as **Commit Changes with Claude** and **Revert This File with Claude** — run no `git`.
-  Each puts a bounded prompt into the Git chat and lets Claude do the work, so the command is on screen in
-  an approval card before it runs and you can answer the tab ("squash those two", "not that file")
-  instead of getting one shot at a button. That tab's turns are **always approved by hand**, whatever
-  permission mode you are in and whatever you have marked "Always allow": the plugin started the turn, so
-  it does not inherit permissions you granted for your own work.
-- **The IDE does it.** Branches, pull, fetch, push, merge, rebase, stash, unstash and the commit dialog
-  are under ⚙ ▸ **Git Operations**, and those entries *are* the IDE's own actions — same dialogs, same
-  shortcuts, same enablement. They are there because the IDE does them better than a chat card would, and
-  reimplementing them would only make them worse.
-- **The plugin does it, once.** *Initialize repository*, offered in the Git view on a project that is not
-  a repository yet, runs `git init -b main` itself. It is the only `git` this plugin ever runs: a fixed
-  argument vector with no shell involved and nothing of yours in it, deliberately outside the read-only
-  package. `-b main` rather than a bare `git init`, which still lands on `master` unless you have set
-  `init.defaultBranch`. Being the plugin spawning a process rather than Claude asking for a tool,
-  **the [sensitive-data lock](#security) does not see it**: that guard sits on the tool requests the
-  binary makes, and this is not one. So the exception is exactly one command, on an empty directory,
-  behind a menu entry that only appears where there is no repository to damage.
+### Services, containers, databases, HTTP, SSH
 
-Those two facts do not contradict each other: the read-only contract is a claim about the `git/` package,
-and it still holds — the one direct execution lives in `ui/`, outside it, on purpose. No gate was
-bypassed.
+> *"Which containers are there?"* · *"Start `api` and show me its log."* · *"Stop the cluster."* · *"What
+> can I do on this node?"* · *"Which data sources are configured?"* · *"What tables does `orders` have?"*
+> · *"Run `select count(*) from users`."* · *"Run the requests in `users.http`."* · *"Which SSH hosts does
+> the IDE know?"* · *"Open an SSH session to `staging`."* · *"Upload this to the deployment server."*
 
-The plugin builds no Git UI of its own — the commit list is a picker, not a viewer, and everything you act
-on is the platform's own Git Log, in your theme and with your shortcuts. Nothing here is sent to Claude
-unless you pick an action that asks it something.
+The **Services** window is the DevOps panel and Claude sees it as you do: the tree of every contributor
+(Docker containers, images, networks, volumes, Kubernetes, run dashboards, database sessions, whatever your
+plugins add), the actions the IDE offers on a node with whether each is enabled right now, and a node's
+console text. It performs an action exactly as clicking it would, with the node selected, so the plugin's
+own enablement decides — and reveals the node so you see what happened. Databases: the data sources, the
+schema the IDE introspected, SQL over the IDE's connection. HTTP Client: the project's `.http` files run
+through their run configuration with the response console, or opened in the editor. SSH hosts as the IDE
+knows them (never the secret), SSH sessions, Deployment (upload, download, sync, compare, browse,
+configure), Qodana and the Package Checker go through those plugins' own actions when they are installed.
 
-### Settings that matter
+### Drive the IDE itself
 
-**Settings ▸ Claude Code** (one page, grouped by subject):
+> *"Open the Problems view."* · *"Close the Terminal."* · *"Turn on presentation mode."* · *"Hide the
+> navigation bar."* · *"Split this tab to the right."* · *"Pin this tab."* · *"Zoom the editor in."*
+> · *"Show whitespace."* · *"Switch to the Darcula theme."* · *"Is the Kotlin plugin installed?"*
+> · *"What does Code ▸ Analyze hold?"* · *"Run the action `ReformatCode` on this file."* · *"Generate
+> the Javadoc."* · *"Open the Groovy console."* · *"Show me the bytecode of this Kotlin file."*
 
-| Setting | Default | Why you would change it |
-|---|---|---|
-| Model · permission mode · effort · thinking | top Opus tier · Ask each time · high · adaptive on | The launch defaults for every new chat |
-| **claude executable path** | auto-detect | A non-standard install, or a GUI IDE that does not inherit your `PATH` |
-| **Provider** | Anthropic | DeepSeek's Anthropic-compatible endpoint. Each provider's key is stored separately in the safe; an `sk-ant-` key is rejected in a third-party slot so your subscription can never leak to another endpoint |
-| **Sensitive Guard** | every rule Enforcing | Its own page since 5.7.0 — **Settings ▸ Claude Code Security**: a mode for the guard as a whole, a mode per rule grouped by category, the three whitelists, and the extra credential globs and blocked domains. See [Security](#security) |
-| **Restore open chats on startup** | on | Start with a single empty chat instead |
-| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; revocable here. This one list stays shared by every project — most settings are per project since 5.7.0, but a remembered tool approval is about the tool, not the repository. The Sensitive Guard still decides first: nothing here bypasses it |
-| **Environment variables**, **Source script** | empty | Seed the binary's environment. The source script is *executed* at session start, so it — and any custom `stdio` MCP server — is gated behind a per-project trust prompt the first time |
-| **Reduce motion** | off | Flatten the chat's animations |
-| **Advanced launch** | flags omitted | `--max-turns`, `--max-budget-usd`, `--fallback-model`, extra `--add-dir` roots, beta flags, strict MCP config |
-| **IDE tools (MCP)** | off | Below |
+Claude can list every action your IDE registers with whether it is enabled in context, walk the main menu
+as you see it, and dispatch any action by id on a file, a commit or a Services node. It opens and closes
+tool windows, opens Settings at a page, lists the plugins, flips View ▸ Appearance (presentation,
+distraction-free, full screen, zen, compact, the Presentation Assistant) and the interface parts (toolbar,
+navigation bar, tool window bars, status bar, main menu), manages editor tabs and the tool window layout,
+zooms the editor or the whole IDE, toggles line numbers, whitespace, soft wraps and gutter icons, keeps
+bookmarks, moves through the navigation history, and lists or switches the theme, colour scheme, keymap
+and code style. The Tools menu's generators (Javadoc, the command-line launcher, XML validation and schema
+generation, Markdown import and export) and consoles (Groovy, Kotlin bytecode, Python) open as their
+entries would.
 
-### IDE tools (MCP) — optional, off by default
+### Leave marks for me
 
-Let Claude query the IDE directly (diagnostics, open files, usages, …) through JetBrains' own MCP
-server. Two steps:
+> *"Highlight the lines you are unsure about."* · *"Put a warning on line 40 with why."* · *"Ask me in
+> the file which of the two I want."* · *"Bookmark the places you changed."* · *"Notify me when the build
+> is done."* · *"Put it in a scratch file."*
 
-1. **Enable JetBrains' MCP Server plugin** (Settings ▸ Plugins) and confirm it is running.
-2. In **Settings ▸ Claude Code**, tick *Enable JetBrains MCP server*, pick the **transport**
-   (`sse` by default, or `streamable-http` / `stdio`) and the **port** if you changed it from `64342`.
-   Apply, then start a **new chat** — the setting is applied when the `claude` process launches.
+Claude can point at code without editing it: highlighted, warning or error ranges, gutter icons with a
+tooltip, inline hints, all in every editor of the file and all gone when the session ends. It can ask you
+something **where you are reading** — a banner over the file's editor with the choices as buttons — put a
+line in the status bar, open a scratch file that is never committed, set bookmarks on files and lines, and
+raise a balloon in the IDE's notification area so you see it without reading the chat.
 
-You can also register **custom MCP servers** as a JSON object of `name → server`; both are merged into
-a single `--mcp-config`. Invalid JSON blocks saving.
+### The IDE's internals
 
-> **Security.** `sse` and `streamable-http` use JetBrains' localhost endpoint, which any process on
-> your machine can reach; `stdio` launches a helper process instead. Enable only on a machine you
-> trust. Every IDE tool call is still gated by the permission card *and* by the
-> [sensitive-data lock](#security) — and MCP servers are third-party callers there, so a credential
-> hit from one is denied outright.
+> *"Show me the PSI tree of this function."* · *"What does UAST see at this line?"* · *"Which files does
+> the `FilenameIndex` hold under this key?"* · *"Which languages are injected in this file?"* · *"List the
+> source roots from the workspace model."*
+
+For the rare request that needs the IDE's model as data: the PSI tree and the element at a position, the
+UAST (the AST unified across Java, Kotlin, Scala and Groovy, on IDEs with the Java plugin), the file-based
+and stub indexes by name, the injected language fragments of a file and a temporary injection at a
+position, and the workspace model's modules, roots, libraries and SDKs, read-only.
+
+## How it shows up in the IDE
+
+**The mirror.** One switch, on by default — **Settings ▸ Claude Code ▸ Claude IDE Integration ▸ Mirror
+Claude's work in the IDE**. What Claude reads opens in the preview tab, what it edits in a real tab, a
+commit it names is selected in the Log, a service in Services, a problem in its tab, a run in its window; a
+range it points at flashes; the focus stays where you left it. Where the platform steals focus anyway, the
+plugin hands it back. Turn on **View ▸ Appearance ▸ Presentation Assistant** and every action Claude fires
+is announced on screen.
+
+**The cards.** Every call is a card in the chat: one per item when a list was passed, live lines for the
+long ones, a diff and a Restore for edits, and a one-click link into the IDE — the commit, the Log, the
+tool window, the terminal tab, the run, the problem, the diff. Results come back as compact tables (TOON),
+which is what keeps the token bill low: the integration costs *less* than the native tools it replaces,
+because a file read is one call where a `cat` was a process plus a permission.
+
+**God Mode.** The flame in the chat bar is the whole integration in one switch: all four servers and every
+rule. **Settings ▸ Claude Code ▸ Claude IDE Integration** fine-tunes it — the servers, whether an
+unexpected client must be approved, the mirror, and each rule per server. Each rule is one instruction in
+Claude's system prompt, repeated every turn, naming which tool replaces which native one, so a session does
+not drift back to `grep` and `sed`. An upgrade that adds domains switches their rules on.
+
+**The guard sits inside the servers.** Every tool call is judged by the [Sensitive Guard](#security) before
+it runs; a refusal comes back as the tool's error naming the rule and the string that tripped it, and the
+answer is to change that string, never to switch tool.
+
+## The chat
+
+Each tab is an independent session with its own `claude` process — the binary's own sessions, so they are
+the same conversations you see from a terminal. Replies stream; tool calls are collapsible cards coloured by
+state; reasoning is collapsed by default; follow-ups typed during a turn queue in order. The composer bar
+carries provider, model (read from the binary's handshake, nothing hardcoded), permission mode, effort and
+thinking, all changeable mid-conversation, plus attachments (files, a directory, an image, the selection,
+recent files, paste or drag an image) and the flame, the shield and the phone.
+
+**When Claude wants to change a file** the proposal opens as an editable diff tab — Current | Proposed —
+with Accept / Reject in the chat, never a modal. Edit the proposed side before accepting; what gets written
+is your version. Every completed edit card carries **Restore**, and ⚙ ▸ **Review This Session's Changes…**
+diffs the whole session against its base. Permission modes: **Ask each time**, **Accept edits**, **Plan**,
+**Bypass permissions** — and whatever the mode, the guard decides first.
+
+**Agents** get their own tabs and transcripts; their tool calls draw under the Task card that spawned them.
+**Workloads** draws everything running across every chat as one tree. Background tasks keep their output
+after they end. The **Session** view shows context, tokens, cost, plan limits, account, MCP health; the
+**Plan** view shows the plan-mode document; the **Git** view is a chat dedicated to the repository with
+*Commit with Claude* and *Revert this file with Claude* as bounded, hand-approved prompts.
+
+**Sessions**: Open Previous Session…, Rename, Fork, restore-on-startup. The plugin stores no transcripts of
+its own and **never deletes a conversation** — there is no delete action, and a source contract bans
+recursive deletion anywhere in the codebase. **Remote Control** (the phone button) connects a chat to
+claude.ai/code or the mobile app; the guard still decides first, on this machine.
+
+Keyboard: `Enter` send · `Shift+Enter` newline · `Esc` close a menu or interrupt · `Ctrl/Cmd+F` find ·
+`Ctrl/Cmd+O` fold all reasoning · `/` the slash-command palette · `Tab` on an empty composer takes the
+suggested next prompt.
 
 ## Security
 
-The plugin ships a **deterministic sensitive-data lock** (`permission/SensitiveGuard`). It is not a
-model-side guardrail: the classification is out-of-band Kotlin with no model input, evaluated in
-`PermissionBroker.handle` **before any auto-approval branch**. There is no prompt that argues it into
-a yes.
+The plugin ships a **deterministic sensitive-data lock**, `SensitiveGuard`: out-of-band Kotlin with no model
+input, evaluated before any auto-approval, for the agent's native tools *and* for every IDE tool call
+inside the four servers. There is no prompt that argues it into a yes, and prompt injection is assumed to
+succeed rather than detected — which is why it judges the tool call, never the reasoning.
 
-The permission mode you pick is the *plugin's*, never the binary's — `acceptEdits` and
-`bypassPermissions` are translated to `default` on the command line, so every call still arrives as a
-control request and the verdict stays the plugin's to make. Auto-approval is something the plugin then
-chooses to do, which is what lets the lock hold in the modes whose whole point is not being asked.
+It classifies **credential and key material** (SSH and GPG keys, cloud and cluster credentials, database
+and shell-history secrets, browser and password-manager stores, wallets, agent and code-host tokens),
+**dangerous commands** (credential dumps, exfiltration, network-piped-to-shell, LOLBINs, offensive tooling)
+and **foreign territory** (another user's home, network mounts, non-`/mnt/c` WSL drives), with structural
+patterns that cover Linux, macOS, Windows and WSL, on canonicalised paths and de-obfuscated commands. The
+whole input object is walked for path-like values, payload keys included.
 
-**What it classifies**
+It decides by trust of the caller: the agent's own tools get an explicit card every time; third-party MCP
+servers and Skills are denied outright; foreign territory is denied for everyone. **Settings ▸ Claude Code
+Security** holds a mode for the guard as a whole, a mode per rule by category, three whitelists (a command
+prefix, at the reach of a rule, a category or everywhere) and extra credential globs and blocked domains.
+Turning a rule off never allows silently: a hit becomes a card you must answer. The shield in the chat bar
+suspends the guard for a chosen duration; it is on by default and unlit whenever it is not.
 
-| Category | Examples |
-|---|---|
-| Credential / key material | SSH and GPG keys, cloud and cluster credentials, database and shell-history secrets, browser and password-manager stores, crypto wallets, AI-agent and code-host tokens |
-| Dangerous commands | Credential dumps, file exfiltration, network-piped-to-shell, LOLBINs, recognised offensive tooling |
-| Foreign territory | Another user's home, UNC / network mounts, non-`/mnt/c` WSL drives |
+The permission mode is the plugin's, never the binary's: `acceptEdits` and `bypassPermissions` are
+translated to `default` on the command line, so every call arrives as a control request and the verdict
+stays the plugin's. The guard's rules and their mechanics are in
+[`docs/SECURITY-GUARD.md`](docs/SECURITY-GUARD.md); the threat model is [ADR 0002](docs/adr/0002-threat-model.md);
+the full policy and how to report a vulnerability is [`SECURITY.md`](SECURITY.md).
 
-Patterns are **structural**, so one rule covers Linux, macOS, Windows (`C:\Users\…\.ssh`) and WSL
-(`/mnt/c/Users/…`). The whole input object is walked for path-like values — not a fixed key list — so
-an MCP tool naming its argument `target` or `destination` is still covered. Paths are canonicalised on
-disk (symlinks, `..`) and commands go through a de-obfuscation stage (broken quotes, `$IFS`, variable
-substitution, base64 payloads) before matching.
+**Telemetry: none.** No analytics, no crash reporter, no usage counter. Your conversation goes from the
+`claude` binary to Anthropic over the channel it already uses; the IDE servers listen on Unix sockets with a
+token generated per session and rotated while it runs; the only other traffic goes to your own forge
+through the IDE's account, and to the public Marketplace API when you ask about releases.
 
-**How it decides** — by trust of the caller, as an allowlist:
+## Settings that matter
 
-- the agent's **own tools** → an explicit permission card, **every time**, in every mode;
-- **MCP servers and Skills** → denied outright; third-party code has no business reading your keys;
-- **foreign territory** → denied for every caller, trusted or not.
+**Settings ▸ Claude Code**, one page grouped by subject:
 
-**Per-rule switches** (Settings ▸ Claude Code Security, its own entry in the settings tree, kept per
-project). Every rule can be turned off independently, and so can a whole category at once — all **on** by
-default. Turning one off is never a silent allow: detection still runs, and a hit is only *downgraded* from
-an automatic deny to a permission card, shown every time, to every caller. Every card names the rule and the
-Settings path.
+| Setting | Default | Why you would change it |
+|---|---|---|
+| Model · permission mode · effort · thinking | top Opus tier · Ask each time · high · adaptive | The launch defaults for every new chat |
+| **claude executable path** | auto-detect | A non-standard install, or an IDE that does not inherit your `PATH` |
+| **Provider** | Anthropic | An Anthropic-compatible endpoint; each provider's key is stored separately, and an `sk-ant-` key is refused in a third-party slot |
+| **Claude IDE Integration** | on: four servers, every rule, mirror on | Turn a server or a rule off, require approval for unexpected clients, stop mirroring; the flame in the chat bar is the same switch |
+| **Sensitive Guard** | every rule Enforcing | Its own page, **Settings ▸ Claude Code Security** — see [Security](#security) |
+| **Restore open chats on startup** | on | Start with a single empty chat |
+| **Allowed / disallowed tools**, **Always-allowed tools** | empty | Stop being asked about a tool; the guard still decides first |
+| **Environment variables**, **Source script** | empty | Seed the binary's environment; the script runs at session start behind a per-project trust prompt |
+| **Custom MCP servers** | empty | Your own servers as a JSON object, merged into one `--mcp-config` |
+| **Advanced launch** | flags omitted | `--max-turns`, `--max-budget-usd`, `--fallback-model`, `--add-dir`, betas, strict MCP config |
 
-**One switch above all of them**: a shield in the chat's button row, and the same control on that page,
-turns the guard off for a chosen duration — 5 minutes up to *Forever*, five of the seven choices expiring on
-their own. It is **on** by default, the shield is unlit whenever it is not, and while it is off the guard
-evaluates nothing at all.
+Settings are per IDE installation and per project; credentials and host tokens are global. **Transfer**
+exports and imports a settings file and migrates from another JetBrains IDE on the same machine.
 
-**Whitelisting a command** is the narrow alternative to switching a rule off: an exact command, matched whole
-and de-obfuscated on both sides, at one of three reaches — that rule, that category, or everywhere. Any rule
-can be whitelisted, and a blocked call offers a **Whitelist Command** link that files the command under the
-rule that stopped it.
+## Any MCP client can drive the IDE
 
-The built-in sensitive-path list is additive only by construction: it can be widened with extra globs and
-can never be shrunk. Paths under the project root are exempt from both the credential and
-the foreign rules — your repository is the sanctioned zone — and your own home is exempt from the
-foreign rule alone, so the credential globs still cover it. Dangerous-command classification is
-location-independent. A session refuses to start at all when the project itself sits on a remote or
-network-mounted path.
-
-Detecting a path concealed inside an arbitrary shell string is best-effort and gets widened over time;
-the **enforcement** of a match is absolute. Separately, jump-to-code links can only ever open inside
-the project or your own home (canonical, symlink-safe), while the **write** gate stays project-only.
-
-The threat model is written down in [ADR 0002](docs/adr/0002-threat-model.md), including what it does
-*not* defend against: **prompt injection is assumed to succeed, not detected**, which is precisely why
-the lock judges the tool call and never the model's reasoning. Full model and reporting policy in
-[`SECURITY.md`](SECURITY.md).
-
-**Telemetry: none.** The plugin collects nothing about you and sends nothing to us — there is no
-analytics endpoint, no crash reporter and no usage counter. Your conversation goes from the `claude`
-binary to Anthropic over the same channel it already uses in your terminal. The only other network
-traffic the plugin makes is optional and goes to **your** forge: give it a GitHub or GitLab token and
-it asks that server about the branch you are on, to show you your own pull requests and CI status.
-None of that reaches us either.
+The four servers are ordinary MCP servers that happen to live inside the plugin. Claude Code is their first
+client, not their only one: anything that speaks MCP can open the socket, authenticate with the session's
+token and run the same tools under the same guard. The bundled stdio bridge and the socket protocol are in
+[`docs/MCP_CLIENT.md`](docs/MCP_CLIENT.md). When the chat page cannot be shown at all, the servers still
+start and a notification carries the configuration to paste into your client.
 
 ## Troubleshooting
 
 | Symptom | Usually |
 |---|---|
-| The chat never loads, or the tool window is blank | The embedded browser (JCEF) is unavailable. Below build **253.29346.138** — so on 2025.1, 2025.2 and 2025.3.0 (`253.28294.334`) — this version does not run at all; see [Requirements](#requirements). Otherwise check the `ide.browser.jcef.enabled` registry key |
-| "Claude Code was not found" with the binary installed | It is somewhere the plugin does not look, or the IDE did not inherit your `PATH`. Paste the full path into the card, or set it in Settings |
-| Signed out again after a restart | The stored credential could not be renewed. Sign in again from the card, and check the IDE can reach your keychain |
-| A tool call is refused with no card to override it | The [security lock](#security) blocked it. The message names the rule and the Settings path; foreign-territory blocks are absolute by design |
-| A chat is empty after reopening it | The session file is gone from `~/.claude/projects/…`, or the working directory changed. The plugin keeps no transcripts of its own |
-| The agent seems stuck | `Esc` interrupts the turn. If a tool card sits running forever, its agent's tab shows what it was actually doing |
-| Leftover diff tabs | They are real editor tabs, not modals. **Close All Diffs** in the Claude Code tool window's title bar closes every one the plugin opened |
+| The chat never loads, or the window is blank | JCEF is unavailable: below 2025.3.1 this version does not run; otherwise check `ide.browser.jcef.enabled` in the Registry |
+| "Claude Code was not found" with the binary installed | It is somewhere the plugin does not look, or the IDE did not inherit your `PATH`; paste the path into the card |
+| A tool call is refused with no card to override | The guard blocked it; the message names the rule and the Settings path. Foreign-territory blocks are absolute by design |
+| Claude uses `Bash` or `grep` although the IDE tools exist | The flame is off, or a rule is: turn God Mode on, or the rule in Settings ▸ Claude Code ▸ Claude IDE Integration |
+| A domain is missing from the servers | The IDE plugin behind it is not installed or disabled (Git, GitHub, Java, Database, Terminal…) |
+| A commit or Services action answers "not enabled here" | The view had not been shown yet; ask again, the view is now open, or open it yourself |
+| Signed out after a restart | The credential could not be renewed; sign in again, and check the IDE reaches your keychain |
 
-Deeper cases, with log locations and commands:
-[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and [`docs/FAQ.md`](docs/FAQ.md).
-
-Bugs and features: open an issue with the templates in
+Deeper cases with log locations: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and
+[`docs/FAQ.md`](docs/FAQ.md). Bugs and features: the templates in
 [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE). Vulnerabilities: [`SECURITY.md`](SECURITY.md).
 
 ## Build from source
 
-Requires **JDK 21** — the Gradle toolchain is pinned to it, because the IDE runs on JBR 21. The Gradle
-wrapper is included.
-
-```bash
-JAVA_HOME=/path/to/a/jdk-21 ./gradlew buildPlugin
-# → build/distributions/claude-code-native-5.8.0.zip
-```
-
-Install it with **Settings ▸ Plugins ▸ ⚙ ▸ Install Plugin from Disk**.
-
-```bash
-./gradlew runIde          # sandbox IDE with the plugin loaded
-./gradlew test            # unit + headless + integration (JVM)
-./gradlew koverVerify     # coverage gates (blocking in CI)
-./gradlew detekt spotlessCheck
-./gradlew verifyPlugin    # IntelliJ plugin verifier across the declared range
-./gradlew checkDrift      # protocol drift vs. the latest SDK + binary
-npm test                  # frontend suite (vitest + jsdom)
-npm run lint && npm run format:check
-npm audit --omit=dev      # the distributed scope; must be clean
-```
-
-`checkDrift` needs a real `claude` binary and looks in `~/.local/bin` by default — point it elsewhere
-with `-PclaudeBinary=/usr/bin/claude` (or the `CLAUDE_BINARY` environment variable). It is **not**
-wired into `check`: it updates the SDK and the binary to latest, which is a deliberate act, not a side
-effect of running the tests.
-
-`verifyPlugin` can run **fully offline** against locally extracted IDEs:
-
-```bash
-./gradlew verifyPlugin -PlocalIdePath=/path/to/idea-A,/path/to/idea-B
-```
-
-### Testing
-
-The suite is a real pyramid:
-
-- **unit** (pure JVM) — protocol parse/build, diff reconstruction, the exhaustive `PermissionBroker`
-  and `SensitiveGuard` matrices, hunk encode, path-traversal guards, settings enums;
-- **headless component** — `BasePlatformTestCase` in-process, for the project services and settings UI;
-- **integration** — a real `ClaudeSession` driven against the deterministic `bin/fake-claude` stand-in
-  with JSONL fixtures;
-- **UI end-to-end** — RemoteRobot against a real IDE, gated behind `-PuiTest.enabled=true` (see
-  [`docs/UI_TESTING.md`](docs/UI_TESTING.md));
-- **frontend** — vitest + jsdom loading the real inlined `src/main/resources/jcef/*.js`, including a
-  JS↔CSS class contract and an accessibility contract.
-
-CI has no `push` trigger — deliberately, so one commit does not pay for two identical pipelines; the pull
-request is the door, and a branch with no pull request gets no checks. The gate is **not uniform**: a pull
-request into `develop` runs the JVM suite (with `koverVerify`) and the frontend suite; the expensive half —
-static analysis, `npm audit --omit=dev`, `verifyPlugin` and the artifact assertions — runs at the
-`develop → main` door, which is the merge that publishes. The UI end-to-end suite answers only to a nightly
-schedule and a manual dispatch, and is never a required check. CodeQL runs on pushes to both branches as
-well as on pull requests, and both CodeQL and the protocol-drift check run weekly.
-
-## How it works
-
-The plugin speaks **directly with the `claude` binary** over its `stream-json` + control stdio
-protocol — no Node.js and no TypeScript SDK at runtime. One long-lived process per chat handles
-streaming input and output; `can_use_tool` control requests are answered by the plugin, so **the binary
-writes the file** only after your approval.
-
-Nothing is mirrored from terminal output. Every state — compaction, cost, hooks, subagents, MCP health
-— is reconstructed natively from the protocol's structured fields.
-
-The TypeScript SDK package under `node_modules/` is kept as a **protocol reference only** and is never
-distributed. `./gradlew checkDrift` updates the SDK and binary to latest and reports any protocol kind
-the plugin does not model yet.
-
-Architecture, protocol details and the empirically verified facts about the binary's behaviour are in
-[`CLAUDE.md`](CLAUDE.md); where each thing lives is in [`PROJECTMAP.md`](PROJECTMAP.md).
-
-## What's new
-
-**5.8.0** — [Remote Control](#remote-control--pick-a-chat-up-from-your-phone): a chat running in the IDE
-can be driven from claude.ai or the Claude mobile app while Claude keeps executing on your machine. A
-phone button in the chat's button row and a row in the ⚙ menu, neither of which lights up until the CLI
-has accepted; a refusal names its reason on the button and in the chat. Permission cards answered from
-the phone close themselves here.
-
-**5.7.0** — the [Sensitive Guard](#security) stops being invisible: it keeps a log of every alert it
-raises, per project, and a **Guard** view in the chat's view row to read it — what matched, what the rule
-saw, the verdict, and what let the call through if anything did. Every rule gets a mode (Enforcing,
-Permissive, Allow All), as does the guard as a whole; **Settings ▸ Claude Code Security** becomes its own
-page, with the three whitelist reaches and the extra credential globs and blocked domains. A shield in
-the chat's button row suspends the guard for a duration you pick. Most settings became per project.
-
-**5.5.0** — a tab and a transcript per agent, with the whole tree one hover away; a single **Workloads**
-diagram of everything running across every chat; background tasks that keep their output after they
-end and survive a restart; a [Git integration](#git) whose write actions are asked of Claude rather than
-run by the plugin; settings moved into the IDE's password safe. It also **fixes a plugin that was dead on
-2026.2**, which is why the minimum IDE is now 2025.3.1.
-
-**5.1.x** — per-model plan-limit windows (the ones the CLI's `/usage` showed and the plugin did not),
-moved to their own row under the composer; older model generations selectable again behind an *Other
-models* group.
-
-**5.0.0** — the standards-compliance major: a screen-reader live region and a visible focus ring
-throughout, a written [threat model](docs/adr/0002-threat-model.md), third-party licence attribution
-shipped inside the artifact, and the plan-limits panel.
-
-Full history in [`CHANGELOG.md`](CHANGELOG.md); user-facing notes per release in
-[`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+JDK 21 and Node 22+ (`.nvmrc`). `./gradlew buildPlugin` produces `build/distributions/claude-code-native-6.0.0.zip`;
+`./gradlew test` runs the JVM suite, `npm test` the frontend suite, `./gradlew detekt spotlessCheck` and
+`npm run lint` the static gates, `./gradlew verifyPlugin` the Plugin Verifier against the declared range.
+The rules the code is held to — no deprecated or internal platform API, a 250-line ceiling per file, no
+comments, one gateway file per external plugin, the guard off limits — are in
+[`DIRECTIVES.md`](DIRECTIVES.md) and [`docs/PLATFORM_API_POLICY.md`](docs/PLATFORM_API_POLICY.md).
 
 ## Documentation
 
-Using the plugin is covered above. Everything below is for working *on* it.
-
-| Document | What it covers |
-|---|---|
-| [`CLAUDE.md`](CLAUDE.md) | Architecture, protocol, empirical binary behaviour |
-| [`PROJECTMAP.md`](PROJECTMAP.md) | Where things live — the "I want to change X → go to Y" index |
-| [`AGENTS.md`](AGENTS.md) | Runbook for working on this repo with a coding agent |
-| [`SECURITY.md`](SECURITY.md) | The sensitive-data lock, triage scope, reporting policy |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to contribute |
-| [`docs/adr/`](docs/adr/README.md) | Decision records — release process, threat model, i18n deferral |
-| [`docs/FAQ.md`](docs/FAQ.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common questions and fixes |
-| [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md) · [`docs/DRIFT_DETECTION.md`](docs/DRIFT_DETECTION.md) | Binary compatibility policy and drift detection |
-| [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) | Release and branching workflow |
-| [`docs/CI_SETUP.md`](docs/CI_SETUP.md) · [`docs/UI_TESTING.md`](docs/UI_TESTING.md) | CI/CD configuration and the RemoteRobot harness |
-
-## Upstream and forks
-
-**This repository is upstream.** It is not a fork of anything, and the claim is checkable rather than
-asserted — GitHub records a repository's ancestry, and for this one it is empty:
-
-```sh
-gh repo view serialexperimentslainnnn/claude-code-for-jetbrains --json isFork,parent
-# {"isFork":false,"parent":null}
-```
-
-The other anchors point at the same place: the Marketplace listing
-([plugin 31965](https://plugins.jetbrains.com/plugin/31965-claude-code-native)) is published from this
-repository by its author, every release tag here is cut by the release workflow and the artifacts are
-signed, and the commits carry the maintainer's signature.
-
-### Known forks
-
-The GPL exists so that people can fork, study and modify this. Nothing below is a complaint — it is
-simply a map, so that anyone who lands on a copy knows where the original is and can compare.
-
-| Fork | Owner | Last seen active |
-|---|---|---|
-| [luxgoldix-coder/claude-code-for-jetbrains](https://github.com/luxgoldix-coder/claude-code-for-jetbrains) | luxgoldix-coder | 2026-08-10 |
-
-*List reviewed 2026-08-13. It is maintained by hand and may lag; the live set is always*
-`gh api repos/serialexperimentslainnnn/claude-code-for-jetbrains/forks --jq '.[].full_name'`.
-
-### If you fork it
-
-Please do — and two asks, the first of which the licence already requires of you:
-
-1. **Say that it is modified, and by whom.** GPL-3.0 §5(a) requires a modified version to carry
-   prominent notices stating that you changed it and when. In practice that means editing this README,
-   the plugin description and the plugin `id` so a user can tell the two apart.
-2. **Use your own plugin id and your own signing key** before publishing anywhere. Two artifacts
-   claiming `dev.lain.claude-code-for-jetbrains` cannot coexist in a user's IDE, and a release signed
-   with this project's key would misattribute your work to this project — and this project's bugs
-   to you.
-
-Neither ask restricts what the licence grants you. They exist so that a user can always answer "whose
-build am I running, and where do I report this?".
+- [`docs/SKILL_INVENTORY.md`](docs/SKILL_INVENTORY.md) — every tool, its parameters and an example, plus the board of what shipped
+- [`docs/MCP_CLIENT.md`](docs/MCP_CLIENT.md) — driving the IDE from any MCP client
+- [`docs/MCP_ROADMAP.md`](docs/MCP_ROADMAP.md) — what was considered, what is out and why
+- [`docs/PLATFORM_API_POLICY.md`](docs/PLATFORM_API_POLICY.md) — the platform APIs the plugin refuses and their replacements
+- [`docs/SECURITY-GUARD.md`](docs/SECURITY-GUARD.md) — the Sensitive Guard: rules, categories, whitelists
+- [`docs/FAQ.md`](docs/FAQ.md) · [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) · [`docs/BINARY_COMPAT.md`](docs/BINARY_COMPAT.md)
+- [`docs/RELEASE_PROCEDURE.md`](docs/RELEASE_PROCEDURE.md) · [`docs/BRANCHING.md`](docs/BRANCHING.md) · [`docs/CI_SETUP.md`](docs/CI_SETUP.md)
+- [`docs/adr/`](docs/adr) — the decisions, the threat model among them
+- [`CHANGELOG.md`](CHANGELOG.md) · [`RELEASE_NOTES.md`](RELEASE_NOTES.md)
 
 ## Licence and attribution
 
-Licensed under the **GNU General Public License v3.0** — see [`LICENSE`](LICENSE).
-
-The published archive redistributes third-party components (marked, DOMPurify, highlight.js,
-kotlinx.serialization). Their notices are in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), with the
-full licence texts under [`LICENSES/`](LICENSES) — each entry verified against the upstream `LICENSE` of
-the exact version that ships, not against a manifest or a minified file's banner.
-
-All of it is packaged **inside** the artifact, because a notice sitting in a Git repository does not
-accompany the binary a user installs. Both halves of that are enforced rather than promised: the
-*Build plugin* job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) unpacks the very zip the
-plugin verifier passed and fails the build unless the jar carries `META-INF/LICENSE`,
-`META-INF/THIRD-PARTY-NOTICES.md` and one `META-INF/licenses/…` text for **every** file under
-`LICENSES/` — the expected set is read from the checkout, so adding a dependency's licence text extends
-the check by itself. The same job fails if the zip contains a single `node_modules` entry, which is what
-turns "no npm code is distributed" from a claim into a check.
+GPL-3.0 — see [`LICENSE`](LICENSE) and [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). *Claude* and
+*Claude Code* are trademarks of Anthropic, PBC; *JetBrains* and the IDE names are trademarks of JetBrains
+s.r.o. This project is not affiliated with, sponsored by, or endorsed by either. The upstream repository is
+[serialexperimentslainnnn/claude-code-for-jetbrains](https://github.com/serialexperimentslainnnn/claude-code-for-jetbrains).
 
 ## Disclaimer
 
-Unofficial, community-built, open-source plugin. **Not affiliated with, sponsored by, or endorsed by
-Anthropic or JetBrains.** It requires your own separately-installed `claude` CLI and your own Claude
-subscription or API key — no credentials are bundled or provided.
-
-"Claude" and "Claude Code" are trademarks of Anthropic; "JetBrains", "IntelliJ", "PyCharm" and related
-names are trademarks of JetBrains s.r.o. Used here for identification only.
+This software is provided as is, without warranty of any kind. It runs an AI agent with access to your
+files, your IDE and your repositories under the permissions you grant it and the guard described above;
+read what it proposes before you accept it, and keep the backups you would keep anyway.

@@ -1,26 +1,24 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.permission.SecurityRule
-import dev.lain.claudejb.permission.SensitiveGuard
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.GuardMode
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SecuritySuspensions
-import dev.lain.claudejb.settings.SettingsStore
-import dev.lain.claudejb.settings.guardSuspended
-import dev.lain.claudejb.settings.parseEnv
-import dev.lain.claudejb.settings.sensitiveDecision
-import dev.lain.claudejb.settings.sensitivePolicy
+import dev.lain.claudejb.model.permission.SensitiveGuard
+import dev.lain.claudejb.model.permission.vocab.SecurityRule
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.LaunchDefaults
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsStore
+import dev.lain.claudejb.model.settings.env.parseEnv
+import dev.lain.claudejb.model.settings.guard.GuardMode
+import dev.lain.claudejb.model.settings.guard.SecuritySuspensions
+import dev.lain.claudejb.model.settings.guard.guardSuspended
+import dev.lain.claudejb.model.settings.guard.sensitiveDecision
+import dev.lain.claudejb.model.settings.guard.sensitivePolicy
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
 
     private val settings get() = ClaudeSettings.getInstance(project)
-    private val emptyInput = JsonObject(emptyMap())
-
     private val credentialRead = JsonObject(
         mapOf("command" to JsonPrimitive("cat ${System.getProperty("user.home")}/.ssh/id_rsa")),
     )
@@ -47,7 +45,7 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test defaults are correct`() {
-        assertEquals(ClaudeSession.DEFAULT_MODEL, settings.state.model)
+        assertEquals(LaunchDefaults.DEFAULT_MODEL, settings.state.model)
         assertEquals("opus[1m]", settings.state.model)
         assertTrue(settings.restoreOpenChatsOnStartup)
         assertTrue(settings.state.restoreOpenChatsOnStartup)
@@ -173,12 +171,12 @@ class ClaudeSettingsHeadlessTest : BasePlatformTestCase() {
     }
 
     fun `test remember and forget always-allow tool`() {
-        assertFalse(settings.isToolAlwaysAllowed("Bash", emptyInput))
+        assertFalse(settings.isToolAlwaysAllowed("Bash"))
         settings.alwaysAllow.remember("Bash")
-        assertTrue(settings.isToolAlwaysAllowed("Bash", emptyInput))
+        assertTrue(settings.isToolAlwaysAllowed("Bash"))
         assertTrue("Bash" in settings.alwaysAllow.all())
         settings.alwaysAllow.forget("Bash")
-        assertFalse(settings.isToolAlwaysAllowed("Bash", emptyInput))
+        assertFalse(settings.isToolAlwaysAllowed("Bash"))
         assertFalse("Bash" in settings.alwaysAllow.all())
     }
 

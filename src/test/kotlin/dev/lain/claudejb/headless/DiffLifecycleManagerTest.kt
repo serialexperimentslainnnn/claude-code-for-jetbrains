@@ -1,9 +1,8 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.diff.DiffPresenter
-import dev.lain.claudejb.diff.OpenedDiffsService
-import dev.lain.claudejb.session.DiffLifecycleManager
+import dev.lain.claudejb.controller.session.diff.DiffLifecycleManager
+import dev.lain.claudejb.view.diff.OpenedDiffsService
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File

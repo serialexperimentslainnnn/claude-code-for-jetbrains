@@ -2,16 +2,16 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.permission.PermissionBroker
-import dev.lain.claudejb.permission.SecurityRule
-import dev.lain.claudejb.session.AttentionLanding
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.EntryDTO
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.GuardAlert
-import dev.lain.claudejb.settings.GuardAlertLog
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.ui.ChatTranscriptView
+import dev.lain.claudejb.controller.session.AttentionLanding
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.permission.broker.PermissionBroker
+import dev.lain.claudejb.model.permission.vocab.SecurityRule
+import dev.lain.claudejb.model.session.transcript.EntryDTO
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.guard.GuardAlert
+import dev.lain.claudejb.model.settings.guard.GuardAlertLog
+import dev.lain.claudejb.view.feed.ChatTranscriptView
 
 class GuardRestoreHeadlessTest : BasePlatformTestCase() {
 
@@ -56,7 +56,7 @@ class GuardRestoreHeadlessTest : BasePlatformTestCase() {
 
     private fun restored(dtos: List<EntryDTO>): ClaudeSession {
         val session = ClaudeSession(project, "t")
-        session.restore(savedSession, dtos)
+        session.persistence.restore(savedSession, dtos)
         PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
         return session
     }
@@ -122,7 +122,7 @@ class GuardRestoreHeadlessTest : BasePlatformTestCase() {
             assertEquals("only the call the chat itself made is reported here", 2, rows.size)
             assertEquals(rule.name, rows[1].blockedRule)
 
-            val mine = session.guardAlertsAnchoredIn(listOf(toolRow("tu_inside_the_agent")))
+            val mine = session.guard.alertsAnchoredIn(listOf(toolRow("tu_inside_the_agent")))
             assertEquals(1, mine.size)
             assertEquals("tu_inside_the_agent", mine.first().toolUseId)
         } finally {

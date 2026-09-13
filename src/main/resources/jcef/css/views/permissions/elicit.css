@@ -1,0 +1,59 @@
+.elicit-card .elicit-msg {
+  font-size: 12.8px;
+  color: var(--text);
+  margin: 4px 0 10px;
+  line-height: 1.55;
+}
+.elicit-card .elicit-server {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: var(--mono);
+}
+.elicit-card .elicit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 10px 0 12px;
+}
+.elicit-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.elicit-card input,
+.elicit-card select,
+.boot-path-controls input,
+.auth-row input {
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
+}
+.elicit-card input:focus,
+.elicit-card select:focus,
+.boot-path-controls input:focus,
+.auth-row input:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.elicit-card input::placeholder,
+.boot-path-controls input::placeholder,
+.auth-row input::placeholder {
+  color: var(--dim);
+}
+.elicit-card a {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.elicit-card a:hover {
+  text-decoration: underline;
+}

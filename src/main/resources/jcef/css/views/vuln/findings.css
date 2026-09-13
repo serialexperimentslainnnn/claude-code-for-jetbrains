@@ -1,0 +1,140 @@
+.vuln-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  min-width: 0;
+}
+.vuln-finding[data-tier='malicious'] {
+  border-left-color: var(--danger);
+}
+.vuln-finding[data-tier='critical'] {
+  border-left-color: var(--danger);
+}
+.vuln-finding[data-tier='high'] {
+  border-left-color: var(--neon-orange);
+}
+.vuln-finding[data-tier='moderate'] {
+  border-left-color: var(--warning);
+}
+.vuln-finding[data-tier='low'] {
+  border-left-color: var(--info);
+}
+
+.vuln-finding-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.vuln-pkg {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.vuln-id {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.vuln-where {
+  color: var(--dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.vuln-summary {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.vuln-cvss {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+.vuln-fixed {
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.vuln-details {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.vuln-details > :first-child {
+  margin-top: 0;
+}
+.vuln-details > :last-child {
+  margin-bottom: 0;
+}
+.vuln-refs {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 11.5px;
+}
+.vuln-ref {
+  overflow-wrap: anywhere;
+}
+
+.vuln-inv {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.vuln-inv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  min-width: 0;
+}
+.vuln-inv-eco {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: var(--mono);
+  min-width: 62px;
+}
+.vuln-inv-name {
+  flex: 1 1 auto;
+  color: var(--text);
+  font-family: var(--mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.vuln-inv-version {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.vuln-inv-origin {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+@media (forced-colors: active) {
+  .vuln-tier,
+  .vuln-finding {
+    border-color: CanvasText;
+  }
+  .vuln-fill {
+    background: Highlight;
+  }
+}

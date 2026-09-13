@@ -1,0 +1,120 @@
+.toon {
+  margin: 6px 0;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.toon-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.toon-table th,
+.toon-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.toon-table th {
+  color: var(--dim);
+  font-weight: 500;
+  text-transform: lowercase;
+}
+.toon-table tr:last-child td {
+  border-bottom: none;
+}
+.toon-table td.toon-text,
+.toon-table td.toon-message,
+.toon-table td.toon-description {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+}
+.toon-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 10px;
+}
+.toon-field {
+  display: contents;
+}
+.toon-field.toon-nested {
+  display: block;
+  grid-column: 1 / -1;
+}
+.toon-field.toon-nested .toon-key {
+  display: block;
+  margin: 6px 0 2px;
+}
+.toon-key {
+  color: var(--dim);
+}
+.toon-list {
+  margin: 0;
+  padding-left: 16px;
+}
+.toon-scalar {
+  font-family: var(--mono);
+}
+.toon-block,
+.toon-diff {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  white-space: pre;
+  overflow: auto;
+  max-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.toon-diff span {
+  display: block;
+}
+.toon-diff-add {
+  color: var(--ok, #4caf50);
+  background: rgba(76, 175, 80, 0.08);
+}
+.toon-diff-del {
+  color: var(--err, #ef5350);
+  background: rgba(239, 83, 80, 0.08);
+}
+.toon-diff-hunk {
+  color: var(--accent, #64b5f6);
+}
+.toon-diff-meta {
+  color: var(--dim);
+}
+.toon-items {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.toon-item {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+.toon-item > summary {
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.toon-item[open] > summary {
+  margin-bottom: 4px;
+}
+.toon-item-error > summary {
+  color: var(--err, #ef5350);
+}
+.toon-item-err {
+  color: var(--err, #ef5350);
+  font-family: var(--mono);
+}
+.toon-code {
+  padding: 0;
+}
+.toon-code code {
+  display: block;
+  padding: 6px 8px;
+}

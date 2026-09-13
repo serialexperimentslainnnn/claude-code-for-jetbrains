@@ -2,16 +2,16 @@ package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.protocol.ClaudeEvent
-import dev.lain.claudejb.protocol.ElicitationRequest
-import dev.lain.claudejb.protocol.FilesPersistedInfo
-import dev.lain.claudejb.protocol.MemoryRecallInfo
-import dev.lain.claudejb.protocol.PersistedFile
-import dev.lain.claudejb.protocol.PromptSuggestionInfo
-import dev.lain.claudejb.protocol.RecalledMemory
-import dev.lain.claudejb.protocol.ThinkingTokensInfo
-import dev.lain.claudejb.session.ClaudeSession
-import dev.lain.claudejb.session.Speaker
+import dev.lain.claudejb.controller.session.ClaudeSession
+import dev.lain.claudejb.model.protocol.ClaudeEvent
+import dev.lain.claudejb.model.protocol.models.ElicitationRequest
+import dev.lain.claudejb.model.protocol.models.FilesPersistedInfo
+import dev.lain.claudejb.model.protocol.models.MemoryRecallInfo
+import dev.lain.claudejb.model.protocol.models.PersistedFile
+import dev.lain.claudejb.model.protocol.models.PromptSuggestionInfo
+import dev.lain.claudejb.model.protocol.models.RecalledMemory
+import dev.lain.claudejb.model.protocol.models.ThinkingTokensInfo
+import dev.lain.claudejb.model.session.transcript.Speaker
 
 class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
 
@@ -22,10 +22,10 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
         try {
             session.handleEventForTest(ClaudeEvent.PromptSuggestion(PromptSuggestionInfo(suggestion = "Add tests")))
             flush()
-            assertEquals("Add tests", session.promptSuggestion)
-            session.clearSuggestion()
+            assertEquals("Add tests", session.prompts.suggestion)
+            session.prompts.clearSuggestion()
             flush()
-            assertNull(session.promptSuggestion)
+            assertNull(session.prompts.suggestion)
         } finally {
             session.dispose()
         }
@@ -36,10 +36,10 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
         try {
             session.handleEventForTest(ClaudeEvent.ThinkingTokens(ThinkingTokensInfo(estimatedTokens = 500)))
             flush()
-            assertEquals(500, session.liveThinkingTokens)
+            assertEquals(500, session.turn.liveThinkingTokens)
             session.handleEventForTest(ClaudeEvent.MessageStart)
             flush()
-            assertEquals(0, session.liveThinkingTokens)
+            assertEquals(0, session.turn.liveThinkingTokens)
         } finally {
             session.dispose()
         }
@@ -80,7 +80,7 @@ class ClaudeSessionEventSurfacingHeadlessTest : BasePlatformTestCase() {
                 ClaudeEvent.Elicitation("r1", ElicitationRequest(mcpServerName = "github", message = "Authorize?")),
             )
             flush()
-            val pending = session.pendingPermissions().single()
+            val pending = session.cards.pending().single()
             assertEquals("r1", pending.requestId)
             assertNotNull(pending.elicitation)
         } finally {

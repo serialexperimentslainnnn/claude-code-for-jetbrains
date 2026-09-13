@@ -6,12 +6,12 @@ class TokenAccountingIntegrationTest : FakeClaudeTestBase() {
         val session = newSessionWith("token_accounting.jsonl")
         session.send("count tokens")
 
-        waitUntil("tokens accounted") { session.totalTokens() == 380 }
+        waitUntil("tokens accounted") { session.tokens.totalTokens() == 380 }
 
-        assertEquals("total tokens", 380, session.totalTokens())
-        assertEquals("session input", 100, session.sessionInputTokens)
-        assertEquals("session cache creation", 200, session.sessionCacheCreationTokens)
-        assertEquals("session cache read", 50, session.sessionCacheReadTokens)
-        assertEquals("session output", 30, session.sessionOutputTokens)
+        assertEquals("total tokens", 380, session.tokens.totalTokens())
+        assertEquals("session input", 100, session.tokens.sessionInputTokens)
+        assertEquals("session cache creation", 200, session.tokens.sessionCacheCreationTokens)
+        assertEquals("session cache read", 50, session.tokens.sessionCacheReadTokens)
+        assertEquals("session output", 30, session.tokens.sessionOutputTokens)
     }
 }

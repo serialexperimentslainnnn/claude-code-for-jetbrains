@@ -1,0 +1,181 @@
+.dg-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--bg) 55%, var(--code-bg));
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--border) 85%, transparent) 1px,
+    transparent 0
+  );
+  background-size: 16px 16px;
+  cursor: grab;
+}
+.dg-view.dragging {
+  cursor: grabbing;
+}
+.dg-canvas {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  transform-origin: 0 0;
+}
+.dg-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.dg-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--border) 65%, var(--text) 35%);
+  stroke-width: 1.5;
+}
+.dg-card {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 0.12s var(--ease),
+    background-color 0.12s var(--ease),
+    transform 0.12s var(--ease);
+}
+.dg-card:hover {
+  background: var(--surface2);
+  border-color: color-mix(in srgb, var(--neon-orange) 45%, var(--border));
+  transform: translateY(-1px);
+}
+.dg-card.selected {
+  border-color: var(--neon-orange);
+  color: var(--neon-orange);
+}
+.dg-card.chat {
+  border-left-color: var(--accent);
+}
+.dg-card.agent {
+  border-left-color: color-mix(in srgb, var(--text) 40%, transparent);
+}
+.dg-card.task {
+  border-left-color: color-mix(in srgb, var(--info) 55%, transparent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.dg-card.running {
+  animation: toolRun 1.3s ease-in-out infinite;
+}
+.dg-card.completed {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+}
+.dg-card.failed {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+}
+@keyframes dgDraw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.dg-edge.dg-draw {
+  animation: dgDraw 0.26s ease-out forwards;
+}
+@keyframes dgPop {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.dg-card.dg-pop {
+  animation: dgPop 0.22s var(--ease) 0.24s both;
+}
+.dg-card.dg-pop.running {
+  animation:
+    dgPop 0.22s var(--ease) 0.24s both,
+    toolRun 1.3s ease-in-out 0.46s infinite;
+}
+
+.dg-edge.running {
+  stroke: color-mix(in srgb, var(--info) 70%, transparent);
+  animation: edgeRun 1.3s ease-in-out infinite;
+}
+@keyframes edgeRun {
+  0%,
+  100% {
+    stroke: color-mix(in srgb, var(--info) 75%, transparent);
+  }
+  50% {
+    stroke: color-mix(in srgb, var(--warning) 75%, transparent);
+  }
+}
+.dg-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.dg-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+.dg-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.dg-dot.running {
+  background: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 22%, transparent);
+}
+.dg-dot.completed {
+  background: var(--success);
+}
+.dg-dot.failed {
+  background: var(--danger);
+}
+.dg-dot.stopped {
+  background: var(--danger);
+}
+.dg-card.stopped {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  opacity: 0.85;
+}

@@ -1,11 +1,11 @@
 package dev.lain.claudejb.headless
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.permission.SecurityRule
-import dev.lain.claudejb.settings.GuardAlert
-import dev.lain.claudejb.settings.GuardAlertLog
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsScope
+import dev.lain.claudejb.model.permission.vocab.SecurityRule
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsScope
+import dev.lain.claudejb.model.settings.guard.GuardAlert
+import dev.lain.claudejb.model.settings.guard.GuardAlertLog
 
 class GuardAlertLogHeadlessTest : BasePlatformTestCase() {
 

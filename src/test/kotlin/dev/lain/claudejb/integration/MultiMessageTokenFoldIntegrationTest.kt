@@ -6,10 +6,10 @@ class MultiMessageTokenFoldIntegrationTest : FakeClaudeTestBase() {
         val session = newSessionWith("multi_message.jsonl")
         session.send("two parts please")
 
-        waitUntil("both messages folded") { session.totalTokens() == 150 }
+        waitUntil("both messages folded") { session.tokens.totalTokens() == 150 }
 
-        assertEquals("total tokens (both messages)", 150, session.totalTokens())
-        assertEquals("session input (folded)", 90, session.sessionInputTokens)
-        assertEquals("session output (folded)", 60, session.sessionOutputTokens)
+        assertEquals("total tokens (both messages)", 150, session.tokens.totalTokens())
+        assertEquals("session input (folded)", 90, session.tokens.sessionInputTokens)
+        assertEquals("session output (folded)", 60, session.tokens.sessionOutputTokens)
     }
 }

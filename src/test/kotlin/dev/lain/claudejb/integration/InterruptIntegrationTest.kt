@@ -1,6 +1,6 @@
 package dev.lain.claudejb.integration
 
-import dev.lain.claudejb.session.Speaker
+import dev.lain.claudejb.model.session.transcript.Speaker
 
 class InterruptIntegrationTest : FakeClaudeTestBase() {
 
@@ -12,13 +12,13 @@ class InterruptIntegrationTest : FakeClaudeTestBase() {
             session.transcript.entries.any { it.speaker == Speaker.ASSISTANT && it.text.contains("Working on it") }
         }
 
-        session.interrupt()
+        session.turnControl.interrupt()
 
         waitUntil("session idle after interrupt") {
-            !session.turnActive &&
+            !session.turn.active &&
                 session.transcript.entries.any { it.text.contains("still going") }
         }
 
-        assertFalse("turn no longer active", session.turnActive)
+        assertFalse("turn no longer active", session.turn.active)
     }
 }

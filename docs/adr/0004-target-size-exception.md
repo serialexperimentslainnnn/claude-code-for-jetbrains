@@ -40,8 +40,8 @@ the pill has room — it is closed on the chats' row — and never let a second 
 Three things make that a decision rather than a shrug:
 
 1. **It is registered where it gets audited.** There is no accessibility statement or conformance report in
-   this repository, so the register is `src/test/frontend/accessibility.test.js`, which is the only
-   accessibility record that runs. The declaration sits beside the rule in `css/tabs.css` as well, but a
+   this repository, so the register is `src/test/frontend/contracts/accessibility.test.js`, which is the only
+   accessibility record that runs. The declaration sits beside the rule in `css/views/tabs/bar.css` as well, but a
    comment beside the cause is not a register: nobody reads it again.
 2. **It is asserted in BOTH directions.** A declared exception fails in two ways and only one of them looks
    like a failure. Someone shrinks the control further — caught, because the size is pinned at 20. Or the

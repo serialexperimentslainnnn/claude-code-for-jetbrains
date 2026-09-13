@@ -4,56 +4,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 
-/**
- * **Every declaration in `src/main` must be named by something else in `src/main`.** A declaration whose only
- * mentions are its own file, its own KDoc and its own tests is not code the plugin runs — it is code the plugin
- * carries, and it is carried at full price: it is read in reviews, it is migrated, it is kept compiling.
- *
- * WHY THIS HAS TO BE A GATE. detekt analyses `src/main` and `src/test` in ONE invocation (`build.gradle.kts`,
- * `source.setFrom(files("src/main/kotlin", "src/test/kotlin"))`). A declaration that nothing calls but its own
- * test therefore satisfies every unused-code rule, and that same test then raises its line coverage for
- * `koverVerify`. **A dead file with a good test suite scores better than a live one**, and no other gate in this
- * build can tell the two apart. What it looks like in practice is a declaration that is implemented,
- * documented, tested — and reachable from nothing.
- *
- * WHAT COUNTS AS A REFERENCE — the three exclusions are the whole test, because each one is a way a dead
- * declaration reports itself as live:
- *  1. **A comment is not a reference.** This codebase's KDoc is dense with `[Symbol]` links, and dead code here
- *     is the BEST documented, because it was written in good faith. `GitReadOnlyContractTest` already treats a
- *     symbol named in prose as not a usage; this is the same rule.
- *  2. **A string literal is not a reference.** A class that names itself in its own `toString` would otherwise
- *     certify itself. Template expressions inside a string are kept: an interpolated call really is a call.
- *  3. **The declaration's own body is not a reference.** A companion factory returning its own type is the most
- *     natural shape in the world, and it says nothing about whether anything outside ever asks for one.
- *
- * WHAT IS EXEMPT, and nothing else is: **platform entry points**, which are reached from the plugin
- * descriptors rather than from Kotlin. They are resolved by READING those descriptors, never from a list kept
- * here: a hardcoded list goes stale silently, and it would then exempt a class the descriptor had stopped
- * naming. There is no per-declaration exemption and there is deliberately no way to grant one: a finding here
- * is answered by wiring the declaration or deleting it, and an exemption is how it gets answered by neither.
- *
- * SCOPE, and its two declared limits. The scan covers top-level declarations and the members of top-level
- * `object`s — the shapes whose call sites are spelled unambiguously in the source (`Owner.member`,
- * `Owner::member`, or an import of it). Members of CLASSES are reached through an instance whose type only a
- * compiler can resolve, and EXTENSIONS are called on their receiver rather than on their owner; both are
- * skipped, because a guess in either direction is worse than a declared gap. `override`s are skipped too: they
- * are called through their supertype, so a scan for their own name proves nothing.
- *
- * TWO BLIND SPOTS THIS SCAN HAS, named because a gate that lists three of its five limits reads as exhaustive
- * and gets trusted for the two it left out:
- *  - **Mutual references between dead declarations read as live.** The question asked is "is this name written
- *    anywhere else", not "is it reachable from anything that runs". Two dead declarations that name each other
- *    each certify the other and neither is reported. One level down, the same applies inside an object: a dead
- *    member whose only caller is another dead member of the same object is invisible, because a member used by
- *    its own object counts as referenced — and that clause is right, since an object legitimately assembles
- *    what it exports out of its own parts. Closing this needs transitive reachability, which needs a call
- *    graph, which needs a compiler; that is the same boundary the scope above draws.
- *  - **The entry-point exemption matches a SIMPLE name, and it is global.** A class the descriptors name is
- *    exempt everywhere, so an unrelated top-level declaration that happens to share that simple name inherits
- *    the exemption. Reading the descriptors is what stops the exemption going stale; this is the one way it
- *    still can. The fix, if a name is ever reused: match the fully-qualified name, which means tracking each
- *    declaration's package as well as its name.
- */
 class ReachabilityContractTest {
 
     private val sources: List<Source> = mainSources()
@@ -256,7 +206,6 @@ class ReachabilityContractTest {
                 """(?:fun|val|var)\s+(?:<[^>]+>\s+)?([A-Za-z_]\w*)(\.?)""",
         )
 
-        /** `private` is detekt's business; an `override` is reached through the supertype, not by its own name. */
         val SKIPPED_MODIFIER = Regex("""\b(private|override)\s""")
     }
 }

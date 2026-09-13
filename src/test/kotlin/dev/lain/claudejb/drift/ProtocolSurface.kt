@@ -72,6 +72,7 @@ data class ProtocolSurface(
             "get_usage", "register_repo_root", "reload_skills",
             "list_models", "get_plan", "get_workspace_diff",
             "generate_session_title", "side_question",
+            "get_hooks_listing", "list_permission_rules", "reload_output_styles", "update_settings",
         )
     }
 }

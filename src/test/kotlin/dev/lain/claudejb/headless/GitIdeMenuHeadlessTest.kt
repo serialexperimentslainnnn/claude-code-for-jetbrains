@@ -4,9 +4,9 @@ import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.git.GitAvailability
-import dev.lain.claudejb.ui.GitActionCatalog
-import dev.lain.claudejb.ui.GitIdeMenu
+import dev.lain.claudejb.controller.commands.git.GitActionCatalog
+import dev.lain.claudejb.controller.commands.git.GitIdeMenu
+import dev.lain.claudejb.controller.git.GitAvailability
 
 class GitIdeMenuHeadlessTest : BasePlatformTestCase() {
 

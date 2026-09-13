@@ -5,11 +5,11 @@ import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.settings.ClaudeSettings
-import dev.lain.claudejb.settings.Provider
-import dev.lain.claudejb.settings.SecretStore
-import dev.lain.claudejb.settings.SettingsScope
-import dev.lain.claudejb.settings.SettingsStore
+import dev.lain.claudejb.model.settings.ClaudeSettings
+import dev.lain.claudejb.model.settings.Provider
+import dev.lain.claudejb.model.settings.SecretStore
+import dev.lain.claudejb.model.settings.SettingsScope
+import dev.lain.claudejb.model.settings.SettingsStore
 
 class SecretStoreIsolationHeadlessTest : BasePlatformTestCase() {
 

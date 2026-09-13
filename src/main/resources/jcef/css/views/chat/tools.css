@@ -1,0 +1,198 @@
+.tool {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  overflow: hidden;
+  transition: border-color 0.2s;
+  animation: rise 0.22s var(--ease) both;
+}
+
+.tool.agent-link > .tool-head {
+  cursor: pointer;
+}
+.tool.agent-link > .tool-head:hover .name {
+  text-decoration: underline;
+}
+.tool.agent-link > .tool-head .chev {
+  visibility: hidden;
+}
+
+.tool.loading,
+.tool.running {
+  animation:
+    rise 0.22s var(--ease) both,
+    toolRun 1.3s ease-in-out infinite;
+}
+.tool.loading > .tool-head .ic,
+.tool.running > .tool-head .ic {
+  animation:
+    spin 1.1s linear infinite,
+    toolRunIc 1.3s ease-in-out infinite;
+}
+.tool.failed {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--border));
+  animation: none;
+}
+.tool.done {
+  border-color: color-mix(in srgb, var(--success) 50%, var(--border));
+  animation:
+    rise 0.22s var(--ease) both,
+    settle 0.32s var(--ease);
+}
+@keyframes settle {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.015);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes toolRun {
+  0%,
+  100% {
+    border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--warning) 60%, var(--border));
+  }
+}
+@keyframes toolRunIc {
+  0%,
+  100% {
+    color: var(--info);
+  }
+  50% {
+    color: var(--warning);
+  }
+}
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.14s;
+}
+.tool-head:hover {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.tool-head .ic {
+  flex: 0 0 auto;
+  color: var(--dim);
+  display: inline-flex;
+}
+.tool-head .ic svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.tool.failed > .tool-head .ic {
+  color: var(--danger);
+}
+.tool.done > .tool-head .ic {
+  color: var(--success);
+}
+.tool-head .name {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1 1 auto;
+}
+.tool-head .tool-diff,
+.tool-head .tool-restore {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.tool-head .tool-diff {
+  margin-left: auto;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.tool-head .tool-diff:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.tool-head .tool-restore {
+  margin-left: 6px;
+  color: var(--dim);
+}
+.tool-head .tool-restore:hover {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.tool-head .tool-restore + .chev,
+.tool-head .tool-diff + .chev {
+  margin-left: 8px;
+}
+.tool-head .chev {
+  flex: 0 0 auto;
+  color: var(--dim);
+  transition: transform 0.16s var(--ease);
+}
+.tool.open > .tool-head .chev {
+  transform: rotate(90deg);
+}
+.tool-out {
+  display: none;
+  border-top: 1px solid var(--border);
+}
+.tool.open > .tool-out {
+  display: block;
+}
+.tool-places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 2px 12px 6px;
+  font-size: 12px;
+}
+.tool-places .tool-place {
+  color: var(--accent);
+  text-decoration: none;
+}
+.tool-places .tool-place:hover {
+  text-decoration: underline;
+}
+.tool-live-tail {
+  padding: 4px 12px 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool.open > .tool-live-tail {
+  display: none;
+}
+.tool-live-tail .tool-foot {
+  color: var(--text);
+}
+.tool-live-tail .tool-foot:not(:empty) + .tool-last:not(:empty)::before {
+  content: ' · ';
+  color: var(--dim);
+}

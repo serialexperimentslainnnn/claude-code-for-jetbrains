@@ -10,7 +10,7 @@ class InitFlowIntegrationTest : FakeClaudeTestBase() {
             session.sessionId == "11111111-1111-1111-1111-111111111111"
         }
         assertEquals("11111111-1111-1111-1111-111111111111", session.sessionId)
-        assertEquals("claude-opus-4-8", session.model)
+        assertEquals("claude-opus-4-8", session.launch.model)
     }
 
     fun `test modelOptions reflects only binary-reported models (no hardcoded fallback)`() {
@@ -18,7 +18,7 @@ class InitFlowIntegrationTest : FakeClaudeTestBase() {
         session.start(resume = false)
         waitUntil("session id back-filled from init") { session.sessionId != null }
 
-        assertEquals(session.models, session.modelOptions())
-        assertTrue("no hardcoded fallback entries", session.modelOptions().none { it.value == "sonnet" || it.value == "haiku" })
+        assertEquals(session.catalog.models, session.catalog.models)
+        assertTrue("no hardcoded fallback entries", session.catalog.models.none { it.value == "sonnet" || it.value == "haiku" })
     }
 }

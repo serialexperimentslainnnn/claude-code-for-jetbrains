@@ -1,6 +1,6 @@
 package dev.lain.claudejb.integration
 
-import dev.lain.claudejb.session.Speaker
+import dev.lain.claudejb.model.session.transcript.Speaker
 
 class ThinkingFlowIntegrationTest : FakeClaudeTestBase() {
 

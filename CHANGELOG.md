@@ -4,6 +4,134 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] — 2026-09-12
+
+**Claude becomes one with your IDE.** The plugin now runs four MCP servers of its own inside the IDE
+and hands Claude the IDE itself: 178 tools in 55 domains, on by default, every action mirrored on
+your screen without taking your focus, every call judged by the guard first. Underneath, the code is
+restructured, the page is TypeScript, the plugin can be traced, and the bugs found on the way are fixed.
+
+### Added
+- **Four MCP servers of the plugin's own — `code`, `run`, `vcs`, `ops` — over Unix sockets**, with no
+  port, nothing to install and nothing exposed. Claude reads through the IDE's index (unsaved edits
+  included), searches, navigates by symbol, edits through the document model (one undo entry, a diff,
+  saved), renames and moves with the refactoring engine, reformats with the project's code style, reads
+  the IDE's problems and inspections, builds, runs configurations, runs tests through the IDE's runner,
+  runs commands in the IDE's Terminal, debugs with breakpoints, drives Git through the IDE and its Log,
+  Commit and Pull Requests views, works the Services panel, databases, the HTTP Client and SSH hosts, and
+  can fire any action the IDE registers — with a file, a commit or a Services node as its target. Each
+  server offers its tools on demand, so a session pays only for the domains it uses; results come back
+  as compact tables.
+- **Claude God Mode: one switch, on by default.** The flame in the chat bar lights when all four servers
+  and every rule are on. Each rule is one instruction in Claude's system prompt, repeated every turn,
+  naming which IDE tool replaces which native one, so a session does not drift back to `grep` and `sed`.
+  **Settings ▸ Claude Code ▸ Claude IDE Integration** fine-tunes servers, rules, the mirror and whether
+  an unexpected client must be approved. An upgrade that adds domains switches their rules on.
+- **Everything Claude does is mirrored in the IDE, never focused.** What it reads opens in the preview
+  tab, what it edits in a real tab; a commit it names is selected in the Log, a service in Services, a
+  problem in its tab, a run in its window; a range it points at flashes. Your caret stays where you are
+  typing and the Terminal keeps its tab. One switch in the same settings group turns the mirror off.
+- **Claude opens, shows and navigates for you.** Ask for a file at a line, a commit, a range of commits,
+  a diff of two files or of a file against any ref, a pull request, a tool window, a Settings page, a
+  Services node, a file in the Project view, a path in the file manager — it appears in the IDE, in the
+  right place, without you touching the mouse.
+- **Cards for the IDE tools.** Every own call is a card named by server, tool and subject; a list
+  passed to a tool draws one sub-card per item, each with its own title, diff, live lines, state and a
+  one-click link into the IDE (the commit, the Log, the tool window, the terminal tab, the run, the
+  problem, the diff). An own edit has *View diff* and *Restore*; a long tool keeps its outcome in view;
+  a subagent's calls draw under its Task card.
+- **Pull requests and releases through the IDE's own GitHub account.** List and read pull requests,
+  open one selected in the IDE's Pull Requests view, create one, comment on it, read its mergeability
+  and checks until they settle, and merge it once they are green; then verify the tags, the Actions runs,
+  the GitHub Release and the plugin's versions on the JetBrains Marketplace. No `gh`, no token of its own.
+- **Any MCP client can drive the IDE.** The servers speak plain MCP over their sockets with the
+  session's token; a bundled stdio bridge and the protocol are documented in `docs/MCP_CLIENT.md`. When
+  the chat page cannot be shown, the servers still start and a notification carries the configuration.
+- **Marks, banners and notifications.** Claude can highlight ranges, leave gutter icons and inline hints,
+  ask you something in a banner over the file you are reading, write to the status bar, open a scratch
+  file, set bookmarks and raise a balloon in the IDE's notification area — all gone when the session ends.
+- **A Log view in the chat's view row.** The plugin's own log, filtered by level, with a *Copy* button
+  that puts a report-ready text on the clipboard. Credentials, prompts and other people's paths never
+  reach it. A *Debug* switch in the same view turns detailed tracing on for this IDE session.
+
+### Changed
+- **The JetBrains MCP Server switch and the third-party Index and Debugger servers are gone.** The
+  plugin's own servers replace all three; nothing to install, no port to configure. Custom MCP servers
+  are still yours to add under *Custom MCP Servers*.
+- **Update and Plan in the Vulnerabilities view open their own chat tab**, named after the job, instead
+  of writing into the chat you were in.
+- **The plugin uses no deprecated or internal platform API**, verified by the Plugin Verifier against
+  every IDE build from 2025.3.1 to 2026.3 on IntelliJ IDEA and PyCharm, and the policy is written down
+  in `docs/PLATFORM_API_POLICY.md`.
+- **The code is restructured, one responsibility per file.** The session orchestrator, the chat
+  bridge, the page host and the guard are split along their seams and every comment is gone. No
+  behaviour changes; the test suite and a new package-dependency gate say so.
+- **The chat page is written in TypeScript**, one small file per concern, compiled into the same
+  scripts the page always loaded. Nothing changes on screen.
+- **Logging is consistent.** One level vocabulary across the plugin: `warn` means something went
+  wrong, `info` marks a lifecycle step, `debug` is the trace. The binary's stderr and the page's own
+  errors are recorded instead of dropped.
+- **The transcript keeps the last 500 rows on screen instead of 2,000.** A long session rendered
+  thousands of rows and the chat slowed down. The model and the page trim at the same number, the
+  notice at the top says how many earlier rows were dropped, and the session file on disk still holds
+  the whole conversation.
+
+### Fixed
+- **Closing the last chat, or opening the only one, could leave a blank panel** — no composer, no
+  tabs, "loading" forever — until *Open previous session* brought a chat back. The page host gave up
+  on a browser that was still starting and fell back to two delivery routes its own navigation guard
+  refused. The first route now waits for the browser to exist, and the dead routes are gone.
+- **A page reloaded after a failed delivery kept the loading screen up**, because three of the states
+  the host re-sends were remembered as "already sent".
+- **JavaScript errors in the chat page never reached the IDE log.** The page reported them under a
+  message name the host did not parse.
+- **The model, effort and thinking pills did not survive a new chat**, unlike the mode pill next to
+  them: they changed the running session and never the stored setting.
+- **Fork Session resumed the original session's id**, so both chats wrote into one transcript.
+- **`/btw` never got its answer.** A side question is a full model call; the host gave every control
+  request thirty seconds, declared the question unanswered and dropped the reply when it arrived. A
+  request the binary reports as started now waits for its answer.
+- **Closing a chat while its sign-in was still open left a `claude` process running** with no tab
+  to stop it.
+- **The Workloads view leaked a pair of mouse listeners on every redraw.**
+- **`Shift+Tab` in the prompt could not leave it**, and `Escape` with the find bar open was swallowed
+  before the settings menu, the attach tree or the palette saw it.
+- **Switching chats with a search open left the find bar showing a count for a search that was no
+  longer running.**
+
+### Security
+- **Every IDE tool call is judged by the guard inside the servers**, before it runs, with the same rules
+  as the agent's native tools; a refusal comes back as the tool's error naming the rule and the text that
+  tripped it. The shield, the whitelists and the Security settings page apply to both alike.
+- **A write through the IDE tools stays inside the project.** `write_file`, `create_file`, `replace_text`,
+  `insert_text`, `move_file`, `file_from_template` and `worktrees add` refuse a destination outside the
+  project root, and the guard judges an own call with its arguments in front of it, exactly as it judges the
+  native `Write`. The socket files and the parent of their directory are private to the user, like the
+  directory itself.
+- **A path that is only mentioned, does not exist and is not written is a parameter, not a reach**, so
+  an API endpoint or a flag that looks like a path no longer trips the outside-the-project rule; a path
+  that exists, or that the command creates or writes, is judged as before.
+- **A container mount is judged by its host side**: the container side of `-v`, `--mount` and
+  `kubectl cp` is never read as a path on your machine; the host side is.
+- **More privileged-container vectors are refused**: further dangerous capabilities, `podman` and
+  `nerdctl` spellings, `kubectl` and `oc` security contexts and policies that grant privilege.
+- **The guard's test suite is hardened**: assertions pin the verdict a rule must give, not the one the
+  code happened to give, and Windows paths and commands get their own cases across every rule
+  family. The guard's own code is restructured under those tests with no verdict changed.
+- **The guard sees more of Windows.** Writes into the Startup folder and PowerShell profiles are
+  judged by their content; `copy`, `move`, `del`, `Set-Content`, `Out-File` and friends count as file
+  writes with no diff; an 8.3 short name never folds a path inside the project; an explicit NTFS
+  alternate data stream is a write no diff shows; a caret-split command is read as what it runs; and a
+  raw device is named as a device rather than as a network mount. Four
+  Windows false positives are gone: a `set` assignment binds its variable so a later use is not opaque,
+  a `PATH` prepend is split on `;` with a drive letter not mistaken for a separator, a drive-relative
+  path is judged as outside the project, and a local long-path prefix on a project file is spelling,
+  not a network share.
+- **A link written by the model cannot open a file outside the project.** Markdown in a reply, a tool
+  result or an advisory could carry a `jb://open` link to any file under your home; the page now only
+  honours the links the host resolved. And *View diff* on a pending card refuses a path outside the
+  project instead of reading it.
+
 ## [5.8.1] — 2026-08-30
 
 ### Fixed

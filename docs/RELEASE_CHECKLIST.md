@@ -64,6 +64,8 @@ and the ones at the root of the document are the **all gated code** row. Measure
 | `ui/`, `ui/jcef/` | — | — | ❌ excluded — covered elsewhere |
 | `actions/` | — | — | ❌ excluded — one delegate call each |
 | `util/` | — | — | ❌ excluded — one line, and it needs a live platform to run |
+| `model/mcp/` | — | — | ✅ gated — pure: the TOON codec, the JSON-RPC shapes, the meta-tools and the server |
+| `controller/mcp/` | — | — | ✅ gated for `ServerEndpoint`, `SocketHome`, `GuardGate`; ❌ `IdeMcpService`, `IdeToolCatalog` and `tools/` excluded by name — they need a live index |
 
 `vuln/` carries the one **known debt** in this table: `OsvScanner` has no test at all and is deliberately left
 inside the gate rather than excluded with its two neighbours, so the package figure keeps paying for it. It

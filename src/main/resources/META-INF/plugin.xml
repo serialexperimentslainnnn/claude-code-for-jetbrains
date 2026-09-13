@@ -166,14 +166,27 @@
          gate every entry point, and `GitGateway` is the ONLY file that names a git4idea type, so nothing can be
          class-loaded when the dependency is unsatisfied. -->
     <depends optional="true" config-file="claude-git.xml">Git4Idea</depends>
+    <!-- Bundled GitHub plugin: grants runtime classloader access to `org.jetbrains.plugins.github.*` so the
+         pull-request tools can ask the IDE's own accounts and API. Optional like Git: `GitHubGateway` is the
+         only file naming those types and checks the plugin first, so a missing GitHub plugin degrades to
+         "not available". -->
+    <depends optional="true" config-file="claude-github.xml">org.jetbrains.plugins.github</depends>
+    <!-- Bundled Java plugin: grants runtime classloader access to UAST (`org.jetbrains.uast.*`), which ships inside
+         it. Optional: PyCharm and the other IDEs without Java load this plugin without the uast domain;
+         `JavaAvailability` gates the only file that names those types. -->
+    <depends optional="true" config-file="claude-java.xml">com.intellij.modules.java</depends>
+    <depends optional="true" config-file="claude-intellilang.xml">org.intellij.intelliLang</depends>
+    <depends optional="true" config-file="claude-database.xml">com.intellij.database</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- The banner Claude can show over a file's editor (presence ▸ banner_show); it reads BannerRegistry. -->
+        <editorNotificationProvider implementation="dev.lain.claudejb.controller.mcp.tools.code.BannerProvider"/>
         <!-- Right-hand tool window, next to where the JetBrains AI Assistant lives. -->
         <toolWindow id="Claude Code"
                     anchor="right"
                     icon="/icons/toolwindow.svg"
                     canCloseContents="true"
-                    factoryClass="dev.lain.claudejb.ui.ClaudeToolWindowFactory"/>
+                    factoryClass="dev.lain.claudejb.view.window.ClaudeToolWindowFactory"/>
 
         <notificationGroup id="Claude Code" displayType="BALLOON"/>
 
@@ -181,7 +194,7 @@
              configurable under "Other Settings", which is where a plugin nobody is looking for belongs; this
              one is opened on purpose, and the security page is opened while something is being blocked. -->
         <projectConfigurable
-                instance="dev.lain.claudejb.ui.ClaudeSettingsConfigurable"
+                instance="dev.lain.claudejb.view.settings.ClaudeSettingsConfigurable"
                 id="dev.lain.claudejb.settings"
                 groupId="root"
                 displayName="Claude Code"
@@ -190,7 +203,7 @@
         <!-- Its own root entry rather than a child of the page above: every control on it decides what may
              reach the machine, and SensitiveGuard.SETTINGS_PATH sends the user straight here from a block. -->
         <projectConfigurable
-                instance="dev.lain.claudejb.ui.ClaudeSecurityConfigurable"
+                instance="dev.lain.claudejb.view.settings.ClaudeSecurityConfigurable"
                 id="dev.lain.claudejb.settings.security"
                 groupId="root"
                 displayName="Claude Code Security"
@@ -200,27 +213,27 @@
     <applicationListeners>
         <!-- Our diff tabs are mock:// in-memory previews the IDE can never restore; drop them before the
              workspace state is written. ProjectCloseListener is an APPLICATION-bus topic. See DiffTabCleanup. -->
-        <listener class="dev.lain.claudejb.diff.DiffTabCleanup"
+        <listener class="dev.lain.claudejb.view.diff.DiffTabCleanup"
                   topic="com.intellij.openapi.project.ProjectCloseListener"/>
     </applicationListeners>
 
     <actions>
         <action id="dev.lain.claudejb.ExplainSelection"
-                class="dev.lain.claudejb.actions.ExplainSelectionAction"
+                class="dev.lain.claudejb.controller.actions.ExplainSelectionAction"
                 text="Explain with Claude"
                 icon="/icons/claude.svg"
                 description="Send the selected code to Claude and ask it to explain.">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
         <action id="dev.lain.claudejb.AddSelectionAsContext"
-                class="dev.lain.claudejb.actions.AddSelectionAsContextAction"
+                class="dev.lain.claudejb.controller.actions.AddSelectionAsContextAction"
                 text="Add Selection to Claude Context"
                 icon="/icons/claude.svg"
                 description="Attach the selected code to the active Claude chat as context.">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
         <action id="dev.lain.claudejb.AddFileAsContext"
-                class="dev.lain.claudejb.actions.AddFileAsContextAction"
+                class="dev.lain.claudejb.controller.actions.AddFileAsContextAction"
                 text="Add File to Claude Context"
                 icon="/icons/claude.svg"
                 description="Attach the current file to the active Claude chat as an @-mention.">

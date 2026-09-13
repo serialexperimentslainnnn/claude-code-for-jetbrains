@@ -1,7 +1,7 @@
 package dev.lain.claudejb.integration
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import dev.lain.claudejb.session.SessionTranscriptReader
+import dev.lain.claudejb.model.session.history.SessionTranscriptReader
 import java.nio.file.Files
 import java.nio.file.Path
 

@@ -1,0 +1,227 @@
+.composer-bar .pill,
+.composer-bar .attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  height: 26px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--dim);
+  font-family: var(--font);
+  font-size: 11.5px;
+  width: auto;
+  flex: 0 0 auto;
+  position: relative;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.composer-bar .bar-left > * + * {
+  border-left: 1px solid var(--border);
+}
+.composer-bar .pill:hover,
+.composer-bar .attach-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+  box-shadow: none;
+}
+.composer-bar .pill[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+.composer-bar .pill .pill-label {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.composer-bar .pill .pill-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--dim);
+}
+.composer-bar .pill .pill-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.composer-bar .pill:hover .pill-icon {
+  color: var(--text);
+}
+.composer-bar .pill .pill-caret {
+  font-size: 10px;
+  opacity: 0.6;
+}
+.composer-bar .attach-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+.pill.pill-open {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.bar-icon {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 7px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  color: var(--dim);
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.bar-icon:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.bar-icon.active {
+  color: var(--accent);
+}
+.bar-icon.failed {
+  color: var(--danger);
+}
+.bar-icon.flame.active {
+  color: #ff7a1a;
+  filter: drop-shadow(0 0 4px rgba(255, 122, 26, 0.8));
+}
+.bar-icon .vibe-emoji {
+  font-size: 16px;
+  line-height: 1;
+}
+.bar-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.overflow-btn[aria-expanded='true'] {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+.menu {
+  position: absolute;
+  z-index: 50;
+  min-width: 180px;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px 0;
+  margin: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  animation: pop 0.14s var(--ease);
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 3px 12px;
+  border-radius: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text);
+  transition: background-color 0.12s;
+}
+.menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.menu-item.selected {
+  color: var(--accent);
+}
+.menu-item.selected::after {
+  content: '✓';
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 11px;
+}
+.menu-group {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+.menu-group-header {
+  color: var(--dim);
+}
+.menu-group-caret {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--dim);
+}
+.menu-group-caret::after {
+  content: '▸';
+}
+.menu-group.open .menu-group-caret::after {
+  content: '▾';
+}
+.menu-group-items {
+  display: none;
+}
+.menu-group.open .menu-group-items {
+  display: block;
+}
+.menu-group-items .menu-item {
+  padding-left: 20px;
+}
+
+.settings-menu {
+  min-width: 240px;
+  max-width: 340px;
+}
+.settings-menu .settings-group-entry {
+  font-weight: 600;
+}
+.settings-section-items {
+  display: block;
+}
+.settings-menu .menu-item-label {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-item {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+.settings-item[role='menuitemradio'].selected::after {
+  content: '●';
+}
+.menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+.settings-empty {
+  color: var(--dim);
+  cursor: default;
+}
+.settings-empty:hover {
+  background: transparent;
+}
